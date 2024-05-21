@@ -1,0 +1,94 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Newsletter service powering Serverless Picks of the Week
+
+Metadata:
+  esbuild-properties: &esbuild-properties
+    Format: esm
+    Minify: true
+    OutExtension:
+      - .js=.mjs
+    Target: es2020
+    Sourcemap: false
+    EntryPoints:
+      - index.mjs
+    Banner:
+      - js=import { createRequire } from 'module'; const require = createRequire(import.meta.url);
+    External:
+      - '@aws-sdk/*'
+
+  esbuild: &esbuild
+    BuildMethod: esbuild
+    BuildProperties: *esbuild-properties
+
+Parameters:
+  TableName:
+    Type: String
+    Default: readysetcloud
+  SendGridDistributionListId:
+    Type: String
+    Default: 4e9ba0a2-7c0a-4946-93d9-7ece72d2d3aa
+  SendGridSenderId:
+    Type: String
+    Default: '4700440'
+
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    Architectures:
+      - arm64
+    Tracing: Active
+    Timeout: 15
+    MemorySize: 1024
+    Handler: index.handler
+    Environment:
+      Variables:
+        AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+        SECRET_ID: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+  Api:
+    Cors:
+      AllowMethods: "'POST,OPTIONS'"
+      AllowHeaders: "'Content-Type'"
+      AllowOrigin: "'https://www.readysetcloud.io'"
+
+Resources:
+  NewsletterApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      TracingEnabled: true
+      StageName: v1
+      MethodSettings:
+        - MetricsEnabled: True
+          ResourcePath: '/*'
+          HttpMethod: '*'
+          LoggingLevel: ERROR
+          DataTraceEnabled: True
+      DefinitionBody:
+        Fn::Transform:
+          Name: AWS::Include
+          Parameters:
+            Location: ./openapi.yaml
+
+  AddSubscriberFunction:
+    Type: AWS::Serverless::Function
+    Metadata: *esbuild
+    Properties:
+      CodeUri: functions/add-subscriber
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+      Environment:
+        Variables:
+          LIST_ID: !Ref SendGridDistributionListId
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /subscribers
+            Method: POST

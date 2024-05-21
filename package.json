@@ -1,0 +1,11 @@
+{
+  "name": "newsletter-service",
+  "version": "1.0.0",
+  "description": "Service to send a newsletter",
+  "author": "allenheltondev",
+  "license": "ISC",
+  "dependencies": {
+    "@aws-lambda-powertools/parameters": "^2.1.1",
+    "@sendgrid/client": "^8.1.3"
+  }
+}

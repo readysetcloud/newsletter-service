@@ -18,10 +18,6 @@ Metadata:
     External:
       - '@aws-sdk/*'
 
-  esbuild: &esbuild
-    BuildMethod: esbuild
-    BuildProperties: *esbuild-properties
-
 Parameters:
   TableName:
     Type: String
@@ -32,16 +28,31 @@ Parameters:
   SendGridSenderId:
     Type: String
     Default: '4700440'
+  AdminEmail:
+    Type: String
+    Default: allenheltondev@gmail.com
+  SendGridTemplateId:
+    Type: String
+    Default: d-b231d6ee5c2346e489b0cceb9a430582
+  SendGridTemplateVersionId:
+    Type: String
+    Default: cca59fb9-1507-4f2a-8df0-0b52b403a128
+  GitHubOwner:
+    Type: String
+    Default: readysetcloud
+  GitHubRepo:
+    Type: String
+    Default: ready-set-cloud
 
 Globals:
   Function:
     Runtime: nodejs20.x
+    CodeUri: functions
     Architectures:
       - arm64
     Tracing: Active
     Timeout: 15
     MemorySize: 1024
-    Handler: index.handler
     Environment:
       Variables:
         AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
@@ -70,11 +81,21 @@ Resources:
           Parameters:
             Location: ./openapi.yaml
 
+  ScheduleGroup:
+    Type: AWS::Scheduler::ScheduleGroup
+    Properties:
+      Name: picks-of-the-week
+
   AddSubscriberFunction:
     Type: AWS::Serverless::Function
-    Metadata: *esbuild
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - add-subscriber.mjs
     Properties:
-      CodeUri: functions/add-subscriber
+      Handler: add-subscriber.handler
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -92,3 +113,553 @@ Resources:
             RestApiId: !Ref NewsletterApi
             Path: /subscribers
             Method: POST
+
+  BuildReportEmailFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - build-report-email.mjs
+    Properties:
+      Handler: build-report-email.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+
+  GetNextIssueDateFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - get-next-issue-date.mjs
+    Properties:
+      Handler: get-next-issue-date.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+
+  StageIssueFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - stage-issue.mjs
+    Properties:
+      Handler: stage-issue.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+      Environment:
+        Variables:
+          LIST_ID: !Ref SendGridDistributionListId
+          SENDER_ID: !Ref SendGridSenderId
+          TEMPLATE_ID: !Ref SendGridTemplateId
+          VERSION_ID: !Ref SendGridTemplateVersionId
+
+  ParseIssueFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - parse-issue.mjs
+    Properties:
+      Handler: parse-issue.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+      Environment:
+        Variables:
+          OWNER: !Ref GitHubOwner
+          REPO: !Ref GitHubRepo
+
+  IdentifyNewIssueFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - identify-new-issue.mjs
+    Properties:
+      Handler: identify-new-issue.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+            - Effect: Allow
+              Action: states:StartExecution
+              Resource: !Ref StageIssueStateMachine
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+      Environment:
+        Variables:
+          OWNER: !Ref GitHubOwner
+          REPO: !Ref GitHubRepo
+          COMMIT_TIME_TOLERANCE_MINUTES: 10
+          STATE_MACHINE_ARN: !Ref StageIssueStateMachine
+      Events:
+        AmplifyBuildSuccessful:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - aws.amplify
+              detail-type:
+                - Amplify Deployment Status Change
+              detail:
+                appId:
+                  - !Ref AmplifyAppId
+                jobStatus:
+                  - SUCCEED
+
+  ReportStatsStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      DefinitionUri: state-machines/report-stats.asl.json
+      DefinitionSubstitutions:
+        DynamodbQuery: !Sub arn:${AWS::Partition}:states:::aws-sdk:dynamodb:query
+        TableName: !Ref TableName
+        LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
+        SendApiRequest: "{{resolve:ssm:/serverless-toolbox/send-api-request}}"
+        GetTopLinks: !GetAtt GetTopLinkFunction.Arn
+        BuildReportEmail: !GetAtt BuildReportEmailFunction.Arn
+        DynamodbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
+        EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
+        AdminEmail: !Ref AdminEmail
+        ListId: !Ref SendGridDistributionListId
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:putItem
+                - dynamodb:query
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}
+            - Effect: Allow
+              Action: dynamodb:query
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}/index/GSI1
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource:
+                - "{{resolve:ssm:/serverless-toolbox/send-api-request}}"
+                - !GetAtt GetTopLinkFunction.Arn
+                - !GetAtt BuildReportEmailFunction.Arn
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+      Events:
+        Trigger:
+          Type: Schedule
+          Properties:
+            Schedule: "cron(0 15 ? * FRI *)"
+
+  SendAdCopyReminderStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      DefinitionUri: state-machines/ad-copy-reminder.asl.json
+      DefinitionSubstitutions:
+        S3GetObject: !Sub arn:${AWS::Partition}:states:::aws-sdk:s3:getObject
+        Bucket: !Ref BucketName
+        LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
+        GetNextIssueDate: !GetAtt GetNextIssueDateFunction.Arn
+        EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: s3:getObject
+              Resource: !Sub arn:${AWS::Partition}:s3:::${BucketName}/*
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !GetAtt GetNextIssueDateFunction.Arn
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+      Events:
+        Trigger:
+          Type: Schedule
+          Properties:
+            Schedule: "cron(0 15 ? * WED *)"
+
+  StageIssueStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      DefinitionUri: state-machines/stage-issue.asl.json
+      DefinitionSubstitutions:
+        DynamodbGetItem: !Sub arn:${AWS::Partition}:states:::dynamodb:getItem
+        TableName: !Ref TableName
+        DynamodbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
+        S3GetObject: !Sub arn:${AWS::Partition}:states:::aws-sdk:s3:getObject
+        Bucket: !Ref BucketName
+        LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
+        ParseIssue: !GetAtt ParseIssueFunction.Arn
+        StageIssue: !GetAtt StageIssuueFunction.Arn
+        DynamodbUpdateItem: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
+        EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
+        SendApiRequest: "{{resolve:ssm:/serverless-toolbox/send-api-request}}"
+        SfnStartExecution: !Sub arn:${AWS::Partition}:states:::states:startExecution.sync:2
+        GetMarkdownLinks: !GetAtt GetMarkdownLinksFunction.Arn
+        UpdateLinksWithRedirects: !GetAtt UpdateLinksWithRedirectsFunction.Arn
+        AddRedirectsStateMachine: !Ref AddRedirectStateMachine
+        SchedulerCreateSchedule: !Sub arn:${AWS::Partition}:states:::aws-sdk:scheduler:createSchedule
+        PublishTopContentStateMachine: !Ref PublishTopContentStateMachine
+        PublishTopContentRole: !GetAtt PublishTopContentRole.Arn
+        AdminEmail: !Ref AdminEmail
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}
+            - Effect: Allow
+              Action: s3:GetObject
+              Resource: !Sub arn:${AWS::Partition}:s3:::${BucketName}/*
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource:
+                - !GetAtt StageIssueFunction.Arn
+                - !GetAtt ParseIssueFunction.Arn
+                - "{{resolve:ssm:/serverless-toolbox/send-api-request}}"
+                - !GetAtt GetMarkdownLinksFunction.Arn
+                - !GetAtt UpdateLinksWithRedirectsFunction.Arn
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+            - Effect: Allow
+              Action: states:StartExecution
+              Resource: !Ref AddRedirectStateMachine
+            - Effect: Allow
+              Action:
+                - states:DescribeExecution
+                - states:StopExecution
+              Resource: !Sub arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${AddRedirectStateMachine.Name}:*
+            - Effect: Allow
+              Action:
+              - events:PutTargets
+              - events:PutRule
+              - events:DescribeRule
+              Resource:
+              - !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule
+            - Effect: Allow
+              Action: scheduler:CreateSchedule
+              Resource: !Sub arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/picks-of-the-week/NEWSLETTER-STATS*
+            - Effect: Allow
+              Action: iam:PassRole
+              Resource: !GetAtt PublishTopContentRole.Arn
+
+  RedirectKeyValueStore:
+    Type: AWS::CloudFront::KeyValueStore
+    Properties:
+      Name: rsc-redirect
+
+  AddRedirectStateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 3
+
+  AddRedirectStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: workflows/add-redirect.asl.json
+      Tracing:
+        Enabled: true
+      Logging:
+        Level: ALL
+        IncludeExecutionData: True
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt AddRedirectStateMachineLogGroup.Arn
+      DefinitionSubstitutions:
+        KvsArn: !GetAtt RedirectKeyValueStore.Arn
+        DescribeKVS: !Sub arn:${AWS::Partition}:states:::aws-sdk:cloudfrontkeyvaluestore:describeKeyValueStore
+        PutKey: !Sub arn:${AWS::Partition}:states:::aws-sdk:cloudfrontkeyvaluestore:putKey
+        DdbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
+        TableName: !Ref TableName
+        PutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogDelivery
+                - logs:GetLogDelivery
+                - logs:UpdateLogDelivery
+                - logs:DeleteLogDelivery
+                - logs:ListLogDeliveries
+                - logs:PutResourcePolicy
+                - logs:DescribeResourcePolicies
+                - logs:DescribeLogGroups
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - cloudfront-keyvaluestore:DescribeKeyValueStore
+                - cloudfront-keyvaluestore:PutKey
+              Resource: !GetAtt RedirectKeyValueStore.Arn
+            - Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt ReadySetCloudTable.Arn
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+      Type: EXPRESS
+      Events:
+        EventBridge:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              detail-type:
+                - Add Redirects
+
+  RedirectFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      AutoPublish: true
+      FunctionCode: !Sub |
+        import cf from 'cloudfront';
+
+        const kvsId = '${RedirectKeyValueStore.Id}';
+        const kvsHandle = cf.kvs(kvsId);
+
+        async function handler(event) {
+            const request = event.request;
+            const headers = request.headers;
+            const key = request.uri.split('/')[1]
+            let value = "https://readysetcloud.io";
+            try {
+                value = await kvsHandle.get(key);
+                console.log(JSON.stringify({key, value}));
+            } catch (err) {
+                console.log(`Kvs key lookup failed.`);
+            }
+
+            const response = {
+                statusCode: 302,
+                statusDescription: 'Found',
+                headers:
+                    { "location": { "value": value } }
+                }
+
+            return response;
+
+        }
+      FunctionConfig:
+        KeyValueStoreAssociations:
+          - KeyValueStoreARN: !GetAtt RedirectKeyValueStore.Arn
+        Runtime: cloudfront-js-2.0
+        Comment: Function to return redirects
+      Name: redirect-function
+
+  RedirectCFDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - "GET"
+            - "HEAD"
+            - "OPTIONS"
+          Compress: False
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt RedirectFunction.FunctionMetadata.FunctionARN
+          TargetOriginId: dummy.origin
+          ViewerProtocolPolicy: redirect-to-https
+        DefaultRootObject: index.html
+        Enabled: True
+        PriceClass: PriceClass_100
+        Origins:
+          - DomainName: dummy.origin
+            Id: dummy.origin
+            CustomOriginConfig:
+              OriginProtocolPolicy: match-viewer
+        ViewerCertificate:
+          AcmCertificateArn: !Ref RedirectCertificate
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        Aliases:
+          - rdyset.click
+
+  RedirectCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: rdyset.click
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: rdyset.click
+          HostedZoneId: Z09437152FAVHJ1MPFQYO
+
+  Route53RecordSet:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: Z09437152FAVHJ1MPFQYO
+      Name: rdyset.click
+      Type: A
+      AliasTarget:
+        HostedZoneId: Z2FDTNDATAQYW2
+        DNSName: !GetAtt RedirectCFDistribution.DomainName
+
+  HandleLogSubscriptionFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - handle-log-subscription.mjs
+    Properties:
+      Handler: handle-log-subscription.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: dynamodb:updateItem
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref TableName
+      Events:
+        Logs:
+          Type: CloudWatchLogs
+          Properties:
+            LogGroupName: /aws/cloudfront/function/redirect-function
+            FilterPattern: '{$.key = *}'
+
+  GetMarkdownLinksFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - get-markdown-links.mjs
+    Properties:
+      Handler: get-markdown-links.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+
+  UpdateLinksWithRedirectsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - update-links-with-redirects.mjs
+    Properties:
+      Handler: update-links-with-redirects.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+      Environment:
+        Variables:
+          REDIRECT_URL: https://rdyset.click
+
+  GetTopLinkFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - get-top-link.mjs
+    Properties:
+      Handler: get-top-link.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: dynamodb:Query
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}/index/GSI1
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref TableName
+
+  PublishTopContentStateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 3
+
+  PublishTopContentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PublishTopContent
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !GetAtt PublishTopContentStateMachine.Arn
+
+  PublishTopContentStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: state-machines/publish-top-content.asl.json
+      Tracing:
+        Enabled: true
+      Logging:
+        Level: ALL
+        IncludeExecutionData: True
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt PublishTopContentStateMachineLogGroup.Arn
+      DefinitionSubstitutions:
+        LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
+        GetTopLinks: !GetAtt GetTopLinkFunction.Arn
+        PutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogDelivery
+                - logs:GetLogDelivery
+                - logs:UpdateLogDelivery
+                - logs:DeleteLogDelivery
+                - logs:ListLogDeliveries
+                - logs:PutResourcePolicy
+                - logs:DescribeResourcePolicies
+                - logs:DescribeLogGroups
+              Resource: "*"
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !GetAtt GetTopLinkFunction.Arn
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+      Type: EXPRESS

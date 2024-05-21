@@ -1,0 +1,414 @@
+{
+  "Comment": "Stages an issue in SendGrid for publishing",
+  "StartAt": "Get Existing Issue",
+  "States": {
+    "Get Existing Issue": {
+      "Type": "Task",
+      "Resource": "${DynamodbGetItem}",
+      "Parameters": {
+        "TableName": "${TableName}",
+        "Key": {
+          "pk": {
+            "S.$": "States.Format('{}#{}', $.commit, $.fileName)"
+          },
+          "sk": {
+            "S": "newsletter"
+          }
+        }
+      },
+      "Next": "Has Issue Been Processed?",
+      "ResultPath": "$.existingNewsletter"
+    },
+    "Has Issue Been Processed?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Not": {
+            "Variable": "$.existingNewsletter.Item",
+            "IsPresent": true
+          },
+          "Next": "Save Newsletter Record"
+        },
+        {
+          "And": [
+            {
+              "Variable": "$.existingNewsletter.Item",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.existingNewsletter.Item.status.S",
+              "StringEquals": "failed"
+            }
+          ],
+          "Next": "Save Issue Record"
+        }
+      ],
+      "Default": "Success - Duplicate Request"
+    },
+    "Save Issue Record": {
+      "Type": "Task",
+      "Resource": "${DynamodbPutItem}",
+      "Parameters": {
+        "TableName": "${TableName}",
+        "Item": {
+          "pk": {
+            "S.$": "States.Format('{}#{}', $.commit, $.fileName)"
+          },
+          "sk": {
+            "S": "newsletter"
+          },
+          "status": {
+            "S": "in progress"
+          }
+        }
+      },
+      "Next": "Get Sponsor List",
+      "ResultPath": null
+    },
+    "Get Sponsor List": {
+      "Type": "Task",
+      "Parameters": {
+        "Bucket": "${Bucket}",
+        "Key": "sponsors/sponsors.json"
+      },
+      "Resource": "${S3GetObject}",
+      "ResultSelector": {
+        "list.$": "States.StringToJson($.Body)"
+      },
+      "ResultPath": "$.sponsors",
+      "Next": "Get Author List"
+    },
+    "Get Author List": {
+      "Type": "Task",
+      "Parameters": {
+        "Bucket": "${Bucket}",
+        "Key": "authors/authors.json"
+      },
+      "Resource": "${S3GetObject}",
+      "ResultSelector": {
+        "list.$": "States.StringToJson($.Body)"
+      },
+      "ResultPath": "$.authors",
+      "Next": "Get Links From Content"
+    },
+    "Get Links From Content": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "Parameters": {
+        "Payload": {
+          "content.$": "$$.Execution.Input.content"
+        },
+        "FunctionName": "${GetMarkdownLinks}"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Create Redirects",
+      "ResultPath": "$.links"
+    },
+    "Create Redirects": {
+      "Type": "Task",
+      "Resource": "${SfnStartExecution}",
+      "Parameters": {
+        "StateMachineArn": "${AddRedirectsStateMachine}",
+        "Input": {
+          "AWS_STEP_FUNCTIONS_STARTED_BY_EXECUTION_ID.$": "$$.Execution.Id",
+          "links.$": "$.links.Payload.links",
+          "campaign.$": "$$.Execution.Input.fileName"
+        }
+      },
+      "ResultPath": "$.redirects",
+      "Next": "Update Content"
+    },
+    "Update Content": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "Parameters": {
+        "FunctionName": "${UpdateLinksWithRedirects}",
+        "Payload": {
+          "redirects.$": "$.redirects.Output.redirects",
+          "content.$": "$$.Execution.Input.content"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultPath": "$.updatedContent",
+      "Next": "Parse Issue"
+    },
+    "Parse Issue": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "Parameters": {
+        "FunctionName": "${ParseIssue}",
+        "Payload": {
+          "content.$": "$.updatedContent.Payload.content",
+          "sponsors.$": "$.sponsors.list.sponsors",
+          "fileName.$": "$$.Execution.Input.fileName"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Update Issue Record (Failure)"
+        }
+      ],
+      "OutputPath": "$.Payload",
+      "Next": "Stage In SendGrid"
+    },
+    "Stage In SendGrid": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "${StageIssue}"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Schedule Send",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Update Issue Record (Failure)"
+        }
+      ],
+      "ResultPath": "$.sendgrid"
+    },
+    "Schedule Send": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "Parameters": {
+        "FunctionName": "${SendApiRequest}",
+        "Payload": {
+          "secretKey": "sendgrid",
+          "auth": {
+            "location": "header",
+            "key": "Authorization",
+            "prefix": "Bearer"
+          },
+          "request": {
+            "method": "PUT",
+            "baseUrl.$": "States.Format('https://api.sendgrid.com/v3/marketing/campaigns/{}/schedule', $.sendgrid.Payload.id)",
+            "body": {
+              "send_at.$": "$.sendAtDate"
+            }
+          }
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Save Records",
+      "ResultPath": null,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Update Issue Record (Failure)"
+        }
+      ]
+    },
+    "Update Issue Record (Failure)": {
+      "Type": "Task",
+      "Resource": "${DynamodbUpdateItem}",
+      "Parameters": {
+        "TableName": "${TableName}",
+        "Key": {
+          "pk": {
+            "S.$": "States.Format('{}#{}', $$.Execution.Input.commit, $$.Execution.Input.fileName)"
+          },
+          "sk": {
+            "S": "newsletter"
+          }
+        },
+        "UpdateExpression": "SET #status = :status",
+        "ExpressionAttributeNames": {
+          "#status": "status"
+        },
+        "ExpressionAttributeValues": {
+          ":status": {
+            "S": "failed"
+          }
+        }
+      },
+      "End": true,
+      "ResultPath": null
+    },
+    "Save Records": {
+      "Type": "Parallel",
+      "Next": "Schedule Top Stats",
+      "Branches": [
+        {
+          "StartAt": "Save Issue",
+          "States": {
+            "Save Issue": {
+              "Type": "Task",
+              "Resource": "${DynamodbPutItem}",
+              "Parameters": {
+                "TableName": "${TableName}",
+                "Item": {
+                  "pk": {
+                    "S.$": "$$.Execution.Input.fileName"
+                  },
+                  "sk": {
+                    "S": "newsletter"
+                  },
+                  "GSI1PK": {
+                    "S": "newsletter"
+                  },
+                  "GSI1SK": {
+                    "S.$": "$.sendAtDate"
+                  },
+                  "singleSendId": {
+                    "S.$": "$.sendgrid.Payload.id"
+                  }
+                }
+              },
+              "ResultPath": null,
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Update Issue Record (success)",
+          "States": {
+            "Update Issue Record (success)": {
+              "Type": "Task",
+              "Resource": "${DynamodbUpdateItem}",
+              "Parameters": {
+                "TableName": "${TableName}",
+                "Key": {
+                  "pk": {
+                    "S.$": "States.Format('{}#{}', $$.Execution.Input.commit, $$.Execution.Input.fileName)"
+                  },
+                  "sk": {
+                    "S": "newsletter"
+                  }
+                },
+                "UpdateExpression": "SET #status = :status",
+                "ExpressionAttributeNames": {
+                  "#status": "status"
+                },
+                "ExpressionAttributeValues": {
+                  ":status": {
+                    "S": "succeeded"
+                  }
+                }
+              },
+              "ResultPath": null,
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": null
+    },
+    "Schedule Top Stats": {
+      "Type": "Task",
+      "Next": "Notify of Success",
+      "Parameters": {
+        "ActionAfterCompletion": "DELETE",
+        "FlexibleTimeWindow": {
+          "Mode": "OFF"
+        },
+        "GroupName": "picks-of-the-week",
+        "Name.$": "States.Format('NEWSLETTER-STATS-{}', $.data.metadata.number)",
+        "ScheduleExpression.$": "States.Format('at({})', $.getTopStatsDate)",
+        "Target": {
+          "Arn": "${PublishTopContentStateMachine}",
+          "RoleArn": "${PublishTopContentRole}",
+          "Input": {
+            "campaign.$": "$$.Execution.Input.fileName"
+          }
+        }
+      },
+      "Resource": "${SchedulerCreateSchedule}",
+      "ResultPath": null
+    },
+    "Notify of Success": {
+      "Type": "Task",
+      "Resource": "${EventBridgePutEvents}",
+      "Parameters": {
+        "Entries": [
+          {
+            "Detail": {
+              "to": "${AdminEmail}",
+              "subject.$": "States.Format('[Scheduled] {}', $.subject)",
+              "html.$": "States.Format('<p>The newsletter was successfully scheduled for sending. There is nothing more to do, but if you wish to see the single send, click the link below.</p><p><a href=\"https://mc.sendgrid.com/single-sends/{}/review\">Click to view</a></p>', $.sendgrid.Payload.id)"
+            },
+            "DetailType": "Send Email",
+            "Source": "user.StageNewsletterStateMachine"
+          }
+        ]
+      },
+      "Next": "Success",
+      "ResultPath": null
+    },
+    "Success": {
+      "Type": "Succeed"
+    },
+    "Success - Duplicate Request": {
+      "Type": "Succeed",
+      "Comment": "This issue has already been processed"
+    }
+  }
+}

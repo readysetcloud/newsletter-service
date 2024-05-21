@@ -1,0 +1,93 @@
+{
+  "Comment": "Gets the top issue content and schedules Twitter messages",
+  "StartAt": "Get Links From Content",
+  "States": {
+    "Get Links From Content": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "Parameters": {
+        "Payload": {
+          "campaign.$": "$.campaign",
+          "seedDate.$": "$$.Execution.StartTime"
+        },
+        "FunctionName": "${GetTopLinks}"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "OutputPath": "$.Payload",
+      "Next": "Seed social messages"
+    },
+    "Seed social messages": {
+      "Type": "Pass",
+      "Next": "Schedule Person Message",
+      "Parameters": {
+        "post.$": "$.post",
+        "person.$": "$.person",
+        "postMessages": [
+          "Check out the most popular link from this week's newsletter as determined by you all! {}",
+          "Your choice has made it clear! Discover the top link from this week's newsletter. {}",
+          "Thanks to your clicks, here's the most popular link from this week's newsletter. {}",
+          "Check out what the community loved most this week. Here's the most popular link from the newsletter on Monday: {}",
+          "You all have spoken! The must-read article from our newsletter this week is right here for you. {}",
+          "By popular demand, the most clicked link from this week's newsletter is here. Check it out! {}",
+          "Curious what everyone liked in this week's newsletter? Here's the top link, chosen by you. {}",
+          "One article stood out in the newsletter thanks to your interest this week. Check out what everyone liked. {}",
+          "Spotlight on our readers' choice! The most popular content from the newsletter this week is right here. {}",
+          "You've made it a highlight, and we're thrilled to share it. Here's the top link from this week's newsletter. {}"
+        ],
+        "personMessages": [
+          "Special shoutout to one of this week's contributors to the newsletter! Check out their work and see what makes it exceptional. {}",
+          "This week, we shine the spotlight on a community member who contributed some amazing content to the newsletter: {}",
+          "Spotlight's on! Check out this week's featured content creator from the community 💙 {}",
+          "Let's celebrate you! Get to know the creator of some of the content from this week's newsletter. Their work speaks volumes 🔥 {}",
+          "Our community is full of stars, and this week we're highlighting one whose work has truly shined 👇 {}",
+          "A round of applause for this week's top contributor of the Serverless Picks of the Week newsletter! 👏 Thank you for everything you do!: {}",
+          "Discover this week's top creator from the Serverless Picks of the Week newsletter 🔎 Congratulations! {}",
+          "In the spotlight: A community member whose creativity and expertise have brought us joy and lessons learned 👇 {}",
+          "This week's community spotlight shines on a creator whose work has inspired and amazed us all. Thank you for all you do 💙 {}",
+          "Acknowledging greatness! We're proud to highlight members of the community who put in the work to make us all better devs. Thank you for everything! {}"
+        ]
+      }
+    },
+    "Schedule Person Message": {
+      "Type": "Task",
+      "Resource": "${PutEvents}",
+      "Parameters": {
+        "Entries": [
+          {
+            "Detail": {
+              "messages": [
+                {
+                  "platform": "twitter",
+                  "scheduledDate.$": "$.person.date",
+                  "message.$": "States.Format(States.ArrayGetItem($.personMessages, States.MathRandom(0, States.ArrayLength($.personMessages))), $.person.link)",
+                  "campaign.$": "$$.Execution.Input.campaign"
+                },
+                {
+                  "platform": "twitter",
+                  "scheduledDate.$": "$.post.date",
+                  "message.$": "States.Format(States.ArrayGetItem($.postMessages, States.MathRandom(0, States.ArrayLength($.postMessages))), $.post.link)",
+                  "campaign.$": "$$.Execution.Input.campaign"
+                }
+              ]
+            },
+            "DetailType": "Schedule Social Post",
+            "Source": "top-post-state-machine"
+          }
+        ]
+      },
+      "End": true
+    }
+  }
+}

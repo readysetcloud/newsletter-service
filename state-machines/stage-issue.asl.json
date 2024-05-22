@@ -27,7 +27,7 @@
             "Variable": "$.existingNewsletter.Item",
             "IsPresent": true
           },
-          "Next": "Save Newsletter Record"
+          "Next": "Save Issue Record"
         },
         {
           "And": [

@@ -19,9 +19,9 @@ Metadata:
       - '@aws-sdk/*'
 
 Parameters:
-  TableName:
+  AmplifyAppId:
     Type: String
-    Default: readysetcloud
+    Default: d31uo0a8ezw8ek
   SendGridDistributionListId:
     Type: String
     Default: 4e9ba0a2-7c0a-4946-93d9-7ece72d2d3aa
@@ -43,6 +43,20 @@ Parameters:
   GitHubRepo:
     Type: String
     Default: ready-set-cloud
+  BucketName:
+    Type: String
+    Default: readysetcloud
+  Environment:
+    Type: String
+    AllowedValues: [ sandbox, stage, production ]
+    Default: sandbox
+
+Conditions:
+  DeployProductionResources:
+    !Equals [!Ref Environment, 'production']
+  DeployNonProductionResources:
+    Fn::Not:
+      - !Equals [!Ref Environment, 'production']
 
 Globals:
   Function:
@@ -80,6 +94,34 @@ Resources:
           Name: AWS::Include
           Parameters:
             Location: ./openapi.yaml
+
+  NewsletterTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
 
   ScheduleGroup:
     Type: AWS::Scheduler::ScheduleGroup
@@ -240,7 +282,7 @@ Resources:
       DefinitionUri: state-machines/report-stats.asl.json
       DefinitionSubstitutions:
         DynamodbQuery: !Sub arn:${AWS::Partition}:states:::aws-sdk:dynamodb:query
-        TableName: !Ref TableName
+        TableName: !Ref NewsletterTable
         LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
         SendApiRequest: "{{resolve:ssm:/serverless-toolbox/send-api-request}}"
         GetTopLinks: !GetAtt GetTopLinkFunction.Arn
@@ -256,10 +298,10 @@ Resources:
               Action:
                 - dynamodb:putItem
                 - dynamodb:query
-              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}
             - Effect: Allow
               Action: dynamodb:query
-              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}/index/GSI1
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}/index/GSI1
             - Effect: Allow
               Action: lambda:InvokeFunction
               Resource:
@@ -311,13 +353,13 @@ Resources:
       DefinitionUri: state-machines/stage-issue.asl.json
       DefinitionSubstitutions:
         DynamodbGetItem: !Sub arn:${AWS::Partition}:states:::dynamodb:getItem
-        TableName: !Ref TableName
+        TableName: !Ref NewsletterTable
         DynamodbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
         S3GetObject: !Sub arn:${AWS::Partition}:states:::aws-sdk:s3:getObject
         Bucket: !Ref BucketName
         LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
         ParseIssue: !GetAtt ParseIssueFunction.Arn
-        StageIssue: !GetAtt StageIssuueFunction.Arn
+        StageIssue: !GetAtt StageIssueFunction.Arn
         DynamodbUpdateItem: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
         SendApiRequest: "{{resolve:ssm:/serverless-toolbox/send-api-request}}"
@@ -337,7 +379,7 @@ Resources:
                 - dynamodb:GetItem
                 - dynamodb:PutItem
                 - dynamodb:UpdateItem
-              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}
             - Effect: Allow
               Action: s3:GetObject
               Resource: !Sub arn:${AWS::Partition}:s3:::${BucketName}/*
@@ -377,7 +419,7 @@ Resources:
   RedirectKeyValueStore:
     Type: AWS::CloudFront::KeyValueStore
     Properties:
-      Name: rsc-redirect
+      Name: newsletter-redirect
 
   AddRedirectStateMachineLogGroup:
     Type: AWS::Logs::LogGroup
@@ -387,7 +429,7 @@ Resources:
   AddRedirectStateMachine:
     Type: AWS::Serverless::StateMachine
     Properties:
-      DefinitionUri: workflows/add-redirect.asl.json
+      DefinitionUri: state-machines/add-redirect.asl.json
       Tracing:
         Enabled: true
       Logging:
@@ -401,7 +443,7 @@ Resources:
         DescribeKVS: !Sub arn:${AWS::Partition}:states:::aws-sdk:cloudfrontkeyvaluestore:describeKeyValueStore
         PutKey: !Sub arn:${AWS::Partition}:states:::aws-sdk:cloudfrontkeyvaluestore:putKey
         DdbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
-        TableName: !Ref TableName
+        TableName: !Ref NewsletterTable
         PutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
       Policies:
         - Statement:
@@ -423,7 +465,7 @@ Resources:
               Resource: !GetAtt RedirectKeyValueStore.Arn
             - Effect: Allow
               Action: dynamodb:PutItem
-              Resource: !GetAtt ReadySetCloudTable.Arn
+              Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
@@ -473,10 +515,11 @@ Resources:
           - KeyValueStoreARN: !GetAtt RedirectKeyValueStore.Arn
         Runtime: cloudfront-js-2.0
         Comment: Function to return redirects
-      Name: redirect-function
+      Name: newsletter-redirect
 
   RedirectCFDistribution:
     Type: AWS::CloudFront::Distribution
+    Condition: DeployProductionResources
     Properties:
       DistributionConfig:
         DefaultCacheBehavior:
@@ -508,6 +551,7 @@ Resources:
 
   RedirectCertificate:
     Type: AWS::CertificateManager::Certificate
+    Condition: DeployProductionResources
     Properties:
       DomainName: rdyset.click
       ValidationMethod: DNS
@@ -517,6 +561,7 @@ Resources:
 
   Route53RecordSet:
     Type: AWS::Route53::RecordSet
+    Condition: DeployProductionResources
     Properties:
       HostedZoneId: Z09437152FAVHJ1MPFQYO
       Name: rdyset.click
@@ -524,6 +569,32 @@ Resources:
       AliasTarget:
         HostedZoneId: Z2FDTNDATAQYW2
         DNSName: !GetAtt RedirectCFDistribution.DomainName
+
+  NonProdRedirectCFDistribution:
+    Type: AWS::CloudFront::Distribution
+    Condition: DeployNonProductionResources
+    Properties:
+      DistributionConfig:
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - "GET"
+            - "HEAD"
+            - "OPTIONS"
+          Compress: False
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt RedirectFunction.FunctionMetadata.FunctionARN
+          TargetOriginId: dummy.origin
+          ViewerProtocolPolicy: redirect-to-https
+        DefaultRootObject: index.html
+        Enabled: True
+        PriceClass: PriceClass_100
+        Origins:
+          - DomainName: dummy.origin
+            Id: dummy.origin
+            CustomOriginConfig:
+              OriginProtocolPolicy: match-viewer
 
   HandleLogSubscriptionFunction:
     Type: AWS::Serverless::Function
@@ -541,10 +612,10 @@ Resources:
           Statement:
             - Effect: Allow
               Action: dynamodb:updateItem
-              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}
       Environment:
         Variables:
-          TABLE_NAME: !Ref TableName
+          TABLE_NAME: !Ref NewsletterTable
       Events:
         Logs:
           Type: CloudWatchLogs
@@ -597,10 +668,10 @@ Resources:
           Statement:
             - Effect: Allow
               Action: dynamodb:Query
-              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}/index/GSI1
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}/index/GSI1
       Environment:
         Variables:
-          TABLE_NAME: !Ref TableName
+          TABLE_NAME: !Ref NewsletterTable
 
   PublishTopContentStateMachineLogGroup:
     Type: AWS::Logs::LogGroup

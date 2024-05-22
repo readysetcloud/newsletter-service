@@ -1,0 +1,197 @@
+{
+  "Comment": "Put a new or update an existing key in a KeyValueStore",
+  "StartAt": "Setup Key Seed",
+  "States": {
+    "Setup Key Seed": {
+      "Type": "Pass",
+      "Next": "Iterate Links",
+      "Result": {
+        "characters": [
+          "a",
+          "b",
+          "c",
+          "d",
+          "e",
+          "f",
+          "g",
+          "h",
+          "i",
+          "j",
+          "k",
+          "l",
+          "m",
+          "n",
+          "o",
+          "p",
+          "q",
+          "r",
+          "s",
+          "t",
+          "u",
+          "v",
+          "w",
+          "x",
+          "y",
+          "z",
+          "A",
+          "B",
+          "C",
+          "D",
+          "E",
+          "F",
+          "G",
+          "H",
+          "I",
+          "J",
+          "K",
+          "L",
+          "M",
+          "N",
+          "O",
+          "P",
+          "Q",
+          "R",
+          "S",
+          "T",
+          "U",
+          "V",
+          "W",
+          "X",
+          "Y",
+          "Z",
+          "0",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9"
+        ]
+      }
+    },
+    "Iterate Links": {
+      "Type": "Map",
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "Describe KV Store",
+        "States": {
+          "Describe KV Store": {
+            "Type": "Task",
+            "Parameters": {
+              "KvsARN": "${KvsArn}"
+            },
+            "Resource": "${DescribeKVS}",
+            "ResultPath": "$.kv",
+            "Next": "Generate Key Parts"
+          },
+          "Generate Key Parts": {
+            "Type": "Pass",
+            "Next": "Generate Key",
+            "Parameters": {
+              "partOne.$": "States.Format('{}{}', States.ArrayGetItem($.characters, States.MathRandom(0, States.ArrayLength($.characters))), States.ArrayGetItem($.characters, States.MathRandom(0, States.ArrayLength($.characters))))",
+              "partTwo.$": "States.Format('{}{}', States.ArrayGetItem($.characters, States.MathRandom(0, States.ArrayLength($.characters))), States.ArrayGetItem($.characters, States.MathRandom(0, States.ArrayLength($.characters))))",
+              "partThree.$": "States.Format('{}{}', States.ArrayGetItem($.characters, States.MathRandom(0, States.ArrayLength($.characters))), States.ArrayGetItem($.characters, States.MathRandom(0, States.ArrayLength($.characters))))",
+              "kvEtag.$": "$.kv.ETag",
+              "link.$": "$.link",
+              "linkIndex.$": "$.linkIndex"
+            }
+          },
+          "Generate Key": {
+            "Type": "Pass",
+            "Next": "Save Mappings",
+            "Parameters": {
+              "key.$": "States.Format('{}{}{}', $.partOne, $.partTwo, $.partThree)",
+              "kvEtag.$": "$.kvEtag",
+              "link.$": "$.link",
+              "linkIndex.$": "$.linkIndex"
+            }
+          },
+          "Save Mappings": {
+            "Type": "Parallel",
+            "End": true,
+            "Branches": [
+              {
+                "StartAt": "Add to KV Store",
+                "States": {
+                  "Add to KV Store": {
+                    "Type": "Task",
+                    "Parameters": {
+                      "IfMatch.$": "$.kvEtag",
+                      "KvsARN": "${KvsArn}",
+                      "Key.$": "$.key",
+                      "Value.$": "$.link"
+                    },
+                    "Resource": "${PutKey}",
+                    "End": true
+                  }
+                }
+              },
+              {
+                "StartAt": "Add to DDB",
+                "States": {
+                  "Add to DDB": {
+                    "Type": "Task",
+                    "Resource": "${DdbPutItem}",
+                    "Parameters": {
+                      "TableName": "${TableName}",
+                      "Item": {
+                        "pk": {
+                          "S.$": "$.key"
+                        },
+                        "sk": {
+                          "S": "link"
+                        },
+                        "GSI1PK": {
+                          "S.$": "$$.Execution.Input.campaign"
+                        },
+                        "GSI1SK": {
+                          "S.$": "States.Format('{}', $.linkIndex)"
+                        },
+                        "link": {
+                          "S.$": "$.link"
+                        }
+                      }
+                    },
+                    "End": true
+                  }
+                }
+              }
+            ],
+            "ResultPath": null
+          }
+        }
+      },
+      "ItemsPath": "$$.Execution.Input.links",
+      "ItemSelector": {
+        "characters.$": "$.characters",
+        "link.$": "$$.Map.Item.Value",
+        "linkIndex.$": "$$.Map.Item.Index"
+      },
+      "Next": "Notify Of Completion",
+      "MaxConcurrency": 1,
+      "ResultPath": "$.redirects"
+    },
+    "Notify Of Completion": {
+      "Type": "Task",
+      "Resource": "${PutEvents}",
+      "Parameters": {
+        "Entries": [
+          {
+            "Detail": {
+              "campaign.$": "$$.Execution.Input.campaign"
+            },
+            "DetailType": "Redirect Links Generated",
+            "Source": "redirect-state-machine"
+          }
+        ]
+      },
+      "ResultPath": null,
+      "End": true
+    }
+  }
+}

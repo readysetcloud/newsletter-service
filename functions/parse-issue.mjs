@@ -2,13 +2,16 @@
 import showdown from 'showdown';
 import frontmatter from '@github-docs/frontmatter';
 import { getOctokit } from './utils/helpers.mjs';
+import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
+import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 
+const ddb = new DynamoDBClient();
 const converter = new showdown.Converter();
 
 export const handler = async (state) => {
   const newsletter = frontmatter(state.content);
-  const sponsor = getSponsorDetails(newsletter.data.sponsor, newsletter.data.sponsor_description, state.sponsors);
-  const author = state.authors.find(a => a.name === newsletter.data.author);
+  const sponsor = await getSponsorDetails(newsletter.data.sponsor, newsletter.data.sponsor_description);
+  const author = await getAuthor(newsletter.data.author);
 
   let sections = newsletter.content.split('### ');
   sections = sections.map(s => processSection(s, sponsor));
@@ -100,10 +103,10 @@ const processTipOfTheWeek = (section) => {
   }
 };
 
-const getSponsorDetails = (sponsorName, description, sponsorList) => {
+const getSponsorDetails = async (sponsorName, description) => {
   if (!sponsorName) return null;
 
-  const sponsor = sponsorList.find(s => s.name.toLowerCase() === sponsorName.toLowerCase());
+  const sponsor = await getSponsor(sponsorName);
   if (sponsor) {
     let sponsorAd = description ?? sponsor.description;
 
@@ -163,3 +166,43 @@ const updateSourceWithRedirects = async (fileName, content, data) => {
   }
 };
 
+const getAuthor = async (metadataAuthor) => {
+  if (!metadataAuthor) return null;
+
+  const data = await ddb.send(new GetItemCommand({
+    TableName: process.env.TABLE_NAME,
+    Key: marshall({
+      pk: metadataAuthor,
+      sk: 'author'
+    })
+  }));
+
+  if (data?.Item) {
+    const author = unmarshall(data.Item);
+    return {
+      name: author.name,
+      twitter: author.twitter
+    };
+  }
+
+  return null;
+};
+
+const getSponsor = async (sponsorName) => {
+
+  let data = await ddb.send(new GetItemCommand({
+    TableName: process.env.TABLE_NAME,
+    Key: marshall({
+      pk: sponsorName,
+      sk: 'sponsor'
+    })
+  }));
+
+  if (data?.Item) {
+    data = unmarshall(data.Item);
+    const { pk, sk, GSI1PK, GSI1SK, ...sponsor } = data;
+    return sponsor;
+  }
+
+  return null;
+};

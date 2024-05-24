@@ -43,9 +43,6 @@ Parameters:
   GitHubRepo:
     Type: String
     Default: ready-set-cloud
-  BucketName:
-    Type: String
-    Default: readysetcloud
   Environment:
     Type: String
     AllowedValues: [ sandbox, stage, production ]
@@ -234,6 +231,9 @@ Resources:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
               Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+            - Effect: Allow
+              Action: dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
           OWNER: !Ref GitHubOwner
@@ -376,17 +376,18 @@ Resources:
       Type: STANDARD
       DefinitionUri: state-machines/ad-copy-reminder.asl.json
       DefinitionSubstitutions:
-        S3GetObject: !Sub arn:${AWS::Partition}:states:::aws-sdk:s3:getObject
-        Bucket: !Ref BucketName
+        TableName: !Ref NewsletterTable
         LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
         GetNextIssueDate: !GetAtt GetNextIssueDateFunction.Arn
+        DynamodbGetItem: !Sub arn:${AWS::Partition}:states:::dynamodb:getItem
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
+        AdminEmail: !Ref AdminEmail
       Policies:
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: s3:getObject
-              Resource: !Sub arn:${AWS::Partition}:s3:::${BucketName}/*
+              Action: dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
               Action: lambda:InvokeFunction
               Resource: !GetAtt GetNextIssueDateFunction.Arn
@@ -408,8 +409,6 @@ Resources:
         DynamodbGetItem: !Sub arn:${AWS::Partition}:states:::dynamodb:getItem
         TableName: !Ref NewsletterTable
         DynamodbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
-        S3GetObject: !Sub arn:${AWS::Partition}:states:::aws-sdk:s3:getObject
-        Bucket: !Ref BucketName
         LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
         ParseIssue: !GetAtt ParseIssueFunction.Arn
         StageIssue: !GetAtt StageIssueFunction.Arn
@@ -432,10 +431,7 @@ Resources:
                 - dynamodb:GetItem
                 - dynamodb:PutItem
                 - dynamodb:UpdateItem
-              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}
-            - Effect: Allow
-              Action: s3:GetObject
-              Resource: !Sub arn:${AWS::Partition}:s3:::${BucketName}/*
+              Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
               Action: lambda:InvokeFunction
               Resource:
@@ -460,8 +456,7 @@ Resources:
               - events:PutTargets
               - events:PutRule
               - events:DescribeRule
-              Resource:
-              - !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule
             - Effect: Allow
               Action: scheduler:CreateSchedule
               Resource: !Sub arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/picks-of-the-week/NEWSLETTER-STATS*

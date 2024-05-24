@@ -1,20 +1,8 @@
 {
   "Comment": "Send an email reminder to the sponsor of the newsletter",
-  "StartAt": "Get Calendar",
+  "StartAt": "Get Next Issue Sponsor",
   "States": {
-    "Get Calendar": {
-      "Type": "Task",
-      "Parameters": {
-        "Bucket": "${Bucket}",
-        "Key": "sponsors/sponsor-calendar.json"
-      },
-      "Resource": "${S3GetObject}",
-      "ResultSelector": {
-        "schedule.$": "States.StringToJson($.Body)"
-      },
-      "Next": "Get Upcoming Sponsored Slot"
-    },
-    "Get Upcoming Sponsored Slot": {
+    "Get Next Issue Sponsor": {
       "Type": "Task",
       "Resource": "${LambdaInvoke}",
       "Parameters": {
@@ -41,79 +29,82 @@
         {
           "Variable": "$.Payload.slot",
           "IsPresent": true,
-          "Next": "Get Sponsor List"
+          "Next": "Load Sponsor Details"
         }
       ],
       "Default": "Nothing To Do"
     },
-    "Get Sponsor List": {
+    "Load Sponsor Details": {
       "Type": "Task",
+      "Resource": "${DynamodbGetItem}",
       "Parameters": {
-        "Bucket": "${Bucket}",
-        "Key": "sponsors/sponsors.json"
-      },
-      "Resource": "${S3GetObject}",
-      "ResultSelector": {
-        "list.$": "States.StringToJson($.Body)"
-      },
-      "ResultPath": "$.sponsors",
-      "Next": "Format State"
-    },
-    "Format State": {
-      "Type": "Pass",
-      "Parameters": {
-        "slot.$": "$.Payload.slot",
-        "sponsors.$": "$.sponsors.list.sponsors"
-      },
-      "Next": "Find Sponsor"
-    },
-    "Find Sponsor": {
-      "Type": "Map",
-      "End": true,
-      "Iterator": {
-        "StartAt": "Is Correct Sponsor?",
-        "States": {
-          "Is Correct Sponsor?": {
-            "Type": "Choice",
-            "Choices": [
-              {
-                "Variable": "$.sponsor.name",
-                "StringEqualsPath": "$.slot.sponsor",
-                "Next": "Send Email To Sponsor"
-              }
-            ],
-            "Default": "End"
+        "TableName": "${TableName}",
+        "Key": {
+          "pk": {
+            "S.$": "$.Payload.slot.sponsor"
           },
-          "Send Email To Sponsor": {
-            "Type": "Task",
-            "Resource": "${EventBridgePutEvents}",
-            "Parameters": {
-              "Entries": [
-                {
-                  "Detail": {
-                    "to.$": "$.sponsor.contact.email",
-                    "subject.$": "States.Format('Serverless Picks of the Week Ad Copy Reminder ({})', $.slot.date)",
-                    "text.$": "States.Format('Happy Wednesday {}!\r\rThis is a friendly reminder to submit your ad copy for your upcoming sponsored ad in the Serverless Picks of the Week newsletter by Friday at 8pm CST. \r\n\r\nFor the issue released on {}, you can send your ad copy by replying to this email. If you want to use the same copy as the previous issue, no further action is required. \r\n\r\nIf you have an issues meeting the deadline or have any other questions, please let me know as soon as possible.\r\n\r\nHave a great rest of your week!\r\n\r\nAllen Helton', $.sponsor.contact.name, $.slot.date)"
-                  },
-                  "DetailType": "Send Email",
-                  "Source": "user.AdCopyStateMachine"
-                }
-              ]
-            },
-            "End": true,
-            "ResultPath": null
-          },
-          "End": {
-            "Type": "Pass",
-            "End": true
+          "sk": {
+            "S": "sponsor"
           }
         }
       },
-      "ItemsPath": "$.sponsors",
+      "Next": "Sponsor details found?",
+      "ResultPath": "$.detail"
+    },
+    "Sponsor details found?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.detail.Item",
+          "IsPresent": true,
+          "Next": "Send Sponsor Email"
+        }
+      ],
+      "Default": "Notify Admin Sponsor Data is Missing"
+    },
+    "Send Sponsor Email": {
+      "Type": "Task",
+      "Resource": "${EventBridgePutEvents}",
       "Parameters": {
-        "sponsor.$": "$$.Map.Item.Value",
-        "slot.$": "$.slot"
-      }
+        "Entries": [
+          {
+            "Detail": {
+              "to.$": "$.detail.Item.contact.email",
+              "subject.$": "States.Format('Serverless Picks of the Week Ad Copy Reminder ({})', $.Payload.slot.date)",
+              "text.$": "States.Format('Happy Wednesday {}!\r\rThis is a friendly reminder to submit your ad copy for your upcoming sponsored ad in the Serverless Picks of the Week newsletter by Friday at 8pm CST. \r\n\r\nFor the issue released on {}, you can send your ad copy by replying to this email. If you want to use the same copy as the previous issue, no further action is required. \r\n\r\nIf you have an issues meeting the deadline or have any other questions, please let me know as soon as possible.\r\n\r\nHave a great rest of your week!\r\n\r\nAllen Helton', $.detail.Item.contact.name, $.Payload.slot.date)"
+            },
+            "DetailType": "Send Email",
+            "Source": "user.AdCopyStateMachine"
+          }
+        ]
+      },
+      "ResultPath": null,
+      "Next": "Success"
+    },
+    "Notify Admin Sponsor Data is Missing": {
+      "Type": "Task",
+      "Resource": "${EventBridgePutEvents}",
+      "Parameters": {
+        "Entries": [
+          {
+            "Detail": {
+              "to": "${AdminEmail}",
+              "subject": "[Ready, Set, Cloud] Invalid Newsletter Sponsor",
+              "text.$": "States.Format('Oh man. The newsletter is configured with a sponsor ({}) who does not exist in the database. Go add the details to sponsors.json and rerun the workflow for the SendAdCopyReminderStateMachine.', $.Payload.slot.sponsor)"
+            },
+            "DetailType": "Send Email",
+            "Source": "user.AdCopyStateMachine"
+          }
+        ]
+      },
+      "ResultPath": null,
+      "Next": "Fail"
+    },
+    "Fail": {
+      "Type": "Fail"
+    },
+    "Success": {
+      "Type": "Succeed"
     },
     "Nothing To Do": {
       "Type": "Succeed"

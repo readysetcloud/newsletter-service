@@ -62,34 +62,8 @@
           }
         }
       },
-      "Next": "Get Sponsor List",
+      "Next": "Get Links From Content",
       "ResultPath": null
-    },
-    "Get Sponsor List": {
-      "Type": "Task",
-      "Parameters": {
-        "Bucket": "${Bucket}",
-        "Key": "sponsors/sponsors.json"
-      },
-      "Resource": "${S3GetObject}",
-      "ResultSelector": {
-        "list.$": "States.StringToJson($.Body)"
-      },
-      "ResultPath": "$.sponsors",
-      "Next": "Get Author List"
-    },
-    "Get Author List": {
-      "Type": "Task",
-      "Parameters": {
-        "Bucket": "${Bucket}",
-        "Key": "authors/authors.json"
-      },
-      "Resource": "${S3GetObject}",
-      "ResultSelector": {
-        "list.$": "States.StringToJson($.Body)"
-      },
-      "ResultPath": "$.authors",
-      "Next": "Get Links From Content"
     },
     "Get Links From Content": {
       "Type": "Task",
@@ -163,7 +137,6 @@
         "FunctionName": "${ParseIssue}",
         "Payload": {
           "content.$": "$.updatedContent.Payload.content",
-          "sponsors.$": "$.sponsors.list.sponsors",
           "fileName.$": "$$.Execution.Input.fileName"
         }
       },

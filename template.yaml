@@ -181,6 +181,14 @@ Resources:
       Handler: get-next-issue-date.handler
       Policies:
         - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
 
   StageIssueFunction:
     Type: AWS::Serverless::Function
@@ -260,6 +268,51 @@ Resources:
           REPO: !Ref GitHubRepo
           COMMIT_TIME_TOLERANCE_MINUTES: 10
           STATE_MACHINE_ARN: !Ref StageIssueStateMachine
+      Events:
+        AmplifyBuildSuccessful:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - aws.amplify
+              detail-type:
+                - Amplify Deployment Status Change
+              detail:
+                appId:
+                  - !Ref AmplifyAppId
+                jobStatus:
+                  - SUCCEED
+
+  SyncRepoDataFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - sync-repo-data.mjs
+    Properties:
+      Handler: sync-repo-data.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+            - Effect: Allow
+              Action: dynamodb:Query
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}/index/GSI1
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:DeleteItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          OWNER: !Ref GitHubOwner
+          REPO: !Ref GitHubRepo
       Events:
         AmplifyBuildSuccessful:
           Type: EventBridgeRule
@@ -734,3 +787,22 @@ Resources:
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
       Type: EXPRESS
+
+  APIGatewayCloudWatchRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+            Action: "sts:AssumeRole"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+
+  APIGatewayAccount:
+    Type: AWS::ApiGateway::Account
+    Properties:
+      CloudWatchRoleArn: !GetAtt APIGatewayCloudWatchRole.Arn

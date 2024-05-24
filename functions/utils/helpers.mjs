@@ -6,7 +6,7 @@ let octokit;
 export const getOctokit = async () => {
   if (!octokit) {
     const secrets = await getSecret(process.env.SECRET_ID, { transform: 'json' });
-    auth = secrets.github;
+    const auth = secrets.github;
     octokit = new Octokit({ auth });
   }
 

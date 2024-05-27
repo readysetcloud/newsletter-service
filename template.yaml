@@ -51,7 +51,7 @@ Parameters:
 Conditions:
   DeployProductionResources:
     !Equals [!Ref Environment, 'production']
-  DeployNonProductionResources:
+  DeployStageResources:
     Fn::Not:
       - !Equals [!Ref Environment, 'production']
 
@@ -238,6 +238,7 @@ Resources:
         Variables:
           OWNER: !Ref GitHubOwner
           REPO: !Ref GitHubRepo
+          TABLE_NAME: !Ref NewsletterTable
 
   IdentifyNewIssueFunction:
     Type: AWS::Serverless::Function
@@ -620,7 +621,7 @@ Resources:
 
   NonProdRedirectCFDistribution:
     Type: AWS::CloudFront::Distribution
-    Condition: DeployNonProductionResources
+    Condition: DeployStageResources
     Properties:
       DistributionConfig:
         DefaultCacheBehavior:

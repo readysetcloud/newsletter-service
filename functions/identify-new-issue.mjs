@@ -106,6 +106,10 @@ const processNewContent = async (newContent) => {
   const today = new Date();
   const executions = await Promise.allSettled(newContent.map(async (content) => {
     const metadata = frontmatter(content.content);
+    let postDate = metadata.data.date;
+    if(!postDate.includes('T')){
+      postDate = `${postDate}T23:59:59`;
+    }
     const date = new Date(metadata.data.date);
     if (date > today) {
       await scheduleFuturePost(content, metadata.data.date);

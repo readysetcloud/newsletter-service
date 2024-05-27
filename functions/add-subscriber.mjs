@@ -8,6 +8,9 @@ export const handler = async (event) => {
     if (!apiKey) {
       const secrets = await getSecret(process.env.SECRET_ID, { transform: 'json' });
       apiKey = secrets.sendgrid;
+      if(!apiKey) {
+        throw new Error('Missing sendgrid api key');
+      }
     }
 
     const contact = JSON.parse(event.body);

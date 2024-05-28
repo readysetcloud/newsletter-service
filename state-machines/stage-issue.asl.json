@@ -62,6 +62,39 @@
           }
         }
       },
+      "Next": "Is Scheduled In The Future?",
+      "ResultPath": null
+    },
+    "Is Scheduled In The Future?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.futureDate",
+          "IsPresent": true,
+          "Next": "Wait For Future Date"
+        }
+      ],
+      "Default": "Get Links From Content"
+    },
+    "Wait For Future Date": {
+      "Type": "Wait",
+      "TimestampPath": "$.futureDate",
+      "Next": "Trigger Site Rebuild"
+    },
+    "Trigger Site Rebuild": {
+      "Type": "Task",
+      "Resource": "${EventBridgePutEvents}",
+      "Parameters": {
+        "Entries": [
+          {
+            "Detail": {
+              "reason": "Scheduled newsletter issue"
+            },
+            "DetailType": "Trigger Site Rebuild",
+            "Source": "user.StageIssueStateMachine"
+          }
+        ]
+      },
       "Next": "Get Links From Content",
       "ResultPath": null
     },

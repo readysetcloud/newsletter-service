@@ -260,9 +260,6 @@ Resources:
             - Effect: Allow
               Action: states:StartExecution
               Resource: !Ref StageIssueStateMachine
-            - Effect: Allow
-              Action: events:PutEvents
-              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
       Environment:
         Variables:
           OWNER: !Ref GitHubOwner

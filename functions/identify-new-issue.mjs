@@ -1,10 +1,8 @@
 import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
-import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import frontmatter from '@github-docs/frontmatter';
 import { getOctokit } from './utils/helpers.mjs';
 
 const sfn = new SFNClient();
-const eventBridge = new EventBridgeClient();
 let octokit;
 
 export const handler = async (event) => {
@@ -17,8 +15,8 @@ export const handler = async (event) => {
     if (recentCommits.length) {
       const newContent = await getNewContent(recentCommits);
       if (newContent.length) {
-        const data = await getContentData(newContent);
-        await processNewContent(data);
+        const data = await getIssueData(newContent);
+        await processNewIssue(data);
       }
     }
   } catch (err) {
@@ -72,7 +70,7 @@ const getNewContent = async (commits) => {
   return content;
 };
 
-const getContentData = async (newContent) => {
+const getIssueData = async (newContent) => {
   const contentData = await Promise.allSettled(newContent.map(async (content) => {
     const postContent = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
       owner: process.env.OWNER,
@@ -102,20 +100,24 @@ const getContentData = async (newContent) => {
   return allContent;
 };
 
-const processNewContent = async (newContent) => {
+const processNewIssue = async (newContent) => {
   const today = new Date();
   const executions = await Promise.allSettled(newContent.map(async (content) => {
     const metadata = frontmatter(content.content);
     let postDate = metadata.data.date;
-    if(!postDate.includes('T')){
+    if (!postDate.includes('T')) {
       postDate = `${postDate}T23:59:59`;
     }
-    const date = new Date(metadata.data.date);
+
+    const date = new Date(postDate);
     if (date > today) {
-      await scheduleFuturePost(content, metadata.data.date);
-    } else {
-      await processContentNow(content);
+      content.futureDate = `${metadata.data.date.split('T')[0]}T12:00:00Z`;
     }
+
+    await sfn.send(new StartExecutionCommand({
+      stateMachineArn: process.env.STATE_MACHINE_ARN,
+      input: JSON.stringify(content)
+    }));
   }));
 
   for (const execution of executions) {
@@ -123,29 +125,4 @@ const processNewContent = async (newContent) => {
       console.error(execution.reason);
     }
   }
-};
-
-const scheduleFuturePost = async (content, date) => {
-  await eventBridge.send(new PutEventsCommand({
-    Entries: [
-      {
-        Source: 'rsc.identify-new-content',
-        DetailType: 'Schedule Post',
-        Detail: JSON.stringify({
-          fileName: content.fileName,
-          commit: content.commit,
-          date: date,
-          type: 'newsletter'
-        })
-      }
-    ]
-  }
-  ));
-};
-
-const processContentNow = async (content) => {
-  await sfn.send(new StartExecutionCommand({
-    stateMachineArn: process.env.STATE_MACHINE_ARN,
-    input: JSON.stringify(content)
-  }));
 };

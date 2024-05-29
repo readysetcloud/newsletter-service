@@ -20,11 +20,11 @@
     "zlib": "^1.0.5"
   },
   "devDependencies": {
-    "@aws-sdk/client-dynamodb": "^3.577.0",
-    "@aws-sdk/client-eventbridge": "^3.577.0",
+    "@aws-sdk/client-dynamodb": "^3.585.0",
+    "@aws-sdk/client-eventbridge": "^3.583.0",
     "@aws-sdk/client-secrets-manager": "^3.583.0",
-    "@aws-sdk/client-sfn": "^3.577.0",
-    "@aws-sdk/util-dynamodb": "^3.577.0",
+    "@aws-sdk/client-sfn": "^3.583.0",
+    "@aws-sdk/util-dynamodb": "^3.585.0",
     "@babel/core": "^7.24.6",
     "@babel/preset-env": "^7.24.6",
     "@eslint/js": "^9.3.0",

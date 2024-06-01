@@ -23,10 +23,25 @@ jobs:
     name: Deploy
     runs-on: ubuntu-latest
     steps:
-      - name: Call reusable deploy workflow
-        uses: ./.github/workflows/sam.yaml
+      - uses: actions/checkout@v4
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.STAGE_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.STAGE_SECRET_KEY }}
-          environment: production
-          distribution-list-id: 4e9ba0a2-7c0a-4946-93d9-7ece72d2d3aa
+          aws-region: us-east-1
+          aws-access-key-id: ${{ secrets.PROD_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.PROD_SECRET_KEY }}
+
+      - name: SAM Build and Deploy
+        run: |
+          npm install -g esbuild
+          npm ci
+
+          sam --info
+          sam build --parallel
+
+          sam deploy \
+          --stack-name newsletter-service \
+          --resolve-s3 \
+          --no-fail-on-empty-changeset \
+          --capabilities CAPABILITY_IAM \
+          --parameter-overrides Environment=production SendGridDistributionListId=4e9ba0a2-7c0a-4946-93d9-7ece72d2d3aa

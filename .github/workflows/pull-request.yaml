@@ -25,13 +25,28 @@ jobs:
     if: ${{ github.actor != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Call reusable deploy workflow
-        uses: ./.github/workflows/sam.yaml
+      - uses: actions/checkout@v4
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
         with:
+          aws-region: us-east-1
           aws-access-key-id: ${{ secrets.STAGE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.STAGE_SECRET_KEY }}
-          environment: stage
-          distribution-list-id: 5e5efcd1-aea6-4afe-9eee-5b14540c4bf3
+
+      - name: SAM Build and Deploy
+        run: |
+          npm install -g esbuild
+          npm ci
+
+          sam --info
+          sam build --parallel
+
+          sam deploy \
+          --stack-name newsletter-service \
+          --resolve-s3 \
+          --no-fail-on-empty-changeset \
+          --capabilities CAPABILITY_IAM \
+          --parameter-overrides Environment=stage SendGridDistributionListId=5e5efcd1-aea6-4afe-9eee-5b14540c4bf3
 
   deploy-dependabot:
     name: Deploy Dependabot Updates
@@ -41,13 +56,28 @@ jobs:
       pull-requests: write
       contents: write
     steps:
-      - name: Call reusable deploy workflow
-        uses: ./.github/workflows/sam.yaml
+      - uses: actions/checkout@v4
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
         with:
+          aws-region: us-east-1
           aws-access-key-id: ${{ secrets.DEPENDABOT_STAGE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.DEPENDABOT_STAGE_SECRET_KEY }}
-          environment: stage
-          distribution-list-id: 5e5efcd1-aea6-4afe-9eee-5b14540c4bf3
+
+      - name: SAM Build and Deploy
+        run: |
+          npm install -g esbuild
+          npm ci
+
+          sam --info
+          sam build --parallel
+
+          sam deploy \
+          --stack-name newsletter-service \
+          --resolve-s3 \
+          --no-fail-on-empty-changeset \
+          --capabilities CAPABILITY_IAM \
+          --parameter-overrides Environment=stage SendGridDistributionListId=5e5efcd1-aea6-4afe-9eee-5b14540c4bf3
 
   auto-merge-dependabot-update:
     name: Auto Merge Dependabot Update

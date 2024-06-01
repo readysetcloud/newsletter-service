@@ -1,6 +1,6 @@
 openapi: 3.0.0
 info:
-  title: Ready, Set, Cloud API
+  title: Newsletter API
   description: |
     Used to manage contacts for newsletter and other updates
   version: 1.0.0

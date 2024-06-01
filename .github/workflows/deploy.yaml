@@ -23,53 +23,10 @@ jobs:
     name: Deploy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Configure AWS
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Call reusable deploy workflow
+        uses: ./.github/workflows/sam.yaml
         with:
-          aws-region: us-east-1
-          aws-access-key-id: ${{ secrets.PROD_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.PROD_SECRET_KEY }}
-
-      - name: SAM Build and Deploy
-        run: |
-          npm install -g esbuild
-          npm ci
-
-          sam --info
-          sam build --parallel
-
-          sam deploy \
-          --stack-name newsletter-service \
-          --resolve-s3 \
-          --no-fail-on-empty-changeset \
-          --capabilities CAPABILITY_IAM \
-          --parameter-overrides Environment=production SendGridDistributionListId=4e9ba0a2-7c0a-4946-93d9-7ece72d2d3aa
-    secrets: inherit
-
-  auto-merge-dependabot-update:
-    name: Auto Merge Dependabot Update
-    needs: [deploy]
-    if: ${{ github.actor == 'dependabot[bot]' && github.event_name == 'pull_request' }}
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-      contents: write
-    steps:
-      - name: Dependabot metadata
-        id: dependabot-metadata
-        uses: dependabot/fetch-metadata@v2
-      - uses: actions/checkout@v4
-      - name: Approve a PR if not already approved
-        if: ${{ steps.dependabot-metadata.outputs.update-type == 'version-update:semver-minor' || steps.dependabot-metadata.outputs.update-type == 'version-update:semver-patch' || steps.dependabot-metadata.outputs.package-ecosystem == 'github_actions' }}
-        env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh pr checkout "$PR_URL" # sets the upstream metadata for `gh pr status`
-
-          if [ "$(gh pr status --json reviewDecision -q .currentBranch.reviewDecision)" != "APPROVED" ]; then
-            gh pr review --approve "$PR_URL"
-          fi
-
-          gh pr merge --auto --merge "$PR_URL"
+          aws-access-key-id: ${{ secrets.STAGE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.STAGE_SECRET_KEY }}
+          environment: production
+          distribution-list-id: 4e9ba0a2-7c0a-4946-93d9-7ece72d2d3aa

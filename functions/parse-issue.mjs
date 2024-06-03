@@ -49,7 +49,7 @@ export const handler = async (state) => {
   if (lastWordsIndex >= 0) {
     let lastWords = sections[lastWordsIndex];
     sections.splice(lastWordsIndex, 1);
-    lastWords = convertToHtml(lastWords.raw.split('Happy Coding!')[0]);
+    lastWords = convertToHtml(lastWords.raw);
 
     dataTemplate.content.lastWords = lastWords;
   }
@@ -93,7 +93,7 @@ const processSection = (section, sponsor) => {
 };
 
 const processTipOfTheWeek = (section) => {
-  const tweets = section.raw.matchAll(/\{\{<tweet user="([a-zA-Z0-9]*)" id="([\d]*)">\}\}/g);
+  const tweets = section.raw.matchAll(/\{\{<tweet user="([a-zA-Z0-9_-]*)" id="([\d]*)">\}\}/g);
   for (const tweet of tweets) {
     let text = section.raw.replace(tweet[0], '').trim();
     text = convertToHtml(text, true);

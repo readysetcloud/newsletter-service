@@ -1,0 +1,25 @@
+name: Pre-deployment validations
+
+on:
+  workflow_call:
+
+jobs:
+  eslint:
+    name: Lint JS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure NPM
+        run: |
+          npm ci
+          npm run lint
+
+  unit-tests:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit Tests
+        run: |
+          npm ci
+          npm run coverage

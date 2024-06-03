@@ -3,6 +3,22 @@ Transform: AWS::Serverless-2016-10-31
 Description: >
   Newsletter service powering Serverless Picks of the Week
 
+Parameters:
+  SendGridDistributionListId:
+    Type: String
+  SendGridSenderId:
+    Type: String
+    Default: '4700440'
+  SendGridTemplateId:
+    Type: String
+    Default: d-b231d6ee5c2346e489b0cceb9a430582
+  SendGridTemplateVersionId:
+    Type: String
+    Default: cca59fb9-1507-4f2a-8df0-0b52b403a128
+  Environment:
+    Type: String
+    AllowedValues: [ sandbox, stage, production ]
+
 Metadata:
   esbuild-properties: &esbuild-properties
     Format: esm
@@ -17,36 +33,6 @@ Metadata:
       - js=import { createRequire } from 'module'; const require = createRequire(import.meta.url);
     External:
       - '@aws-sdk/*'
-
-Parameters:
-  AmplifyAppId:
-    Type: String
-    Default: d31uo0a8ezw8ek
-  SendGridDistributionListId:
-    Type: String
-    Default: 4e9ba0a2-7c0a-4946-93d9-7ece72d2d3aa
-  SendGridSenderId:
-    Type: String
-    Default: '4700440'
-  AdminEmail:
-    Type: String
-    Default: allenheltondev@gmail.com
-  SendGridTemplateId:
-    Type: String
-    Default: d-b231d6ee5c2346e489b0cceb9a430582
-  SendGridTemplateVersionId:
-    Type: String
-    Default: cca59fb9-1507-4f2a-8df0-0b52b403a128
-  GitHubOwner:
-    Type: String
-    Default: readysetcloud
-  GitHubRepo:
-    Type: String
-    Default: ready-set-cloud
-  Environment:
-    Type: String
-    AllowedValues: [ sandbox, stage, production ]
-    Default: sandbox
 
 Conditions:
   DeployProductionResources:
@@ -67,7 +53,7 @@ Globals:
     Environment:
       Variables:
         AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
-        SECRET_ID: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+        SECRET_ID: "{{resolve:ssm:/readysetcloud/secrets}}"
   Api:
     Cors:
       AllowMethods: "'POST,OPTIONS'"
@@ -141,7 +127,7 @@ Resources:
           Statement:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
       Environment:
         Variables:
           LIST_ID: !Ref SendGridDistributionListId
@@ -203,7 +189,7 @@ Resources:
           Statement:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
       Environment:
         Variables:
           LIST_ID: !Ref SendGridDistributionListId
@@ -230,14 +216,14 @@ Resources:
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
             - Effect: Allow
               Action: dynamodb:GetItem
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          OWNER: !Ref GitHubOwner
-          REPO: !Ref GitHubRepo
+          OWNER: '{{resolve:ssm:/readysetcloud/github-owner}}'
+          REPO: '{{resolve:ssm:/readysetcloud/github-repo}}'
           TABLE_NAME: !Ref NewsletterTable
 
   IdentifyNewIssueFunction:
@@ -256,14 +242,14 @@ Resources:
           Statement:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
             - Effect: Allow
               Action: states:StartExecution
               Resource: !Ref StageIssueStateMachine
       Environment:
         Variables:
-          OWNER: !Ref GitHubOwner
-          REPO: !Ref GitHubRepo
+          OWNER: '{{resolve:ssm:/readysetcloud/github-owner}}'
+          REPO: '{{resolve:ssm:/readysetcloud/github-repo}}'
           COMMIT_TIME_TOLERANCE_MINUTES: 10
           STATE_MACHINE_ARN: !Ref StageIssueStateMachine
       Events:
@@ -277,7 +263,7 @@ Resources:
                 - Amplify Deployment Status Change
               detail:
                 appId:
-                  - !Ref AmplifyAppId
+                  - '{{resolve:ssm:/readysetcloud/amplify-app-id}}'
                 jobStatus:
                   - SUCCEED
 
@@ -297,7 +283,7 @@ Resources:
           Statement:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/serverless-toolbox/secrets}}"
+              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
             - Effect: Allow
               Action: dynamodb:Query
               Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}/index/GSI1
@@ -309,8 +295,8 @@ Resources:
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
-          OWNER: !Ref GitHubOwner
-          REPO: !Ref GitHubRepo
+          OWNER: '{{resolve:ssm:/readysetcloud/github-owner}}'
+          REPO: '{{resolve:ssm:/readysetcloud/github-repo}}'
       Events:
         AmplifyBuildSuccessful:
           Type: EventBridgeRule
@@ -322,7 +308,7 @@ Resources:
                 - Amplify Deployment Status Change
               detail:
                 appId:
-                  - !Ref AmplifyAppId
+                  - '{{resolve:ssm:/readysetcloud/amplify-app-id}}'
                 jobStatus:
                   - SUCCEED
 
@@ -335,12 +321,12 @@ Resources:
         DynamodbQuery: !Sub arn:${AWS::Partition}:states:::aws-sdk:dynamodb:query
         TableName: !Ref NewsletterTable
         LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
-        SendApiRequest: "{{resolve:ssm:/serverless-toolbox/send-api-request}}"
+        SendApiRequest: "{{resolve:ssm:/readysetcloud/send-api-request}}"
         GetTopLinks: !GetAtt GetTopLinkFunction.Arn
         BuildReportEmail: !GetAtt BuildReportEmailFunction.Arn
         DynamodbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
-        AdminEmail: !Ref AdminEmail
+        AdminEmail: '{{resolve:ssm:/readysetcloud/admin-email}}'
         ListId: !Ref SendGridDistributionListId
       Policies:
         - Version: 2012-10-17
@@ -356,7 +342,7 @@ Resources:
             - Effect: Allow
               Action: lambda:InvokeFunction
               Resource:
-                - "{{resolve:ssm:/serverless-toolbox/send-api-request}}"
+                - "{{resolve:ssm:/readysetcloud/send-api-request}}"
                 - !GetAtt GetTopLinkFunction.Arn
                 - !GetAtt BuildReportEmailFunction.Arn
             - Effect: Allow
@@ -379,7 +365,7 @@ Resources:
         GetNextIssueDate: !GetAtt GetNextIssueDateFunction.Arn
         DynamodbGetItem: !Sub arn:${AWS::Partition}:states:::dynamodb:getItem
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
-        AdminEmail: !Ref AdminEmail
+        AdminEmail: '{{resolve:ssm:/readysetcloud/admin-email}}'
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -412,7 +398,7 @@ Resources:
         StageIssue: !GetAtt StageIssueFunction.Arn
         DynamodbUpdateItem: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
-        SendApiRequest: "{{resolve:ssm:/serverless-toolbox/send-api-request}}"
+        SendApiRequest: "{{resolve:ssm:/readysetcloud/send-api-request}}"
         SfnStartExecution: !Sub arn:${AWS::Partition}:states:::states:startExecution.sync:2
         GetMarkdownLinks: !GetAtt GetMarkdownLinksFunction.Arn
         UpdateLinksWithRedirects: !GetAtt UpdateLinksWithRedirectsFunction.Arn
@@ -420,7 +406,7 @@ Resources:
         SchedulerCreateSchedule: !Sub arn:${AWS::Partition}:states:::aws-sdk:scheduler:createSchedule
         PublishTopContentStateMachine: !Ref PublishTopContentStateMachine
         PublishTopContentRole: !GetAtt PublishTopContentRole.Arn
-        AdminEmail: !Ref AdminEmail
+        AdminEmail: '{{resolve:ssm:/readysetcloud/admin-email}}'
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -435,7 +421,7 @@ Resources:
               Resource:
                 - !GetAtt StageIssueFunction.Arn
                 - !GetAtt ParseIssueFunction.Arn
-                - "{{resolve:ssm:/serverless-toolbox/send-api-request}}"
+                - "{{resolve:ssm:/readysetcloud/send-api-request}}"
                 - !GetAtt GetMarkdownLinksFunction.Arn
                 - !GetAtt UpdateLinksWithRedirectsFunction.Arn
             - Effect: Allow
@@ -642,6 +628,12 @@ Resources:
             CustomOriginConfig:
               OriginProtocolPolicy: match-viewer
 
+  RedirectLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 3
+      LogGroupName: /aws/cloudfront/function/newsletter-redirect
+
   HandleLogSubscriptionFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -666,7 +658,7 @@ Resources:
         Logs:
           Type: CloudWatchLogs
           Properties:
-            LogGroupName: /aws/cloudfront/function/redirect-function
+            LogGroupName: /aws/cloudfront/function/newsletter-redirect
             FilterPattern: '{$.key = *}'
 
   GetMarkdownLinksFunction:

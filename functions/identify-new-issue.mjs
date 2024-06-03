@@ -105,13 +105,13 @@ const processNewIssue = async (newContent) => {
   const executions = await Promise.allSettled(newContent.map(async (content) => {
     const metadata = frontmatter(content.content);
     let postDate = metadata.data.date;
-    if (!postDate.includes('T')) {
-      postDate = `${postDate}T23:59:59`;
+    if (postDate.toISOString().indexOf('T00:00:00.000Z') > -1) {
+      postDate = `${postDate.toISOString().split('T')[0]}T12:00:00Z`;
     }
 
     const date = new Date(postDate);
     if (date > today) {
-      content.futureDate = `${metadata.data.date.split('T')[0]}T12:00:00Z`;
+      content.futureDate = `${metadata.data.date.toISOString().split('T')[0]}T12:00:00Z`;
     }
 
     await sfn.send(new StartExecutionCommand({

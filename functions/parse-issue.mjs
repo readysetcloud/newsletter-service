@@ -67,10 +67,14 @@ export const handler = async (state) => {
   const topStatsDate = new Date(newsletterDate);
   topStatsDate.setDate(topStatsDate.getDate() + 3);
 
+  const reportStatsDate = new Date(newsletterDate);
+  topStatsDate.setDate(reportStatsDate.getDate() + 5);
+
   return {
     data: dataTemplate,
     sendAtDate: newsletterDate.toISOString(),
     getTopStatsDate: topStatsDate.toISOString().split('.')[0],
+    reportStatsDate: reportStatsDate.toISOString().split('.')[0],
     subject: `Serverless Picks of the Week #${dataTemplate.metadata.number} - ${dataTemplate.metadata.title}`
   };
 };

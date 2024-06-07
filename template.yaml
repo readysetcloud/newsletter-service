@@ -109,7 +109,37 @@ Resources:
   ScheduleGroup:
     Type: AWS::Scheduler::ScheduleGroup
     Properties:
-      Name: picks-of-the-week
+      Name: newsletter
+
+  AddTenantFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - add-update-tenant.mjs
+    Properties:
+      Handler: add-update-tenant.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+      Events:
+        CreationEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - rsc-core
+              detail-type:
+                - Add/Update Tenant
 
   AddSubscriberFunction:
     Type: AWS::Serverless::Function
@@ -312,6 +342,64 @@ Resources:
                 jobStatus:
                   - SUCCEED
 
+  ImportFromGitHubFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - import-issue-from-github.mjs
+    Properties:
+      Handler: import-issue-from-github.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/newsletter/*
+            - Effect: Allow
+              Action: dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action: states:StartExecution
+              Resource: !Ref StageIssueStateMachine
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          STATE_MACHINE_ARN: !Ref StageIssueStateMachine
+      Events:
+        AmplifyBuildSuccessful:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              detail-type:
+                - Create Newsletter Issue
+              detail:
+                source:
+                  - github
+
+  ReportStatsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ReportIssueStats
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !GetAtt ReportStatsStateMachine.Arn
+
   ReportStatsStateMachine:
     Type: AWS::Serverless::StateMachine
     Properties:
@@ -348,11 +436,6 @@ Resources:
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
-      Events:
-        Trigger:
-          Type: Schedule
-          Properties:
-            Schedule: "cron(0 15 ? * FRI *)"
 
   SendAdCopyReminderStateMachine:
     Type: AWS::Serverless::StateMachine
@@ -406,7 +489,8 @@ Resources:
         SchedulerCreateSchedule: !Sub arn:${AWS::Partition}:states:::aws-sdk:scheduler:createSchedule
         PublishTopContentStateMachine: !Ref PublishTopContentStateMachine
         PublishTopContentRole: !GetAtt PublishTopContentRole.Arn
-        AdminEmail: '{{resolve:ssm:/readysetcloud/admin-email}}'
+        ReportStatsStateMachine: !Ref ReportStatsStateMachine
+        ReportStatsRole: !GetAtt ReportStatsRole.Arn
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -443,10 +527,14 @@ Resources:
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule
             - Effect: Allow
               Action: scheduler:CreateSchedule
-              Resource: !Sub arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/picks-of-the-week/NEWSLETTER-STATS*
+              Resource:
+                - !Sub arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/newsletter/NEWSLETTER-STATS*
+                - !Sub arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/newsletter/ISSUE-STATS*
             - Effect: Allow
               Action: iam:PassRole
-              Resource: !GetAtt PublishTopContentRole.Arn
+              Resource:
+                - !GetAtt PublishTopContentRole.Arn
+                - !GetAtt ReportStatsRole.Arn
 
   RedirectKeyValueStore:
     Type: AWS::CloudFront::KeyValueStore

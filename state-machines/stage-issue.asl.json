@@ -195,7 +195,80 @@
         }
       ],
       "OutputPath": "$.Payload",
-      "Next": "Stage In SendGrid"
+      "Next": "Is Preview?"
+    },
+    "Is Preview?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$$.Execution.Input.isPreview",
+          "BooleanEquals": true,
+          "Next": "Send Preview"
+        }
+      ],
+      "Default": "Stage In SendGrid"
+    },
+    "Send Preview": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "Parameters": {
+        "FunctionName": "${StageIssue}",
+        "Payload": {
+          "data.$": "$.data",
+          "subject.$": "$.subject",
+          "email.$": "$$.Execution.Input.email",
+          "isPreview": true
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Update Issue Record - Failure"
+        }
+      ],
+      "ResultPath": "$.sendgrid",
+      "Next": "Update Issue Record - Previewed"
+    },
+    "Update Issue Record - Previewed": {
+      "Type": "Task",
+      "Resource": "${DynamoDbUpdateItem}",
+      "Parameters": {
+        "TableName": "${TableName}",
+        "Key": {
+          "pk": {
+            "S.$": "$$.Execution.Input.key"
+          },
+          "sk": {
+            "S": "newsletter"
+          }
+        },
+        "UpdateExpression": "SET #status = :status",
+        "ExpressionAttributeNames": {
+          "#status": "status"
+        },
+        "ExpressionAttributeValues": {
+          ":status": {
+            "S": "failed"
+          }
+        }
+      },
+      "End": true,
+      "ResultPath": null
     },
     "Stage In SendGrid": {
       "Type": "Task",
@@ -275,7 +348,7 @@
     },
     "Update Issue Record - Failure": {
       "Type": "Task",
-      "Resource": "${DynamodbUpdateItem}",
+      "Resource": "${DynamoDbUpdateItem}",
       "Parameters": {
         "TableName": "${TableName}",
         "Key": {
@@ -301,7 +374,7 @@
     },
     "Update Issue Record - Success": {
       "Type": "Task",
-      "Resource": "${DynamodbUpdateItem}",
+      "Resource": "${DynamoDbUpdateItem}",
       "Parameters": {
         "TableName": "${TableName}",
         "Key": {

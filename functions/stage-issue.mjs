@@ -1,8 +1,10 @@
 import Handlebars from 'handlebars';
 import sendgrid from '@sendgrid/client';
 import { getSecret } from '@aws-lambda-powertools/parameters/secrets';
+import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 
 let apiKey;
+const eventBridge = new EventBridgeClient();
 
 export const handler = async (state) => {
   try {
@@ -16,9 +18,13 @@ export const handler = async (state) => {
     const template = await getNewsletterTemplate();
     const newsletter = enrichTemplate(template, state.data);
 
-    const singleSendId = await createSingleSend(newsletter, state.subject, state.sendAtDate);
+    if (state.isPreview) {
+      await sendPreview(newsletter, state.subject, state.email);
+    } else {
+      const singleSendId = await createSingleSend(newsletter, state.subject, state.sendAtDate);
 
-    return { id: singleSendId };
+      return { id: singleSendId };
+    }
   } catch (err) {
     console.error(err);
     throw err;
@@ -74,4 +80,18 @@ const createSingleSend = async (newsletter, subject, sendAtDate) => {
   const [response, body] = await sendgrid.request(request);
 
   return response.body.id;
+};
+
+const sendPreview = async (newsletter, subject, email) => {
+  await eventBridge.send(new PutEventsCommand({
+    Entries: [{
+      Source: 'newsletter-service',
+      DetailType: 'Send Email',
+      Detail: JSON.stringify({
+        subject: `[Preview] ${subject}`,
+        to: email,
+        html: newsletter.html
+      })
+    }]
+  }));
 };

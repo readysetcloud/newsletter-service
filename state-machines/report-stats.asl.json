@@ -13,7 +13,7 @@
         },
         "ExpressionAttributeValues": {
           ":GSI1PK": {
-            "S": "newsletter"
+            "S.$": "States.Format('{}#newsletter', $$.Execution.Input.tenant.id)"
           }
         },
         "ScanIndexForward": false,
@@ -142,7 +142,7 @@
                 "TableName": "${TableName}",
                 "Item": {
                   "pk": {
-                    "S": "newsletter"
+                    "S.$": "States.Format('{}#newsletter', $$.Execution.Input.tenant.email)"
                   },
                   "sk": {
                     "S.$": "States.Format('subscribers#{}', States.ArrayGetItem(States.StringSplit($$.Execution.StartTime, 'T'), 0))"
@@ -172,7 +172,7 @@
                 },
                 "ExpressionAttributeValues": {
                   ":pk": {
-                    "S": "newsletter"
+                    "S.$": "States.Format('{}#newsletter', $$.Execution.Input.tenant.id)"
                   },
                   ":sk": {
                     "S": "subscribers#"
@@ -227,7 +227,7 @@
           {
             "Detail": {
               "subject.$": "$.subject",
-              "to": "${AdminEmail}",
+              "to.$": "$$.Execution.Input.tenant.email",
               "html.$": "$.content"
             },
             "DetailType": "Send Email",

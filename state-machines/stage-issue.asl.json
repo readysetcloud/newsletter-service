@@ -9,7 +9,7 @@
         "TableName": "${TableName}",
         "Key": {
           "pk": {
-            "S.$": "States.Format('{}#{}', $.commit, $.fileName)"
+            "S.$": "$$.Execution.Input.key"
           },
           "sk": {
             "S": "newsletter"
@@ -52,7 +52,7 @@
         "TableName": "${TableName}",
         "Item": {
           "pk": {
-            "S.$": "States.Format('{}#{}', $.commit, $.fileName)"
+            "S.$": "$$.Execution.Input.key"
           },
           "sk": {
             "S": "newsletter"
@@ -131,7 +131,7 @@
         "Input": {
           "AWS_STEP_FUNCTIONS_STARTED_BY_EXECUTION_ID.$": "$$.Execution.Id",
           "links.$": "$.links.Payload.links",
-          "campaign.$": "$$.Execution.Input.fileName"
+          "campaign.$": "$$.Execution.Input.key"
         }
       },
       "ResultPath": "$.redirects",
@@ -191,7 +191,7 @@
           "ErrorEquals": [
             "States.ALL"
           ],
-          "Next": "Update Issue Record (Failure)"
+          "Next": "Update Issue Record - Failure"
         }
       ],
       "OutputPath": "$.Payload",
@@ -223,7 +223,7 @@
           "ErrorEquals": [
             "States.ALL"
           ],
-          "Next": "Update Issue Record (Failure)"
+          "Next": "Update Issue Record - Failure"
         }
       ],
       "ResultPath": "$.sendgrid"
@@ -262,25 +262,25 @@
           "BackoffRate": 2
         }
       ],
-      "Next": "Save Records",
+      "Next": "Update Issue Record - Success",
       "ResultPath": null,
       "Catch": [
         {
           "ErrorEquals": [
             "States.ALL"
           ],
-          "Next": "Update Issue Record (Failure)"
+          "Next": "Update Issue Record - Failure"
         }
       ]
     },
-    "Update Issue Record (Failure)": {
+    "Update Issue Record - Failure": {
       "Type": "Task",
       "Resource": "${DynamodbUpdateItem}",
       "Parameters": {
         "TableName": "${TableName}",
         "Key": {
           "pk": {
-            "S.$": "States.Format('{}#{}', $$.Execution.Input.commit, $$.Execution.Input.fileName)"
+            "S.$": "$$.Execution.Input.key"
           },
           "sk": {
             "S": "newsletter"
@@ -299,96 +299,96 @@
       "End": true,
       "ResultPath": null
     },
-    "Save Records": {
-      "Type": "Parallel",
-      "Next": "Schedule Top Stats",
-      "Branches": [
-        {
-          "StartAt": "Save Issue",
-          "States": {
-            "Save Issue": {
-              "Type": "Task",
-              "Resource": "${DynamodbPutItem}",
-              "Parameters": {
-                "TableName": "${TableName}",
-                "Item": {
-                  "pk": {
-                    "S.$": "$$.Execution.Input.fileName"
-                  },
-                  "sk": {
-                    "S": "newsletter"
-                  },
-                  "GSI1PK": {
-                    "S": "newsletter"
-                  },
-                  "GSI1SK": {
-                    "S.$": "$.sendAtDate"
-                  },
-                  "singleSendId": {
-                    "S.$": "$.sendgrid.Payload.id"
-                  }
-                }
-              },
-              "ResultPath": null,
-              "End": true
-            }
-          }
-        },
-        {
-          "StartAt": "Update Issue Record (success)",
-          "States": {
-            "Update Issue Record (success)": {
-              "Type": "Task",
-              "Resource": "${DynamodbUpdateItem}",
-              "Parameters": {
-                "TableName": "${TableName}",
-                "Key": {
-                  "pk": {
-                    "S.$": "States.Format('{}#{}', $$.Execution.Input.commit, $$.Execution.Input.fileName)"
-                  },
-                  "sk": {
-                    "S": "newsletter"
-                  }
-                },
-                "UpdateExpression": "SET #status = :status",
-                "ExpressionAttributeNames": {
-                  "#status": "status"
-                },
-                "ExpressionAttributeValues": {
-                  ":status": {
-                    "S": "succeeded"
-                  }
-                }
-              },
-              "ResultPath": null,
-              "End": true
-            }
-          }
-        }
-      ],
-      "ResultPath": null
-    },
-    "Schedule Top Stats": {
+    "Update Issue Record - Success": {
       "Type": "Task",
-      "Next": "Notify of Success",
+      "Resource": "${DynamodbUpdateItem}",
       "Parameters": {
-        "ActionAfterCompletion": "DELETE",
-        "FlexibleTimeWindow": {
-          "Mode": "OFF"
-        },
-        "GroupName": "picks-of-the-week",
-        "Name.$": "States.Format('NEWSLETTER-STATS-{}', $.data.metadata.number)",
-        "ScheduleExpression.$": "States.Format('at({})', $.getTopStatsDate)",
-        "Target": {
-          "Arn": "${PublishTopContentStateMachine}",
-          "RoleArn": "${PublishTopContentRole}",
-          "Input": {
-            "campaign.$": "$$.Execution.Input.fileName"
+        "TableName": "${TableName}",
+        "Key": {
+          "pk": {
+            "S.$": "$$.Execution.Input.key"
+          },
+          "sk": {
+            "S": "newsletter"
           }
+        },
+        "UpdateExpression": "SET #status = :status, #GSIPK = :GSIPK, #GSISK = :GSISK, #singleSendId = :singleSendId",
+        "ExpressionAttributeNames": {
+          "#status": "status",
+          "#GSIPK": "GSI1PK",
+          "#GSISK": "GSI1SK",
+          "#singleSendId": "singleSendId"
+        },
+        "ExpressionAttributeValues": {
+          ":status": { "S": "succeeded" },
+          ":GSIPK": { "S.$": "States.Format('{}#newsletter', $$.Execution.Input.tenant.id)" },
+          ":GSISK": { "S.$": "$.sendAtDate" },
+          ":singleSendId": { "S.$": "$.sendgrid.Payload.id" }
         }
       },
-      "Resource": "${SchedulerCreateSchedule}",
-      "ResultPath": null
+      "ResultPath": null,
+      "Next": "Schedule Reports"
+    },
+    "Schedule Reports": {
+      "Type": "Parallel",
+      "Next": "Notify of Success",
+      "ResultPath": null,
+      "Branches": [
+        {
+          "StartAt": "Schedule Top Stats",
+          "States": {
+            "Schedule Top Stats": {
+              "Type": "Task",
+              "End": true,
+              "Parameters": {
+                "ActionAfterCompletion": "DELETE",
+                "FlexibleTimeWindow": {
+                  "Mode": "OFF"
+                },
+                "GroupName": "newsletter",
+                "Name.$": "States.Format('NEWSLETTER-STATS-{}', $.data.metadata.number)",
+                "ScheduleExpression.$": "States.Format('at({})', $.getTopStatsDate)",
+                "Target": {
+                  "Arn": "${PublishTopContentStateMachine}",
+                  "RoleArn": "${PublishTopContentRole}",
+                  "Input": {
+                    "campaign.$": "$$.Execution.Input.key"
+                  }
+                }
+              },
+              "Resource": "${SchedulerCreateSchedule}",
+              "ResultPath": null
+            }
+          }
+        },
+        {
+          "StartAt": "Schedule Issue Report",
+          "States": {
+            "Schedule Issue Report": {
+              "Type": "Task",
+              "End": true,
+              "Parameters": {
+                "ActionAfterCompletion": "DELETE",
+                "FlexibleTimeWindow": {
+                  "Mode": "OFF"
+                },
+                "GroupName": "newsletter",
+                "Name.$": "States.Format('ISSUE-STATS-{}', $.data.metadata.number)",
+                "ScheduleExpression.$": "States.Format('at({})', $.reportStatsDate)",
+                "Target": {
+                  "Arn": "${ReportStatsStateMachine}",
+                  "RoleArn": "${ReportStatsRole}",
+                  "Input": {
+                    "tenant": "$$.Execution.Input.tenant"
+                  }
+                }
+              },
+              "Resource": "${SchedulerCreateSchedule}",
+              "ResultPath": null
+            }
+          }
+        }
+      ]
     },
     "Notify of Success": {
       "Type": "Task",
@@ -397,7 +397,7 @@
         "Entries": [
           {
             "Detail": {
-              "to": "${AdminEmail}",
+              "to.$": "$$.Execution.Input.tenant.email",
               "subject.$": "States.Format('[Scheduled] {}', $.subject)",
               "html.$": "States.Format('<p>The newsletter was successfully scheduled for sending. There is nothing more to do, but if you wish to see the single send, click the link below.</p><p><a href=\"https://mc.sendgrid.com/single-sends/{}/review\">Click to view</a></p>', $.sendgrid.Payload.id)"
             },

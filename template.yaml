@@ -479,7 +479,7 @@ Resources:
         LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
         ParseIssue: !GetAtt ParseIssueFunction.Arn
         StageIssue: !GetAtt StageIssueFunction.Arn
-        DynamodbUpdateItem: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
+        DynamoDbUpdateItem: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
         SendApiRequest: "{{resolve:ssm:/readysetcloud/send-api-request}}"
         SfnStartExecution: !Sub arn:${AWS::Partition}:states:::states:startExecution.sync:2

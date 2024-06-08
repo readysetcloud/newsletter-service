@@ -34,7 +34,7 @@ const getIssueData = async (tenant, github) => {
   const postContent = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
     owner: tenant.github.owner,
     repo: tenant.github.repo,
-    path: encodeURIComponent(github.fileName),
+    path: github.fileName,
     ...github.branch && { ref: github.branch }
   });
 

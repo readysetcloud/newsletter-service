@@ -35,7 +35,7 @@ const getIssueData = async (tenant, github) => {
     owner: tenant.github.owner,
     repo: tenant.github.repo,
     path: github.fileName,
-    ...github.branch && { ref: github.branch }
+    ...github.branchName && { ref: github.branchName }
   });
 
   const buffer = Buffer.from(postContent.data.content, 'base64');

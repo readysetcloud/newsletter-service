@@ -358,7 +358,7 @@ Resources:
           Statement:
             - Effect: Allow
               Action: ssm:GetParameter
-              Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/newsletter/*
+              Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/rsc/*
             - Effect: Allow
               Action: dynamodb:GetItem
               Resource: !GetAtt NewsletterTable.Arn

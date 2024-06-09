@@ -62,15 +62,25 @@
           }
         }
       },
-      "Next": "Is Scheduled In The Future?",
+      "Next": "Is Scheduled In The Future And Not Preview?",
       "ResultPath": null
     },
-    "Is Scheduled In The Future?": {
+    "Is Scheduled In The Future And Not Preview?": {
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.futureDate",
-          "IsPresent": true,
+          "And": [
+            {
+              "Variable": "$.futureDate",
+              "IsPresent": true
+            },
+            {
+              "Not": {
+                "Variable": "$.isPreview",
+                "IsPresent": true
+              }
+            }
+          ],
           "Next": "Wait For Future Date"
         }
       ],
@@ -201,8 +211,16 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$$.Execution.Input.isPreview",
-          "BooleanEquals": true,
+          "And": [
+            {
+              "Variable": "$$.Execution.Input.isPreview",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$$.Execution.Input.isPreview",
+              "BooleanEquals": true
+            }
+          ],
           "Next": "Send Preview"
         }
       ],

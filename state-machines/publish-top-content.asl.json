@@ -70,12 +70,14 @@
               "messages": [
                 {
                   "platform": "twitter",
+                  "accountId": "readysetcloud",
                   "scheduledDate.$": "$.person.date",
                   "message.$": "States.Format(States.ArrayGetItem($.personMessages, States.MathRandom(0, States.ArrayLength($.personMessages))), $.person.link)",
                   "campaign.$": "$$.Execution.Input.campaign"
                 },
                 {
                   "platform": "twitter",
+                  "accountId": "readysetcloud",
                   "scheduledDate.$": "$.post.date",
                   "message.$": "States.Format(States.ArrayGetItem($.postMessages, States.MathRandom(0, States.ArrayLength($.postMessages))), $.post.link)",
                   "campaign.$": "$$.Execution.Input.campaign"

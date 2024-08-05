@@ -611,7 +611,8 @@ Resources:
         async function handler(event) {
             const request = event.request;
             const headers = request.headers;
-            const key = request.uri.split('/')[1]
+            const pieces = request.uri.split('/');
+            const key = pieces[pieces.length - 1];
             let value = "https://readysetcloud.io";
             try {
                 value = await kvsHandle.get(key);

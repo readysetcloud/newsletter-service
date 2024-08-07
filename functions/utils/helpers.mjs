@@ -20,7 +20,7 @@ export const getOctokit = async (tenantId) => {
 
     const auth = secrets.github;
     octokit = new Octokit({ auth });
-  }
+  } 
 
   return octokit;
 };

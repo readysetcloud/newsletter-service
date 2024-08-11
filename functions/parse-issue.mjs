@@ -68,7 +68,7 @@ export const handler = async (state) => {
   topStatsDate.setDate(topStatsDate.getDate() + 3);
 
   const reportStatsDate = new Date(newsletterDate);
-  topStatsDate.setDate(reportStatsDate.getDate() + 5);
+  reportStatsDate.setDate(reportStatsDate.getDate() + 5);
 
   return {
     data: dataTemplate,

@@ -470,7 +470,7 @@
                   "Arn": "${ReportStatsStateMachine}",
                   "RoleArn": "${ReportStatsRole}",
                   "Input": {
-                    "tenant": "$$.Execution.Input.tenant"
+                    "tenant.$": "$$.Execution.Input.tenant"
                   }
                 }
               },

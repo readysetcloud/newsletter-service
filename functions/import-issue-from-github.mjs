@@ -7,8 +7,7 @@ let octokit;
 
 export const handler = async (event) => {
   try {
-
-    const { github, tenantId, isPreview, email } = event.detail;
+    const { github, tenantId, email } = event.detail;
     const tenant = await getTenant(tenantId);
     octokit = await getOctokit(tenantId);
 
@@ -21,7 +20,8 @@ export const handler = async (event) => {
         email: tenant.email
       },
       key: `${tenant.pk}#${github.fileName}`,
-      ...(isPreview === true) && { isPreview: true, email }
+      isPreview: process.env.IS_PREVIEW === true || process.env.IS_PREVIEW === 'true',
+      ...email && { email }
     };
     await processNewIssue(issueData);
 

@@ -75,10 +75,8 @@
               "IsPresent": true
             },
             {
-              "Not": {
-                "Variable": "$.isPreview",
-                "IsPresent": true
-              }
+              "Variable": "$.isPreview",
+              "BooleanEquals": false
             }
           ],
           "Next": "Wait For Future Date"
@@ -180,7 +178,8 @@
         "FunctionName": "${ParseIssue}",
         "Payload": {
           "content.$": "$.updatedContent.Payload.content",
-          "fileName.$": "$$.Execution.Input.fileName"
+          "fileName.$": "$$.Execution.Input.fileName",
+          "isPreview.$": "$$.Execution.Input.isPreview"
         }
       },
       "Retry": [

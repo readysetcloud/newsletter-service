@@ -256,47 +256,6 @@ Resources:
           REPO: '{{resolve:ssm:/readysetcloud/github-repo}}'
           TABLE_NAME: !Ref NewsletterTable
 
-  IdentifyNewIssueFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - identify-new-issue.mjs
-    Properties:
-      Handler: identify-new-issue.handler
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
-            - Effect: Allow
-              Action: states:StartExecution
-              Resource: !Ref StageIssueStateMachine
-      Environment:
-        Variables:
-          OWNER: '{{resolve:ssm:/readysetcloud/github-owner}}'
-          REPO: '{{resolve:ssm:/readysetcloud/github-repo}}'
-          COMMIT_TIME_TOLERANCE_MINUTES: 10
-          STATE_MACHINE_ARN: !Ref StageIssueStateMachine
-      Events:
-        AmplifyBuildSuccessful:
-          Type: EventBridgeRule
-          Properties:
-            Pattern:
-              source:
-                - aws.amplify
-              detail-type:
-                - Amplify Deployment Status Change
-              detail:
-                appId:
-                  - '{{resolve:ssm:/readysetcloud/amplify-app-id}}'
-                jobStatus:
-                  - SUCCEED
-
   SyncRepoDataFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -369,6 +328,7 @@ Resources:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
           STATE_MACHINE_ARN: !Ref StageIssueStateMachine
+          IS_PREVIEW: !If [DeployStageResources, true, false]
       Events:
         AmplifyBuildSuccessful:
           Type: EventBridgeRule

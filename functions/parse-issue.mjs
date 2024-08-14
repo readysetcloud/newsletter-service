@@ -62,7 +62,9 @@ export const handler = async (state) => {
   });
 
   newsletterDate.setHours(14);
-  await updateSourceWithRedirects(state.fileName, newsletter.content, newsletter.data);
+  if (!state.isPreview) {
+    await updateSourceWithRedirects(state.fileName, newsletter.content, newsletter.data);
+  }
 
   const topStatsDate = new Date(newsletterDate);
   topStatsDate.setDate(topStatsDate.getDate() + 3);

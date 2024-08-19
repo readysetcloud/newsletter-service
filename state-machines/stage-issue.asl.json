@@ -233,7 +233,7 @@
         "Payload": {
           "data.$": "$.data",
           "subject.$": "$.subject",
-          "email.$": "$$.Execution.Input.email",
+          "email.$": "$$.Execution.Input.tenant.email",
           "isPreview": true
         }
       },

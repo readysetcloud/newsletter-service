@@ -142,7 +142,7 @@
                 "TableName": "${TableName}",
                 "Item": {
                   "pk": {
-                    "S.$": "States.Format('{}#newsletter', $$.Execution.Input.tenant.email)"
+                    "S.$": "States.Format('{}#newsletter', $$.Execution.Input.tenant.id)"
                   },
                   "sk": {
                     "S.$": "States.Format('subscribers#{}', States.ArrayGetItem(States.StringSplit($$.Execution.StartTime, 'T'), 0))"

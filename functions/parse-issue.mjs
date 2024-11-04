@@ -37,7 +37,7 @@ export const handler = async (state) => {
     content: {}
   };
 
-  const tipOfTheWeekIndex = sections.findIndex(ps => ps.header.toLowerCase() === 'tip of the week');
+  const tipOfTheWeekIndex = sections.findIndex(ps => ps.header.toLowerCase().includes('tip of the week'));
   if (tipOfTheWeekIndex >= 0) {
     let tipOfTheWeek = sections[tipOfTheWeekIndex];
     tipOfTheWeek = processTipOfTheWeek(tipOfTheWeek);
@@ -45,7 +45,7 @@ export const handler = async (state) => {
     dataTemplate.content.tipOfTheWeek = tipOfTheWeek;
   }
 
-  const lastWordsIndex = sections.findIndex(ps => ps.header.toLowerCase() === 'last words');
+  const lastWordsIndex = sections.findIndex(ps => ps.header.toLowerCase().includes('last words'));
   if (lastWordsIndex >= 0) {
     let lastWords = sections[lastWordsIndex];
     sections.splice(lastWordsIndex, 1);

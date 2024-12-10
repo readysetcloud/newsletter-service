@@ -496,6 +496,36 @@ Resources:
                 - !GetAtt PublishTopContentRole.Arn
                 - !GetAtt ReportStatsRole.Arn
 
+  CalculateClicksStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      DefinitionUri: state-machines/calculate-clicks.asl.json
+      DefinitionSubstitutions:
+        DynamoDbUpdate: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
+        TableName: !Ref NewsletterTable
+        CloudWatchStartQuery: !Sub arn:${AWS::Partition}:states:::aws-sdk:cloudwatchlogs:startQuery
+        CloudWatchGetQueryResults: !Sub arn:${AWS::Partition}:states:::aws-sdk:cloudwatchlogs:getQueryResults
+        LogGroupArn: !GetAtt RedirectLogGroup.Arn
+        RedirectLogs: !Ref RedirectLogGroup
+        HandleLogBatch: !GetAtt HandleLogBatchFunction.Arn
+        LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: logs:StartQuery
+              Resource: !GetAtt RedirectLogGroup.Arn
+            - Effect: Allow
+              Action: logs:GetQueryResults
+              Resource: "*"
+            - Effect: Allow
+              Action: dynamodb:UpdateItem
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !GetAtt HandleLogBatchFunction.Arn
+
   RedirectKeyValueStore:
     Type: AWS::CloudFront::KeyValueStore
     Properties:
@@ -578,7 +608,7 @@ Resources:
                 value = await kvsHandle.get(key);
                 console.log(JSON.stringify({key, value}));
             } catch (err) {
-                console.log(`Kvs key lookup failed.`);
+                console.log(`Kvs key lookup failed: ` + key);
             }
 
             const response = {
@@ -683,16 +713,16 @@ Resources:
       RetentionInDays: 3
       LogGroupName: /aws/cloudfront/function/newsletter-redirect
 
-  HandleLogSubscriptionFunction:
+  HandleLogBatchFunction:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
         <<: *esbuild-properties
         EntryPoints:
-          - handle-log-subscription.mjs
+          - handle-log-batch.mjs
     Properties:
-      Handler: handle-log-subscription.handler
+      Handler: handle-log-batch.handler
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -703,12 +733,6 @@ Resources:
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
-      Events:
-        Logs:
-          Type: CloudWatchLogs
-          Properties:
-            LogGroupName: /aws/cloudfront/function/newsletter-redirect
-            FilterPattern: '{$.key = *}'
 
   GetMarkdownLinksFunction:
     Type: AWS::Serverless::Function
@@ -760,11 +784,6 @@ Resources:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
 
-  PublishTopContentStateMachineLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      RetentionInDays: 3
-
   PublishTopContentRole:
     Type: AWS::IAM::Role
     Properties:
@@ -789,38 +808,34 @@ Resources:
     Type: AWS::Serverless::StateMachine
     Properties:
       DefinitionUri: state-machines/publish-top-content.asl.json
-      Tracing:
-        Enabled: true
-      Logging:
-        Level: ALL
-        IncludeExecutionData: True
-        Destinations:
-          - CloudWatchLogsLogGroup:
-              LogGroupArn: !GetAtt PublishTopContentStateMachineLogGroup.Arn
       DefinitionSubstitutions:
+        StepFunctionsStartExecution: !Sub arn:${AWS::Partition}:states:::states:startExecution.sync:2
+        CalculateClicks: !GetAtt CalculateClicksStateMachine.Arn
         LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
         GetTopLinks: !GetAtt GetTopLinkFunction.Arn
         PutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
       Policies:
         - Statement:
             - Effect: Allow
-              Action:
-                - logs:CreateLogDelivery
-                - logs:GetLogDelivery
-                - logs:UpdateLogDelivery
-                - logs:DeleteLogDelivery
-                - logs:ListLogDeliveries
-                - logs:PutResourcePolicy
-                - logs:DescribeResourcePolicies
-                - logs:DescribeLogGroups
-              Resource: "*"
-            - Effect: Allow
               Action: lambda:InvokeFunction
               Resource: !GetAtt GetTopLinkFunction.Arn
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
-      Type: EXPRESS
+            - Effect: Allow
+              Action: states:StartExecution
+              Resource: !GetAtt CalculateClicksStateMachine.Arn
+            - Effect: Allow
+              Action:
+                - states:DescribeExecution
+                - states:StopExecution
+              Resource: !Sub arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${CalculateClicksStateMachine.Name}:*
+            - Effect: Allow
+              Action:
+                - events:PutTargets
+                - events:PutRule
+                - events:DescribeRule
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule
 
   APIGatewayCloudWatchRole:
     Type: AWS::IAM::Role

@@ -1,0 +1,114 @@
+{
+  "QueryLanguage": "JSONata",
+  "Comment": "Gets the click count through cloudwatch insights for the redirects",
+  "StartAt": "Has start time?",
+  "States": {
+    "Has start time?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Next": "Start query",
+          "Condition": "{% $exists($states.context.Execution.Input.startTime) %}",
+          "Assign": {
+            "start": "{% $floor($toMillis($states.context.Execution.Input.startTime) / 1000) %}"
+          }
+        }
+      ],
+      "Default": "Get last run"
+    },
+    "Get last run": {
+      "Type": "Task",
+      "Arguments": {
+        "TableName": "${TableName}",
+        "Key": {
+          "pk": { "S": "redirect" },
+          "sk": { "S": "lastRun" }
+        },
+        "UpdateExpression": "SET #time = :time",
+        "ExpressionAttributeNames": {
+          "#time": "time"
+        },
+        "ExpressionAttributeValues": {
+          ":time": "{% $states.context.Execution.StartTime %}"
+        },
+        "ReturnValues": "UPDATED_OLD"
+      },
+      "Resource": "${DynamoDbUpdate}",
+      "Next": "Start query",
+      "Assign": {
+        "start": "{% ($floor($toMillis($states.result.Attributes.time.S) / 1000) + 1) %}"
+      }
+    },
+    "Start query": {
+      "Type": "Task",
+      "Arguments": {
+        "EndTime": "{% $floor($millis() / 1000) %}",
+        "QueryString": "fields @message, @timestamp | filter strcontains(@message, \"value\") | sort @timestamp desc | limit 250",
+        "StartTime": "{% $start %}",
+        "LogGroupName": "${RedirectLogs}"
+      },
+      "Resource": "${CloudWatchStartQuery}",
+      "Assign": {
+        "queryId": "{% $states.result.QueryId %}"
+      },
+      "Next": "Get query results"
+    },
+    "Get query results": {
+      "Type": "Task",
+      "Arguments": {
+        "QueryId": "{% $queryId %}"
+      },
+      "Resource": "${CloudWatchGetQueryResults}",
+      "Next": "Query status?"
+    },
+    "Query status?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Next": "Wait 5 seconds",
+          "Condition": "{% $states.input.Status = \"Running\" %}"
+        },
+        {
+          "Next": "Update Counts From Batch",
+          "Condition": "{% $states.input.Status = \"Complete\" and $count($states.input.Results) > 0 %}"
+        }
+      ],
+      "Default": "Success"
+    },
+    "Wait 5 seconds": {
+      "Type": "Wait",
+      "Seconds": 5,
+      "Next": "Get query results"
+    },
+    "Success": {
+      "Type": "Succeed"
+    },
+    "Update Counts From Batch": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "Output": "{% $states.result.Payload %}",
+      "Arguments": {
+        "FunctionName": "${HandleLogBatch}",
+        "Payload": "{% {\n \"results\": $states.input.Results\n}\n %}"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Next": "Start query",
+      "Assign": {
+        "start": "{% ($floor($toMillis($states.result.Payload.newestTimestamp)/1000) + 1) %}"
+      }
+    }
+  }
+}

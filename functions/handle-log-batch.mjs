@@ -23,6 +23,7 @@ export const handler = async (state) => {
     }
   }
 
+  console.log(JSON.stringify(keyCounts, null, 2));
   if(Object.keys(keyCounts).length > 0) {
     await updateKeyCounts(keyCounts);
   }

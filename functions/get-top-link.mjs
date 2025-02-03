@@ -2,7 +2,7 @@ import { DynamoDBClient, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 const ddb = new DynamoDBClient();
 
-const socialMedia = ['https://twitter.com', 'https://x.com', 'https://linkedin.com', 'https://github.com', 'https://bsky.app/profile'];
+const socialMedia = ['https://twitter.com', 'https://x.com', 'https://linkedin.com', 'https://github.com', 'https://bsky.app/profile', 'https://www.twitter.com', 'https://www.x.com', 'https://www.linkedin.com', 'https://www.github.com', 'https://www.bsky.app/profile'];
 
 export const handler = async (state) => {
   try {

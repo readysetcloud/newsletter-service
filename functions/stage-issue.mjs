@@ -54,11 +54,10 @@ const enrichTemplate = (template, data) => {
 };
 
 const createSingleSend = async (newsletter, subject, sendAtDate) => {
-  const date = new Date(sendAtDate);
   const campaign = {
     name: subject,
     categories: ['newsletter'],
-    send_at: date.toISOString(),
+    send_at: sendAtDate,
     send_to: {
       list_ids: [process.env.LIST_ID],
     },

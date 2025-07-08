@@ -20,7 +20,7 @@ export const getOctokit = async (tenantId) => {
 
     const auth = secrets.github;
     octokit = new Octokit({ auth });
-  } 
+  }
 
   return octokit;
 };
@@ -45,4 +45,15 @@ export const getTenant = async (tenantId) => {
     tenants.tenantId = data;
     return data;
   }
+};
+
+export const formatResponse = (statusCode, body) => {
+  return {
+    statusCode,
+    body: typeof body === 'string' ? JSON.stringify({ message: body }) : JSON.stringify(body),
+    headers: {
+      'Content-Type': 'application/json',
+      ...process.env.ORIGIN && { 'Access-Control-Allow-Origin': process.env.ORIGIN }
+    }
+  };
 };

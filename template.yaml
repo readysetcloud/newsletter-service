@@ -18,6 +18,9 @@ Parameters:
   Environment:
     Type: String
     AllowedValues: [ sandbox, stage, production ]
+  Origin:
+    Type: String
+    Default: 'https://www.readysetcloud.io'
 
 Metadata:
   esbuild-properties: &esbuild-properties
@@ -105,6 +108,9 @@ Resources:
               KeyType: RANGE
           Projection:
             ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
 
   ScheduleGroup:
     Type: AWS::Scheduler::ScheduleGroup
@@ -161,12 +167,69 @@ Resources:
       Environment:
         Variables:
           LIST_ID: !Ref SendGridDistributionListId
+          ORIGIN: !Ref Origin
       Events:
         FromApi:
           Type: Api
           Properties:
             RestApiId: !Ref NewsletterApi
             Path: /subscribers
+            Method: POST
+
+  SetupVotingOptionsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - setup-voting-options.mjs
+    Properties:
+      Handler: setup-voting-options.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-pro-v1:0
+            - Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+
+  VoteFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - vote.mjs
+    Properties:
+      Handler: vote.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+                - dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          ORIGIN: !Ref Origin
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /{tenant}/{slug}/votes
             Method: POST
 
   BuildReportEmailFunction:

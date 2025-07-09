@@ -21,7 +21,7 @@ export const handler = async (state) => {
         {
           role: 'user',
           content: [{
-            text: `Choose the top 3 most exciting articles based on the newsletter content below. You are tasked with coming up with the options for a vote for "best content". Select a 3-5 word friendly description for each one. Don't select the superhero as an option and make the descriptions unambiguous and feel like a complete thought. Use the 'format_vote' tool to generate the options you decide.
+            text: `Choose the top 4 most exciting articles based on the newsletter content below. You are tasked with coming up with the options for a vote for "best content". Select a 3-5 word friendly description for each one. Don't select the superhero as an option and make the descriptions unambiguous and feel like a complete thought. Use the 'format_vote' tool to generate the options you decide.
 ---
 EXAMPLES
 DSQL vs. Aurora
@@ -47,8 +47,8 @@ ${content}`
                   properties: {
                     options: {
                       type: 'array',
-                      minItems: 3,
-                      maxItems: 3,
+                      minItems: 4,
+                      maxItems: 4,
                       items: {
                         type: 'object',
                         properties: {
@@ -80,27 +80,32 @@ ${content}`
     throw new Error('Could not generate voting options');
   }
 
+  const voteItem = {
+    pk: `${tenant.id}#${slug}`,
+    sk: 'votes',
+    options
+  };
+
+  options.forEach(option => {
+    voteItem[option.id] = 0;
+  });
+
   await ddb.send(new PutItemCommand({
     TableName: process.env.TABLE_NAME,
-    Item: marshall({
-      pk: `${tenant.id}#${slug}`,
-      sk: 'votes',
-      options,
-      [options[0].id]: 0,
-      [options[1].id]: 0,
-      [options[2].id]: 0,
-    })
+    Item: marshall(voteItem)
   }));
 
   return options;
 };
 
 const getFormattedOptions = (slug, options) => {
-  return options.map((option, index) => {
+  const newOptions = options.map((option, index) => {
     const { description } = option;
     return {
       id: `${slug}-${index}`,
       description
     };
   });
+
+  return newOptions;
 };

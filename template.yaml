@@ -514,6 +514,7 @@ Resources:
         PublishTopContentRole: !GetAtt PublishTopContentRole.Arn
         ReportStatsStateMachine: !Ref ReportStatsStateMachine
         ReportStatsRole: !GetAtt ReportStatsRole.Arn
+        SetupVotingOptions: !GetAtt SetupVotingOptionsFunction.Arn
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -531,6 +532,7 @@ Resources:
                 - "{{resolve:ssm:/readysetcloud/send-api-request}}"
                 - !GetAtt GetMarkdownLinksFunction.Arn
                 - !GetAtt UpdateLinksWithRedirectsFunction.Arn
+                - !GetAtt SetupVotingOptionsFunction.Arn
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default

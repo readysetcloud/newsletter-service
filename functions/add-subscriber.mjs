@@ -1,5 +1,6 @@
 import sendgrid from '@sendgrid/client';
 import { getSecret } from '@aws-lambda-powertools/parameters/secrets';
+import { formatResponse } from './utils/helpers.mjs';
 
 let apiKey;
 
@@ -16,20 +17,12 @@ export const handler = async (event) => {
     const contact = JSON.parse(event.body);
     await addContact(apiKey, contact);
 
-    return {
-      statusCode: 201,
-      body: JSON.stringify({ message: 'Contact added' }),
-      headers: { 'Access-Control-Allow-Origin': 'https://www.readysetcloud.io' }
-    };
+    return formatResponse(201, 'Contact added');
   }
   catch (err) {
     console.error(JSON.stringify(err));
     console.error(event.body);
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ message: 'Something went wrong' }),
-      headers: { 'Access-Control-Allow-Origin': 'https://www.readysetcloud.io' }
-    };
+    return formatResponse(500, 'Something went wrong');
   }
 };
 

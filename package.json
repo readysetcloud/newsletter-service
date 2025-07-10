@@ -6,7 +6,7 @@
   "type": "module",
   "license": "ISC",
   "scripts": {
-    "test": "jest",
+    "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js",
     "lint": "eslint .",
     "coverage": "c8 npm test"
   },
@@ -20,6 +20,7 @@
     "zlib": "^1.0.5"
   },
   "devDependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.842.0",
     "@aws-sdk/client-dynamodb": "^3.592.0",
     "@aws-sdk/client-eventbridge": "^3.592.0",
     "@aws-sdk/client-secrets-manager": "^3.592.0",

@@ -45,7 +45,58 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
+  /{tenant}/{slug}/votes:
+    parameters:
+      - $ref: '#/components/parameters/Tenant'
+      - name: slug
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      summary: Submit a vote
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                choice:
+                  type: string
+                  description: Selection for the vote
+              required: [ choice ]
+      responses:
+        200:
+          description: The vote was submitted and results were returned
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        400:
+          $ref: '#/components/responses/BadRequest'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/UnknownError'
+      x-amazon-apigateway-request-validator: Validate All
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${VoteFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
 components:
+  parameters:
+    Tenant:
+      name: tenant
+      in: path
+      required: true
+      schema:
+        type: string
+      description: The tenant identifier
+
   schemas:
     Subscriber:
       description: New subscriber details
@@ -89,6 +140,19 @@ components:
                 type: string
                 description: Message detailing what went wrong
                 example: The 'name' field is required and is missing.
+    NotFound:
+      description: The requested entity was not found
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - message
+            properties:
+              message:
+                type: string
+                description: The requested entity was not found
+                example: Vote not found
     UnknownError:
       description: An unexpected error occurred on the server.
       content:

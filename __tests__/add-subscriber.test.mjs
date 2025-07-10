@@ -1,15 +1,29 @@
-import sendgrid from '@sendgrid/client';
-import { getSecret } from '@aws-lambda-powertools/parameters/secrets';
-import { handler } from '../functions/add-subscriber.mjs';
+import { jest, describe, test, expect, beforeEach } from '@jest/globals';
 
-jest.mock('@sendgrid/client');
-jest.mock('@aws-lambda-powertools/parameters/secrets');
+// Mock SendGrid client
+jest.unstable_mockModule('@sendgrid/client', () => ({
+  default: {
+    setApiKey: jest.fn(),
+    request: jest.fn()
+  }
+}));
+
+// Mock getSecret from AWS Powertools
+jest.unstable_mockModule('@aws-lambda-powertools/parameters/secrets', () => ({
+  getSecret: jest.fn()
+}));
+
+// Import handler AFTER mocks
+const { handler } = await import('../functions/add-subscriber.mjs');
+const { getSecret } = await import('@aws-lambda-powertools/parameters/secrets');
+const sendgrid = (await import('@sendgrid/client')).default;
 
 describe('Lambda Handler', () => {
   beforeEach(() => {
     jest.resetAllMocks();
     process.env.SECRET_ID = 'test-secret-id';
     process.env.LIST_ID = 'test-list-id';
+    process.env.ORIGIN = 'https://www.readysetcloud.io'
   });
 
   test('should handle missing API key', async () => {
@@ -29,7 +43,10 @@ describe('Lambda Handler', () => {
     expect(response).toEqual({
       statusCode: 500,
       body: JSON.stringify({ message: 'Something went wrong' }),
-      headers: { 'Access-Control-Allow-Origin': 'https://www.readysetcloud.io' }
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': 'https://www.readysetcloud.io'
+      }
     });
   });
 
@@ -67,7 +84,10 @@ describe('Lambda Handler', () => {
     expect(response).toEqual({
       statusCode: 201,
       body: JSON.stringify({ message: 'Contact added' }),
-      headers: { 'Access-Control-Allow-Origin': 'https://www.readysetcloud.io' }
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': 'https://www.readysetcloud.io'
+      }
     });
   });
 
@@ -86,10 +106,13 @@ describe('Lambda Handler', () => {
 
     const response = await handler(event);
 
-    expect(response).toEqual({
+    expect(response).toMatchObject({
       statusCode: 500,
       body: JSON.stringify({ message: 'Something went wrong' }),
-      headers: { 'Access-Control-Allow-Origin': 'https://www.readysetcloud.io' }
+      headers: expect.objectContaining({
+        'Access-Control-Allow-Origin': 'https://www.readysetcloud.io',
+        'Content-Type': 'application/json'
+      })
     });
   });
 });

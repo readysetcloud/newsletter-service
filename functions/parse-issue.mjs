@@ -34,7 +34,8 @@ export const handler = async (state) => {
       ...(author && { author })
     },
     ...(sponsor && { sponsor }),
-    content: {}
+    content: {},
+    ...state.votingOptions && { votingOptions: state.votingOptions }
   };
 
   const tipOfTheWeekIndex = sections.findIndex(ps => ps.header.toLowerCase().includes('tip of the week'));
@@ -62,6 +63,16 @@ export const handler = async (state) => {
   });
 
   newsletterDate.setHours(14);
+  if (!newsletter.data.voting_options && Array.isArray(state.votingOptions) && state.votingOptions.every(vo => vo.id && vo.description)) {
+    newsletter.data.voting_options = state.votingOptions;
+    if(!newsletter.content.includes('{{<vote>}}')) {
+      const lastWordsIndex = newsletter.content.toLowerCase().indexOf('### last words');
+      if (lastWordsIndex >= 0) {
+        newsletter.content = newsletter.content.substring(0, lastWordsIndex) + '{{<vote>}}\n\n' + newsletter.content.substring(lastWordsIndex);
+      }
+    }
+  }
+  
   if (!state.isPreview) {
     await updateSourceWithRedirects(state.fileName, newsletter.content, newsletter.data);
   }
@@ -102,7 +113,7 @@ const processSection = (section, sponsor) => {
 };
 
 const processTipOfTheWeek = (section) => {
-  const socials = section.raw.matchAll(/\{\{<\s*social\s+url="([^"]+)"\s*>\}\}/g);
+  const socials = section.raw.matchAll(/\{\{<\s*social\s+url="([^"]+)"(?:\s+[^>]*)?>\}\}/g);
 
   for (const social of socials) {
     let text = section.raw.replace(social[0], '').trim();

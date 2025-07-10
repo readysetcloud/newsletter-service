@@ -570,7 +570,6 @@ Resources:
         DynamoDbUpdate: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
         TableName: !Ref NewsletterTable
         CloudWatchStartQuery: !Sub arn:${AWS::Partition}:states:::aws-sdk:cloudwatchlogs:startQuery
-        CloudWatchGetQueryResults: !Sub arn:${AWS::Partition}:states:::aws-sdk:cloudwatchlogs:getQueryResults
         LogGroupArn: !GetAtt RedirectLogGroup.Arn
         RedirectLogs: !Ref RedirectLogGroup
         HandleLogBatch: !GetAtt HandleLogBatchFunction.Arn
@@ -581,9 +580,6 @@ Resources:
             - Effect: Allow
               Action: logs:StartQuery
               Resource: !GetAtt RedirectLogGroup.Arn
-            - Effect: Allow
-              Action: logs:GetQueryResults
-              Resource: "*"
             - Effect: Allow
               Action: dynamodb:UpdateItem
               Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}
@@ -793,8 +789,13 @@ Resources:
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: dynamodb:updateItem
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:PutItem
               Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}
+            - Effect: Allow
+              Action: logs:GetQueryResults
+              Resource: "*"
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable

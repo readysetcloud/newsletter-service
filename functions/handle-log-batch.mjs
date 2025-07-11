@@ -13,7 +13,7 @@ export const handler = async (state) => {
     const queryResults = await cloudWatchLogs.send(new GetQueryResultsCommand({ queryId }));
 
     // If query is still running, return status without processing
-    if (queryResults.Status === 'Running') {
+    if (queryResults.status === 'Running') {
       return {
         status: 'Running',
         message: 'Query still in progress'
@@ -21,7 +21,7 @@ export const handler = async (state) => {
     }
 
     // If query failed, return error
-    if (queryResults.Status === 'Failed') {
+    if (queryResults.status === 'Failed') {
       return {
         status: 'Failed',
         message: 'CloudWatch query failed'
@@ -29,7 +29,7 @@ export const handler = async (state) => {
     }
 
     // If no results, return success
-    if (!queryResults.Results || queryResults.Results.length === 0) {
+    if (!queryResults.results?.length === 0) {
       return {
         status: 'Complete',
         processedCount: 0,
@@ -38,7 +38,7 @@ export const handler = async (state) => {
     }
 
     // Process and deduplicate results
-    const { keyCounts, processedCount } = await processQueryResults(queryResults.Results);
+    const { keyCounts, processedCount } = await processQueryResults(queryResults.results);
 
     // Update counts in DynamoDB if we have data
     if (Object.keys(keyCounts).length > 0) {

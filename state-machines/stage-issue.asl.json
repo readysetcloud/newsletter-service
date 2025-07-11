@@ -429,18 +429,20 @@
             "S": "newsletter"
           }
         },
-        "UpdateExpression": "SET #status = :status, #GSIPK = :GSIPK, #GSISK = :GSISK, #singleSendId = :singleSendId",
+        "UpdateExpression": "SET #status = :status, #GSIPK = :GSIPK, #GSISK = :GSISK, #singleSendId = :singleSendId, #slug = :slug",
         "ExpressionAttributeNames": {
           "#status": "status",
           "#GSIPK": "GSI1PK",
           "#GSISK": "GSI1SK",
-          "#singleSendId": "singleSendId"
+          "#singleSendId": "singleSendId",
+          "#slug": "slug"
         },
         "ExpressionAttributeValues": {
           ":status": { "S": "succeeded" },
           ":GSIPK": { "S.$": "States.Format('{}#newsletter', $$.Execution.Input.tenant.id)" },
           ":GSISK": { "S.$": "$.sendAtDate" },
-          ":singleSendId": { "S.$": "$.sendgrid.Payload.id" }
+          ":singleSendId": { "S.$": "$.sendgrid.Payload.id" },
+          ":slug": { "S.$": "States.Format('{}', $.data.metadata.number)"}
         }
       },
       "ResultPath": null,

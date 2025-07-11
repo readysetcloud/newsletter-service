@@ -232,18 +232,44 @@ Resources:
             Path: /{tenant}/{slug}/votes
             Method: POST
 
-  BuildReportEmailFunction:
+  BuildReportDataFunction:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
         <<: *esbuild-properties
         EntryPoints:
-          - build-report-email.mjs
+          - build-report-data.mjs
     Properties:
-      Handler: build-report-email.handler
+      Handler: build-report-data.handler
       Policies:
         - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt NewsletterTable.Arn
+
+  GetInsightsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - get-insights.mjs
+    Properties:
+      Handler: get-insights.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: dynamodb:Query
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}/index/GSI1
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-pro-v1:0
 
   GetNextIssueDateFunction:
     Type: AWS::Serverless::Function
@@ -430,11 +456,13 @@ Resources:
       DefinitionUri: state-machines/report-stats.asl.json
       DefinitionSubstitutions:
         DynamodbQuery: !Sub arn:${AWS::Partition}:states:::aws-sdk:dynamodb:query
+        DynamoDbGetItem: !Sub arn:${AWS::Partition}:states:::dynamodb:getItem
         TableName: !Ref NewsletterTable
         LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
         SendApiRequest: "{{resolve:ssm:/readysetcloud/send-api-request}}"
         GetTopLinks: !GetAtt GetTopLinkFunction.Arn
-        BuildReportEmail: !GetAtt BuildReportEmailFunction.Arn
+        BuildReportData: !GetAtt BuildReportDataFunction.Arn
+        GetInsights: !GetAtt GetInsightsFunction.Arn
         DynamodbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
         AdminEmail: '{{resolve:ssm:/readysetcloud/admin-email}}'
@@ -444,18 +472,20 @@ Resources:
           Statement:
             - Effect: Allow
               Action:
-                - dynamodb:putItem
-                - dynamodb:query
+                - dynamodb:PutItem
+                - dynamodb:Query
+                - dynamodb:GetItem
               Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}
             - Effect: Allow
-              Action: dynamodb:query
+              Action: dynamodb:Query
               Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}/index/GSI1
             - Effect: Allow
               Action: lambda:InvokeFunction
               Resource:
                 - "{{resolve:ssm:/readysetcloud/send-api-request}}"
                 - !GetAtt GetTopLinkFunction.Arn
-                - !GetAtt BuildReportEmailFunction.Arn
+                - !GetAtt BuildReportDataFunction.Arn
+                - !GetAtt GetInsightsFunction.Arn
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default

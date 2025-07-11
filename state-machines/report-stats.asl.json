@@ -184,6 +184,27 @@
               "Resource": "${DynamodbQuery}"
             }
           }
+        },
+        {
+          "StartAt": "Get Vote Results",
+          "States": {
+            "Get Vote Results": {
+              "Type": "Task",
+              "Resource": "${DynamoDbGetItem}",
+              "Parameters": {
+                "TableName": "${TableName}",
+                "Key": {
+                  "pk": {
+                    "S.$": "States.Format('{}#{}', $$.Execution.Input.tenant.id, $.Items[0].slug.S)"
+                  },
+                  "sk": {
+                    "S": "votes"
+                  }
+                }
+              },
+              "End": true
+            }
+          }
         }
       ],
       "Next": "Build Email Report",
@@ -194,14 +215,42 @@
       "Resource": "${LambdaInvoke}",
       "OutputPath": "$.Payload",
       "Parameters": {
-        "FunctionName": "${BuildReportEmail}",
+        "FunctionName": "${BuildReportData}",
         "Payload": {
           "stats.$": "$.data[0].results[0].stats",
           "issue.$": "$.Items[0].pk.S",
           "subscribers.$": "$.data[2].contact_count",
           "priorSubscribers.$": "$.data[3].Items[0].count.S",
           "links.$": "$.data[1].links",
-          "singleSendId.$": "$.Items[0].singleSendId.S"
+          "singleSendId.$": "$.Items[0].singleSendId.S",
+          "voteResults.$": "$.data[4].Item"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Update With Insights"
+    },
+    "Update With Insights": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "ResultPath": "$.updated",
+      "Parameters": {
+        "FunctionName": "${GetInsights}",
+        "Payload": {
+          "issue.$": "$.issue",
+          "report.$": "$.html",
+          "insightData.$": "$.insightData"
         }
       },
       "Retry": [
@@ -228,7 +277,7 @@
             "Detail": {
               "subject.$": "$.subject",
               "to.$": "$$.Execution.Input.tenant.email",
-              "html.$": "$.content"
+              "html.$": "$.updated.html"
             },
             "DetailType": "Send Email",
             "Source": "user.GetNewsletterStats"

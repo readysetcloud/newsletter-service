@@ -276,10 +276,12 @@
           {
             "Detail": {
               "subject.$": "$.subject",
-              "to.$": "$$.Execution.Input.tenant.email",
-              "html.$": "$.updated.html"
+              "to": {
+                "email.$": "$$.Execution.Input.tenant.email"
+              },
+              "html.$": "$.updated.Payload.html"
             },
-            "DetailType": "Send Email",
+            "DetailType": "Send Email v2",
             "Source": "user.GetNewsletterStats"
           }
         ]

@@ -36,6 +36,8 @@ Metadata:
       - js=import { createRequire } from 'module'; const require = createRequire(import.meta.url);
     External:
       - '@aws-sdk/*'
+    Loader:
+      - .hbs=text
 
 Conditions:
   DeployProductionResources:
@@ -46,7 +48,7 @@ Conditions:
 
 Globals:
   Function:
-    Runtime: nodejs20.x
+    Runtime: nodejs22.x
     CodeUri: functions
     Architectures:
       - arm64
@@ -117,6 +119,25 @@ Resources:
     Properties:
       Name: newsletter
 
+  SchedulerExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EventBridgeAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: events:PutEvents
+                Resource: !Sub 'arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default'
+
   AddTenantFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -147,6 +168,12 @@ Resources:
               detail-type:
                 - Add/Update Tenant
 
+  NewsletterContactList:
+    Type: AWS::SES::ContactList
+    Properties:
+      ContactListName: rsc
+      Description: Newsletter subscribers for Ready Set Cloud
+
   AddSubscriberFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -154,19 +181,19 @@ Resources:
       BuildProperties:
         <<: *esbuild-properties
         EntryPoints:
-          - add-subscriber.mjs
+          - subscribers/add-subscriber.mjs
     Properties:
-      Handler: add-subscriber.handler
+      Handler: subscribers/add-subscriber.handler
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
+              Action: ses:CreateContact
+              Resource: '*'
       Environment:
         Variables:
-          LIST_ID: !Ref SendGridDistributionListId
+          LIST: !Ref NewsletterContactList
           ORIGIN: !Ref Origin
       Events:
         FromApi:
@@ -175,6 +202,45 @@ Resources:
             RestApiId: !Ref NewsletterApi
             Path: /subscribers
             Method: POST
+
+  ImportSubscriberListFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - subscribers/import-subscriber-list.mjs
+    Properties:
+      Handler: subscribers/import-subscriber-list.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: ses:CreateContact
+              Resource: '*'
+      Environment:
+        Variables:
+          LIST: !Ref NewsletterContactList
+
+  ExportSubscribersFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - subscribers/export-subscribers.mjs
+    Properties:
+      Handler: subscribers/subscribers.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: ses:ListContacts
+              Resource: '*'
 
   SetupVotingOptionsFunction:
     Type: AWS::Serverless::Function
@@ -232,6 +298,66 @@ Resources:
             Path: /{tenant}/{slug}/votes
             Method: POST
 
+  OpenTrackingFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - open-tracking.mjs
+    Properties:
+      Handler: open-tracking.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          ORIGIN: !Ref Origin
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /{tenant}/{slug}/opens
+            Method: GET
+
+  UnsubscribeFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - subscribers/unsubscribe.mjs
+    Properties:
+      Handler: subscribers/unsubscribe.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: ses:DeleteContact
+              Resource: '*'
+      Environment:
+        Variables:
+          LIST: !Ref NewsletterContactList
+          ORIGIN: !Ref Origin
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /{tenant}/unsubscribe
+            Method: GET
+
   BuildReportDataFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -249,6 +375,9 @@ Resources:
             - Effect: Allow
               Action: dynamodb:PutItem
               Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
 
   GetInsightsFunction:
     Type: AWS::Serverless::Function
@@ -270,6 +399,9 @@ Resources:
             - Effect: Allow
               Action: bedrock:InvokeModel
               Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-pro-v1:0
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
 
   GetNextIssueDateFunction:
     Type: AWS::Serverless::Function
@@ -307,14 +439,48 @@ Resources:
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
       Environment:
         Variables:
-          LIST_ID: !Ref SendGridDistributionListId
-          SENDER_ID: !Ref SendGridSenderId
-          TEMPLATE_ID: !Ref SendGridTemplateId
-          VERSION_ID: !Ref SendGridTemplateVersionId
+          LIST: !Ref NewsletterContactList
+
+  SendEmailV2Function:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - send-email-v2.mjs
+    Properties:
+      Handler: send-email-v2.handler
+      Timeout: 900
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:ListContacts
+              Resource: '*'
+            - Effect: Allow
+              Action: scheduler:CreateSchedule
+              Resource: !Sub 'arn:aws:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/newsletter/*'
+      Environment:
+        Variables:
+          FROM_EMAIL: allen@readysetcloud.io
+          SCHEDULER_ROLE_ARN: !GetAtt SchedulerExecutionRole.Arn
+      Events:
+        EmailEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - newsletter-service
+              detail-type:
+                - Send Email v2
 
   ParseIssueFunction:
     Type: AWS::Serverless::Function

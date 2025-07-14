@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { getSecret } from '@aws-lambda-powertools/parameters/secrets';
 import { getParameter } from '@aws-lambda-powertools/parameters/ssm';
 import { Octokit } from 'octokit';
@@ -7,6 +8,10 @@ import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 let octokit;
 let tenants = {};
 const ddb = new DynamoDBClient();
+
+const algorithm = 'aes-256-gcm';
+const key = crypto.createHash('sha256').update(process.env.EMAIL_ENCRYPTION_KEY).digest(); // 32 bytes
+const ivLength = 16;
 
 export const getOctokit = async (tenantId) => {
   if (!octokit) {
@@ -56,4 +61,38 @@ export const formatResponse = (statusCode, body) => {
       ...process.env.ORIGIN && { 'Access-Control-Allow-Origin': process.env.ORIGIN }
     }
   };
+};
+export const formatEmptyResponse = () => {
+  return {
+    statusCode: 204,
+    ...process.env.ORIGIN && {
+      headers: {
+        'Access-Control-Allow-Origin': process.env.ORIGIN
+      }
+    }
+  };
+};
+
+export const encrypt = (email) => {
+  const iv = crypto.randomBytes(ivLength);
+  const cipher = crypto.createCipheriv(algorithm, key, iv);
+
+  let encrypted = cipher.update(email, 'utf8', 'base64');
+  encrypted += cipher.final('base64');
+  const authTag = cipher.getAuthTag().toString('base64');
+
+  // Return iv + encrypted + authTag as one string
+  return `${iv.toString('base64')}:${encrypted}:${authTag}`;
+};
+
+export const decrypt = (encrypted) => {
+  const [ivB64, dataB64, authTagB64] = encrypted.split(':');
+  const iv = Buffer.from(ivB64, 'base64');
+  const authTag = Buffer.from(authTagB64, 'base64');
+  const decipher = crypto.createDecipheriv(algorithm, key, iv);
+  decipher.setAuthTag(authTag);
+
+  let decrypted = decipher.update(dataB64, 'base64', 'utf8');
+  decrypted += decipher.final('utf8');
+  return decrypted;
 };

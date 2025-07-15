@@ -318,7 +318,14 @@
       "Type": "Task",
       "Resource": "${LambdaInvoke}",
       "Parameters": {
-        "Payload.$": "$",
+        "Payload": {
+          "data.$": "$.data",
+          "sendAtDate.$": "$.sendAtDate",
+          "getTopStatsDate.$": "$.getTopStatsDate",
+          "reportStatsDate.$": "$.reportStatsDate",
+          "subject.$": "$.subject",
+          "tenantId.$": "$$.Execution.Input.tenant.id"
+        },
         "FunctionName": "${StageIssue}"
       },
       "Retry": [

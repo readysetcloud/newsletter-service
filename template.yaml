@@ -21,6 +21,9 @@ Parameters:
   Origin:
     Type: String
     Default: 'https://www.readysetcloud.io'
+  EncryptionKey:
+    Type: String
+    Description: Used to hash email addresses
 
 Metadata:
   esbuild-properties: &esbuild-properties
@@ -114,6 +117,42 @@ Resources:
         AttributeName: ttl
         Enabled: true
 
+  NewsletterBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteRule
+            Status: Enabled
+            ExpirationInDays: 7
+      VersioningConfiguration:
+        Status: Enabled
+
+  ConfigurationSet:
+    Type: AWS::SES::ConfigurationSet
+    Properties:
+      DeliveryOptions:
+        TlsPolicy: REQUIRE
+      ReputationOptions:
+        ReputationMetricsEnabled: true
+      SendingOptions:
+        SendingEnabled: true
+
+  ConfigurationSetDestination:
+    Type: AWS::SES::ConfigurationSetEventDestination
+    Properties:
+      ConfigurationSetName: !Ref ConfigurationSet
+      EventDestination:
+        Enabled: true
+        EventBridgeDestination:
+          EventBusArn: !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+        MatchingEventTypes:
+          - SEND
+          - REJECT
+          - BOUNCE
+          - COMPLAINT
+          - DELIVERY
+          
   ScheduleGroup:
     Type: AWS::Scheduler::ScheduleGroup
     Properties:
@@ -155,6 +194,9 @@ Resources:
             - Effect: Allow
               Action: dynamodb:PutItem
               Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action: ses:CreateContactList
+              Resource: '*'
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
@@ -167,12 +209,6 @@ Resources:
                 - rsc-core
               detail-type:
                 - Add/Update Tenant
-
-  NewsletterContactList:
-    Type: AWS::SES::ContactList
-    Properties:
-      ContactListName: rsc
-      Description: Newsletter subscribers for Ready Set Cloud
 
   AddSubscriberFunction:
     Type: AWS::Serverless::Function
@@ -191,16 +227,21 @@ Resources:
             - Effect: Allow
               Action: ses:CreateContact
               Resource: '*'
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          LIST: !Ref NewsletterContactList
+          TABLE_NAME: !Ref NewsletterTable
           ORIGIN: !Ref Origin
       Events:
         FromApi:
           Type: Api
           Properties:
             RestApiId: !Ref NewsletterApi
-            Path: /subscribers
+            Path: /{tenant}/subscribers
             Method: POST
 
   ImportSubscriberListFunction:
@@ -220,9 +261,14 @@ Resources:
             - Effect: Allow
               Action: ses:CreateContact
               Resource: '*'
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          LIST: !Ref NewsletterContactList
+          TABLE_NAME: !Ref NewsletterTable
 
   ExportSubscribersFunction:
     Type: AWS::Serverless::Function
@@ -241,6 +287,50 @@ Resources:
             - Effect: Allow
               Action: ses:ListContacts
               Resource: '*'
+            - Effect: Allow
+              Action: dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action: s3:PutObject
+              Resource: !Sub '${NewsletterBucket.Arn}/reports/*'
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          BUCKET: !Ref NewsletterBucket
+
+  HandleEmailStatusFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - handle-email-status.mjs
+    Properties:
+      Handler: handle-email-status.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+      Events:
+        CreationEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - aws.ses
+              detail-type:
+                - Email Rejected
+                - Email Sent
+                - Email Delivered
+                - Email Bounced
+                - Email Complaint Received
 
   SetupVotingOptionsFunction:
     Type: AWS::Serverless::Function
@@ -290,6 +380,7 @@ Resources:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
           ORIGIN: !Ref Origin
+          EMAIL_ENCRYPTION_KEY: !Ref EncryptionKey
       Events:
         FromApi:
           Type: Api
@@ -346,9 +437,14 @@ Resources:
             - Effect: Allow
               Action: ses:DeleteContact
               Resource: '*'
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          LIST: !Ref NewsletterContactList
+          TABLE_NAME: !Ref NewsletterTable
           ORIGIN: !Ref Origin
       Events:
         FromApi:
@@ -441,9 +537,14 @@ Resources:
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+              Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          LIST: !Ref NewsletterContactList
+          TABLE_NAME: !Ref NewsletterTable
 
   SendEmailV2Function:
     Type: AWS::Serverless::Function
@@ -472,6 +573,8 @@ Resources:
         Variables:
           FROM_EMAIL: allen@readysetcloud.io
           SCHEDULER_ROLE_ARN: !GetAtt SchedulerExecutionRole.Arn
+          EMAIL_ENCRYPTION_KEY: !Ref EncryptionKey
+          CONFIGURATION_SET: !Ref ConfigurationSet
       Events:
         EmailEvent:
           Type: EventBridgeRule

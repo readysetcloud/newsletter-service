@@ -1,17 +1,26 @@
 import { SESv2Client, DeleteContactCommand } from "@aws-sdk/client-sesv2";
-import { decrypt } from "../utils/helpers.mjs";
+import { DynamoDBClient, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import { getTenant, decrypt } from "../utils/helpers.mjs";
 
 const ses = new SESv2Client();
+const ddb = new DynamoDBClient();
+
 export const handler = async (event) => {
   try {
-    const { tenantId } = event.pathParameters;
-    const email = event.queryStringParameters?.email;
-    if (email) {
-      const emailAddress = decrypt(email);
-      await ses.send(new DeleteContactCommand({
-        ContactListName: process.env.LIST,
-        EmailAddress: emailAddress
-      }));
+    const tenantId = event.pathParameters.tenant;
+    const tenant = await getTenant(tenantId);
+    if (!tenant) {
+      console.warn(`Could not find tenant ${tenantId} to unsubscribe from`);
+    } else {
+      const email = event.queryStringParameters?.email;
+      if (email) {
+        const emailAddress = decrypt(email);
+        await ses.send(new DeleteContactCommand({
+          ContactListName: tenant.list,
+          EmailAddress: emailAddress
+        }));
+        await updateSubscriberCount(tenantId);
+      }
     }
   } catch (err) {
     console.error(err);
@@ -29,4 +38,21 @@ export const handler = async (event) => {
     </html>`
     };
   }
+};
+
+const updateSubscriberCount = async (tenantId) => {
+  await ddb.send(new UpdateItemCommand({
+    TableName: process.env.TABLE_NAME,
+    Key: marshall({
+      pk: tenantId,
+      sk: 'tenant'
+    }),
+    UpdateExpression: 'SET #subscribers = #subscribers + :val',
+    ExpressionAttributeNames: {
+      '#subscribers': 'subscribers'
+    },
+    ExpressionAttributeValues: {
+      ':val': { N: '-1' }
+    }
+  }));
 };

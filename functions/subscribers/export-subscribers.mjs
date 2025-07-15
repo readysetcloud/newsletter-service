@@ -1,16 +1,22 @@
 import { SESv2Client, ListContactsCommand } from "@aws-sdk/client-sesv2";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { getTenant } from "../utils/helpers.mjs";
 
 const ses = new SESv2Client();
 const s3 = new S3Client();
 
 export const handler = async (event) => {
   try {
+    const tenantId = event.tenant;
+    const tenant = await getTenant(tenantId);
+    if (!tenant) {
+      return { message: 'Tenant not found' };
+    }
     const emailAddresses = [];
     let nextToken;
     do {
       const contacts = await ses.send(new ListContactsCommand({
-        ContactListName: event.list,
+        ContactListName: tenant.list,
         NextToken: nextToken
       }));
       if (contacts.Contacts?.length) {
@@ -24,7 +30,7 @@ export const handler = async (event) => {
       addresses: emailAddresses
     };
 
-    const key = `reports/${event.list}-${new Date().toISOString()}.json`;
+    const key = `reports/${tenantId}-${new Date().toISOString()}.json`;
     await s3.send(new PutObjectCommand({
       Bucket: process.env.BUCKET,
       Key,

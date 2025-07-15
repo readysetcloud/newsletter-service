@@ -18,7 +18,7 @@ const BOT_USER_AGENTS = [
 
 export const handler = async (event) => {
   try {
-    const { tenantId, slug } = event.pathParameters;
+    const { tenant, slug } = event.pathParameters;
     const email = event.queryStringParameters?.email;
 
     if (!email) {
@@ -32,19 +32,19 @@ export const handler = async (event) => {
       return formatEmptyResponse();
     }
 
-    let updateExpression = 'ADD total_opens :inc SET last_opened = :now';
+    let updateExpression = 'ADD totalOpens :inc SET lastOpened = :now';
     try {
       await ddb.send(new PutItemCommand({
         TableName: process.env.TABLE_NAME,
         Item: marshall({
-          pk: `${tenantId}#${slug}`,
+          pk: `${tenant}#${slug}`,
           sk: `opens#${email}`,
           createdAt: new Date().toISOString(),
           ttl: Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60)
         }),
         ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)'
       }));
-      updateExpression += ' ADD unique_opens :inc';
+      updateExpression += ' ADD uniqueOpens :inc';
     } catch (conditionalError) {
       // If condition fails, this email has already opened this newsletter
       // This is expected behavior, so we don't increment unique_opens
@@ -59,7 +59,7 @@ export const handler = async (event) => {
     await dynamoClient.send(new UpdateItemCommand({
       TableName: process.env.TABLE_NAME,
       Key: marshall({
-        pk: `${tenantId}#${slug}`,
+        pk: `${tenant}#${slug}`,
         sk: 'stats'
       }),
       UpdateExpression: updateExpression,

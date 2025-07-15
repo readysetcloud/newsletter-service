@@ -22,7 +22,9 @@ x-amazon-apigateway-gateway-responses:
       gatewayresponse.header.Access-Control-Allow-Origin: "'https://www.readysetcloud.io'"
 
 paths:
-  /subscribers:
+  /{tenant}/subscribers:
+    parameters:
+      - $ref: '#/components/parameters/Tenant'
     post:
       summary: Add a new subscriber
       requestBody:

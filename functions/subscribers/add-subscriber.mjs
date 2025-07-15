@@ -1,10 +1,18 @@
 import { SESv2Client, CreateContactCommand } from '@aws-sdk/client-sesv2';
-import { formatResponse } from '../utils/helpers.mjs';
+import { DynamoDBClient, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
+import { formatResponse, getTenant } from '../utils/helpers.mjs';
 
 const ses = new SESv2Client();
+const ddb = new DynamoDBClient();
 
 export const handler = async (event) => {
   try {
+    const tenantId  = event.pathParameters;
+    const tenant = await getTenant(tenantId);
+    if (!tenant) {
+      return formatResponse(404, 'Tenant not found');
+    }
+
     if (!event.body) {
       return formatResponse(400, 'Missing request body');
     }
@@ -15,7 +23,8 @@ export const handler = async (event) => {
       return formatResponse(400, 'Email is required');
     }
 
-    await addContact(contact);
+    await addContact(tenant.list, contact);
+    await updateSubscriberCount(tenantId);
 
     return formatResponse(201, 'Contact added');
   }
@@ -25,9 +34,9 @@ export const handler = async (event) => {
   }
 };
 
-const addContact = async (contact) => {
+const addContact = async (list, contact) => {
   const contactData = {
-    ContactListName: process.env.LIST,
+    ContactListName: list,
     EmailAddress: contact.email
   };
 
@@ -41,4 +50,19 @@ const addContact = async (contact) => {
   await ses.send(new CreateContactCommand(contactData));
 };
 
-
+const updateSubscriberCount = async (tenantId) => {
+  await ddb.send(new UpdateItemCommand({
+    TableName: process.env.TABLE_NAME,
+    Key: marshall({
+      pk: tenantId,
+      sk: 'tenant'
+    }),
+    UpdateExpression: 'SET #subscribers = #subscribers + :val',
+    ExpressionAttributeNames: {
+      '#subscribers': 'subscribers'
+    },
+    ExpressionAttributeValues: {
+      ':val': { N: '1' }
+    }
+  }));
+};

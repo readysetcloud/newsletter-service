@@ -1,8 +1,12 @@
 import Handlebars from 'handlebars';
 import template from '../templates/newsletter.hbs';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
+import { DynamoDBClient, PutItemCommand } from '@aws-sdk/client-dynamodb';
+import { getTenant } from './utils/helpers.mjs';
+import { marshall } from '@aws-sdk/util-dynamodb';
 
 const eventBridge = new EventBridgeClient();
+const ddb = new DynamoDBClient();
 
 export const handler = async (state) => {
   try {
@@ -15,12 +19,14 @@ export const handler = async (state) => {
         to: { email: state.email }
       });
     } else {
+      const tenant = await getTenant(state.tenantId);
+      await setupIssueStats(tenant, state.data.metadata.number);
       await sendEmail({
         subject: state.subject,
         html: template,
-        to: { list: process.env.LIST},
+        to: { list: tenant.list },
         sendAt: state.sendAtDate
-      })
+      });
 
       return state;
     }
@@ -68,3 +74,22 @@ const sendEmail = async (params) => {
     }]
   }));
 };
+
+const setupIssueStats = async (tenant, slug) => {
+  await ddb.send(new PutItemCommand({
+    TableName: process.env.TABLE_NAME,
+    Item: marshall({
+      pk: `${tenant.pk}#${slug}`,
+      sk: 'stats',
+      totalOpens: 0,
+      uniqueOpens: 0,
+      bounces: 0,
+      rejects: 0,
+      complaints: 0,
+      deliveries: 0,
+      sends: 0,
+      subscribers: tenant.subscribers,
+      failedAddresses: []
+    })
+  }))
+}

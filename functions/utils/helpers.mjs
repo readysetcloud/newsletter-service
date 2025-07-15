@@ -10,7 +10,7 @@ let tenants = {};
 const ddb = new DynamoDBClient();
 
 const algorithm = 'aes-256-gcm';
-const key = crypto.createHash('sha256').update(process.env.EMAIL_ENCRYPTION_KEY).digest(); // 32 bytes
+const key = crypto.createHash('sha256').update(process.env.EMAIL_ENCRYPTION_KEY).digest(); 
 const ivLength = 16;
 
 export const getOctokit = async (tenantId) => {

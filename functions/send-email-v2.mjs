@@ -1,6 +1,6 @@
 import { SESv2Client, SendEmailCommand, ListContactsCommand } from "@aws-sdk/client-sesv2";
 import { SchedulerClient, CreateScheduleCommand } from "@aws-sdk/client-scheduler";
-import { encrypt} from './utils/helpers.mjs'
+import { encrypt } from './utils/helpers.mjs';
 
 const ses = new SESv2Client();
 const scheduler = new SchedulerClient();
@@ -102,10 +102,10 @@ export const handler = async (event) => {
     for (const email of emailAddresses) {
       await sendWithRetry(async () => {
         let personalizedEmail = html;
-        if(replacements?.emailAddress){
+        if (replacements?.emailAddress) {
           personalizedEmail = personalizedEmail.replace(new RegExp(replacements.emailAddress, 'g'), email);
         }
-        if(replacements?.emailAddressHash){
+        if (replacements?.emailAddressHash) {
           const emailHash = encrypt(email);
           personalizedEmail = personalizedEmail.replace(new RegExp(replacements.emailAddressHash, 'g'), emailHash);
         }
@@ -118,7 +118,9 @@ export const handler = async (event) => {
               Subject: { Data: subject },
               Body: { Html: { Data: personalizedEmail } }
             }
-          }
+          },
+          ...data.referenceNumber && { EmailTags: [{ Name: 'referenceNumber', Value: data.referenceNumber }] },
+          ConfigurationSetName: process.env.CONFIGURATION_SET
         }));
       });
 

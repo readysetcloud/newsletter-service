@@ -3,7 +3,7 @@ export default {
     '^.+\\.[tj]sx?$': 'babel-jest'
   },
   transformIgnorePatterns: [
-    "/node_modules/(?!(@octokit|@aws-sdk|@sendgrid))"
+    "/node_modules/(?!(@octokit|@aws-sdk))"
   ],
   testMatch: [
     '**/__tests__/**/*.[jt]s?(x)',

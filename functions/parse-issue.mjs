@@ -72,7 +72,7 @@ export const handler = async (state) => {
       }
     }
   }
-  
+
   if (!state.isPreview) {
     await updateSourceWithRedirects(state.fileName, newsletter.content, newsletter.data);
   }

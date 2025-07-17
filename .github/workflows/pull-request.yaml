@@ -46,7 +46,7 @@ jobs:
           --resolve-s3 \
           --no-fail-on-empty-changeset \
           --capabilities CAPABILITY_IAM \
-          --parameter-overrides Environment=stage SendGridDistributionListId=5e5efcd1-aea6-4afe-9eee-5b14540c4bf3
+          --parameter-overrides Environment=stage EncryptionKey=${{secrets.ENCRYPTION_KEY}}
 
   deploy-dependabot:
     name: Deploy Dependabot Updates
@@ -77,7 +77,7 @@ jobs:
           --resolve-s3 \
           --no-fail-on-empty-changeset \
           --capabilities CAPABILITY_IAM \
-          --parameter-overrides Environment=stage SendGridDistributionListId=5e5efcd1-aea6-4afe-9eee-5b14540c4bf3
+          --parameter-overrides Environment=stage EncryptionKey=${{secrets.ENCRYPTION_KEY}}
 
   auto-merge-dependabot-update:
     name: Auto Merge Dependabot Update

@@ -287,9 +287,9 @@ export const handler = async (state) => {
               <table cellpadding="0" cellspacing="0" border="0" style="margin: 0 auto;">
                 <tr>
                   <td style="background-color: #4a90e2; border-radius: 6px; padding: 12px 24px;">
-                    <a href="https://mc.sendgrid.com/single-sends/${state.singleSendId || ''}/stats" style="color: #ffffff; text-decoration: none; font-weight: bold; font-size: 16px; display: block;">
-                      📊 View Full Analytics in SendGrid
-                    </a>
+                    <span style="color: #ffffff; text-decoration: none; font-weight: bold; font-size: 16px; display: block;">
+                      📊 Email Analytics Summary
+                    </span>
                   </td>
                 </tr>
               </table>

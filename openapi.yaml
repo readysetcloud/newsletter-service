@@ -22,7 +22,9 @@ x-amazon-apigateway-gateway-responses:
       gatewayresponse.header.Access-Control-Allow-Origin: "'https://www.readysetcloud.io'"
 
 paths:
-  /subscribers:
+  /{tenant}/subscribers:
+    parameters:
+      - $ref: '#/components/parameters/Tenant'
     post:
       summary: Add a new subscriber
       requestBody:
@@ -48,11 +50,7 @@ paths:
   /{tenant}/{slug}/votes:
     parameters:
       - $ref: '#/components/parameters/Tenant'
-      - name: slug
-        in: path
-        required: true
-        schema:
-          type: string
+      - $ref: '#/components/parameters/Slug'
     post:
       summary: Submit a vote
       requestBody:
@@ -87,6 +85,53 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
+  /{tenant}/{slug}/opens:
+    parameters:
+      - $ref: '#/components/parameters/Tenant'
+      - $ref: '#/components/parameters/Slug'
+    get:
+      summary: Track email opens
+      responses:
+        204:
+          description: The open was registered
+        400:
+          $ref: '#/components/responses/BadRequest'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/UnknownError'
+      x-amazon-apigateway-request-validator: Validate All
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OpenTrackingFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
+  /{tenant}/unusubscribe:
+    parameters:
+      - $ref: '#/components/parameters/Tenant'
+    get:
+      summary: Unsubscribe from newsletter
+      responses:
+        200:
+          description: The open was registered
+          content:
+            text/html:
+              schema:
+                type: string
+        400:
+          $ref: '#/components/responses/BadRequest'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/UnknownError'
+      x-amazon-apigateway-request-validator: Validate All
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UnsubscribeFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
 components:
   parameters:
     Tenant:
@@ -96,6 +141,13 @@ components:
       schema:
         type: string
       description: The tenant identifier
+    Slug:
+      name: slug
+      in: path
+      required: true
+      schema:
+        type: string
+        description: Issue slug
 
   schemas:
     Subscriber:

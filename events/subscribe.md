@@ -60,7 +60,6 @@
       "repo": "ready-set-cloud"
     },
     "apiKeys": {
-      "sendgrid": "sendgridapikey",
       "github": "githubPAT"
     }
   }

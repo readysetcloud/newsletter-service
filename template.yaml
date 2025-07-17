@@ -1,26 +1,18 @@
-AWSTemplateFormatVersion: '2010-09-09'
+AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 Description: >
   Newsletter service powering Serverless Picks of the Week
 
 Parameters:
-  SendGridDistributionListId:
-    Type: String
-  SendGridSenderId:
-    Type: String
-    Default: '4700440'
-  SendGridTemplateId:
-    Type: String
-    Default: d-b231d6ee5c2346e489b0cceb9a430582
-  SendGridTemplateVersionId:
-    Type: String
-    Default: cca59fb9-1507-4f2a-8df0-0b52b403a128
   Environment:
     Type: String
-    AllowedValues: [ sandbox, stage, production ]
+    AllowedValues: [sandbox, stage, production]
   Origin:
     Type: String
-    Default: 'https://www.readysetcloud.io'
+    Default: "https://www.readysetcloud.io"
+  EncryptionKey:
+    Type: String
+    Description: Used to hash email addresses
 
 Metadata:
   esbuild-properties: &esbuild-properties
@@ -35,18 +27,19 @@ Metadata:
     Banner:
       - js=import { createRequire } from 'module'; const require = createRequire(import.meta.url);
     External:
-      - '@aws-sdk/*'
+      - "@aws-sdk/*"
+    Loader:
+      - .hbs=text
 
 Conditions:
-  DeployProductionResources:
-    !Equals [!Ref Environment, 'production']
+  DeployProductionResources: !Equals [!Ref Environment, "production"]
   DeployStageResources:
     Fn::Not:
-      - !Equals [!Ref Environment, 'production']
+      - !Equals [!Ref Environment, "production"]
 
 Globals:
   Function:
-    Runtime: nodejs20.x
+    Runtime: nodejs22.x
     CodeUri: functions
     Architectures:
       - arm64
@@ -71,8 +64,8 @@ Resources:
       StageName: v1
       MethodSettings:
         - MetricsEnabled: True
-          ResourcePath: '/*'
-          HttpMethod: '*'
+          ResourcePath: "/*"
+          HttpMethod: "*"
           LoggingLevel: ERROR
           DataTraceEnabled: True
       DefinitionBody:
@@ -112,10 +105,65 @@ Resources:
         AttributeName: ttl
         Enabled: true
 
+  NewsletterBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteRule
+            Status: Enabled
+            ExpirationInDays: 7
+      VersioningConfiguration:
+        Status: Enabled
+
+  ConfigurationSet:
+    Type: AWS::SES::ConfigurationSet
+    Properties:
+      DeliveryOptions:
+        TlsPolicy: REQUIRE
+      ReputationOptions:
+        ReputationMetricsEnabled: true
+      SendingOptions:
+        SendingEnabled: true
+
+  ConfigurationSetDestination:
+    Type: AWS::SES::ConfigurationSetEventDestination
+    Properties:
+      ConfigurationSetName: !Ref ConfigurationSet
+      EventDestination:
+        Enabled: true
+        EventBridgeDestination:
+          EventBusArn: !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+        MatchingEventTypes:
+          - SEND
+          - REJECT
+          - BOUNCE
+          - COMPLAINT
+          - DELIVERY
+
   ScheduleGroup:
     Type: AWS::Scheduler::ScheduleGroup
     Properties:
       Name: newsletter
+
+  SchedulerExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EventBridgeAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: events:PutEvents
+                Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
 
   AddTenantFunction:
     Type: AWS::Serverless::Function
@@ -134,6 +182,9 @@ Resources:
             - Effect: Allow
               Action: dynamodb:PutItem
               Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action: ses:CreateContactList
+              Resource: "*"
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
@@ -154,27 +205,120 @@ Resources:
       BuildProperties:
         <<: *esbuild-properties
         EntryPoints:
-          - add-subscriber.mjs
+          - subscribers/add-subscriber.mjs
     Properties:
-      Handler: add-subscriber.handler
+      Handler: subscribers/add-subscriber.handler
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
+              Action: ses:CreateContact
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          LIST_ID: !Ref SendGridDistributionListId
+          TABLE_NAME: !Ref NewsletterTable
           ORIGIN: !Ref Origin
       Events:
         FromApi:
           Type: Api
           Properties:
             RestApiId: !Ref NewsletterApi
-            Path: /subscribers
+            Path: /{tenant}/subscribers
             Method: POST
+
+  ImportSubscriberListFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - subscribers/import-subscriber-list.mjs
+    Properties:
+      Handler: subscribers/import-subscriber-list.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: ses:CreateContact
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+
+  ExportSubscribersFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - subscribers/export-subscribers.mjs
+    Properties:
+      Handler: subscribers/subscribers.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: ses:ListContacts
+              Resource: "*"
+            - Effect: Allow
+              Action: dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action: s3:PutObject
+              Resource: !Sub "${NewsletterBucket.Arn}/reports/*"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          BUCKET: !Ref NewsletterBucket
+
+  HandleEmailStatusFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - handle-email-status.mjs
+    Properties:
+      Handler: handle-email-status.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+      Events:
+        CreationEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - aws.ses
+              detail-type:
+                - Email Rejected
+                - Email Sent
+                - Email Delivered
+                - Email Bounced
+                - Email Complaint Received
 
   SetupVotingOptionsFunction:
     Type: AWS::Serverless::Function
@@ -224,6 +368,7 @@ Resources:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
           ORIGIN: !Ref Origin
+          EMAIL_ENCRYPTION_KEY: !Ref EncryptionKey
       Events:
         FromApi:
           Type: Api
@@ -231,6 +376,71 @@ Resources:
             RestApiId: !Ref NewsletterApi
             Path: /{tenant}/{slug}/votes
             Method: POST
+
+  OpenTrackingFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - open-tracking.mjs
+    Properties:
+      Handler: open-tracking.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          ORIGIN: !Ref Origin
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /{tenant}/{slug}/opens
+            Method: GET
+
+  UnsubscribeFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - subscribers/unsubscribe.mjs
+    Properties:
+      Handler: subscribers/unsubscribe.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: ses:DeleteContact
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          ORIGIN: !Ref Origin
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /{tenant}/unsubscribe
+            Method: GET
 
   BuildReportDataFunction:
     Type: AWS::Serverless::Function
@@ -249,6 +459,9 @@ Resources:
             - Effect: Allow
               Action: dynamodb:PutItem
               Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
 
   GetInsightsFunction:
     Type: AWS::Serverless::Function
@@ -270,6 +483,9 @@ Resources:
             - Effect: Allow
               Action: bedrock:InvokeModel
               Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-pro-v1:0
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
 
   GetNextIssueDateFunction:
     Type: AWS::Serverless::Function
@@ -307,14 +523,58 @@ Resources:
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+              Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          LIST_ID: !Ref SendGridDistributionListId
-          SENDER_ID: !Ref SendGridSenderId
-          TEMPLATE_ID: !Ref SendGridTemplateId
-          VERSION_ID: !Ref SendGridTemplateVersionId
+          TABLE_NAME: !Ref NewsletterTable
+
+  SendEmailV2Function:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - send-email-v2.mjs
+    Properties:
+      Handler: send-email-v2.handler
+      Timeout: 900
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:ListContacts
+              Resource: "*"
+            - Effect: Allow
+              Action: scheduler:CreateSchedule
+              Resource: !Sub "arn:aws:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/newsletter/*"
+            - Effect: Allow
+              Action: iam:PassRole
+              Resource: !GetAtt SchedulerExecutionRole.Arn
+      Environment:
+        Variables:
+          FROM_EMAIL: allen@readysetcloud.io
+          SCHEDULER_ROLE_ARN: !GetAtt SchedulerExecutionRole.Arn
+          EMAIL_ENCRYPTION_KEY: !Ref EncryptionKey
+          CONFIGURATION_SET: !Ref ConfigurationSet
+      Events:
+        EmailEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - newsletter-service
+              detail-type:
+                - Send Email v2
 
   ParseIssueFunction:
     Type: AWS::Serverless::Function
@@ -341,8 +601,8 @@ Resources:
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          OWNER: '{{resolve:ssm:/readysetcloud/github-owner}}'
-          REPO: '{{resolve:ssm:/readysetcloud/github-repo}}'
+          OWNER: "{{resolve:ssm:/readysetcloud/github-owner}}"
+          REPO: "{{resolve:ssm:/readysetcloud/github-repo}}"
           TABLE_NAME: !Ref NewsletterTable
 
   SyncRepoDataFunction:
@@ -373,8 +633,8 @@ Resources:
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
-          OWNER: '{{resolve:ssm:/readysetcloud/github-owner}}'
-          REPO: '{{resolve:ssm:/readysetcloud/github-repo}}'
+          OWNER: "{{resolve:ssm:/readysetcloud/github-owner}}"
+          REPO: "{{resolve:ssm:/readysetcloud/github-repo}}"
       Events:
         AmplifyBuildSuccessful:
           Type: EventBridgeRule
@@ -386,7 +646,7 @@ Resources:
                 - Amplify Deployment Status Change
               detail:
                 appId:
-                  - '{{resolve:ssm:/readysetcloud/amplify-app-id}}'
+                  - "{{resolve:ssm:/readysetcloud/amplify-app-id}}"
                 jobStatus:
                   - SUCCEED
 
@@ -456,7 +716,7 @@ Resources:
       DefinitionUri: state-machines/report-stats.asl.json
       DefinitionSubstitutions:
         DynamodbQuery: !Sub arn:${AWS::Partition}:states:::aws-sdk:dynamodb:query
-        DynamoDbGetItem: !Sub arn:${AWS::Partition}:states:::dynamodb:getItem
+        DynamodbGetItem: !Sub arn:${AWS::Partition}:states:::dynamodb:getItem
         TableName: !Ref NewsletterTable
         LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
         SendApiRequest: "{{resolve:ssm:/readysetcloud/send-api-request}}"
@@ -465,8 +725,8 @@ Resources:
         GetInsights: !GetAtt GetInsightsFunction.Arn
         DynamodbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
-        AdminEmail: '{{resolve:ssm:/readysetcloud/admin-email}}'
-        ListId: !Ref SendGridDistributionListId
+        AdminEmail: "{{resolve:ssm:/readysetcloud/admin-email}}"
+
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -501,7 +761,7 @@ Resources:
         GetNextIssueDate: !GetAtt GetNextIssueDateFunction.Arn
         DynamodbGetItem: !Sub arn:${AWS::Partition}:states:::dynamodb:getItem
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
-        AdminEmail: '{{resolve:ssm:/readysetcloud/admin-email}}'
+        AdminEmail: "{{resolve:ssm:/readysetcloud/admin-email}}"
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -532,7 +792,7 @@ Resources:
         LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
         ParseIssue: !GetAtt ParseIssueFunction.Arn
         StageIssue: !GetAtt StageIssueFunction.Arn
-        DynamoDbUpdateItem: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
+        DynamodbUpdateItem: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
         SendApiRequest: "{{resolve:ssm:/readysetcloud/send-api-request}}"
         SfnStartExecution: !Sub arn:${AWS::Partition}:states:::states:startExecution.sync:2
@@ -576,9 +836,9 @@ Resources:
               Resource: !Sub arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${AddRedirectStateMachine.Name}:*
             - Effect: Allow
               Action:
-              - events:PutTargets
-              - events:PutRule
-              - events:DescribeRule
+                - events:PutTargets
+                - events:PutRule
+                - events:DescribeRule
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule
             - Effect: Allow
               Action: scheduler:CreateSchedule
@@ -691,26 +951,59 @@ Resources:
 
         async function handler(event) {
             const request = event.request;
-            const headers = request.headers;
             const pieces = request.uri.split('/');
             const key = pieces[pieces.length - 1];
+            let foundRedirect = true;
             let value = "https://readysetcloud.io";
             try {
                 value = await kvsHandle.get(key);
-                console.log(JSON.stringify({key, value}));
             } catch (err) {
-                console.log(`Kvs key lookup failed: ` + key);
+                console.log("Kvs key lookup failed: " + key);
+                foundRedirect = false;
             }
+
+            const logData = { key: key, value: value };
+
+            const queryString = buildQueryString(request.querystring);
+            if('ref' in request.querystring){
+              const refQuery = request.querystring['ref'];
+              const refValue = refQuery.multiValue ?  refQuery.multiValue.map(function(q) { return q.value; }).join(',') : refQuery.value;
+              logData.ref = refValue;
+            }
+
+            if(foundRedirect){
+                console.log(JSON.stringify(logData));
+            }
+            value = value + (queryString ? "?" + queryString : '');
 
             const response = {
                 statusCode: 302,
                 statusDescription: 'Found',
-                headers:
-                    { "location": { "value": value } }
-                }
+                headers: { "location": { "value": value } }
+            };
 
             return response;
+        }
 
+        function buildQueryString(querystring) {
+            const params = [];
+
+            for (const param in querystring) {
+                const query = querystring[param];
+                const multiValue = query.multiValue;
+
+                if (multiValue) {
+                    multiValue.forEach(function(item) {
+                        params.push(param + "=" + encodeURIComponent(item.value));
+                    });
+                } else if (query.value === '') {
+                    params.push(encodeURIComponent(param));
+                } else {
+                    params.push(param + "=" + encodeURIComponent(query.value));
+                }
+            }
+
+            return params.join('&');
         }
       FunctionConfig:
         KeyValueStoreAssociations:

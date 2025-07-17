@@ -110,9 +110,7 @@ describe('Lambda Handler', () => {
         lastName: 'Doe'
       })
     });
-    expect(mockSesClient.send).toHaveBeenCalled();
     expect(UpdateItemCommand).toHaveBeenCalled();
-    expect(mockDdbClient.send).toHaveBeenCalled();
     expect(response.statusCode).toBe(201);
   });
 

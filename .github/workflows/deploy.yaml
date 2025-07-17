@@ -44,4 +44,4 @@ jobs:
           --resolve-s3 \
           --no-fail-on-empty-changeset \
           --capabilities CAPABILITY_IAM \
-          --parameter-overrides Environment=production
+          --parameter-overrides Environment=production EncryptionKey=${{secrets.ENCRYPTION_KEY}}

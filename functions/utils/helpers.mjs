@@ -10,6 +10,8 @@ let tenants = {};
 const ddb = new DynamoDBClient();
 const ivLength = 16;
 const algorithm = 'aes-256-gcm';
+const TPS_LIMIT = 5;
+const MAX_RETRIES = 3;
 
 export const getOctokit = async (tenantId) => {
   if (!octokit) {
@@ -100,3 +102,32 @@ export const decrypt = (encrypted) => {
   decrypted += decipher.final('utf8');
   return decrypted;
 };
+
+export const sendWithRetry = async (sendFn, maxRetries = MAX_RETRIES) => {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await sendFn();
+    } catch (err) {
+      if (err.name === 'TooManyRequestsException' || err.name === 'ThrottlingException') {
+        const delay = Math.pow(2, attempt) * 1000; // Exponential backoff
+        console.warn(`Throttled, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`);
+        await sleep(delay);
+      } else {
+        throw err; // Non-throttle error
+      }
+    }
+  }
+  throw new Error('Max retries exceeded');
+};
+
+export const throttle = async (tasks, rateLimitPerSecond = TPS_LIMIT) => {
+  for (let i = 0; i < tasks.length; i++) {
+    await tasks[i]();
+    if ((i + 1) % rateLimitPerSecond === 0) {
+      console.log(`Throttling: waiting 1 second after ${rateLimitPerSecond} requests`);
+      await sleep(1000);
+    }
+  }
+};
+
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));

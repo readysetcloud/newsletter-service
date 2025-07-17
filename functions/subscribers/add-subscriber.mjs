@@ -24,8 +24,10 @@ export const handler = async (event) => {
       return formatResponse(400, 'Email is required');
     }
 
-    await addContact(tenant.list, contact);
-    await updateSubscriberCount(tenantId);
+    const shouldUpdateCount = await addContact(tenant.list, contact);
+    if (shouldUpdateCount) {
+      await updateSubscriberCount(tenantId);
+    }
 
     return formatResponse(201, 'Contact added');
   }
@@ -48,7 +50,17 @@ const addContact = async (list, contact) => {
     });
   }
 
-  await ses.send(new CreateContactCommand(contactData));
+  try {
+    await ses.send(new CreateContactCommand(contactData));
+  } catch (err) {
+    if (err.name === 'AlreadyExistsException') {
+      console.warn(`Contact already exists: ${contact.address}`);
+      return false;
+    } else {
+      throw err;
+    }
+  }
+  return true;
 };
 
 const updateSubscriberCount = async (tenantId) => {

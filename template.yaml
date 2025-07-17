@@ -242,12 +242,15 @@ Resources:
           - subscribers/import-subscriber-list.mjs
     Properties:
       Handler: subscribers/import-subscriber-list.handler
+      Timeout: 900
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: ses:CreateContact
+              Action:
+                - ses:CreateContact
+                - ses:ListContacts
               Resource: "*"
             - Effect: Allow
               Action:
@@ -267,7 +270,8 @@ Resources:
         EntryPoints:
           - subscribers/export-subscribers.mjs
     Properties:
-      Handler: subscribers/subscribers.handler
+      Handler: subscribers/export-subscribers.handler
+      Timeout: 300
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17

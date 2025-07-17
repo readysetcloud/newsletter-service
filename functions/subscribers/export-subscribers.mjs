@@ -1,6 +1,6 @@
 import { SESv2Client, ListContactsCommand } from "@aws-sdk/client-sesv2";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { getTenant } from "../utils/helpers.mjs";
+import { getTenant, sendWithRetry } from "../utils/helpers.mjs";
 
 const ses = new SESv2Client();
 const s3 = new S3Client();
@@ -15,10 +15,10 @@ export const handler = async (event) => {
     const emailAddresses = [];
     let nextToken;
     do {
-      const contacts = await ses.send(new ListContactsCommand({
+      const contacts = await sendWithRetry(() => ses.send(new ListContactsCommand({
         ContactListName: tenant.list,
         NextToken: nextToken
-      }));
+      })));
       if (contacts.Contacts?.length) {
         emailAddresses.push(...contacts.Contacts.map(c => c.EmailAddress));
       }
@@ -33,7 +33,7 @@ export const handler = async (event) => {
     const key = `reports/${tenantId}-${new Date().toISOString()}.json`;
     await s3.send(new PutObjectCommand({
       Bucket: process.env.BUCKET,
-      Key,
+      Key: key,
       Body: JSON.stringify(report),
       ContentType: "application/json"
     }));

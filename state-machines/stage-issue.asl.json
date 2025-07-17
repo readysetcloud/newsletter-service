@@ -178,7 +178,8 @@
         "FunctionName": "${UpdateLinksWithRedirects}",
         "Payload": {
           "redirects.$": "$.redirects.Output.redirects",
-          "content.$": "$$.Execution.Input.content"
+          "content.$": "$$.Execution.Input.content",
+          "addRef": true
         }
       },
       "Retry": [
@@ -290,7 +291,7 @@
     },
     "Update Issue Record - Previewed": {
       "Type": "Task",
-      "Resource": "${DynamoDbUpdateItem}",
+      "Resource": "${DynamodbUpdateItem}",
       "Parameters": {
         "TableName": "${TableName}",
         "Key": {
@@ -354,7 +355,7 @@
     },
     "Update Issue Record - Failure": {
       "Type": "Task",
-      "Resource": "${DynamoDbUpdateItem}",
+      "Resource": "${DynamodbUpdateItem}",
       "Parameters": {
         "TableName": "${TableName}",
         "Key": {
@@ -380,7 +381,7 @@
     },
     "Update Issue Record - Success": {
       "Type": "Task",
-      "Resource": "${DynamoDbUpdateItem}",
+      "Resource": "${DynamodbUpdateItem}",
       "Parameters": {
         "TableName": "${TableName}",
         "Key": {

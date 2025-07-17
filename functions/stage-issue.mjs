@@ -16,7 +16,8 @@ export const handler = async (state) => {
       await sendEmail({
         subject: `[Preview] ${state.subject}`,
         html: template,
-        to: { email: state.email }
+        to: { email: state.email },
+        sendAt: state.sendAtDate
       });
     } else {
       const tenant = await getTenant(state.tenantId);
@@ -25,7 +26,8 @@ export const handler = async (state) => {
         subject: state.subject,
         html: template,
         to: { list: tenant.list },
-        sendAt: state.sendAtDate
+        sendAt: state.sendAtDate,
+        referenceNumber: `${tenant.pk}#${state.data.metadata.number}`
       });
 
       return state;
@@ -66,9 +68,10 @@ const sendEmail = async (params) => {
         },
         html: params.html,
         ...params.sendAt && { sendAt: params.sendAt },
+        ...params.referenceNumber && { referenceNumber: params.referenceNumber },
         replacements: {
-          emailAddress: "<<EMAIL>",
-          emailAddressHash: "<<EMAIL_HASH>>"
+          emailAddress: "__EMAIL__",
+          emailAddressHash: "__EMAIL_HASH__"
         }
       })
     }]

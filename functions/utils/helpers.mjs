@@ -8,10 +8,8 @@ import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 let octokit;
 let tenants = {};
 const ddb = new DynamoDBClient();
-
-const algorithm = 'aes-256-gcm';
-const key = crypto.createHash('sha256').update(process.env.EMAIL_ENCRYPTION_KEY).digest(); 
 const ivLength = 16;
+const algorithm = 'aes-256-gcm';
 
 export const getOctokit = async (tenantId) => {
   if (!octokit) {
@@ -73,7 +71,12 @@ export const formatEmptyResponse = () => {
   };
 };
 
+const getKey = () => {
+  return crypto.createHash('sha256').update(process.env.EMAIL_ENCRYPTION_KEY).digest();
+};
+
 export const encrypt = (email) => {
+  const key = getKey();
   const iv = crypto.randomBytes(ivLength);
   const cipher = crypto.createCipheriv(algorithm, key, iv);
 
@@ -86,6 +89,7 @@ export const encrypt = (email) => {
 };
 
 export const decrypt = (encrypted) => {
+  const key = getKey();
   const [ivB64, dataB64, authTagB64] = encrypted.split(':');
   const iv = Buffer.from(ivB64, 'base64');
   const authTag = Buffer.from(authTagB64, 'base64');

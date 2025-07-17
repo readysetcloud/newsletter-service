@@ -26,43 +26,23 @@
       "Type": "Parallel",
       "Branches": [
         {
-          "StartAt": "Get Stats From SendGrid",
+          "StartAt": "Get Stats From DynamoDB",
           "States": {
-            "Get Stats From SendGrid": {
+            "Get Stats From DynamoDB": {
               "Type": "Task",
-              "Resource": "${LambdaInvoke}",
-              "OutputPath": "$.Payload",
+              "Resource": "${DynamodbGetItem}",
               "Parameters": {
-                "FunctionName": "${SendApiRequest}",
-                "Payload": {
-                  "secretKey": "sendgrid",
-                  "auth": {
-                    "location": "header",
-                    "key": "Authorization",
-                    "prefix": "Bearer"
+                "TableName": "${TableName}",
+                "Key": {
+                  "pk": {
+                    "S.$": "$.Items[0].pk.S"
                   },
-                  "request": {
-                    "method": "GET",
-                    "baseUrl.$": "States.Format('https://api.sendgrid.com/v3/marketing/stats/singlesends/{}', $.Items[0].singleSendId.S)",
-                    "query": {
-                      "start_date.$": "States.ArrayGetItem(States.StringSplit($.Items[0].GSI1SK.S, 'T'), 0)"
-                    }
+                  "sk": {
+                    "S": "stats"
                   }
                 }
               },
-              "Retry": [
-                {
-                  "ErrorEquals": [
-                    "Lambda.ServiceException",
-                    "Lambda.AWSLambdaException",
-                    "Lambda.SdkClientException",
-                    "Lambda.TooManyRequestsException"
-                  ],
-                  "IntervalSeconds": 2,
-                  "MaxAttempts": 6,
-                  "BackoffRate": 2
-                }
-              ],
+              "ResultPath": "$.stats",
               "End": true
             }
           }
@@ -103,36 +83,18 @@
           "States": {
             "Get Subscriber Count": {
               "Type": "Task",
-              "Resource": "${LambdaInvoke}",
-              "OutputPath": "$.Payload",
+              "Resource": "${DynamodbGetItem}",
               "Parameters": {
-                "FunctionName": "${SendApiRequest}",
-                "Payload": {
-                  "secretKey": "sendgrid",
-                  "auth": {
-                    "location": "header",
-                    "key": "Authorization",
-                    "prefix": "Bearer"
+                "TableName": "${TableName}",
+                "Key": {
+                  "pk": {
+                    "S.$": "$.Execution.Input.tenant.id"
                   },
-                  "request": {
-                    "method": "GET",
-                    "baseUrl": "https://api.sendgrid.com/v3/marketing/lists/${ListId}"
+                  "sk": {
+                    "S": "tenant"
                   }
                 }
               },
-              "Retry": [
-                {
-                  "ErrorEquals": [
-                    "Lambda.ServiceException",
-                    "Lambda.AWSLambdaException",
-                    "Lambda.SdkClientException",
-                    "Lambda.TooManyRequestsException"
-                  ],
-                  "IntervalSeconds": 2,
-                  "MaxAttempts": 6,
-                  "BackoffRate": 2
-                }
-              ],
               "Next": "Set New Subscriber Count"
             },
             "Set New Subscriber Count": {
@@ -148,7 +110,7 @@
                     "S.$": "States.Format('subscribers#{}', States.ArrayGetItem(States.StringSplit($$.Execution.StartTime, 'T'), 0))"
                   },
                   "count": {
-                    "S.$": "States.Format('{}', $.contact_count)"
+                    "S.$": "$.Item.subscribers.N"
                   }
                 }
               },
@@ -190,7 +152,7 @@
           "States": {
             "Get Vote Results": {
               "Type": "Task",
-              "Resource": "${DynamoDbGetItem}",
+              "Resource": "${DynamodbGetItem}",
               "Parameters": {
                 "TableName": "${TableName}",
                 "Key": {
@@ -217,12 +179,11 @@
       "Parameters": {
         "FunctionName": "${BuildReportData}",
         "Payload": {
-          "stats.$": "$.data[0].results[0].stats",
+          "stats.$": "$.data[0].stats.Item",
           "issue.$": "$.Items[0].pk.S",
-          "subscribers.$": "$.data[2].contact_count",
+          "subscribers.$": "$.data[2].Item.subscribers.N",
           "priorSubscribers.$": "$.data[3].Items[0].count.S",
           "links.$": "$.data[1].links",
-          "singleSendId.$": "$.Items[0].singleSendId.S",
           "voteResults.$": "$.data[4].Item"
         }
       },

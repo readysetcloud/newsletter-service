@@ -27,7 +27,7 @@ const sendWithRetry = async (sendFn, maxRetries = 3) => {
 
 export const handler = async (event) => {
   try {
-    // Input validation
+
     if (!event?.detail) {
       throw new Error('Missing event detail');
     }
@@ -56,7 +56,6 @@ export const handler = async (event) => {
           GroupName: 'newsletter',
           Name: `email-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
           ScheduleExpression: `at(${sendAtDate.toISOString().slice(0, 19)})`,
-          ScheduleExpressionTimezone: 'America/Chicago',
           Target: {
             Arn: 'arn:aws:scheduler:::aws-sdk:eventbridge:putEvents',
             RoleArn: process.env.SCHEDULER_ROLE_ARN,

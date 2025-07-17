@@ -1,5 +1,6 @@
 import { SESv2Client, DeleteContactCommand } from "@aws-sdk/client-sesv2";
 import { DynamoDBClient, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import { marshall } from "@aws-sdk/util-dynamodb";
 import { getTenant, decrypt } from "../utils/helpers.mjs";
 
 const ses = new SESv2Client();

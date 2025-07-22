@@ -27,7 +27,7 @@ export const handler = async (state) => {
         html: template,
         to: { list: tenant.list },
         sendAt: state.sendAtDate,
-        referenceNumber: `${tenant.pk}#${state.data.metadata.number}`
+        referenceNumber: `${tenant.pk}_${state.data.metadata.number}`
       });
 
       return state;

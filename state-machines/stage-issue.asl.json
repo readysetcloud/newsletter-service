@@ -488,7 +488,7 @@
               "html.$": "States.Format('<p>The newsletter was successfully scheduled for sending at {}. Good luck!</p>', $.sendAtDate)"
             },
             "DetailType": "Send Email v2",
-            "Source": "user.StageNewsletterStateMachine"
+            "Source": "newsletter-service"
           }
         ]
       },

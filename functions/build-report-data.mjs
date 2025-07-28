@@ -18,17 +18,18 @@ export const handler = async (state) => {
       ? (((subscribers - priorSubscribers) / priorSubscribers) * 100).toFixed(2)
       : subscribers > 0 ? '100.00' : '0.00';
 
+    const stats = unmarshall(state.stats);
     // Calculate rates with safety checks
-    const openRate = state.stats.delivered > 0
-      ? ((state.stats.unique_opens / state.stats.delivered) * 100).toFixed(2)
+    const openRate = stats.delivered > 0
+      ? ((stats.unique_opens / stats.delivered) * 100).toFixed(2)
       : '0.00';
 
-    const clickThroughRate = state.stats.delivered > 0
-      ? ((state.stats.clicks / state.stats.delivered) * 100).toFixed(2)
+    const clickThroughRate = stats.delivered > 0
+      ? ((stats.clicks / stats.delivered) * 100).toFixed(2)
       : '0.00';
 
-    const bounceRate = state.stats.delivered > 0
-      ? ((state.stats.bounces / state.stats.delivered) * 100).toFixed(2)
+    const bounceRate = stats.delivered > 0
+      ? ((stats.bounces / stats.delivered) * 100).toFixed(2)
       : '0.00';
 
     const name = state.issue ? state.issue.split('_')[1]?.split('.')[0]?.replace('-', ' ') || 'Unknown' : 'Unknown';
@@ -49,8 +50,8 @@ export const handler = async (state) => {
       })).sort((a, b) => b.votes - a.votes);
 
       // Calculate poll engagement rate (votes / opens)
-      pollEngagementRate = state.stats.unique_opens > 0
-        ? (totalVotes / state.stats.unique_opens * 100).toFixed(2)
+      pollEngagementRate = stats.unique_opens > 0
+        ? (totalVotes / stats.unique_opens * 100).toFixed(2)
         : '0.00';
     }
 
@@ -70,11 +71,11 @@ export const handler = async (state) => {
         growthRate: parseFloat(safeGrowthRate),
         subscribers: subscribers,
         totalVotes: totalVotes,
-        delivered: state.stats.delivered || 0,
-        uniqueOpens: state.stats.unique_opens || 0,
-        clicks: state.stats.clicks || 0,
-        bounces: state.stats.bounces || 0,
-        unsubscribes: state.stats.unsubscribes || 0
+        delivered: stats.delivered || 0,
+        uniqueOpens: stats.unique_opens || 0,
+        clicks: stats.clicks || 0,
+        bounces: stats.bounces || 0,
+        unsubscribes: stats.unsubscribes || 0
       },
 
       // Content analysis
@@ -89,9 +90,9 @@ export const handler = async (state) => {
       // Engagement patterns
       engagement: {
         openToClickRatio: parseFloat(openRate) > 0 ? (parseFloat(clickThroughRate) / parseFloat(openRate) * 100).toFixed(2) : '0.00',
-        subscriberEngagement: subscribers > 0 ? (((state.stats.unique_opens || 0) + (state.stats.clicks || 0)) / subscribers * 100).toFixed(2) : '0.00',
+        subscriberEngagement: subscribers > 0 ? (((stats.unique_opens || 0) + (stats.clicks || 0)) / subscribers * 100).toFixed(2) : '0.00',
         pollParticipationRate: pollEngagementRate,
-        newSubscribers: Math.max(0, subscribers - priorSubscribers + (state.stats.unsubscribes || 0)),
+        newSubscribers: Math.max(0, subscribers - priorSubscribers + (stats.unsubscribes || 0)),
         netGrowth: subscribers - priorSubscribers
       },
 
@@ -198,7 +199,7 @@ export const handler = async (state) => {
                   <td style="border: 1px solid #ddd; padding: 12px; font-weight: bold;">${subscribers.toLocaleString()}</td>
                   <td style="border: 1px solid #ddd; padding: 12px;">${priorSubscribers.toLocaleString()}</td>
                   <td style="border: 1px solid #ddd; padding: 12px;">${insightData.engagement.newSubscribers.toLocaleString()}</td>
-                  <td style="border: 1px solid #ddd; padding: 12px;">${state.stats.unsubscribes || 0}</td>
+                  <td style="border: 1px solid #ddd; padding: 12px;">${stats.unsubscribes || 0}</td>
                   <td style="border: 1px solid #ddd; padding: 12px; color: ${subscribers - priorSubscribers >= 0 ? '#28a745' : '#dc3545'}; font-weight: bold;">
                     ${subscribers - priorSubscribers >= 0 ? '+' : ''}${(subscribers - priorSubscribers).toLocaleString()}
                   </td>
@@ -272,10 +273,10 @@ export const handler = async (state) => {
                   <th style="border: 1px solid #ddd; padding: 12px; text-align: left; font-weight: bold;">Clicks</th>
                 </tr>
                 <tr>
-                  <td style="border: 1px solid #ddd; padding: 12px;">${(state.stats.delivered || 0).toLocaleString()}</td>
-                  <td style="border: 1px solid #ddd; padding: 12px;">${(state.stats.unique_opens || 0).toLocaleString()}</td>
-                  <td style="border: 1px solid #ddd; padding: 12px;">${state.stats.bounces || 0}</td>
-                  <td style="border: 1px solid #ddd; padding: 12px;">${state.stats.clicks || 0}</td>
+                  <td style="border: 1px solid #ddd; padding: 12px;">${(stats.delivered || 0).toLocaleString()}</td>
+                  <td style="border: 1px solid #ddd; padding: 12px;">${(stats.unique_opens || 0).toLocaleString()}</td>
+                  <td style="border: 1px solid #ddd; padding: 12px;">${stats.bounces || 0}</td>
+                  <td style="border: 1px solid #ddd; padding: 12px;">${stats.clicks || 0}</td>
                 </tr>
               </table>
             </td>

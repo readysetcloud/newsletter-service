@@ -10,7 +10,7 @@ export const handler = async (event) => {
       return;
     }
 
-    const issueId = referenceNumber[0];
+    const issueId = referenceNumber[0].replace(/_/g, '#');
     let stat;
     let failedEmail;
     switch (detail.eventType.toLowerCase()) {

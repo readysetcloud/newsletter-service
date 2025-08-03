@@ -50,6 +50,8 @@ export const handler = async (event) => {
     const ip = event.requestContext.identity.sourceIp;
     const hashedIp = crypto.createHash('sha256').update(ip).digest('hex');
 
+    let updatedVote = vote;
+
     try {
       await ddb.send(new PutItemCommand({
         TableName: process.env.TABLE_NAME,
@@ -61,30 +63,34 @@ export const handler = async (event) => {
         }),
         ConditionExpression: 'attribute_not_exists(pk)'
       }));
+
+      // If we get here, this is a new vote - update the count
+      const updateResponse = await ddb.send(new UpdateItemCommand({
+        TableName: process.env.TABLE_NAME,
+        Key: marshall({
+          pk: `${tenant}#${slug}`,
+          sk: 'votes'
+        }),
+        UpdateExpression: 'SET #choice = #choice + :inc',
+        ExpressionAttributeNames: {
+          '#choice': choice
+        },
+        ExpressionAttributeValues: marshall({
+          ':inc': 1
+        }),
+        ReturnValues: 'ALL_NEW'
+      }));
+
+      updatedVote = unmarshall(updateResponse.Attributes);
     } catch (err) {
       if (err.name === 'ConditionalCheckFailedException') {
-        return formatResponse(400, 'Already voted');
+        // User has already voted - that's fine, we'll just return current results
+        hasAlreadyVoted = true;
+      } else {
+        throw err;
       }
-      throw err;
     }
 
-    const updateResponse = await ddb.send(new UpdateItemCommand({
-      TableName: process.env.TABLE_NAME,
-      Key: marshall({
-        pk: `${tenant}#${slug}`,
-        sk: 'votes'
-      }),
-      UpdateExpression: 'SET #choice = #choice + :inc',
-      ExpressionAttributeNames: {
-        '#choice': choice
-      },
-      ExpressionAttributeValues: marshall({
-        ':inc': 1
-      }),
-      ReturnValues: 'ALL_NEW'
-    }));
-
-    const updatedVote = unmarshall(updateResponse.Attributes);
     const options = vote.options.reduce((acc, option) => {
       acc[option.id] = updatedVote[option.id] || 0;
       return acc;
@@ -95,4 +101,3 @@ export const handler = async (event) => {
     return formatResponse(500, 'Something went wrong');
   }
 };
-

@@ -13,6 +13,10 @@ Parameters:
   EncryptionKey:
     Type: String
     Description: Used to hash email addresses
+  HostedZoneId:
+    Type: String
+  DomainName:
+    Type: String
 
 Metadata:
   esbuild-properties: &esbuild-properties
@@ -247,6 +251,8 @@ Resources:
         BlockPublicPolicy: false
         IgnorePublicAcls: false
         RestrictPublicBuckets: false
+      VersioningConfiguration:
+        Status: Enabled
       OwnershipControls:
         Rules:
           - ObjectOwnership: BucketOwnerPreferred
@@ -261,29 +267,17 @@ Resources:
               - "*"
             MaxAge: 3600
 
-  HostingBucketPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref HostingBucket
-      PolicyDocument:
-        Statement:
-          - Sid: PublicReadGetObject
-            Effect: Allow
-            Principal: "*"
-            Action: s3:GetObject
-            Resource: !Sub "${HostingBucket}/*"
-
-  # Lambda@Edge function for subdomain routing
-  SubdomainRoutingFunction:
+  TenantRoutingFunction:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub "${AWS::StackName}-subdomain-routing"
-      Runtime: nodejs18.x
+      FunctionName: !Sub "${AWS::StackName}-tenant-routing"
       Handler: index.handler
+      Runtime: nodejs22.x
       Role: !GetAtt LambdaEdgeRole.Arn
       Code:
         ZipFile: !Sub |
           exports.handler = async (event) => {
+            console.log('Lambda@Edge function triggered - v6', JSON.stringify(event, null, 2));
             const request = event.Records[0].cf.request;
             const headers = request.headers;
             const host = headers.host[0].value;
@@ -292,32 +286,46 @@ Resources:
             // Extract subdomain (everything before the first dot)
             const hostParts = host.split('.');
             const subdomain = hostParts.length > 2 ? hostParts[0] : null;
-
+            console.log('Processing request:', { host, uri, subdomain });
+            console.log('Original request URI:', uri);
             if (subdomain && subdomain !== 'www') {
               if (uri.startsWith('/api')) {
                 // Route to Newsletter API with subdomain as tenant
                 // Remove /api prefix and add tenant to path
-                const newUri = `/$${subdomain}$${uri.substring(4)}`;
+                const newUri = '/' + subdomain + uri.substring(4);
+                console.log('API routing - Original URI:', uri, 'New URI:', newUri);
                 request.uri = newUri;
                 request.origin = {
                   custom: {
                     domainName: '${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com',
                     port: 443,
                     protocol: 'https',
-    path: '/v1'
+                    path: '/public',
+                    sslProtocols: ['TLSv1', 'TLSv1.1'],
+                    readTimeout: 5,
+                    keepaliveTimeout: 5,
+                    customHeaders: {},
                   }
                 };
+                request.headers['host'] = [{ key: 'host', value: '${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com'}];
               } else {
                 // Route to S3 with subdomain as path prefix
-                const newUri = `/$${subdomain}$${uri}`;
+                const newUri = '/' + subdomain + uri;
+                console.log('S3 routing - Original URI:', uri, 'New URI:', newUri);
                 request.uri = newUri;
                 request.origin = {
-                  s3: {
+                  custom: {
                     domainName: '${HostingBucket}.s3.${AWS::Region}.amazonaws.com',
-                    region: '${AWS::Region}',
-                    authMethod: 'none'
+                    port: 443,
+                    protocol: 'https',
+                    path: '',
+                    sslProtocols: ['TLSv1', 'TLSv1.1'],
+                    readTimeout: 5,
+                    keepaliveTimeout: 5,
+                    customHeaders: {},
                   }
                 };
+                request.headers['host'] = [{ key: 'host', value: '${HostingBucket}.s3.${AWS::Region}.amazonaws.com'}];
               }
             } else {
               // Fallback to Dashboard API
@@ -326,11 +334,17 @@ Resources:
                   domainName: '${DashboardApi}.execute-api.${AWS::Region}.amazonaws.com',
                   port: 443,
                   protocol: 'https',
-                  path: '/api'
+                  path: '/api',
+                  sslProtocols: ['TLSv1', 'TLSv1.1'],
+                  readTimeout: 5,
+                  keepaliveTimeout: 5,
+                  customHeaders: {},
                 }
               };
+              request.headers['host'] = [{ key: 'host', value: '${DashboardApi}.execute-api.${AWS::Region}.amazonaws.com'}];
             }
 
+            console.log('Final request:', JSON.stringify(request, null, 2));
             return request;
           };
 
@@ -338,7 +352,7 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
-        Version: '2012-10-17'
+        Version: "2012-10-17"
         Statement:
           - Effect: Allow
             Principal:
@@ -349,10 +363,11 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 
-  SubdomainRoutingFunctionVersion:
+  TenantRoutingFunctionVersion:
     Type: AWS::Lambda::Version
     Properties:
-      FunctionName: !Ref SubdomainRoutingFunction
+      FunctionName: !Ref TenantRoutingFunction
+      Description: "Version with S3 as custom origin and enhanced logging - v8"
 
   NewsletterDistribution:
     Type: AWS::CloudFront::Distribution
@@ -361,8 +376,6 @@ Resources:
         Enabled: true
         Comment: !Sub "${AWS::StackName} Newsletter Distribution"
         DefaultRootObject: index.html
-
-        # Origins
         Origins:
           - Id: DashboardApiOrigin
             DomainName: !Sub "${DashboardApi}.execute-api.${AWS::Region}.amazonaws.com"
@@ -375,7 +388,7 @@ Resources:
                 - TLSv1.2
           - Id: NewsletterApiOrigin
             DomainName: !Sub "${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com"
-            OriginPath: /v1
+            OriginPath: /public
             CustomOriginConfig:
               HTTPPort: 443
               HTTPSPort: 443
@@ -386,8 +399,6 @@ Resources:
             DomainName: !Sub "${HostingBucket}.s3.${AWS::Region}.amazonaws.com"
             S3OriginConfig:
               OriginAccessIdentity: ""
-
-        # Default behavior (fallback to Dashboard API)
         DefaultCacheBehavior:
           TargetOriginId: DashboardApiOrigin
           ViewerProtocolPolicy: redirect-to-https
@@ -402,7 +413,7 @@ Resources:
           CachedMethods:
             - GET
             - HEAD
-    ForwardedValues:
+          ForwardedValues:
             QueryString: true
             Headers:
               - Authorization
@@ -412,12 +423,10 @@ Resources:
               Forward: none
           LambdaFunctionAssociations:
             - EventType: origin-request
-              LambdaFunctionARN: !Ref SubdomainRoutingFunctionVersion
+              LambdaFunctionARN: !Ref TenantRoutingFunctionVersion
           MinTTL: 0
           DefaultTTL: 0
           MaxTTL: 31536000
-
-        # Cache behaviors for different content types
         CacheBehaviors:
           - PathPattern: "/api/*"
             TargetOriginId: NewsletterApiOrigin
@@ -444,12 +453,11 @@ Resources:
                 Forward: none
             LambdaFunctionAssociations:
               - EventType: origin-request
-                LambdaFunctionARN: !Ref SubdomainRoutingFunctionVersion
+                LambdaFunctionARN: !Ref TenantRoutingFunctionVersion
             MinTTL: 0
             DefaultTTL: 0
             MaxTTL: 86400
-
-          - PathPattern: "*.html"
+          - PathPattern: "/issues/*"
             TargetOriginId: HostingBucketOrigin
             ViewerProtocolPolicy: redirect-to-https
             AllowedMethods:
@@ -466,58 +474,46 @@ Resources:
                 Forward: none
             LambdaFunctionAssociations:
               - EventType: origin-request
-                LambdaFunctionARN: !Ref SubdomainRoutingFunctionVersion
+                LambdaFunctionARN: !Ref TenantRoutingFunctionVersion
             MinTTL: 0
             DefaultTTL: 86400
             MaxTTL: 31536000
-
-          - PathPattern: "*.css"
-            TargetOriginId: HostingBucketOrigin
-            ViewerProtocolPolicy: redirect-to-https
-            AllowedMethods:
-              - GET
-              - HEAD
-            CachedMethods:
-              - GET
-              - HEAD
-            ForwardedValues:
-              QueryString: false
-              Headers:
-                - Host
-              Cookies:
-                Forward: none
-            LambdaFunctionAssociations:
-              - EventType: origin-request
-                LambdaFunctionARN: !Ref SubdomainRoutingFunctionVersion
-            MinTTL: 0
-            DefaultTTL: 86400
-            MaxTTL: 31536000
-
-          - PathPattern: "*.js"
-TargetOriginId: HostingBucketOrigin
-            ViewerProtocolPolicy: redirect-to-https
-            AllowedMethods:
-              - GET
-              - HEAD
-            CachedMethods:
-              - GET
-              - HEAD
-            ForwardedValues:
-              QueryString: false
-              Headers:
-                - Host
-              Cookies:
-                Forward: none
-            LambdaFunctionAssociations:
-              - EventType: origin-request
-                LambdaFunctionARN: !Ref SubdomainRoutingFunctionVersion
-            MinTTL: 0
-            DefaultTTL: 86400
-            MaxTTL: 31536000
-
         PriceClass: PriceClass_100
         ViewerCertificate:
-          CloudFrontDefaultCertificate: true
+          AcmCertificateArn: !Ref SubdomainCertificate
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        Aliases:
+          - !Sub "*.${DomainName}"
+
+  SubdomainCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Sub "*.${DomainName}"
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Sub "*.${DomainName}"
+          HostedZoneId: !Ref HostedZoneId
+
+  Route53RecordSetIPV4:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub "*.${DomainName}"
+      Type: A
+      AliasTarget:
+        HostedZoneId: Z2FDTNDATAQYW2
+        DNSName: !GetAtt NewsletterDistribution.DomainName
+
+  Route53RecordSetIPV6:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub "*.${DomainName}"
+      Type: AAAA
+      AliasTarget:
+        HostedZoneId: Z2FDTNDATAQYW2
+        DNSName: !GetAtt NewsletterDistribution.DomainName
 
   ConfigurationSet:
     Type: AWS::SES::ConfigurationSet
@@ -803,6 +799,7 @@ TargetOriginId: HostingBucketOrigin
           - subscribers/clean-bounced-subscribers.mjs
     Properties:
       Handler: subscribers/clean-bounced-subscribers.handler
+      Timeout: 60
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17

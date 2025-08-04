@@ -277,7 +277,6 @@ Resources:
       Code:
         ZipFile: !Sub |
           exports.handler = async (event) => {
-            console.log('Lambda@Edge function triggered - v6', JSON.stringify(event, null, 2));
             const request = event.Records[0].cf.request;
             const headers = request.headers;
             const host = headers.host[0].value;
@@ -367,7 +366,7 @@ Resources:
     Type: AWS::Lambda::Version
     Properties:
       FunctionName: !Ref TenantRoutingFunction
-      Description: "Version with S3 as custom origin and enhanced logging - v8"
+      Description: "Version with S3 as custom origin and enhanced logging - v9"
 
   NewsletterDistribution:
     Type: AWS::CloudFront::Distribution

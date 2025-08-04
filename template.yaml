@@ -793,6 +793,46 @@ TargetOriginId: HostingBucketOrigin
                 - Email Bounced
                 - Email Complaint Received
 
+  CleanBouncedSubscribersFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - subscribers/clean-bounced-subscribers.mjs
+    Properties:
+      Handler: subscribers/clean-bounced-subscribers.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - ses:DeleteContact
+                - ses:ListContacts
+              Resource: "*"
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+      Events:
+        CleanBouncedEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - newsletter-service
+              detail-type:
+                - Clean Bounced Subscribers
+
   SetupVotingOptionsFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -1284,6 +1324,7 @@ TargetOriginId: HostingBucketOrigin
         ReportStatsStateMachine: !Ref ReportStatsStateMachine
         ReportStatsRole: !GetAtt ReportStatsRole.Arn
         SetupVotingOptions: !GetAtt SetupVotingOptionsFunction.Arn
+        CleanupListRole: !GetAtt SchedulerExecutionRole.Arn
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -1329,6 +1370,7 @@ TargetOriginId: HostingBucketOrigin
               Resource:
                 - !GetAtt PublishTopContentRole.Arn
                 - !GetAtt ReportStatsRole.Arn
+                - !GetAtt SchedulerExecutionRole.Arn
 
   CalculateClicksStateMachine:
     Type: AWS::Serverless::StateMachine

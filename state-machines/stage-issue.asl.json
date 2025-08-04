@@ -402,18 +402,30 @@
           "#description": "description"
         },
         "ExpressionAttributeValues": {
-          ":status": { "S": "succeeded" },
-          ":GSIPK": { "S.$": "States.Format('{}#newsletter', $$.Execution.Input.tenant.id)" },
-          ":GSISK": { "S.$": "$.sendAtDate" },
-          ":slug": { "S.$": "States.Format('{}', $.data.metadata.number)"},
-          ":subject": { "S.$": "$.data.metadata.title"},
-          ":description": { "S.$": "$.data.metadata.description" }
+          ":status": {
+            "S": "succeeded"
+          },
+          ":GSIPK": {
+            "S.$": "States.Format('{}#newsletter', $$.Execution.Input.tenant.id)"
+          },
+          ":GSISK": {
+            "S.$": "$.sendAtDate"
+          },
+          ":slug": {
+            "S.$": "States.Format('{}', $.data.metadata.number)"
+          },
+          ":subject": {
+            "S.$": "$.data.metadata.title"
+          },
+          ":description": {
+            "S.$": "$.data.metadata.description"
+          }
         }
       },
       "ResultPath": null,
-      "Next": "Schedule Reports"
+      "Next": "Schedule Tasks"
     },
-    "Schedule Reports": {
+    "Schedule Tasks": {
       "Type": "Parallel",
       "Next": "Notify of Success",
       "ResultPath": null,
@@ -450,7 +462,6 @@
           "States": {
             "Schedule Issue Report": {
               "Type": "Task",
-              "End": true,
               "Parameters": {
                 "ActionAfterCompletion": "DELETE",
                 "FlexibleTimeWindow": {
@@ -464,6 +475,36 @@
                   "RoleArn": "${ReportStatsRole}",
                   "Input": {
                     "tenant.$": "$$.Execution.Input.tenant"
+                  }
+                }
+              },
+              "Resource": "${SchedulerCreateSchedule}",
+              "ResultPath": null,
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Schedule List Cleanup",
+          "States": {
+            "Schedule List Cleanup": {
+              "Type": "Task",
+              "End": true,
+              "Parameters": {
+                "ActionAfterCompletion": "DELETE",
+                "FlexibleTimeWindow": {
+                  "Mode": "OFF"
+                },
+                "GroupName": "newsletter",
+                "Name.$": "States.Format('{}-CLEAN-{}', $$.Execution.Input.tenant.id, $.data.metadata.number)",
+                "ScheduleExpression.$": "States.Format('at({})', $.getTopStatsDate)",
+                "Target": {
+                  "Arn": "arn:aws:scheduler:::aws-sdk:eventbridge:putEvents",
+                  "RoleArn": "${CleanupListRole}",
+                  "Input": {
+                    "tenantId": "$$.Execution.Input.tenant",
+                    "currentIssue.$": "States.Format('{}#{}', $$.Execution.Input.tenant, $.data.metadata.number)",
+                    "previousIssue.$": "States.Format('{}#{}', $$.Execution.Input.tenant, States.MathAdd($.data.metadata.number, -1))"
                   }
                 }
               },
@@ -483,7 +524,7 @@
             "Detail": {
               "to": {
                 "email.$": "$$.Execution.Input.tenant.email"
-              } ,
+              },
               "subject.$": "States.Format('[Scheduled] {}', $.subject)",
               "html.$": "States.Format('<p>The newsletter was successfully scheduled for sending at {}. Good luck!</p>', $.sendAtDate)"
             },

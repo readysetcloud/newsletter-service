@@ -56,7 +56,7 @@ export const handler = async (event) => {
     }
 
     const now = new Date().toISOString();
-    await dynamoClient.send(new UpdateItemCommand({
+    await ddb.send(new UpdateItemCommand({
       TableName: process.env.TABLE_NAME,
       Key: marshall({
         pk: `${tenant}#${slug}`,

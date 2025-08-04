@@ -57,11 +57,134 @@ Globals:
       AllowOrigin: "'https://www.readysetcloud.io'"
 
 Resources:
+  NewsletterUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "${AWS::StackName}-admin-users"
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+        - Name: tenant_id
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+        - Name: role
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+
+  NewsletterUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref NewsletterUserPool
+      ClientName: !Sub "${AWS::StackName}-admin-client"
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - email
+        - openid
+        - profile
+      ExplicitAuthFlows:
+        - ALLOW_ADMIN_USER_PASSWORD_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+      AccessTokenValidity: 24
+      IdTokenValidity: 24
+      RefreshTokenValidity: 30
+      AllowedOAuthFlowsUserPoolClient: true
+      CallbackURLs:
+        - http://localhost:3000
+        - http://localhost:3000/oauth2/idpresponse
+      LogoutURLs:
+        - http://localhost:3000/logout
+
+  NewsletterIdentityPool:
+    Type: AWS::Cognito::IdentityPool
+    Properties:
+      IdentityPoolName: !Sub "${AWS::StackName}-identity-pool"
+      AllowUnauthenticatedIdentities: false
+      CognitoIdentityProviders:
+        - ClientId: !Ref NewsletterUserPoolClient
+          ProviderName: !GetAtt NewsletterUserPool.ProviderName
+
+  # IAM roles for authenticated users
+  CognitoAuthenticatedRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: cognito-identity.amazonaws.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                "cognito-identity.amazonaws.com:aud": !Ref NewsletterIdentityPool
+              "ForAnyValue:StringLike":
+                "cognito-identity.amazonaws.com:amr": authenticated
+      Policies:
+        - PolicyName: CognitoAuthenticatedPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - execute-api:Invoke
+                Resource: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${NewsletterApi}/*"
+
+  IdentityPoolRoleAttachment:
+    Type: AWS::Cognito::IdentityPoolRoleAttachment
+    Properties:
+      IdentityPoolId: !Ref NewsletterIdentityPool
+      Roles:
+        authenticated: !GetAtt CognitoAuthenticatedRole.Arn
+
   NewsletterApi:
     Type: AWS::Serverless::Api
     Properties:
       TracingEnabled: true
-      StageName: v1
+      StageName: public
+      MethodSettings:
+        - MetricsEnabled: True
+          ResourcePath: "/*"
+          HttpMethod: "*"
+          LoggingLevel: ERROR
+          DataTraceEnabled: True
+      DefinitionBody:
+        Fn::Transform:
+          Name: AWS::Include
+          Parameters:
+            Location: ./publicapi.yaml
+
+  DashboardApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      TracingEnabled: true
+      StageName: api
+      Auth:
+        DefaultAuthorizer: CognitoAuthorizer
+        Authorizers:
+          CognitoAuthorizer:
+            UserPoolArn: !GetAtt NewsletterUserPool.Arn
       MethodSettings:
         - MetricsEnabled: True
           ResourcePath: "/*"
@@ -115,6 +238,286 @@ Resources:
             ExpirationInDays: 7
       VersioningConfiguration:
         Status: Enabled
+
+  HostingBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - "*"
+            AllowedMethods:
+              - GET
+              - HEAD
+            AllowedOrigins:
+              - "*"
+            MaxAge: 3600
+
+  HostingBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref HostingBucket
+      PolicyDocument:
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "${HostingBucket}/*"
+
+  # Lambda@Edge function for subdomain routing
+  SubdomainRoutingFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-subdomain-routing"
+      Runtime: nodejs18.x
+      Handler: index.handler
+      Role: !GetAtt LambdaEdgeRole.Arn
+      Code:
+        ZipFile: !Sub |
+          exports.handler = async (event) => {
+            const request = event.Records[0].cf.request;
+            const headers = request.headers;
+            const host = headers.host[0].value;
+            const uri = request.uri;
+
+            // Extract subdomain (everything before the first dot)
+            const hostParts = host.split('.');
+            const subdomain = hostParts.length > 2 ? hostParts[0] : null;
+
+            if (subdomain && subdomain !== 'www') {
+              if (uri.startsWith('/api')) {
+                // Route to Newsletter API with subdomain as tenant
+                // Remove /api prefix and add tenant to path
+                const newUri = `/$${subdomain}$${uri.substring(4)}`;
+                request.uri = newUri;
+                request.origin = {
+                  custom: {
+                    domainName: '${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com',
+                    port: 443,
+                    protocol: 'https',
+    path: '/v1'
+                  }
+                };
+              } else {
+                // Route to S3 with subdomain as path prefix
+                const newUri = `/$${subdomain}$${uri}`;
+                request.uri = newUri;
+                request.origin = {
+                  s3: {
+                    domainName: '${HostingBucket}.s3.${AWS::Region}.amazonaws.com',
+                    region: '${AWS::Region}',
+                    authMethod: 'none'
+                  }
+                };
+              }
+            } else {
+              // Fallback to Dashboard API
+              request.origin = {
+                custom: {
+                  domainName: '${DashboardApi}.execute-api.${AWS::Region}.amazonaws.com',
+                  port: 443,
+                  protocol: 'https',
+                  path: '/api'
+                }
+              };
+            }
+
+            return request;
+          };
+
+  LambdaEdgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - edgelambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  SubdomainRoutingFunctionVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref SubdomainRoutingFunction
+
+  NewsletterDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "${AWS::StackName} Newsletter Distribution"
+        DefaultRootObject: index.html
+
+        # Origins
+        Origins:
+          - Id: DashboardApiOrigin
+            DomainName: !Sub "${DashboardApi}.execute-api.${AWS::Region}.amazonaws.com"
+            OriginPath: /api
+            CustomOriginConfig:
+              HTTPPort: 443
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols:
+                - TLSv1.2
+          - Id: NewsletterApiOrigin
+            DomainName: !Sub "${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com"
+            OriginPath: /v1
+            CustomOriginConfig:
+              HTTPPort: 443
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols:
+                - TLSv1.2
+          - Id: HostingBucketOrigin
+            DomainName: !Sub "${HostingBucket}.s3.${AWS::Region}.amazonaws.com"
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+
+        # Default behavior (fallback to Dashboard API)
+        DefaultCacheBehavior:
+          TargetOriginId: DashboardApiOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - DELETE
+            - GET
+            - HEAD
+            - OPTIONS
+            - PATCH
+            - POST
+            - PUT
+          CachedMethods:
+            - GET
+            - HEAD
+    ForwardedValues:
+            QueryString: true
+            Headers:
+              - Authorization
+              - Content-Type
+              - Accept
+            Cookies:
+              Forward: none
+          LambdaFunctionAssociations:
+            - EventType: origin-request
+              LambdaFunctionARN: !Ref SubdomainRoutingFunctionVersion
+          MinTTL: 0
+          DefaultTTL: 0
+          MaxTTL: 31536000
+
+        # Cache behaviors for different content types
+        CacheBehaviors:
+          - PathPattern: "/api/*"
+            TargetOriginId: NewsletterApiOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - DELETE
+              - GET
+              - HEAD
+              - OPTIONS
+              - PATCH
+              - POST
+              - PUT
+            CachedMethods:
+              - GET
+              - HEAD
+            ForwardedValues:
+              QueryString: true
+              Headers:
+                - Authorization
+                - Content-Type
+                - Accept
+                - Host
+              Cookies:
+                Forward: none
+            LambdaFunctionAssociations:
+              - EventType: origin-request
+                LambdaFunctionARN: !Ref SubdomainRoutingFunctionVersion
+            MinTTL: 0
+            DefaultTTL: 0
+            MaxTTL: 86400
+
+          - PathPattern: "*.html"
+            TargetOriginId: HostingBucketOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+            CachedMethods:
+              - GET
+              - HEAD
+            ForwardedValues:
+              QueryString: false
+              Headers:
+                - Host
+              Cookies:
+                Forward: none
+            LambdaFunctionAssociations:
+              - EventType: origin-request
+                LambdaFunctionARN: !Ref SubdomainRoutingFunctionVersion
+            MinTTL: 0
+            DefaultTTL: 86400
+            MaxTTL: 31536000
+
+          - PathPattern: "*.css"
+            TargetOriginId: HostingBucketOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+            CachedMethods:
+              - GET
+              - HEAD
+            ForwardedValues:
+              QueryString: false
+              Headers:
+                - Host
+              Cookies:
+                Forward: none
+            LambdaFunctionAssociations:
+              - EventType: origin-request
+                LambdaFunctionARN: !Ref SubdomainRoutingFunctionVersion
+            MinTTL: 0
+            DefaultTTL: 86400
+            MaxTTL: 31536000
+
+          - PathPattern: "*.js"
+TargetOriginId: HostingBucketOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+            CachedMethods:
+              - GET
+              - HEAD
+            ForwardedValues:
+              QueryString: false
+              Headers:
+                - Host
+              Cookies:
+                Forward: none
+            LambdaFunctionAssociations:
+              - EventType: origin-request
+                LambdaFunctionARN: !Ref SubdomainRoutingFunctionVersion
+            MinTTL: 0
+            DefaultTTL: 86400
+            MaxTTL: 31536000
+
+        PriceClass: PriceClass_100
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
 
   ConfigurationSet:
     Type: AWS::SES::ConfigurationSet
@@ -230,6 +633,72 @@ Resources:
           Properties:
             RestApiId: !Ref NewsletterApi
             Path: /{tenant}/subscribers
+            Method: POST
+            Auth:
+              Authorizer: NONE
+
+  GetDashboardDataFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - get-dashboard-data.mjs
+    Properties:
+      Handler: get-dashboard-data.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /dashboard
+            Method: GET
+
+  ManageUserFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - admin/manage-user.mjs
+    Properties:
+      Handler: admin/manage-user.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminCreateUser
+                - cognito-idp:AdminGetUser
+                - cognito-idp:AdminUpdateUserAttributes
+                - cognito-idp:AdminSetUserAttributes
+              Resource: !GetAtt NewsletterUserPool.Arn
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref NewsletterUserPool
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /users
             Method: POST
 
   ImportSubscriberListFunction:
@@ -380,6 +849,8 @@ Resources:
             RestApiId: !Ref NewsletterApi
             Path: /{tenant}/{slug}/votes
             Method: POST
+            Auth:
+              Authorizer: NONE
 
   OpenTrackingFunction:
     Type: AWS::Serverless::Function
@@ -411,6 +882,8 @@ Resources:
             RestApiId: !Ref NewsletterApi
             Path: /{tenant}/{slug}/opens
             Method: GET
+            Auth:
+              Authorizer: NONE
 
   UnsubscribeFunction:
     Type: AWS::Serverless::Function
@@ -445,6 +918,8 @@ Resources:
             RestApiId: !Ref NewsletterApi
             Path: /{tenant}/unsubscribe
             Method: GET
+            Auth:
+              Authorizer: NONE
 
   BuildReportDataFunction:
     Type: AWS::Serverless::Function
@@ -1248,3 +1723,45 @@ Resources:
     Type: AWS::ApiGateway::Account
     Properties:
       CloudWatchRoleArn: !GetAtt APIGatewayCloudWatchRole.Arn
+Outputs:
+  NewsletterApiUrl:
+    Description: "API Gateway endpoint URL for Newsletter service"
+    Value: !Sub "https://${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com/v1"
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiUrl"
+
+  UserPoolId:
+    Description: "Cognito User Pool ID for admin authentication"
+    Value: !Ref NewsletterUserPool
+    Export:
+      Name: !Sub "${AWS::StackName}-UserPoolId"
+
+  UserPoolClientId:
+    Description: "Cognito User Pool Client ID for admin authentication"
+    Value: !Ref NewsletterUserPoolClient
+    Export:
+      Name: !Sub "${AWS::StackName}-UserPoolClientId"
+
+  CloudFrontDistributionUrl:
+    Description: "CloudFront distribution URL for subdomain routing"
+    Value: !Sub "https://${NewsletterDistribution.DomainName}"
+    Export:
+      Name: !Sub "${AWS::StackName}-CloudFrontUrl"
+
+  HostingBucketName:
+    Description: "S3 bucket name for hosting static content"
+    Value: !Ref HostingBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-HostingBucket"
+
+  IdentityPoolId:
+    Description: "Cognito Identity Pool ID"
+    Value: !Ref NewsletterIdentityPool
+    Export:
+      Name: !Sub "${AWS::StackName}-IdentityPoolId"
+
+  Region:
+    Description: "AWS Region"
+    Value: !Ref AWS::Region
+    Export:
+      Name: !Sub "${AWS::StackName}-Region"

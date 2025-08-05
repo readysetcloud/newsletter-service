@@ -85,7 +85,7 @@ export const handler = async (event) => {
     } catch (err) {
       if (err.name === 'ConditionalCheckFailedException') {
         // User has already voted - that's fine, we'll just return current results
-        hasAlreadyVoted = true;
+        // updatedVote is already set to the original vote data
       } else {
         throw err;
       }

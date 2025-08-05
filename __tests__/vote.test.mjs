@@ -2,13 +2,19 @@ import { jest } from '@jest/globals';
 
 // Mock AWS SDK
 const mockSend = jest.fn();
+const mockMarshall = jest.fn();
+const mockUnmarshall = jest.fn();
+
 jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
   DynamoDBClient: jest.fn(() => ({ send: mockSend })),
   GetItemCommand: jest.fn(),
   UpdateItemCommand: jest.fn(),
-  PutItemCommand: jest.fn(),
-  marshall: jest.fn((obj) => obj),
-  unmarshall: jest.fn((obj) => obj)
+  PutItemCommand: jest.fn()
+}));
+
+jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
+  marshall: mockMarshall,
+  unmarshall: mockUnmarshall
 }));
 
 const { handler } = await import('../functions/vote.mjs');
@@ -18,6 +24,17 @@ describe('Vote Function', () => {
     jest.clearAllMocks();
     process.env.TABLE_NAME = 'test-table';
     process.env.ORIGIN = 'https://test.com';
+
+    // Set up marshall/unmarshall mocks
+    mockMarshall.mockImplementation((obj) => {
+      // Simple mock that just returns the object (DynamoDB would normally convert to DynamoDB format)
+      return obj;
+    });
+
+    mockUnmarshall.mockImplementation((obj) => {
+      // Simple mock that just returns the object (DynamoDB would normally convert from DynamoDB format)
+      return obj;
+    });
   });
 
   const mockEvent = {

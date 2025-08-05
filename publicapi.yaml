@@ -1,8 +1,8 @@
 openapi: 3.0.0
 info:
-  title: Content Dashboard API
+  title: Newsletter Public API
   description: |
-    Used to manage content from the user interface
+    Public endpoints for content management
   version: 1.0.0
 
 servers:
@@ -21,53 +21,24 @@ x-amazon-apigateway-gateway-responses:
     responseParameters:
       gatewayresponse.header.Access-Control-Allow-Origin: "'https://www.readysetcloud.io'"
 
+tags:
+  - name: Subscription
+  - name: Tracking
+  - name: Engagement
 paths:
-  /dashboard:
-    get:
-      summary: Dashboard
-      responses:
-        200:
-          description: Load summary data for a dashboard
-          content:
-            application/json:
-              schema:
-                type: object
-        404:
-          $ref: "#/components/responses/NotFound"
-        500:
-          $ref: "#/components/responses/UnknownError"
-      x-amazon-apigateway-request-validator: Validate All
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetDashboardDataFunction.Arn}/invocations
-        httpMethod: POST
-        type: aws_proxy
-      security:
-        - CognitoUserPool: []
-
-  /users:
+  /{tenant}/subscribers:
+    parameters:
+      - $ref: "#/components/parameters/Tenant"
     post:
-      summary: Create an authorized user on the account
+      summary: Add a new subscriber
+      tags:
+        - Subscription
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                email:
-                  type: string
-                  description: Email address
-                  minLength: 4
-                firstName:
-                  type: string
-                lastName:
-                  type: string
-                role:
-                  type: string
-                temporaryPassword:
-                  type: string
-              required: [email, temporaryPassword]
+              $ref: "#/components/schemas/Subscriber"
       responses:
         201:
           $ref: "#/components/responses/Created"
@@ -78,11 +49,107 @@ paths:
       x-amazon-apigateway-request-validator: Validate All
       x-amazon-apigateway-integration:
         uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ManageUserFunction.Arn}/invocations
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AddSubscriberFunction.Arn}/invocations
         httpMethod: POST
         type: aws_proxy
-      security:
-        - CognitoUserPool: []
+
+  /{tenant}/unsubscribe:
+    parameters:
+      - $ref: "#/components/parameters/Tenant"
+    get:
+      summary: Unsubscribe from newsletter
+      parameters:
+        - name: email
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Hashed email address for unsubscribe
+      tags:
+        - Subscription
+      responses:
+        200:
+          description: Unsubscribe confirmation page
+          content:
+            text/html:
+              schema:
+                type: string
+        400:
+          $ref: "#/components/responses/BadRequest"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-request-validator: Validate All
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UnsubscribeFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
+  /{tenant}/{slug}/votes:
+    parameters:
+      - $ref: "#/components/parameters/Tenant"
+      - $ref: "#/components/parameters/Slug"
+    post:
+      summary: Submit a vote
+      tags:
+        - Engagement
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                choice:
+                  type: string
+                  description: Selection for the vote
+              required: [choice]
+      responses:
+        200:
+          description: The vote was submitted and results were returned
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        400:
+          $ref: "#/components/responses/BadRequest"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-request-validator: Validate All
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${VoteFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
+  /{tenant}/{slug}/opens:
+    parameters:
+      - $ref: "#/components/parameters/Tenant"
+      - $ref: "#/components/parameters/Slug"
+    get:
+      summary: Track email opens
+      tags:
+        - Tracking
+      responses:
+        204:
+          description: The open was registered
+        400:
+          $ref: "#/components/responses/BadRequest"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-request-validator: Validate All
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OpenTrackingFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
 
 components:
   parameters:
@@ -170,12 +237,3 @@ components:
                 type: string
                 description: Unknown error message
                 example: An unexpected error occurred.
-  securitySchemes:
-    CognitoUserPool:
-      type: apiKey
-      name: Authorization
-      in: header
-      x-amazon-apigateway-authorizer:
-        type: cognito_user_pools
-        providerARNs:
-          - Fn::Sub: arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${NewsletterUserPool}

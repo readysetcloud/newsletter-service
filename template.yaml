@@ -15,8 +15,12 @@ Parameters:
     Description: Used to hash email addresses
   HostedZoneId:
     Type: String
+    Default: ""
+    Description: Route53 Hosted Zone ID for custom domain (optional)
   DomainName:
     Type: String
+    Default: ""
+    Description: Custom domain name (optional)
 
 Metadata:
   esbuild-properties: &esbuild-properties
@@ -40,6 +44,11 @@ Conditions:
   DeployStageResources:
     Fn::Not:
       - !Equals [!Ref Environment, "production"]
+  HasDomainName: !Not [!Equals [!Ref DomainName, ""]]
+  HasHostedZoneId: !Not [!Equals [!Ref HostedZoneId, ""]]
+  DeployCustomDomain: !And
+    - !Condition HasDomainName
+    - !Condition HasHostedZoneId
 
 Globals:
   Function:
@@ -269,6 +278,7 @@ Resources:
 
   TenantRoutingFunction:
     Type: AWS::Lambda::Function
+    Condition: DeployCustomDomain
     Properties:
       FunctionName: !Sub "${AWS::StackName}-tenant-routing"
       Handler: index.handler
@@ -349,6 +359,7 @@ Resources:
 
   LambdaEdgeRole:
     Type: AWS::IAM::Role
+    Condition: DeployCustomDomain
     Properties:
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
@@ -364,6 +375,7 @@ Resources:
 
   TenantRoutingFunctionVersion:
     Type: AWS::Lambda::Version
+    Condition: DeployCustomDomain
     Properties:
       FunctionName: !Ref TenantRoutingFunction
       Description: "Version with S3 as custom origin and enhanced logging - v9"
@@ -420,9 +432,11 @@ Resources:
               - Accept
             Cookies:
               Forward: none
-          LambdaFunctionAssociations:
-            - EventType: origin-request
-              LambdaFunctionARN: !Ref TenantRoutingFunctionVersion
+          LambdaFunctionAssociations: !If
+            - DeployCustomDomain
+            - - EventType: origin-request
+                LambdaFunctionARN: !Ref TenantRoutingFunctionVersion
+            - !Ref "AWS::NoValue"
           MinTTL: 0
           DefaultTTL: 0
           MaxTTL: 31536000
@@ -450,9 +464,11 @@ Resources:
                 - Host
               Cookies:
                 Forward: none
-            LambdaFunctionAssociations:
-              - EventType: origin-request
-                LambdaFunctionARN: !Ref TenantRoutingFunctionVersion
+            LambdaFunctionAssociations: !If
+              - DeployCustomDomain
+              - - EventType: origin-request
+                  LambdaFunctionARN: !Ref TenantRoutingFunctionVersion
+              - !Ref "AWS::NoValue"
             MinTTL: 0
             DefaultTTL: 0
             MaxTTL: 86400
@@ -471,22 +487,29 @@ Resources:
                 - Host
               Cookies:
                 Forward: none
-            LambdaFunctionAssociations:
-              - EventType: origin-request
-                LambdaFunctionARN: !Ref TenantRoutingFunctionVersion
+            LambdaFunctionAssociations: !If
+              - DeployCustomDomain
+              - - EventType: origin-request
+                  LambdaFunctionARN: !Ref TenantRoutingFunctionVersion
+              - !Ref "AWS::NoValue"
             MinTTL: 0
             DefaultTTL: 86400
             MaxTTL: 31536000
         PriceClass: PriceClass_100
-        ViewerCertificate:
-          AcmCertificateArn: !Ref SubdomainCertificate
-          SslSupportMethod: sni-only
-          MinimumProtocolVersion: TLSv1.2_2021
-        Aliases:
-          - !Sub "*.${DomainName}"
+        ViewerCertificate: !If
+          - DeployCustomDomain
+          - AcmCertificateArn: !Ref SubdomainCertificate
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - CloudFrontDefaultCertificate: true
+        Aliases: !If
+          - DeployCustomDomain
+          - - !Sub "*.${DomainName}"
+          - !Ref "AWS::NoValue"
 
   SubdomainCertificate:
     Type: AWS::CertificateManager::Certificate
+    Condition: DeployCustomDomain
     Properties:
       DomainName: !Sub "*.${DomainName}"
       ValidationMethod: DNS
@@ -496,6 +519,7 @@ Resources:
 
   Route53RecordSetIPV4:
     Type: AWS::Route53::RecordSet
+    Condition: DeployCustomDomain
     Properties:
       HostedZoneId: !Ref HostedZoneId
       Name: !Sub "*.${DomainName}"
@@ -506,6 +530,7 @@ Resources:
 
   Route53RecordSetIPV6:
     Type: AWS::Route53::RecordSet
+    Condition: DeployCustomDomain
     Properties:
       HostedZoneId: !Ref HostedZoneId
       Name: !Sub "*.${DomainName}"

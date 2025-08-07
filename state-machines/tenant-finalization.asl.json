@@ -1,0 +1,283 @@
+{
+  "Comment": "Tenant Finalization Workflow - Handles operations when a tenant is finalized for the first time",
+  "StartAt": "ValidateTenantData",
+  "States": {
+    "ValidateTenantData": {
+      "Type": "Pass",
+      "Comment": "Validate the incoming tenant data",
+      "Parameters": {
+        "tenantId": "{% $.detail.tenantId %}",
+        "userId": "{% $.detail.userId %}",
+        "brandData": "{% $.detail.brandData %}",
+        "subdomain": "{% $.detail.subdomain %}",
+        "finalizedAt": "{% $.detail.finalizedAt %}"
+      },
+      "Next": "ParallelTenantSetup"
+    },
+    "ParallelTenantSetup": {
+      "Type": "Parallel",
+      "Comment": "Execute multiple tenant setup operations in parallel",
+      "Branches": [
+        {
+          "StartAt": "CreateStripeCustomer",
+          "States": {
+            "CreateStripeCustomer": {
+              "Type": "Task",
+              "Resource": "${HTTPInvoke}",
+              "Comment": "Create Stripe customer for billing",
+              "Parameters": {
+                "ApiEndpoint": "https://api.stripe.com/v1/customers",
+                "Method": "POST",
+                "Headers": {
+                  "Content-Type": "application/x-www-form-urlencoded"
+                },
+                "RequestBody": "{% 'email=' & $.userId & '&name=' & $.brandData.company & '&description=Newsletter tenant: ' & $.tenantId & '&metadata[tenant_id]=' & $.tenantId & '&metadata[subdomain]=' & $.subdomain %}",
+                "Authentication": {
+                  "ConnectionArn": "${StripeConnectionArn}"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.Http.StatusCode.4XX"
+                  ],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                },
+                {
+                  "ErrorEquals": [
+                    "States.Http.StatusCode.5XX"
+                  ],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "ResultPath": "$.stripeCustomer",
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "CreateSESContactList",
+          "States": {
+            "CreateSESContactList": {
+              "Type": "Task",
+              "Resource": "${SESCreateContactList}",
+              "Comment": "Create SES contact list for the tenant",
+              "Parameters": {
+                "ContactListName": "{% $.tenantId %}",
+                "Description": "{% 'Contact list for ' & $.tenantId & ' newsletter' %}"
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "SESv2.ConflictException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 1,
+                  "BackoffRate": 1.0
+                },
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "ResultPath": "$.sesContactList",
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "InitializeAnalytics",
+          "States": {
+            "InitializeAnalytics": {
+              "Type": "Task",
+              "Resource": "${DynamoDbPutItem}",
+              "Comment": "Initialize analytics tracking for the tenant",
+              "Parameters": {
+                "TableName": "${TableName}",
+                "Item": {
+                  "pk": {
+                    "S": "{% $.tenantId %}"
+                  },
+                  "sk": {
+                    "S": "analytics#summary"
+                  },
+                  "totalSubscribers": {
+                    "N": "0"
+                  },
+                  "totalIssues": {
+                    "N": "0"
+                  },
+                  "totalOpens": {
+                    "N": "0"
+                  },
+                  "totalClicks": {
+                    "N": "0"
+                  },
+                  "createdAt": {
+                    "S": "{% $now() %}"
+                  },
+                  "lastUpdated": {
+                    "S": "{% $now() %}"
+                  }
+                }
+              },
+              "ResultPath": "$.analyticsInit",
+              "End": true
+            }
+          }
+        }
+      ],
+      "Next": "UpdateTenantRecord",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "UpdateTenantStatusToErrored",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    "UpdateTenantRecord": {
+      "Type": "Task",
+      "Resource": "${DynamoDbUpdateItem}",
+      "Comment": "Update tenant record with all finalization data and change status to active",
+      "Parameters": {
+        "TableName": "${TableName}",
+        "Key": {
+          "pk": {
+            "S": "{% $.tenantId %}"
+          },
+          "sk": {
+            "S": "tenant"
+          }
+        },
+        "UpdateExpression": "SET #status = :status, #list = :listName, subscribers = :subscribers, billing = :billing, createdAt = if_not_exists(createdAt, :createdAt), lastUpdated = :lastUpdated",
+        "ExpressionAttributeNames": {
+          "#status": "status",
+          "#list": "list"
+        },
+        "ExpressionAttributeValues": {
+          ":status": {
+            "S": "active"
+          },
+          ":listName": {
+            "S": "{% $.tenantId %}"
+          },
+          ":subscribers": {
+            "N": "0"
+          },
+          ":billing": {
+            "M": {
+              "customerId": {
+                "S": "{% $[0].stripeCustomer.ResponseBody.id %}"
+              },
+              "provider": {
+                "S": "stripe"
+              },
+              "createdAt": {
+                "S": "{% $now() %}"
+              }
+            }
+          },
+          ":createdAt": {
+            "S": "{% $now() %}"
+          },
+          ":lastUpdated": {
+            "S": "{% $now() %}"
+          }
+        }
+      },
+      "ResultPath": "$.tenantUpdate",
+      "Next": "SendWelcomeNotification"
+    },
+    "SendWelcomeNotification": {
+      "Type": "Task",
+      "Resource": "${EventBridgePutEvents}",
+      "Comment": "Send welcome notification to the user",
+      "Parameters": {
+        "Entries": [
+          {
+            "Source": "newsletter.tenant",
+            "DetailType": "Tenant Setup Complete",
+            "Detail": "{% $string({ 'tenantId': $.tenantId, 'userId': $.userId, 'subdomain': $.subdomain, 'setupCompletedAt': $now(), 'customerId': $[0].stripeCustomer.ResponseBody.id, 'sesContactList': $.tenantId, 'message': 'Tenant setup completed successfully' }) %}"
+          }
+        ]
+      },
+      "Next": "TenantSetupComplete"
+    },
+    "TenantSetupComplete": {
+      "Type": "Pass",
+      "Comment": "Tenant finalization workflow completed successfully",
+      "Parameters": {
+        "status": "completed",
+        "tenantId": "{% $.tenantId %}",
+        "subdomain": "{% $.subdomain %}",
+        "completedAt": "{% $now() %}",
+        "message": "Tenant has been successfully finalized and is ready for use"
+      },
+      "End": true
+    },
+    "UpdateTenantStatusToErrored": {
+      "Type": "Task",
+      "Resource": "${DynamoDbUpdateItem}",
+      "Comment": "Update tenant status to errored when setup fails",
+      "Parameters": {
+        "TableName": "${TableName}",
+        "Key": {
+          "pk": {
+            "S": "{% $.tenantId %}"
+          },
+          "sk": {
+            "S": "tenant"
+          }
+        },
+        "UpdateExpression": "SET #status = :status, lastUpdated = :lastUpdated, errorDetails = :errorDetails",
+        "ExpressionAttributeNames": {
+          "#status": "status"
+        },
+        "ExpressionAttributeValues": {
+          ":status": {
+            "S": "errored"
+          },
+          ":lastUpdated": {
+            "S": "{% $now() %}"
+          },
+          ":errorDetails": {
+            "S": "{% $string($.error) %}"
+          }
+        }
+      },
+      "ResultPath": "$.errorUpdate",
+      "Next": "HandleSetupError"
+    },
+    "HandleSetupError": {
+      "Type": "Task",
+      "Resource": "${EventBridgePutEvents}",
+      "Comment": "Handle setup errors and notify administrators",
+      "Parameters": {
+        "Entries": [
+          {
+            "Source": "newsletter.tenant",
+            "DetailType": "Tenant Setup Failed",
+            "Detail": "{% $string({ 'tenantId': $.tenantId, 'userId': $.userId, 'error': $.error, 'failedAt': $now(), 'message': 'Tenant setup failed and requires manual intervention' }) %}"
+          }
+        ]
+      },
+      "Next": "TenantSetupFailed"
+    },
+    "TenantSetupFailed": {
+      "Type": "Fail",
+      "Comment": "Tenant setup failed",
+      "Cause": "One or more tenant setup operations failed"
+    }
+  }
+}

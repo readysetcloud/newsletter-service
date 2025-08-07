@@ -65,7 +65,7 @@ export const handler = async (state) => {
   newsletterDate.setHours(14);
   if (!newsletter.data.voting_options && Array.isArray(state.votingOptions) && state.votingOptions.every(vo => vo.id && vo.description)) {
     newsletter.data.voting_options = state.votingOptions;
-    if(!newsletter.content.includes('{{<vote>}}')) {
+    if (!newsletter.content.includes('{{<vote>}}')) {
       const lastWordsIndex = newsletter.content.toLowerCase().indexOf('### last words');
       if (lastWordsIndex >= 0) {
         newsletter.content = newsletter.content.substring(0, lastWordsIndex) + '{{<vote>}}\n\n' + newsletter.content.substring(lastWordsIndex);

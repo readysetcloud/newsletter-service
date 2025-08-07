@@ -1,22 +1,21 @@
 import { DynamoDBClient, QueryCommand } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import { formatResponse, getTenant } from './utils/helpers.mjs';
-import { getUserContext, validateTenantAccess, formatAuthError } from './auth/get-user-context.mjs';
+import { getUserContext, formatAuthError } from './auth/get-user-context.mjs';
 
 const ddb = new DynamoDBClient();
 
 export const handler = async (event) => {
   try {
-    // Extract user context from Cognito token
-    const userContext = await getUserContext(event);
+    // Extract user context from Lambda authorizer
+    const userContext = getUserContext(event);
+    const { tenantId } = userContext;
 
-    const { tenant: tenantId } = event.pathParameters;
-    const { timeframe = '30d' } = event.queryStringParameters || {};
-
-    // Validate user has access to this tenant
-    if (!validateTenantAccess(userContext, tenantId)) {
-      return formatAuthError('Access denied to this tenant');
+    if (!tenantId) {
+      return formatResponse(400, 'Tenant ID is required');
     }
+
+    const { timeframe = '30d' } = event.queryStringParameters || {};
 
     const tenant = await getTenant(tenantId);
     if (!tenant) {

@@ -21,6 +21,10 @@ Parameters:
     Type: String
     Default: ""
     Description: Custom domain name (optional)
+  StripeApiKey:
+    Type: String
+    Default: "/stripe/api-key"
+    Description: SSM Parameter Store path for Stripe API key (secure string)
 
 Metadata:
   esbuild-properties: &esbuild-properties
@@ -78,6 +82,13 @@ Resources:
         - email
       AutoVerifiedAttributes:
         - email
+      UserAttributeUpdateSettings:
+        AttributesRequireVerificationBeforeUpdate:
+          - email
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
       Policies:
         PasswordPolicy:
           MinimumLength: 8
@@ -85,16 +96,62 @@ Resources:
           RequireLowercase: true
           RequireNumbers: true
           RequireSymbols: false
+          TemporaryPasswordValidityDays: 7
       Schema:
         - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+        - Name: given_name
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+        - Name: family_name
           AttributeDataType: String
           Required: true
           Mutable: true
         - Name: tenant_id
           AttributeDataType: String
           Required: false
-          Mutable: true
+          Mutable: false
         - Name: role
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+        # Brand-related custom attributes
+        - Name: brand_name
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+        - Name: brand_tags
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+        - Name: industry
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+        - Name: brand_description
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+        - Name: brand_logo
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+        - Name: brand_updated_at
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+        - Name: job_title
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+        - Name: profile_links
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+        - Name: profile_updated_at
           AttributeDataType: String
           Required: false
           Mutable: true
@@ -110,11 +167,19 @@ Resources:
         - email
         - openid
         - profile
+      # Enhanced auth flows for passwordless support
       ExplicitAuthFlows:
         - ALLOW_ADMIN_USER_PASSWORD_AUTH
         - ALLOW_USER_PASSWORD_AUTH
         - ALLOW_USER_SRP_AUTH
         - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_CUSTOM_AUTH
+        - ALLOW_USER_AUTH
+      # Enable passwordless authentication features
+      AuthSessionValidity: 3
+      EnableTokenRevocation: true
+      PreventUserExistenceErrors: ENABLED
+      # Token validity settings
       TokenValidityUnits:
         AccessToken: hours
         IdToken: hours
@@ -128,6 +193,40 @@ Resources:
         - http://localhost:3000/oauth2/idpresponse
       LogoutURLs:
         - http://localhost:3000/logout
+      # Support for passwordless authentication
+      SupportedIdentityProviders:
+        - COGNITO
+
+  # Cognito User Pool Groups for subscription tiers
+  FreeTierGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: free-tier
+      UserPoolId: !Ref NewsletterUserPool
+      Description: Free tier users with basic newsletter features
+      Precedence: 3
+
+  CreatorTierGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: creator-tier
+      UserPoolId: !Ref NewsletterUserPool
+      Description: Creator tier users with enhanced newsletter features
+      Precedence: 2
+
+  ProTierGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: pro-tier
+      UserPoolId: !Ref NewsletterUserPool
+      Description: Pro tier users with premium newsletter features
+      Precedence: 1
+
+  NewsletterUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId: !Ref NewsletterUserPool
+      Domain: !Sub "${AWS::StackName}-auth-${AWS::AccountId}"
 
   NewsletterIdentityPool:
     Type: AWS::Cognito::IdentityPool
@@ -138,7 +237,6 @@ Resources:
         - ClientId: !Ref NewsletterUserPoolClient
           ProviderName: !GetAtt NewsletterUserPool.ProviderName
 
-  # IAM roles for authenticated users
   CognitoAuthenticatedRole:
     Type: AWS::IAM::Role
     Properties:
@@ -180,7 +278,7 @@ Resources:
         - MetricsEnabled: True
           ResourcePath: "/*"
           HttpMethod: "*"
-          LoggingLevel: ERROR
+          LoggingLevel: INFO
           DataTraceEnabled: True
       DefinitionBody:
         Fn::Transform:
@@ -194,10 +292,15 @@ Resources:
       TracingEnabled: true
       StageName: api
       Auth:
-        DefaultAuthorizer: CognitoAuthorizer
+        DefaultAuthorizer: LambdaAuthorizer
+        AddDefaultAuthorizerToCorsPreflight: false
         Authorizers:
-          CognitoAuthorizer:
-            UserPoolArn: !GetAtt NewsletterUserPool.Arn
+          LambdaAuthorizer:
+            FunctionPayloadType: REQUEST
+            FunctionArn: !GetAtt LambdaAuthorizerFunction.Arn
+            Identity:
+              Headers:
+                - Authorization
       MethodSettings:
         - MetricsEnabled: True
           ResourcePath: "/*"
@@ -272,9 +375,21 @@ Resources:
             AllowedMethods:
               - GET
               - HEAD
+              - PUT
+              - POST
             AllowedOrigins:
               - "*"
             MaxAge: 3600
+      LifecycleConfiguration:
+        Rules:
+          - Id: CleanupOrphanedBrandPhotos
+            Status: Enabled
+            Prefix: brand-photos/
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+            Transitions:
+              - StorageClass: STANDARD_IA
+                TransitionInDays: 30
 
   TenantRoutingFunction:
     Type: AWS::Lambda::Function
@@ -310,7 +425,7 @@ Resources:
                     port: 443,
                     protocol: 'https',
                     path: '/public',
-                    sslProtocols: ['TLSv1', 'TLSv1.1'],
+                    sslProtocols: ['TLSv1.2'],
                     readTimeout: 5,
                     keepaliveTimeout: 5,
                     customHeaders: {},
@@ -328,7 +443,7 @@ Resources:
                     port: 443,
                     protocol: 'https',
                     path: '',
-                    sslProtocols: ['TLSv1', 'TLSv1.1'],
+                    sslProtocols: ['TLSv1.2'],
                     readTimeout: 5,
                     keepaliveTimeout: 5,
                     customHeaders: {},
@@ -344,7 +459,7 @@ Resources:
                   port: 443,
                   protocol: 'https',
                   path: '/api',
-                  sslProtocols: ['TLSv1', 'TLSv1.1'],
+                  sslProtocols: ['TLSv1.2'],
                   readTimeout: 5,
                   keepaliveTimeout: 5,
                   customHeaders: {},
@@ -438,7 +553,7 @@ Resources:
                 LambdaFunctionARN: !Ref TenantRoutingFunctionVersion
             - !Ref "AWS::NoValue"
           MinTTL: 0
-          DefaultTTL: 0
+          DefaultTTL: 60
           MaxTTL: 31536000
         CacheBehaviors:
           - PathPattern: "/api/*"
@@ -621,6 +736,55 @@ Resources:
               detail-type:
                 - Add/Update Tenant
 
+  CognitoPostConfirmationFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - auth/cognito-post-confirmation.mjs
+    Properties:
+      Handler: auth/cognito-post-confirmation.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+      Events:
+        Cognito:
+          Type: Cognito
+          Properties:
+            Trigger: PostConfirmation
+            UserPool: !Ref NewsletterUserPool
+
+  AddUserToGroupFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - admin/add-user-to-group.mjs
+    Properties:
+      Handler: admin/add-user-to-group.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: cognito-idp:AdminAddUserToGroup
+              Resource: !GetAtt NewsletterUserPool.Arn
+      Events:
+        UserConfirmedEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source: ["newsletter-service"]
+              detail-type: ["Add User to Group"]
+
   AddSubscriberFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -689,26 +853,124 @@ Resources:
             Path: /dashboard
             Method: GET
 
-  ManageUserFunction:
+  LambdaAuthorizerFunction:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
         <<: *esbuild-properties
         EntryPoints:
-          - admin/manage-user.mjs
+          - auth/lambda-authorizer.mjs
     Properties:
-      Handler: admin/manage-user.handler
+      Handler: auth/lambda-authorizer.handler
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
               Action:
-                - cognito-idp:AdminCreateUser
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref NewsletterUserPool
+          USER_POOL_CLIENT_ID: !Ref NewsletterUserPoolClient
+          TABLE_NAME: !Ref NewsletterTable
+
+  GetProfileFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - admin/get-profile.mjs
+    Properties:
+      Handler: admin/get-profile.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminGetUser
+                - cognito-idp:ListUsers
+              Resource: !GetAtt NewsletterUserPool.Arn
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref NewsletterUserPool
+      Events:
+        GetMyProfile:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /me
+            Method: GET
+        GetUserProfile:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /profiles/{username}
+            Method: GET
+
+  UpdateBrandFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - admin/update-brand.mjs
+    Properties:
+      Handler: admin/update-brand.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
                 - cognito-idp:AdminGetUser
                 - cognito-idp:AdminUpdateUserAttributes
-                - cognito-idp:AdminSetUserAttributes
+              Resource: !GetAtt NewsletterUserPool.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - events:PutEvents
+              Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref NewsletterUserPool
+          TABLE_NAME: !Ref NewsletterTable
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /me/brand
+            Method: PUT
+
+  UpdateProfileFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - admin/update-profile.mjs
+    Properties:
+      Handler: admin/update-profile.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminUpdateUserAttributes
               Resource: !GetAtt NewsletterUserPool.Arn
       Environment:
         Variables:
@@ -718,8 +980,105 @@ Resources:
           Type: Api
           Properties:
             RestApiId: !Ref DashboardApi
-            Path: /users
+            Path: /me/profile
+            Method: PUT
+
+  ManageApiKeysFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - admin/manage-api-keys.mjs
+    Properties:
+      Handler: admin/manage-api-keys.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:Query
+                - dynamodb:DeleteItem
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          ORIGIN: !Ref Origin
+      Events:
+        CreateApiKey:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /api-keys
             Method: POST
+        ListApiKeys:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /api-keys
+            Method: GET
+        GetApiKey:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /api-keys/{keyId}
+            Method: GET
+        DeleteApiKey:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /api-keys/{keyId}
+            Method: DELETE
+
+  UploadBrandPhotoFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - admin/upload-brand-photo.mjs
+    Properties:
+      Handler: admin/upload-brand-photo.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:PutObjectAcl
+                - s3:GetObject
+                - s3:GetObjectAttributes
+              Resource: !Sub "${HostingBucket.Arn}/*"
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          HOSTING_BUCKET_NAME: !Ref HostingBucket
+          TABLE_NAME: !Ref NewsletterTable
+          ORIGIN: !Ref Origin
+      Events:
+        GenerateUploadUrl:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /brand/photos
+            Method: POST
+        ConfirmUpload:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /brand/photos
+            Method: PUT
 
   ImportSubscriberListFunction:
     Type: AWS::Serverless::Function
@@ -1786,45 +2145,90 @@ Resources:
     Type: AWS::ApiGateway::Account
     Properties:
       CloudWatchRoleArn: !GetAtt APIGatewayCloudWatchRole.Arn
+
+  TenantFinalizationStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: state-machines/tenant-finalization.asl.json
+      DefinitionSubstitutions:
+        StripeConnectionArn: !GetAtt StripeConnection.Arn
+        TableName: !Ref NewsletterTable
+        HTTPInvoke: !Sub arn:${AWS::Partition}:states:::http:invoke
+        SESCreateContactList: !Sub arn:${AWS::Partition}:states:::aws-sdk:sesv2:createContactList
+        DynamoDbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
+        DynamoDbUpdateItem: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
+        EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:PutItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+            - Effect: Allow
+              Action: states:InvokeHTTPEndpoint
+              Resource: "*"
+            - Effect: Allow
+              Action: events:RetrieveConnectionCredentials
+              Resource: !GetAtt StripeConnection.Arn
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+                - secretsmanager:DescribeSecret
+              Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:events!connection/*
+            - Effect: Allow
+              Action: sesv2:CreateContactList
+              Resource: "*"
+      Events:
+        TenantFinalizedEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source: ["newsletter.tenant"]
+              detail-type: ["Tenant Finalized"]
+
+  StripeConnection:
+    Type: AWS::Events::Connection
+    Properties:
+      Description: EventBridge connection to Stripe API for secure API key storage
+      AuthorizationType: API_KEY
+      AuthParameters:
+        ApiKeyAuthParameters:
+          ApiKeyName: Authorization
+          ApiKeyValue: !Sub StripeApiKey
+
 Outputs:
   NewsletterApiUrl:
     Description: "API Gateway endpoint URL for Newsletter service"
-    Value: !Sub "https://${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com/v1"
-    Export:
-      Name: !Sub "${AWS::StackName}-ApiUrl"
+    Value: !Sub "https://${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com/public"
 
   UserPoolId:
     Description: "Cognito User Pool ID for admin authentication"
     Value: !Ref NewsletterUserPool
-    Export:
-      Name: !Sub "${AWS::StackName}-UserPoolId"
 
   UserPoolClientId:
     Description: "Cognito User Pool Client ID for admin authentication"
     Value: !Ref NewsletterUserPoolClient
-    Export:
-      Name: !Sub "${AWS::StackName}-UserPoolClientId"
+
+  UserPoolDomainUrl:
+    Description: "Cognito User Pool Domain URL for hosted UI and passwordless authentication"
+    Value: !Sub "https://${NewsletterUserPoolDomain}.auth.${AWS::Region}.amazoncognito.com"
 
   CloudFrontDistributionUrl:
     Description: "CloudFront distribution URL for subdomain routing"
     Value: !Sub "https://${NewsletterDistribution.DomainName}"
-    Export:
-      Name: !Sub "${AWS::StackName}-CloudFrontUrl"
 
   HostingBucketName:
     Description: "S3 bucket name for hosting static content"
     Value: !Ref HostingBucket
-    Export:
-      Name: !Sub "${AWS::StackName}-HostingBucket"
+
+  StripeConnectionArn:
+    Description: "EventBridge connection ARN for Stripe API integration"
+    Value: !GetAtt StripeConnection.Arn
 
   IdentityPoolId:
     Description: "Cognito Identity Pool ID"
     Value: !Ref NewsletterIdentityPool
-    Export:
-      Name: !Sub "${AWS::StackName}-IdentityPoolId"
-
-  Region:
-    Description: "AWS Region"
-    Value: !Ref AWS::Region
-    Export:
-      Name: !Sub "${AWS::StackName}-Region"

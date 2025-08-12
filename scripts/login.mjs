@@ -1,3 +1,4 @@
+import clipboard from 'clipboardy';
 import { config } from 'dotenv';
 config();
 
@@ -23,6 +24,7 @@ async function signIn() {
   try {
     const response = await client.send(command);
 
+    let token;
     if (response.ChallengeName === 'NEW_PASSWORD_REQUIRED') {
       console.log('New password required — responding to challenge...');
 
@@ -42,16 +44,21 @@ async function signIn() {
 
       const challengeResponse = await client.send(challengeCommand);
       console.log('Password updated successfully!');
-      // Print Access Token
-      console.log(challengeResponse.AuthenticationResult.AccessToken);
+      token = challengeResponse.AuthenticationResult.AccessToken;
       // console.log(`Bearer ${challengeResponse.AuthenticationResult.IdToken}`);
       // console.log(`Bearer ${challengeResponse.AuthenticationResult.RefreshToken}`);
     } else {
       console.log('Login successful!');
-      // Print access token
-      console.log(`Bearer ${response.AuthenticationResult.AccessToken}`);
+      token = response.AuthenticationResult.AccessToken;
       // console.log(`Bearer ${response.AuthenticationResult.IdToken}`);
       // console.log(`Bearer ${response.AuthenticationResult.RefreshToken}`);
+    }
+    if(token){
+      token = `Bearer ${token}`;
+      clipboard.writeSync(token);
+      console.log(token);
+    } else {
+      console.error('Unable to generate token');
     }
 
   } catch (err) {

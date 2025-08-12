@@ -3,7 +3,7 @@ import {
   AdminUpdateUserAttributesCommand,
   AdminGetUserCommand
 } from "@aws-sdk/client-cognito-identity-provider";
-import { DynamoDBClient, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import { DynamoDBClient, UpdateItemCommand, GetItemCommand, PutItemCommand } from "@aws-sdk/client-dynamodb";
 import { EventBridgeClient, PutEventsCommand } from "@aws-sdk/client-eventbridge";
 import { marshall } from "@aws-sdk/util-dynamodb";
 import { formatResponse } from '../utils/helpers.mjs';
@@ -28,13 +28,30 @@ export const handler = async (event) => {
     // Check if this is the first time brand is being saved
     const isFirstTimeBrandSave = await checkIfFirstTimeBrandSave(email);
 
+    // If this is first time and brandId is provided, we need to create the tenant
+    let finalTenantId = tenantId;
+    if (isFirstTimeBrandSave && brandData.brandId) {
+      // Check if the brand ID is available
+      const isBrandIdAvailable = await checkBrandIdAvailability(brandData.brandId);
+      if (!isBrandIdAvailable) {
+        throw new Error(`Validation error: Brand ID '${brandData.brandId}' is already taken`);
+      }
+
+      // Create tenant with the brand ID
+      finalTenantId = brandData.brandId;
+      await createTenant(finalTenantId, userId, brandData);
+
+      // Update user's tenant ID in Cognito
+      await updateUserTenantId(email, finalTenantId);
+    }
+
     // Update brand information in Cognito
     const updatedBrand = await updateBrandInfo(email, brandData);
 
     // If this is the first time, finalize the tenant and trigger workflows
     if (isFirstTimeBrandSave) {
-      await finalizeTenant(tenantId, userId, brandData);
-      await triggerTenantFinalizationWorkflows(tenantId, userId, brandData);
+      await finalizeTenant(finalTenantId, userId, brandData);
+      await triggerTenantFinalizationWorkflows(finalTenantId, userId, brandData);
     }
 
     return formatResponse(200, {
@@ -65,15 +82,28 @@ export const handler = async (event) => {
 };
 
 const validateAndExtractBrandData = (body) => {
-  const { brandName, website, industry, brandDescription, brandLogo, tags } = body;
+  const { brandId, brandName, website, industry, brandDescription, brandLogo, tags } = body;
 
-  const hasData = brandName || website || industry || brandDescription || brandLogo || tags;
+  const hasData = brandId || brandName || website || industry || brandDescription || brandLogo || tags;
 
   if (!hasData) {
     throw new Error('Validation error: At least one brand field must be provided');
   }
 
   const brandData = {};
+
+  if (brandId !== undefined) {
+    if (typeof brandId !== 'string' || brandId.length < 3 || brandId.length > 50) {
+      throw new Error('Validation error: brandId must be a string between 3 and 50 characters');
+    }
+
+    // Validate brand ID format
+    if (!/^[a-z]+$/.test(brandId)) {
+      throw new Error('Validation error: brandId can only contain lowercase letters');
+    }
+
+    brandData.brandId = brandId.trim();
+  }
 
   if (brandName !== undefined) {
     if (typeof brandName !== 'string' || brandName.length > 100) {
@@ -193,10 +223,22 @@ const checkIfFirstTimeBrandSave = async (email) => {
 
     const userResult = await cognito.send(getUserCommand);
 
+    // Check if user already has a tenant_id (most reliable indicator)
+    const tenantIdAttr = userResult.UserAttributes.find(
+      attr => attr.Name === 'custom:tenant_id'
+    );
+
+    // If they have a tenant_id, this is not their first time
+    if (tenantIdAttr && tenantIdAttr.Value) {
+      return false;
+    }
+
+    // Also check brand_updated_at as a secondary indicator
     const brandUpdatedAtAttr = userResult.UserAttributes.find(
       attr => attr.Name === 'custom:brand_updated_at'
     );
 
+    // First time if they have neither tenant_id nor brand_updated_at
     return !brandUpdatedAtAttr;
   } catch (error) {
     console.error('Error checking first time brand save:', error);
@@ -231,9 +273,78 @@ const finalizeTenant = async (tenantId, userId, brandData) => {
   console.log(`Tenant ${tenantId} finalized by user ${userId} at ${now}`);
 };
 
+const checkBrandIdAvailability = async (brandId) => {
+  try {
+    const result = await ddb.send(new GetItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({
+        pk: brandId,
+        sk: 'tenant'
+      })
+    }));
+
+    // If item exists, brand ID is not available
+    return !result.Item;
+  } catch (error) {
+    console.error('Error checking brand ID availability:', error);
+    // In case of error, assume not available for safety
+    return false;
+  }
+};
+
+const createTenant = async (tenantId, userId, brandData) => {
+  const now = new Date().toISOString();
+
+  await ddb.send(new PutItemCommand({
+    TableName: process.env.TABLE_NAME,
+    Item: marshall({
+      pk: tenantId,
+      sk: 'tenant',
+      tenantId, // This IS the brandId - no need to store separately
+      brandName: brandData.brandName || 'Unknown Brand',
+      createdBy: userId,
+      createdAt: now,
+      status: 'pending', // Will be set to 'active' when finalized
+      subscribers: 0
+    }),
+    ConditionExpression: 'attribute_not_exists(pk)' // Ensure tenant doesn't already exist
+  }));
+
+  console.log(`Tenant ${tenantId} created by user ${userId} at ${now}`);
+};
+
+const updateUserTenantId = async (email, tenantId) => {
+  // First check if user already has a tenant_id
+  const userResult = await cognito.send(new AdminGetUserCommand({
+    UserPoolId: process.env.USER_POOL_ID,
+    Username: email
+  }));
+
+  const existingTenantId = userResult.UserAttributes?.find(attr => attr.Name === 'custom:tenant_id')?.Value;
+
+  if (existingTenantId) {
+    console.log(`User ${email} already has tenant ID: ${existingTenantId}. Skipping update.`);
+    return;
+  }
+
+  // Only set tenant_id if it doesn't exist
+  await cognito.send(new AdminUpdateUserAttributesCommand({
+    UserPoolId: process.env.USER_POOL_ID,
+    Username: email,
+    UserAttributes: [
+      {
+        Name: 'custom:tenant_id',
+        Value: tenantId
+      }
+    ]
+  }));
+
+  console.log(`User ${email} tenant ID set to ${tenantId}`);
+};
+
 const triggerTenantFinalizationWorkflows = async (tenantId, userId, brandData) => {
   const eventDetail = {
-    tenantId,
+    tenantId, // This IS the brandId
     userId,
     brandData: {
       brandName: brandData.brandName,
@@ -244,7 +355,7 @@ const triggerTenantFinalizationWorkflows = async (tenantId, userId, brandData) =
       tags: brandData.tags
     },
     finalizedAt: new Date().toISOString(),
-    subdomain: tenantId
+    subdomain: tenantId // Same as tenantId, which is the brandId
   };
 
   await eventBridge.send(new PutEventsCommand({

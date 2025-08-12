@@ -15,7 +15,22 @@ x-amazon-apigateway-gateway-responses:
     responseTemplates:
       application/json: '{ "message": "$context.error.validationErrorString" }'
     responseParameters:
-      gatewayresponse.header.Access-Control-Allow-Origin: "'https://www.readysetcloud.io'"
+      gatewayresponse.header.Access-Control-Allow-Origin:
+        Fn::Sub: "'${Origin}'"
+      gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
+      gatewayresponse.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+  DEFAULT_4XX:
+    responseParameters:
+      gatewayresponse.header.Access-Control-Allow-Origin:
+        Fn::Sub: "'${Origin}'"
+      gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
+      gatewayresponse.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+  DEFAULT_5XX:
+    responseParameters:
+      gatewayresponse.header.Access-Control-Allow-Origin:
+        Fn::Sub: "'${Origin}'"
+      gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
+      gatewayresponse.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
 
 tags:
   - name: API Keys
@@ -235,7 +250,7 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
-  /brand/photos:
+  /brand/logo:
     post:
       summary: Generate presigned URL for brand photo upload
       description: Generates a presigned URL for uploading a brand photo to S3
@@ -348,6 +363,54 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
+  /brand/validate:
+    get:
+      summary: Validate brand ID
+      description: Validates a brand ID format and checks if it's available for use as a tenant identifier
+      parameters:
+        - name: brandId
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 3
+            maxLength: 50
+            pattern: '^[a-z]+$'
+          description: The brand ID to validate for availability
+      responses:
+        200:
+          description: Brand ID availability check result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  available:
+                    type: boolean
+                    description: Whether the brand ID is available
+                  brandId:
+                    type: string
+                    description: The brand ID that was checked
+                  suggestions:
+                    type: array
+                    description: Alternative brand ID suggestions if not available
+                    items:
+                      type: string
+                  error:
+                    type: string
+                    description: Error message if brand ID format is invalid
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CheckBrandIdFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
   /me/brand:
     put:
       summary: Update my brand details
@@ -361,6 +424,12 @@ paths:
             schema:
               type: object
               properties:
+                brandId:
+                  type: string
+                  minLength: 3
+                  maxLength: 50
+                  pattern: '^[a-z]+$'
+                  description: Unique brand identifier (becomes tenant ID and subdomain)
                 brandName:
                   type: string
                   maxLength: 100

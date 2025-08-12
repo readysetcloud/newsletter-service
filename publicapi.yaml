@@ -15,7 +15,8 @@ x-amazon-apigateway-gateway-responses:
     responseTemplates:
       application/json: '{ "message": "$context.error.validationErrorString" }'
     responseParameters:
-      gatewayresponse.header.Access-Control-Allow-Origin: "'https://www.readysetcloud.io'"
+      gatewayresponse.header.Access-Control-Allow-Origin:
+        Fn::Sub: "'${Origin}'"
 
 tags:
   - name: Subscription

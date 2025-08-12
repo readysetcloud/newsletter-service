@@ -14,7 +14,7 @@ export const handler = async (event) => {
     const { tenantId } = userContext;
 
     if (!tenantId) {
-      return formatResponse(400, 'Tenant ID is required');
+      return formatResponse(400, 'Tenant ID is required. Please complete brand setup first.');
     }
 
     const method = event.httpMethod;
@@ -40,7 +40,7 @@ export const handler = async (event) => {
 };
 
 /**
- * Generates a presigned URL for uploading a brand photo
+ * Generates a presigned URL for uploading a brand logo
  * @param {string} tenantId - Tenant ID
  * @param {Object} body - Request body with fileName and contentType
  * @returns {Object} Response with presigned URL
@@ -80,7 +80,7 @@ const generateUploadUrl = async (tenantId, body) => {
   // Generate unique file name to prevent conflicts
   const timestamp = Date.now();
   const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9.-]/g, '_');
-  const key = `brand-photos/${tenantId}/${timestamp}-${sanitizedFileName}`;
+  const key = `brand-logos/${tenantId}/${timestamp}-${sanitizedFileName}`;
 
   // Create presigned URL for upload
   const command = new PutObjectCommand({
@@ -108,9 +108,9 @@ const generateUploadUrl = async (tenantId, body) => {
 };
 
 /**
- * Confirms the upload and updates the tenant record with the photo information
+ * Confirms the upload and updates the tenant record with the logo information
  * @param {string} tenantId - Tenant ID
- * @param {Object} body - Request body with key and other photo details
+ * @param {Object} body - Request body with key and other logo details
  * @returns {Object} Response confirming the update
  */
 const confirmUpload = async (tenantId, body) => {
@@ -122,8 +122,8 @@ const confirmUpload = async (tenantId, body) => {
   }
 
   // Verify the key belongs to this tenant (security check)
-  if (!key.startsWith(`brand-photos/${tenantId}/`)) {
-    return formatResponse(403, 'Invalid photo key for this tenant');
+  if (!key.startsWith(`brand-logos/${tenantId}/`)) {
+    return formatResponse(403, 'Invalid logo key for this tenant');
   }
 
   // Check if the file actually exists in S3
@@ -152,7 +152,7 @@ const confirmUpload = async (tenantId, body) => {
     return formatResponse(404, 'Tenant not found');
   }
 
-  // Update tenant record with photo information
+  // Update tenant record with logo information
   const publicUrl = `https://${process.env.HOSTING_BUCKET_NAME}.s3.amazonaws.com/${key}`;
 
   await ddb.send(new UpdateItemCommand({
@@ -169,8 +169,10 @@ const confirmUpload = async (tenantId, body) => {
     })
   }));
 
+  // For onboarding users, we just return the URL - it will be saved when they complete the brand setup
+
   return formatResponse(200, {
-    message: 'Brand photo updated successfully',
+    message: 'Brand logo updated successfully',
     photoUrl: publicUrl,
     key: key
   });

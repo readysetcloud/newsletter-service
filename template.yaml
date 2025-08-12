@@ -67,11 +67,12 @@ Globals:
       Variables:
         AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
         SECRET_ID: "{{resolve:ssm:/readysetcloud/secrets}}"
+        ORIGIN: !Ref Origin
   Api:
     Cors:
-      AllowMethods: "'POST,OPTIONS'"
-      AllowHeaders: "'Content-Type'"
-      AllowOrigin: "'https://www.readysetcloud.io'"
+      AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+      AllowHeaders: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
+      AllowOrigin: !Sub "'${Origin}'"
 
 Resources:
   NewsletterUserPool:
@@ -113,7 +114,7 @@ Resources:
         - Name: tenant_id
           AttributeDataType: String
           Required: false
-          Mutable: false
+          Mutable: true
         - Name: role
           AttributeDataType: String
           Required: false
@@ -914,6 +915,35 @@ Resources:
             Path: /profiles/{username}
             Method: GET
 
+  CheckBrandIdFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - admin/check-brand-id.mjs
+    Properties:
+      Handler: admin/check-brand-id.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /brand/validate
+            Method: GET
+
   UpdateBrandFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -937,6 +967,7 @@ Resources:
               Action:
                 - dynamodb:UpdateItem
                 - dynamodb:GetItem
+                - dynamodb:PutItem
               Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
               Action:
@@ -1071,13 +1102,13 @@ Resources:
           Type: Api
           Properties:
             RestApiId: !Ref DashboardApi
-            Path: /brand/photos
+            Path: /brand/logo
             Method: POST
         ConfirmUpload:
           Type: Api
           Properties:
             RestApiId: !Ref DashboardApi
-            Path: /brand/photos
+            Path: /brand/logo
             Method: PUT
 
   ImportSubscriberListFunction:

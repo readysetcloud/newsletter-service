@@ -79,11 +79,12 @@ const buildOwnProfile = (userId, attributes, userResult) => {
     userId,
     ...(attributes.email && { email: attributes.email }),
     brand: {
-      ...(attributes['custom:brand_name'] && { name: attributes['custom:brand_name'] }),
+      ...(attributes['custom:tenant_id'] && { brandId: attributes['custom:tenant_id'] }), // brandId is the tenantId
+      ...(attributes['custom:brand_name'] && { brandName: attributes['custom:brand_name'] }),
       ...(attributes.website && { website: attributes.website }),
       ...(attributes['custom:industry'] && { industry: attributes['custom:industry'] }),
-      ...(attributes['custom:brand_description'] && { description: attributes['custom:brand_description'] }),
-      ...(attributes['custom:brand_logo'] && { logo: attributes['custom:brand_logo'] }),
+      ...(attributes['custom:brand_description'] && { brandDescription: attributes['custom:brand_description'] }),
+      ...(attributes['custom:brand_logo'] && { brandLogo: attributes['custom:brand_logo'] }),
       ...(parseTagsArray(attributes['custom:brand_tags']) && { tags: parseTagsArray(attributes['custom:brand_tags']) }),
       ...(attributes['custom:brand_updated_at'] && { lastUpdated: attributes['custom:brand_updated_at'] }),
     },
@@ -105,11 +106,12 @@ const buildOwnProfile = (userId, attributes, userResult) => {
 const buildPublicProfile = (attributes) => {
   return {
     brand: {
-      ...(attributes['custom:brand_name'] && { name: attributes['custom:brand_name'] }),
+      ...(attributes['custom:tenant_id'] && { brandId: attributes['custom:tenant_id'] }), // brandId is the tenantId
+      ...(attributes['custom:brand_name'] && { brandName: attributes['custom:brand_name'] }),
       ...(attributes.website && { website: attributes.website }),
       ...(attributes['custom:industry'] && { industry: attributes['custom:industry'] }),
-      ...(attributes['custom:brand_description'] && { description: attributes['custom:brand_description'] }),
-      ...(attributes['custom:brand_logo'] && { logo: attributes['custom:brand_logo'] }),
+      ...(attributes['custom:brand_description'] && { brandDescription: attributes['custom:brand_description'] }),
+      ...(attributes['custom:brand_logo'] && { brandLogo: attributes['custom:brand_logo'] }),
       ...(parseTagsArray(attributes['custom:brand_tags']) && { tags: parseTagsArray(attributes['custom:brand_tags']) }),
     },
     ...(attributes.given_name && { firstName: attributes.given_name }),

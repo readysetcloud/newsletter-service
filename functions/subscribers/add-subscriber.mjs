@@ -2,6 +2,7 @@ import { SESv2Client, CreateContactCommand } from '@aws-sdk/client-sesv2';
 import { DynamoDBClient, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
 import { formatResponse, getTenant } from '../utils/helpers.mjs';
+import { publishSubscriberEvent, EVENT_TYPES } from '../utils/event-publisher.mjs';
 
 const ses = new SESv2Client();
 const ddb = new DynamoDBClient();
@@ -27,6 +28,20 @@ export const handler = async (event) => {
     const shouldUpdateCount = await addContact(tenant.list, contact);
     if (shouldUpdateCount) {
       await updateSubscriberCount(tenantId);
+
+      // Publish subscriber added event after successful addition
+      await publishSubscriberEvent(
+        tenantId,
+        null, // No specific user ID for public subscriber additions
+        EVENT_TYPES.SUBSCRIBER_ADDED,
+        {
+          email: contact.email,
+          firstName: contact.firstName || null,
+          lastName: contact.lastName || null,
+          subscriberCount: tenant.subscribers + 1, // New count after addition
+          addedAt: new Date().toISOString()
+        }
+      );
     }
 
     return formatResponse(201, 'Contact added');

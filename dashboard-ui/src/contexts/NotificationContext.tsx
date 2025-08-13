@@ -183,7 +183,7 @@ export function NotificationProvider({ children }: NotificationProviderProps) {
   // Subscribe to notifications when user is authenticated
   useEffect(() => {
     const subscribeToNotifications = async () => {
-      if (!isAuthenticated || !user?.userId) {
+      if (!isAuthenticated || !user?.userId || !user?.tenantId) {
         return;
       }
 
@@ -191,26 +191,31 @@ export function NotificationProvider({ children }: NotificationProviderProps) {
         dispatch({ type: 'SET_LOADING', payload: true });
         dispatch({ type: 'SET_ERROR', payload: null });
 
-        // Get auth token for Momento
-        const authToken = await getToken();
+        // Get JWT token (ID token contains the Momento token)
+        const session = await import('aws-amplify/auth').then(auth => auth.fetchAuthSession());
+        const jwtToken = session.tokens?.idToken?.toString();
 
-        // Initialize notification service
+        if (!jwtToken) {
+          throw new Error('No JWT token available');
+        }
+
+        // Initialize notification service with JWT token
         await notificationService.initialize({
-          authToken,
-          cacheName: 'newsletter-notifications',
-          topicName: 'user-notifications',
+          jwtToken,
+          tenantId: user.tenantId,
+          userId: user.userId
         });
 
         // Add message handler
         notificationService.addMessageHandler(handleIncomingNotification);
 
-        // Subscribe to user-specific topic
-        await notificationService.subscribe(user.userId);
+        // Subscribe to tenant-specific channels
+        await notificationService.subscribe();
 
         dispatch({ type: 'SET_SUBSCRIBED', payload: true });
         dispatch({ type: 'SET_LOADING', payload: false });
 
-        console.log('Successfully subscribed to notifications');
+        console.log('Successfully subscribed to notifications for tenant:', user.tenantId);
       } catch (error) {
         console.error('Failed to subscribe to notifications:', error);
         dispatch({ type: 'SET_ERROR', payload: 'Failed to connect to notifications' });
@@ -228,7 +233,7 @@ export function NotificationProvider({ children }: NotificationProviderProps) {
         dispatch({ type: 'SET_SUBSCRIBED', payload: false });
       }
     };
-  }, [isAuthenticated, user?.userId, getToken, handleIncomingNotification]);
+  }, [isAuthenticated, user?.userId, user?.tenantId, handleIncomingNotification]);
 
   // Context value functions
   const addNotification = useCallback((notification: Omit<Notification, 'id' | 'timestamp' | 'read'>) => {

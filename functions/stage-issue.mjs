@@ -4,6 +4,7 @@ import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge
 import { DynamoDBClient, PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { getTenant } from './utils/helpers.mjs';
 import { marshall } from '@aws-sdk/util-dynamodb';
+import { publishIssueEvent, EVENT_TYPES } from './utils/event-publisher.mjs';
 
 const eventBridge = new EventBridgeClient();
 const ddb = new DynamoDBClient();
@@ -29,6 +30,22 @@ export const handler = async (state) => {
         sendAt: state.sendAtDate,
         referenceNumber: `${tenant.pk}_${state.data.metadata.number}`
       });
+
+      // Publish issue published event after successful email sending
+      await publishIssueEvent(
+        state.tenantId,
+        state.tenant?.id || 'system', // Use tenant ID from state or fallback to system
+        EVENT_TYPES.ISSUE_PUBLISHED,
+        {
+          issueId: `${state.tenantId}#${state.data.metadata.number}`,
+          issueNumber: state.data.metadata.number,
+          title: state.data.metadata.title,
+          subject: state.subject,
+          publishedAt: new Date().toISOString(),
+          subscriberCount: tenant.subscribers,
+          metadata: state.data.metadata
+        }
+      );
 
       return state;
     }

@@ -8,6 +8,7 @@ import { EventBridgeClient, PutEventsCommand } from "@aws-sdk/client-eventbridge
 import { marshall } from "@aws-sdk/util-dynamodb";
 import { formatResponse } from '../utils/helpers.mjs';
 import { getUserContext, formatAuthError } from '../auth/get-user-context.mjs';
+import { publishBrandEvent, EVENT_TYPES } from '../utils/event-publisher.mjs';
 
 const cognito = new CognitoIdentityProviderClient();
 const ddb = new DynamoDBClient();
@@ -53,6 +54,25 @@ export const handler = async (event) => {
       await finalizeTenant(finalTenantId, userId, brandData);
       await triggerTenantFinalizationWorkflows(finalTenantId, userId, brandData);
     }
+
+    // Publish brand updated event after successful update
+    await publishBrandEvent(
+      finalTenantId,
+      userId,
+      EVENT_TYPES.BRAND_UPDATED,
+      {
+        brandId: finalTenantId,
+        brandName: brandData.brandName,
+        website: brandData.website,
+        industry: brandData.industry,
+        brandDescription: brandData.brandDescription,
+        brandLogo: brandData.brandLogo,
+        tags: brandData.tags,
+        isFirstTime: isFirstTimeBrandSave,
+        updatedAt: updatedBrand.updatedAt,
+        updatedFields: Object.keys(brandData)
+      }
+    );
 
     return formatResponse(200, {
       message: isFirstTimeBrandSave

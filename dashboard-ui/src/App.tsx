@@ -1,6 +1,7 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from '@/contexts/AuthContext';
-import { NotificationProvider } from '@/contexts/NotificationContext';
+import { NotificationProvider as NotificationContextProvider } from '@/contexts/NotificationContext';
+import { NotificationProvider } from '@/components/notifications/NotificationProvider';
 import { ToastProvider } from '@/components/ui/Toast';
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
 import { OnboardingGuard } from '@/components/auth/OnboardingGuard';
@@ -27,8 +28,9 @@ function App() {
     <ErrorBoundary>
       <Router>
         <AuthProvider>
-          <NotificationProvider>
-            <ToastProvider>
+          <NotificationContextProvider>
+            <NotificationProvider>
+              <ToastProvider>
               <div className="min-h-screen bg-gray-50 overflow-x-hidden">
                 <Routes>
                   {/* Public Routes */}
@@ -120,8 +122,9 @@ function App() {
                   <Route path="*" element={<Navigate to="/dashboard" replace />} />
                 </Routes>
               </div>
-            </ToastProvider>
-          </NotificationProvider>
+              </ToastProvider>
+            </NotificationProvider>
+          </NotificationContextProvider>
         </AuthProvider>
       </Router>
     </ErrorBoundary>

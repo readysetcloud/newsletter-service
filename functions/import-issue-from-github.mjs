@@ -1,6 +1,7 @@
 import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
 import frontmatter from '@github-docs/frontmatter';
 import { getOctokit, getTenant } from './utils/helpers.mjs';
+import { publishIssueEvent, EVENT_TYPES } from './utils/event-publisher.mjs';
 
 const sfn = new SFNClient();
 let octokit;
@@ -61,4 +62,20 @@ const processNewIssue = async (data) => {
     stateMachineArn: process.env.STATE_MACHINE_ARN,
     input: JSON.stringify(data)
   }));
+
+  // Publish issue draft saved event after starting the processing workflow
+  await publishIssueEvent(
+    data.tenant.id,
+    'github-import', // User ID for GitHub import
+    EVENT_TYPES.ISSUE_DRAFT_SAVED,
+    {
+      issueId: data.key,
+      fileName: data.fileName,
+      title: metadata.data.title || 'Untitled Issue',
+      slug: metadata.data.slug,
+      scheduledDate: date > today ? date.toISOString() : null,
+      isPreview: data.isPreview,
+      metadata: metadata.data
+    }
+  );
 };

@@ -1,139 +1,224 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NotificationService } from '../notificationService';
-import type { NotificationMessage } from '../notificationService';
+import * as jwtUtils from '../../utils/jwtUtils';
 
 // Mock the Momento SDK
 vi.mock('@gomomento/sdk-web', () => ({
   TopicClient: vi.fn().mockImplementation(() => ({
-    subscribe: vi.fn(),
+    subscribe: vi.fn()
   })),
   CredentialProvider: {
-    fromString: vi.fn(),
+    fromString: vi.fn()
   },
   Configurations: {
     Browser: {
-      v1: vi.fn(),
-    },
+      v1: vi.fn()
+    }
   },
   TopicSubscribe: {
-    Error: class MockTopicSubscribeError {
-      message() {
-        return 'Mock error';
-      }
-    },
-  },
-  TopicItem: vi.fn(),
+    Error: class MockError {
+      message() { return 'Mock error'; }
+    }
+  }
+}));
+
+// Mock JWT utilities
+vi.mock('../../utils/jwtUtils', () => ({
+  extractMomentoTokenFromJWT: vi.fn(),
+  validateMomentoTokenInfo: vi.fn(),
+  extractTenantIdFromJWT: vi.fn()
 }));
 
 describe('NotificationService', () => {
-  let notificationService: NotificationService;
+  let service: NotificationService;
+  const mockConfig = {
+    jwtToken: 'mock-jwt-token',
+    tenantId: 'test-tenant',
+    userId: 'test-user'
+  };
+
+  const mockMomentoTokenInfo = {
+    token: 'mock-momento-token',
+    cacheName: 'test-cache',
+    expiresAt: new Date(Date.now() + 3600000).toISOString(),
+    isValid: true,
+    isExpired: false
+  };
 
   beforeEach(() => {
-    notificationService = new NotificationService();
+    service = new NotificationService();
     vi.clearAllMocks();
+
+    // Setup default mocks
+    vi.mocked(jwtUtils.extractMomentoTokenFromJWT).mockReturnValue(mockMomentoTokenInfo);
+    vi.mocked(jwtUtils.validateMomentoTokenInfo).mockReturnValue({
+      isValid: true,
+      errors: []
+    });
   });
 
   afterEach(() => {
-    notificationService.destroy();
+    service.destroy();
   });
 
-  describe('initialization', () => {
-    it('should initialize with empty state', () => {
-      expect(notificationService.getSubscriptionStatus()).toBe(false);
+  describe('initialize', () => {
+    it('should initialize successfully with valid JWT token', async () => {
+      await expect(service.initialize(mockConfig)).resolves.not.toThrow();
     });
 
-    it('should initialize with config', async () => {
-      const config = {
-        authToken: 'test-token',
-        cacheName: 'test-cache',
-        topicName: 'test-topic',
-      };
+    it('should throw error when no Momento token found in JWT', async () => {
+      vi.mocked(jwtUtils.extractMomentoTokenFromJWT).mockReturnValue(null);
 
-      // Mock successful initialization
-      await expect(notificationService.initialize(config)).resolves.not.toThrow();
+      await expect(service.initialize(mockConfig)).rejects.toThrow('No Momento token found in JWT');
+    });
+
+    it('should throw error when Momento token is invalid', async () => {
+      vi.mocked(jwtUtils.validateMomentoTokenInfo).mockReturnValue({
+        isValid: false,
+        errors: ['Token expired', 'Invalid format']
+      });
+
+      await expect(service.initialize(mockConfig)).rejects.toThrow('Invalid Momento token: Token expired, Invalid format');
     });
   });
 
-  describe('message handlers', () => {
+  describe('subscribe', () => {
+    beforeEach(async () => {
+      await service.initialize(mockConfig);
+    });
+
+    it('should throw error when not initialized', async () => {
+      const uninitializedService = new NotificationService();
+      await expect(uninitializedService.subscribe()).rejects.toThrow('NotificationService not initialized');
+    });
+
+    it('should not subscribe twice', async () => {
+      // Mock successful subscription
+      const mockSubscribe = vi.fn().mockResolvedValue({ unsubscribe: vi.fn() });
+      (service as any).topicClient = { subscribe: mockSubscribe };
+
+      await service.subscribe();
+      await service.subscribe(); // Second call should not subscribe again
+
+      expect(mockSubscribe).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('message handling', () => {
+    beforeEach(async () => {
+      await service.initialize(mockConfig);
+    });
+
     it('should add and remove message handlers', () => {
-      const handler = vi.fn();
+      const handler1 = vi.fn();
+      const handler2 = vi.fn();
 
-      notificationService.addMessageHandler(handler);
-      notificationService.removeMessageHandler(handler);
+      service.addMessageHandler(handler1);
+      service.addMessageHandler(handler2);
 
-      // Should not throw
-      expect(true).toBe(true);
+      // Simulate incoming message
+      const mockItem = {
+        valueString: () => JSON.stringify({
+          id: 'test-1',
+          type: 'info',
+          title: 'Test',
+          message: 'Test message',
+          timestamp: new Date().toISOString()
+        })
+      };
+
+      (service as any).handleIncomingMessage(mockItem);
+
+      expect(handler1).toHaveBeenCalled();
+      expect(handler2).toHaveBeenCalled();
+
+      service.removeMessageHandler(handler1);
+
+      (service as any).handleIncomingMessage(mockItem);
+
+      expect(handler1).toHaveBeenCalledTimes(1); // Should not be called again
+      expect(handler2).toHaveBeenCalledTimes(2); // Should be called again
     });
 
-    it('should call message handlers when notification is received', () => {
+    it('should handle malformed messages gracefully', () => {
       const handler = vi.fn();
-      notificationService.addMessageHandler(handler);
+      service.addMessageHandler(handler);
 
-      // Create a mock notification message
-      const mockMessage: NotificationMessage = {
-        id: 'test-1',
-        type: 'info',
-        title: 'Test Notification',
-        message: 'This is a test',
-        timestamp: new Date().toISOString(),
+      const mockItem = {
+        valueString: () => 'invalid-json'
       };
 
-      // Simulate receiving a message by calling the private method
-      // Note: In a real test, this would be triggered by Momento
-      const mockTopicItem = {
-        valueString: () => JSON.stringify(mockMessage),
-      };
+      expect(() => {
+        (service as any).handleIncomingMessage(mockItem);
+      }).not.toThrow();
 
-      // Access private method for testing
-      // @ts-ignore - accessing private method for testing
-      notificationService.handleIncomingMessage(mockTopicItem);
-
-      expect(handler).toHaveBeenCalledWith(
-        expect.objectContaining({
-          id: mockMessage.id,
-          type: mockMessage.type,
-          title: mockMessage.title,
-          message: mockMessage.message,
-          read: false,
-        })
-      );
+      expect(handler).not.toHaveBeenCalled();
     });
   });
 
-  describe('subscription management', () => {
-    it('should track subscription status', () => {
-      expect(notificationService.getSubscriptionStatus()).toBe(false);
+  describe('connection status', () => {
+    beforeEach(async () => {
+      await service.initialize(mockConfig);
     });
 
-    it('should handle subscription errors gracefully', () => {
-      // Test error handling
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    it('should return correct connection status', () => {
+      const status = service.getConnectionStatus();
 
-      // Simulate an error in message handling
-      const invalidTopicItem = {
-        valueString: () => 'invalid json',
+      expect(status).toEqual({
+        isSubscribed: false,
+        isTokenExpired: false,
+        reconnectAttempts: 0,
+        tenantId: 'test-tenant'
+      });
+    });
+
+    it('should detect expired tokens', () => {
+      // Mock expired token
+      const expiredTokenInfo = {
+        ...mockMomentoTokenInfo,
+        isExpired: true
+      };
+      (service as any).momentoTokenInfo = expiredTokenInfo;
+
+      const status = service.getConnectionStatus();
+      expect(status.isTokenExpired).toBe(true);
+    });
+  });
+
+  describe('token refresh', () => {
+    beforeEach(async () => {
+      await service.initialize(mockConfig);
+    });
+
+    it('should refresh token successfully', async () => {
+      const newJwtToken = 'new-jwt-token';
+      const newMomentoTokenInfo = {
+        ...mockMomentoTokenInfo,
+        token: 'new-momento-token'
       };
 
-      // @ts-ignore - accessing private method for testing
-      notificationService.handleIncomingMessage(invalidTopicItem);
+      vi.mocked(jwtUtils.extractMomentoTokenFromJWT).mockReturnValue(newMomentoTokenInfo);
 
-      expect(consoleSpy).toHaveBeenCalledWith(
-        'Failed to process incoming notification:',
-        expect.any(Error)
-      );
+      await expect(service.refreshToken(newJwtToken)).resolves.not.toThrow();
+    });
 
-      consoleSpy.mockRestore();
+    it('should throw error when refreshing uninitialized service', async () => {
+      const uninitializedService = new NotificationService();
+      await expect(uninitializedService.refreshToken('new-token')).rejects.toThrow('Service not initialized');
     });
   });
 
   describe('cleanup', () => {
-    it('should clean up resources on destroy', () => {
+    it('should clean up resources on destroy', async () => {
+      await service.initialize(mockConfig);
+
       const handler = vi.fn();
-      notificationService.addMessageHandler(handler);
+      service.addMessageHandler(handler);
 
-      notificationService.destroy();
+      service.destroy();
 
-      expect(notificationService.getSubscriptionStatus()).toBe(false);
+      const status = service.getConnectionStatus();
+      expect(status.tenantId).toBeUndefined();
     });
   });
 });

@@ -96,18 +96,6 @@ export class NotificationService {
     }
 
     try {
-      // Subscribe to multiple tenant-specific channels including system error channels
-      const channels = [
-        `tenant:${this.config.tenantId}:notifications`,
-        `tenant:${this.config.tenantId}:issues`,
-        `tenant:${this.config.tenantId}:subscribers`,
-        `tenant:${this.config.tenantId}:brand`,
-        `tenant:${this.config.tenantId}:system`,
-        `tenant:${this.config.tenantId}:errors`,
-        `tenant:${this.config.tenantId}:system-alerts`,
-        `system:global-alerts`, // Global system alerts
-        `system:service-status` // Service status updates
-      ];
 
       const subscribeOptions: SubscribeCallOptions = {
         onItem: (item: TopicItem) => {
@@ -119,42 +107,17 @@ export class NotificationService {
         },
       };
 
-      // Subscribe to all channels
-      const subscriptionPromises = channels.map(async (channel) => {
-        try {
-          const subscribeResponse = await this.topicClient!.subscribe(
-            this.momentoTokenInfo!.cacheName,
-            channel,
-            subscribeOptions
-          );
-
-          if (subscribeResponse instanceof TopicSubscribe.Error) {
-            console.warn(`Failed to subscribe to channel ${channel}: ${subscribeResponse.message()}`);
-            return null;
-          }
-
-          console.log(`Successfully subscribed to channel: ${channel}`);
-          return subscribeResponse;
-        } catch (error) {
-          console.warn(`Error subscribing to channel ${channel}:`, error);
-          return null;
+      const sub = await this.topicClient.subscribe(this.momentoTokenInfo.cacheName, this.config.tenantId, {
+        onItem: (item: TopicItem) => { this.handleIncomingMessage(item); },
+        onError: (error: any) => {
+          console.error('Topic subscription error:', error);
+          this.handleSubscriptionError(error);
         }
       });
 
-      // Wait for all subscriptions to complete
-      const subscriptions = await Promise.all(subscriptionPromises);
-      const successfulSubscriptions = subscriptions.filter(sub => sub !== null);
-
-      if (successfulSubscriptions.length === 0) {
-        throw new Error('Failed to subscribe to any notification channels');
-      }
-
-      // Store the first successful subscription as the main one
-      this.subscription = successfulSubscriptions[0];
+      this.subscription = sub;
       this.isSubscribed = true;
-      this.reconnectAttempts = 0; // Reset reconnect attempts on successful connection
-
-      console.log(`Successfully subscribed to ${successfulSubscriptions.length}/${channels.length} notification channels for tenant: ${this.config.tenantId}`);
+      this.reconnectAttempts = 0;
     } catch (error) {
       console.error('Failed to subscribe to notifications:', error);
       throw error;
@@ -292,7 +255,7 @@ export class NotificationService {
     const enhanced = { ...message };
 
     // Map common system errors to user-friendly messages
-    const errorMappings: Record<string, { title: string; message: string; actionUrl?: string }> = {
+    const errorMappings: Record<string, { title: string; message: string; actionUrl?: string; }> = {
       'MOMENTO_TOKEN_EXPIRED': {
         title: 'Session Expired',
         message: 'Your session has expired. Please refresh the page to continue receiving notifications.',

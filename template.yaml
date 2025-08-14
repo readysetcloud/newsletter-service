@@ -25,6 +25,12 @@ Parameters:
     Type: String
     Default: "/stripe/api-key"
     Description: SSM Parameter Store path for Stripe API key (secure string)
+  MomentoApiKey:
+    Type: String
+    Description: Super user API key for Momento
+  MomentoCacheName:
+    Type: String
+    Description: Momento cache name for real-time notifications
 
 Metadata:
   esbuild-properties: &esbuild-properties
@@ -68,6 +74,9 @@ Globals:
         AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
         SECRET_ID: "{{resolve:ssm:/readysetcloud/secrets}}"
         ORIGIN: !Ref Origin
+        MOMENTO_API_KEY: !Ref MomentoApiKey
+        MOMENTO_CACHE_NAME: !Ref MomentoCacheName
+        EVENT_BUS_NAME: newsletter-events
   Api:
     Cors:
       AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
@@ -761,6 +770,35 @@ Resources:
             Trigger: PostConfirmation
             UserPool: !Ref NewsletterUserPool
 
+  CognitoPreTokenGenerationFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - auth/cognito-pre-token-generation.mjs
+    Properties:
+      Handler: auth/cognito-pre-token-generation.handler
+      Timeout: 10
+      Environment:
+        Variables:
+          TTL_HOURS: 24
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - cloudwatch:PutMetricData
+              Resource: "*"
+      Events:
+        Cognito:
+          Type: Cognito
+          Properties:
+            Trigger: PreTokenGeneration
+            UserPool: !Ref NewsletterUserPool
+
   AddUserToGroupFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -808,6 +846,9 @@ Resources:
                 - dynamodb:GetItem
                 - dynamodb:UpdateItem
               Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !GetAtt NewsletterEventBus.Arn
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
@@ -970,9 +1011,8 @@ Resources:
                 - dynamodb:PutItem
               Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
-              Action:
-                - events:PutEvents
-              Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
+              Action: events:PutEvents
+              Resource: !GetAtt NewsletterEventBus.Arn
       Environment:
         Variables:
           USER_POOL_ID: !Ref NewsletterUserPool
@@ -2105,6 +2145,50 @@ Resources:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
 
+  # User Notification System
+  SendUserNotificationFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - notifications/send-user-notification.mjs
+    Properties:
+      Handler: notifications/send-user-notification.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !GetAtt NewsletterEventBus.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          WRITE_TOKEN_TTL_HOURS: 1
+      Events:
+        NewsletterEvent:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Ref NewsletterEventBus
+            Pattern:
+              source:
+                - newsletter.api
+                - newsletter.admin
+                - newsletter.system
+              detail-type:
+                - Issue Published
+                - Issue Draft Saved
+                - Subscriber Added
+                - Subscriber Removed
+                - Brand Updated
+                - System Alert
+                - System Error
+
   PublishTopContentRole:
     Type: AWS::IAM::Role
     Properties:
@@ -2230,6 +2314,170 @@ Resources:
         ApiKeyAuthParameters:
           ApiKeyName: Authorization
           ApiKeyValue: !Sub StripeApiKey
+
+  NewsletterEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: newsletter-events
+      Description: Custom EventBridge bus for newsletter notification events
+
+  NotificationSystemDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${AWS::StackName}-notification-system"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/Lambda", "Duration", "FunctionName", "${CognitoPreTokenGenerationFunction}" ],
+                  [ ".", "Errors", ".", "." ],
+                  [ ".", "Invocations", ".", "." ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "Pre Token Generation Lambda Metrics",
+                "period": 300
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "Newsletter/Momento", "TokenGenerationSuccess", "TenantId", "ALL" ],
+                  [ ".", "TokenGenerationFailure", ".", "." ],
+                  [ ".", "TokenGenerationDuration", ".", "." ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "Momento Token Generation Metrics",
+                "period": 300
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/Events", "SuccessfulInvocations", "EventBusName", "newsletter-events" ],
+                  [ ".", "FailedInvocations", ".", "." ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "EventBridge Processing Metrics",
+                "period": 300
+              }
+            },
+            {
+              "type": "log",
+              "x": 12,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "query": "SOURCE '/aws/lambda/${CognitoPreTokenGenerationFunction}' | fields @timestamp, @message\n| filter @message like /ERROR/\n| sort @timestamp desc\n| limit 20",
+                "region": "${AWS::Region}",
+                "title": "Recent Errors in Pre Token Generation",
+                "view": "table"
+              }
+            }
+          ]
+        }
+
+  TokenGenerationSuccessRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-token-generation-success-rate"
+      AlarmDescription: "Alert when Momento token generation success rate drops below 95%"
+      MetricName: TokenGenerationSuccess
+      Namespace: Newsletter/Momento
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 0.95
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !Ref NotificationSystemAlarmTopic
+
+  PreTokenGenerationErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-pre-token-generation-errors"
+      AlarmDescription: "Alert when Pre Token Generation Lambda error rate exceeds 5%"
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref CognitoPreTokenGenerationFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref NotificationSystemAlarmTopic
+
+  PreTokenGenerationTimeoutAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-pre-token-generation-timeout"
+      AlarmDescription: "Alert when Pre Token Generation Lambda duration exceeds 8 seconds"
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref CognitoPreTokenGenerationFunction
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 8000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref NotificationSystemAlarmTopic
+
+  EventBridgeFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-eventbridge-failures"
+      AlarmDescription: "Alert when EventBridge failed invocations exceed threshold"
+      MetricName: FailedInvocations
+      Namespace: AWS/Events
+      Dimensions:
+        - Name: EventBusName
+          Value: newsletter-events
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref NotificationSystemAlarmTopic
+
+  NotificationSystemAlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${AWS::StackName}-notification-system-alarms"
+      DisplayName: "Newsletter Notification System Alarms"
 
 Outputs:
   NewsletterApiUrl:

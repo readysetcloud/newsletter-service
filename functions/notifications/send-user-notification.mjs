@@ -351,8 +351,7 @@ async function publishToMomento(notification, tenantId, correlationId) {
 async function generateMomentoWriteToken(tenantId, correlationId) {
   console.log('Generating Momento write token', {
     correlationId,
-    tenantId,
-    ttlHours: process.env.WRITE_TOKEN_TTL_HOURS || 1
+    tenantId
   });
 
   try {
@@ -360,25 +359,18 @@ async function generateMomentoWriteToken(tenantId, correlationId) {
       credentialProvider: CredentialProvider.fromString(process.env.MOMENTO_API_KEY)
     });
 
-    const ttlHours = parseInt(process.env.WRITE_TOKEN_TTL_HOURS || '1');
-    const cacheName = process.env.MOMENTO_CACHE_NAME || 'newsletter-notifications';
-
     const permissions = [
       {
         role: 'publishonly',
-        cache: cacheName,
+        cache: process.env.MOMENTO_CACHE_NAME,
         topic: tenantId
       }
     ];
 
-    const tokenResponse = await authClient.generateDisposableToken(permissions, ExpiresIn.hours(ttlHours), { tokenId: tenantId });
+    const tokenResponse = await authClient.generateDisposableToken(permissions, ExpiresIn.hours(1), { tokenId: tenantId });
 
     if (tokenResponse instanceof GenerateDisposableToken.Success) {
-      console.log('Write token generated successfully', {
-        correlationId,
-        tenantId,
-        ttlHours
-      });
+      console.log('Write token generated successfully', { correlationId, tenantId });
       return tokenResponse.authToken;
     } else {
       throw new Error(`Token generation failed: ${tokenResponse.message}`);

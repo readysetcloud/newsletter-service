@@ -82,21 +82,17 @@ const generateMomentoReadOnlyToken = async (tenantId, userId, logger) => {
     const startTime = Date.now();
 
     try {
-        const ttlHours = parseInt(process.env.TTL_HOURS || '24', 10);
-
         logger.momentoTokenGeneration('start', {
             tenantId,
-            userId,
-            ttlHours
+            userId
         });
 
-        const token = await momentoClient.generateReadOnlyToken(tenantId, userId, ttlHours);
+        const token = await momentoClient.generateReadOnlyToken(tenantId, userId);
         const duration = Date.now() - startTime;
 
         logger.momentoTokenGeneration('success', {
             tenantId,
             userId,
-            ttlHours,
             tokenLength: token?.length || 0,
             durationMs: duration
         });
@@ -161,14 +157,25 @@ const enrichClaims = (event, momentoToken, logger) => {
 
     const claims = event.response.claimsOverrideDetails.claimsToAddOrOverride;
 
+    // Always add tenantId to claims if available (needed for API authorization)
+    const userAttributes = event.request?.userAttributes || {};
+    const tenantId = userAttributes['custom:tenant_id'] || null;
+
+    if (tenantId) {
+        claims['custom:tenant_id'] = tenantId;
+        logger.info('Added tenant ID to JWT claims', {
+            userName: event.userName,
+            tenantId: tenantId
+        });
+    }
+
     // Add Momento token to custom claims if available
     if (momentoToken) {
         claims['custom:momento_token'] = momentoToken;
         claims['custom:momento_cache'] = momentoClient.getCacheName();
 
         // Calculate expiration time based on TTL
-        const ttlHours = parseInt(process.env.TTL_HOURS || '24', 10);
-        const expirationTime = new Date(Date.now() + (ttlHours * 60 * 60 * 1000));
+        const expirationTime = new Date(Date.now() + (60 * 60 * 1000));
         claims['custom:momento_expires'] = expirationTime.toISOString();
 
         logger.info('Added Momento claims to JWT', {

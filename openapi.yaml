@@ -113,12 +113,6 @@ paths:
                       lastName:
                         type: string
                         nullable: true
-                      jobTitle:
-                        type: string
-                        nullable: true
-                      phoneNumber:
-                        type: string
-                        nullable: true
                       links:
                         type: array
                         items:
@@ -221,9 +215,6 @@ paths:
                       lastName:
                         type: string
                         nullable: true
-                      jobTitle:
-                        type: string
-                        nullable: true
                       links:
                         type: array
                         items:
@@ -234,7 +225,6 @@ paths:
                             url:
                               type: string
                         nullable: true
-                  # Metadata (limited)
                   lastModified:
                     type: string
                     format: date-time
@@ -532,14 +522,6 @@ paths:
                   type: string
                   maxLength: 50
                   description: User's last name
-                jobTitle:
-                  type: string
-                  maxLength: 100
-                  description: User's role or job title
-                phoneNumber:
-                  type: string
-                  maxLength: 20
-                  description: Contact phone number
                 timezone:
                   type: string
                   maxLength: 50
@@ -582,12 +564,6 @@ paths:
                         type: string
                         nullable: true
                       lastName:
-                        type: string
-                        nullable: true
-                      jobTitle:
-                        type: string
-                        nullable: true
-                      phoneNumber:
                         type: string
                         nullable: true
                       timezone:

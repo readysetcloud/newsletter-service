@@ -51,7 +51,7 @@ export function ProfilePage() {
         firstName: data.firstName,
         lastName: data.lastName,
         links: data.links?.map(link => ({
-          name: link.platform,
+          name: link.name,
           url: link.url
         }))
       });
@@ -90,7 +90,7 @@ export function ProfilePage() {
     try {
       const response = await profileService.updateProfile({
         links: links.map(link => ({
-          name: link.platform,
+          name: link.name,
           url: link.url
         }))
       });

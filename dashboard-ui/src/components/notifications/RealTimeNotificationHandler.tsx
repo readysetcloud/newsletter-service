@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useState } from 'react';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useAuth } from '../../contexts/AuthContext';
 import type { Notification } from '../../types';
@@ -96,28 +96,6 @@ export function RealTimeNotificationHandler() {
         showInfo(notification.title, notification.message, notification.actionUrl);
     }
   }, [showSuccess, showInfo, showWarning, showError]);
-
-  // Show connection status notifications
-  useEffect(() => {
-    if (user && isSubscribed) {
-      showSuccess(
-        'Real-time Updates Connected',
-        'You will now receive live notifications about your newsletter activity.',
-        undefined
-      );
-    }
-  }, [isSubscribed, user, showSuccess]);
-
-  // Show connection error notifications
-  useEffect(() => {
-    if (error && user) {
-      showError(
-        'Notification Connection Failed',
-        'Real-time notifications are temporarily unavailable. You may need to refresh the page.',
-        undefined
-      );
-    }
-  }, [error, user, showError]);
 
   // This component doesn't render anything visible
   return null;
@@ -228,36 +206,49 @@ export function useRealTimeNotificationHandlers() {
  * Component that provides real-time notification feedback for UI actions
  */
 export function NotificationFeedback() {
-  const { isSubscribed, error, isLoading } = useNotifications();
+  const { isSubscribed, error, isLoading, refreshNotificationToken } = useNotifications();
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    await refreshNotificationToken();
+    setIsRefreshing(false);
+  };
+
+  // Don't show anything while loading - let the app work normally
   if (isLoading) {
-    return (
-      <div className="fixed bottom-4 right-4 bg-blue-50 border border-blue-200 rounded-lg p-3 shadow-lg z-50">
-        <div className="flex items-center space-x-2">
-          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
-          <span className="text-sm text-blue-700">Connecting to real-time updates...</span>
-        </div>
-      </div>
-    );
+    return null;
   }
 
+  // Show error state with refresh option, but don't block the UI
   if (error) {
     return (
-      <div className="fixed bottom-4 right-4 bg-red-50 border border-red-200 rounded-lg p-3 shadow-lg z-50">
-        <div className="flex items-center space-x-2">
-          <div className="w-4 h-4 bg-red-500 rounded-full"></div>
-          <span className="text-sm text-red-700">Real-time updates unavailable</span>
+      <div className="fixed bottom-4 right-4 bg-yellow-50 border border-yellow-200 rounded-lg p-3 shadow-lg z-50 max-w-sm">
+        <div className="flex items-start space-x-2">
+          <div className="w-4 h-4 bg-yellow-500 rounded-full mt-0.5"></div>
+          <div className="flex-1">
+            <span className="text-sm text-yellow-700 block">Limited functionality</span>
+            <span className="text-xs text-yellow-600">Real-time updates unavailable</span>
+            <button
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="text-xs text-yellow-800 underline hover:no-underline mt-1 block disabled:opacity-50"
+            >
+              {isRefreshing ? 'Reconnecting...' : 'Try reconnecting'}
+            </button>
+          </div>
         </div>
       </div>
     );
   }
 
+  // Show success state briefly, then hide
   if (isSubscribed) {
     return (
-      <div className="fixed bottom-4 right-4 bg-green-50 border border-green-200 rounded-lg p-3 shadow-lg z-50 animate-fade-in">
+      <div className="fixed bottom-4 right-4 bg-green-50 border border-green-200 rounded-lg p-2 shadow-lg z-50 animate-fade-in">
         <div className="flex items-center space-x-2">
-          <div className="w-4 h-4 bg-green-500 rounded-full animate-pulse"></div>
-          <span className="text-sm text-green-700">Real-time updates active</span>
+          <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+          <span className="text-xs text-green-700">Real-time updates active</span>
         </div>
       </div>
     );

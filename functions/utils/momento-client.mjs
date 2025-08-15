@@ -67,10 +67,9 @@ class MomentoClientUtil {
    * Generate a read-only token scoped to a specific tenant
    * @param {string} tenantId - Tenant ID for scoping permissions
    * @param {string} userId - User ID for logging and tracking
-   * @param {number} ttlHours - Token TTL in hours (default: 6)
    * @returns {Promise<string>} Generated Momento auth token
    */
-  async generateReadOnlyToken(tenantId, userId, ttlHours = 6) {
+  async generateReadOnlyToken(tenantId, userId) {
     const authClient = this.getAuthClient();
     if (!authClient) {
       throw new Error('Momento auth client not available - check MOMENTO_API_KEY');
@@ -92,10 +91,10 @@ class MomentoClientUtil {
         }
       ];
 
-      const tokenResponse = await authClient.generateDisposableToken(permissions, ExpiresIn.hours(ttlHours), { tokenId: tenantId });
+      const tokenResponse = await authClient.generateDisposableToken({ permissions }, ExpiresIn.hours(1), { tokenId: tenantId });
 
       if (tokenResponse instanceof GenerateDisposableToken.Success) {
-        console.log(`Generated read only token for tenant: ${tenantId}, user: ${userId}, TTL: ${ttlHours}h`);
+        console.log(`Generated read only token for tenant: ${tenantId}, user: ${userId}`);
         return tokenResponse.authToken;
       } else {
         throw new Error(`Token read only failed: ${tokenResponse.message}`);
@@ -114,10 +113,9 @@ class MomentoClientUtil {
   /**
    * Generate a write-enabled token scoped to a specific tenant
    * @param {string} tenantId - Tenant ID for scoping permissions
-   * @param {number} ttlHours - Token TTL in hours (default: 1)
    * @returns {Promise<string>} Generated Momento auth token
    */
-  async generateWriteToken(tenantId, ttlHours = 1) {
+  async generateWriteToken(tenantId) {
     const authClient = this.getAuthClient();
     if (!authClient) {
       throw new Error('Momento auth client not available - check MOMENTO_API_KEY');
@@ -139,10 +137,10 @@ class MomentoClientUtil {
         }
       ];
 
-      const tokenResponse = await authClient.generateDisposableToken(permissions, ExpiresIn.hours(ttlHours), { tokenId: tenantId });
+      const tokenResponse = await authClient.generateDisposableToken({ permissions }, ExpiresIn.hours(1), { tokenId: tenantId });
 
       if (tokenResponse instanceof GenerateDisposableToken.Success) {
-        console.log(`Generated write token for tenant: ${tenantId}, TTL: ${ttlHours}h`);
+        console.log(`Generated write token for tenant: ${tenantId}`);
         return tokenResponse.authToken;
       } else {
         throw new Error(`Token generation failed: ${tokenResponse.message}`);

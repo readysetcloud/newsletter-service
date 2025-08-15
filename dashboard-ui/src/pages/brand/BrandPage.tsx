@@ -44,38 +44,78 @@ export const BrandPage: React.FC = () => {
     }
   };
 
-  const handleFormSubmit = async (data: BrandFormData, logoFile?: File) => {
+  const handleFormSubmit = async (data: BrandFormData, logoFile?: File, logoRemoved?: boolean) => {
     try {
       setIsSubmitting(true);
       setError(null);
       setSuccess(null);
 
-      // Upload logo if provided
+      // For new brands, save brand info first to create tenantId, then upload logo
+      // For existing brands, upload logo first, then update brand info
+      const isNewBrand = !profile?.brand?.brandId;
       let logoUrl = profile?.brand?.brandLogo;
-      if (logoFile) {
-        const uploadResponse = await profileService.uploadBrandPhoto(logoFile);
-        if (uploadResponse.success && uploadResponse.data) {
-          logoUrl = uploadResponse.data;
-        } else {
-          throw new Error(uploadResponse.error || 'Failed to upload logo');
+
+      if (isNewBrand) {
+        // Step 1: Create brand first (this creates the tenantId)
+        const response = await profileService.updateBrand(data);
+        if (!response.success) {
+          throw new Error(response.error || 'Failed to save brand');
+        }
+
+        // Step 2: Upload logo if provided (now tenantId exists)
+        if (logoFile) {
+          const uploadResponse = await profileService.uploadBrandPhoto(logoFile);
+          if (uploadResponse.success && uploadResponse.data) {
+            logoUrl = uploadResponse.data;
+            // Step 3: Update brand with logo URL
+            const brandDataWithLogo = {
+              ...data,
+              brandLogo: logoUrl
+            };
+            await profileService.updateBrand(brandDataWithLogo);
+          } else {
+            throw new Error(uploadResponse.error || 'Failed to upload logo');
+          }
+        }
+      } else {
+        // For existing brands, handle logo changes
+        if (logoFile) {
+          // Upload new logo
+          const uploadResponse = await profileService.uploadBrandPhoto(logoFile);
+          if (uploadResponse.success && uploadResponse.data) {
+            logoUrl = uploadResponse.data;
+          } else {
+            throw new Error(uploadResponse.error || 'Failed to upload logo');
+          }
+        } else if (logoRemoved) {
+          // Logo was removed, clear it
+          logoUrl = '';
+        }
+
+        // Update brand information
+        const brandData = {
+          ...data,
+          ...(logoFile || logoRemoved ? { brandLogo: logoUrl } : {})
+        };
+
+        const response = await profileService.updateBrand(brandData);
+        if (!response.success) {
+          throw new Error(response.error || 'Failed to save brand');
         }
       }
 
-      // Update brand information
-      const brandData = {
-        ...data,
-        ...(logoUrl && { brandLogo: logoUrl })
-      };
+      setSuccess(profile?.brand?.brandId ? 'Brand updated successfully!' : 'Brand created successfully!');
 
-      const response = await profileService.updateBrand(brandData);
-
-      if (response.success) {
-        setSuccess(profile?.brand?.brandId ? 'Brand updated successfully!' : 'Brand created successfully!');
-        // Reload profile to get updated data including brandId
-        await loadProfile();
-      } else {
-        throw new Error(response.error || 'Failed to save brand');
+      // Update preview data immediately with the uploaded logo
+      if (logoUrl) {
+        setPreviewData(prev => ({
+          ...prev,
+          brandLogo: logoUrl
+        }));
       }
+
+      // Reload profile to get updated data including brandId
+      await loadProfile();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save brand');
     } finally {
@@ -84,7 +124,11 @@ export const BrandPage: React.FC = () => {
   };
 
   const handlePreviewChange = (data: Partial<BrandInfo>, photo?: string) => {
-    setPreviewData(data);
+    // Merge form data with existing preview data to preserve brandLogo from API
+    setPreviewData(prev => ({
+      ...prev,
+      ...data
+    }));
     setPreviewPhoto(photo);
   };
 

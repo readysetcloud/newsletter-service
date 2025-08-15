@@ -33,6 +33,9 @@ export const BrandIdInput: React.FC<BrandIdInputProps> = ({
 
   // Auto-generate brand ID from brand name if user hasn't manually modified it
   useEffect(() => {
+    // Skip auto-generation if field is disabled (brand already exists)
+    if (disabled) return;
+
     if (!hasUserModified && brandName) {
       const generated = generateBrandId(brandName);
       if (generated && generated !== value) {
@@ -43,11 +46,14 @@ export const BrandIdInput: React.FC<BrandIdInputProps> = ({
         }, 1500);
       }
     }
-  }, [brandName, hasUserModified, value, onChange]);
+  }, [brandName, hasUserModified, value, onChange, disabled]);
 
   // Reset hasUserModified if the current value matches what would be auto-generated
   // This allows auto-generation to continue working if user clears the field or it matches the generated value
   useEffect(() => {
+    // Skip this logic if field is disabled (brand already exists)
+    if (disabled) return;
+
     if (hasUserModified) {
       if (!value) {
         // If field is empty, allow auto-generation again
@@ -62,11 +68,19 @@ export const BrandIdInput: React.FC<BrandIdInputProps> = ({
         }
       }
     }
-  }, [brandName, value, hasUserModified]);
+  }, [brandName, value, hasUserModified, disabled]);
 
   // Check availability only when field has been blurred and value is valid
   useEffect(() => {
     const checkAvailability = async () => {
+      // Skip validation if field is disabled (brand already exists)
+      if (disabled) {
+        setAvailabilityStatus('idle');
+        setSuggestions([]);
+        setIsChecking(false);
+        return;
+      }
+
       // Only check if user has blurred the field or explicitly requested check
       if (!shouldCheck || !debouncedValue || debouncedValue.length < 3) {
         if (!debouncedValue || debouncedValue.length < 3) {
@@ -97,7 +111,7 @@ export const BrandIdInput: React.FC<BrandIdInputProps> = ({
     };
 
     checkAvailability();
-  }, [debouncedValue, shouldCheck]);
+  }, [debouncedValue, shouldCheck, disabled]);
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const newValue = e.target.value.toLowerCase().replace(/[^a-z]/g, '');
@@ -121,6 +135,7 @@ export const BrandIdInput: React.FC<BrandIdInputProps> = ({
   }, [onChange]);
 
   const getValidationState = () => {
+    if (disabled) return 'idle'; // No validation state when disabled
     if (error) return 'error';
     if (isChecking) return 'validating';
     if (availabilityStatus === 'available') return 'success';
@@ -129,6 +144,7 @@ export const BrandIdInput: React.FC<BrandIdInputProps> = ({
   };
 
   const getValidationMessage = () => {
+    if (disabled) return undefined; // No validation messages when disabled
     if (error) return error;
     if (isChecking) return 'Checking availability...';
     if (availabilityStatus === 'available') return 'Brand ID is available!';
@@ -161,7 +177,7 @@ export const BrandIdInput: React.FC<BrandIdInputProps> = ({
       />
 
       {/* Suggestions */}
-      {suggestions.length > 0 && availabilityStatus === 'taken' && (
+      {!disabled && suggestions.length > 0 && availabilityStatus === 'taken' && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
           <div className="flex items-start">
             <ExclamationTriangleIcon className="h-5 w-5 text-yellow-400 mt-0.5 mr-2 flex-shrink-0" />
@@ -187,7 +203,7 @@ export const BrandIdInput: React.FC<BrandIdInputProps> = ({
       )}
 
       {/* Auto-generation notice */}
-      {!hasUserModified && brandName && (
+      {!disabled && !hasUserModified && brandName && (
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
           <div className="flex items-start">
             <CheckCircleIcon className="h-4 w-4 text-blue-400 mt-0.5 mr-2 flex-shrink-0" />

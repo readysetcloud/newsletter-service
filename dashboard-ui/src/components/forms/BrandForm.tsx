@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Input } from '../ui/Input';
@@ -19,7 +19,7 @@ import { getUserFriendlyErrorMessage } from '../../utils/errorHandling';
 
 interface BrandFormProps {
   initialData?: Partial<BrandInfo>;
-  onSubmit: (data: BrandFormData, logoFile?: File) => Promise<void>;
+  onSubmit: (data: BrandFormData, logoFile?: File, logoRemoved?: boolean) => Promise<void>;
   onPreviewChange?: (data: Partial<BrandInfo>, previewPhoto?: string) => void;
   isSubmitting?: boolean;
   className?: string;
@@ -42,6 +42,8 @@ export const BrandForm: React.FC<BrandFormProps> = ({
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isUploading] = useState(false);
+  const [hasLogoChanged, setHasLogoChanged] = useState(false);
+  const [isLogoRemoved, setIsLogoRemoved] = useState(false);
   const { addToast } = useToast();
 
   const form = useForm<BrandFormData>({
@@ -69,15 +71,28 @@ export const BrandForm: React.FC<BrandFormProps> = ({
   // Enhanced validation state
   const { isFormValid, validationErrors } = useFormValidationState(form);
 
-  // Watch form values for preview updates
-  const watchedValues = watch();
+  // Watch specific form values for preview updates
+  const brandId = watch('brandId');
+  const brandName = watch('brandName');
+  const website = watch('website');
+  const industry = watch('industry');
+  const brandDescription = watch('brandDescription');
+  const tags = watch('tags');
 
   // Update preview when form values change
   useEffect(() => {
     if (onPreviewChange) {
+      const watchedValues = {
+        brandId,
+        brandName,
+        website,
+        industry,
+        brandDescription,
+        tags
+      };
       onPreviewChange(watchedValues, logoPreview || undefined);
     }
-  }, [watchedValues, logoPreview, onPreviewChange]);
+  }, [brandId, brandName, website, industry, brandDescription, tags, logoPreview]); // Watch individual values instead of the whole object
 
   // Reset form when initial data changes
   useEffect(() => {
@@ -90,12 +105,16 @@ export const BrandForm: React.FC<BrandFormProps> = ({
         brandDescription: initialData.brandDescription || '',
         tags: initialData.tags || []
       });
+      setHasLogoChanged(false); // Reset logo change state when form resets
+      setIsLogoRemoved(false); // Reset logo removal state when form resets
     }
-  }, [initialData, reset]);
+  }, [initialData]); // Removed reset from dependencies since it's stable from react-hook-form
 
-  const handlePhotoChange = (file: File | null) => {
+  const handlePhotoChange = useCallback((file: File | null) => {
     setLogoFile(file);
     setUploadError(null);
+    setHasLogoChanged(true); // Mark logo as changed
+    setIsLogoRemoved(false); // Reset removal state when new file is selected
 
     if (file) {
       const url = URL.createObjectURL(file);
@@ -106,21 +125,36 @@ export const BrandForm: React.FC<BrandFormProps> = ({
       }
       setLogoPreview(null);
     }
-  };
+  }, [logoPreview]);
 
-  const handlePhotoRemove = () => {
+  const handlePhotoRemove = useCallback(() => {
     setLogoFile(null);
     setUploadError(null);
+    setHasLogoChanged(true); // Mark logo as changed
+    setIsLogoRemoved(true); // Mark logo as removed
     if (logoPreview) {
       URL.revokeObjectURL(logoPreview);
       setLogoPreview(null);
     }
-  };
+
+    // Trigger preview update to remove the logo from preview
+    if (onPreviewChange) {
+      const currentValues = watch();
+      onPreviewChange({
+        ...currentValues,
+        brandLogo: undefined // Remove logo from preview
+      });
+    }
+  }, [logoPreview, onPreviewChange, watch]);
 
   const handleFormSubmit = async (data: BrandFormData) => {
     try {
       setUploadError(null);
-      await onSubmit(data, logoFile || undefined);
+      await onSubmit(data, logoFile || undefined, isLogoRemoved);
+
+      // Reset logo change state after successful submission
+      setHasLogoChanged(false);
+      setIsLogoRemoved(false);
 
       // Show success toast
       addToast({
@@ -145,11 +179,11 @@ export const BrandForm: React.FC<BrandFormProps> = ({
     }
   };
 
-  const handleTagsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleTagsChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const value = event.target.value;
     const tags = value.split(',').map(tag => tag.trim()).filter(tag => tag.length > 0);
     setValue('tags', tags, { shouldDirty: true });
-  };
+  }, [setValue]);
 
   return (
     <form onSubmit={handleSubmit(handleFormSubmit)} className={className}>
@@ -222,21 +256,6 @@ export const BrandForm: React.FC<BrandFormProps> = ({
           isUploading={isUploading}
           error={uploadError || undefined}
         />
-
-        {/* Brand ID Display (if exists) */}
-        {initialData?.brandId && (
-          <div className="bg-slate-50 rounded-lg p-4">
-            <label className="block text-sm font-medium text-slate-700 mb-1">
-              Brand ID (Immutable)
-            </label>
-            <div className="font-mono text-sm text-slate-900 bg-white px-3 py-2 rounded border">
-              {initialData.brandId}
-            </div>
-            <p className="text-xs text-slate-500 mt-1">
-              This ID cannot be changed and is used for API integration
-            </p>
-          </div>
-        )}
       </div>
 
       {/* Submit Button */}
@@ -253,8 +272,8 @@ export const BrandForm: React.FC<BrandFormProps> = ({
         )}
         <Button
           type="submit"
-          disabled={(!isDirty && !logoFile) || !isFormValid || isSubmitting}
-          loading={isSubmitting}
+          disabled={(!isDirty && !logoFile && !hasLogoChanged) || !isFormValid || isSubmitting}
+          isLoading={isSubmitting}
         >
           {isSubmitting ? 'Saving...' : submitButtonText}
         </Button>

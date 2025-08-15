@@ -88,12 +88,15 @@ class ApiClient {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
       }
-
-      const data = await response.json();
-      return {
-        success: true,
-        data,
-      };
+      if (response.status == 204) {
+        return { success: true };
+      } else {
+        const data = await response.json();
+        return {
+          success: true,
+          data,
+        };
+      }
     } catch (error) {
       clearTimeout(timeoutId);
 

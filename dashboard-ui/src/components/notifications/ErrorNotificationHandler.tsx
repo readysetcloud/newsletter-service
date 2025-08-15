@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState } from 'react';
+import { useEffect, useCallback, useState, useRef } from 'react';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useAuth } from '../../contexts/AuthContext';
 import { notificationService } from '../../services/notificationService';
@@ -18,6 +18,7 @@ export function ErrorNotificationHandler() {
   const [isRetrying, setIsRetrying] = useState(false);
   const [systemErrors, setSystemErrors] = useState<Set<string>>(new Set());
   const [lastErrorTime, setLastErrorTime] = useState<Date | null>(null);
+  const lastErrorRef = useRef<string | null>(null);
 
   // Handle system error notifications with enhanced categorization
   const handleSystemError = useCallback((errorData: {
@@ -223,9 +224,13 @@ export function ErrorNotificationHandler() {
 
   // Monitor connection status and handle errors
   useEffect(() => {
-    if (isAuthenticated && error && !isSubscribed) {
+    if (!isAuthenticated || !error || isSubscribed) return;
+
+    if (lastErrorRef.current !== error) {
+      lastErrorRef.current = error;
       handleConnectionError();
     }
+    
   }, [isAuthenticated, error, isSubscribed, handleConnectionError]);
 
   // Auto-retry connection after a delay

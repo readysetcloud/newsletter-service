@@ -39,9 +39,8 @@ export interface PersonalInfo {
 }
 
 export interface SocialLink {
-  platform: string;
   url: string;
-  displayName?: string;
+  name: string;
 }
 
 export interface UserPreferences {

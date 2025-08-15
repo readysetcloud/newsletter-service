@@ -2,9 +2,8 @@ import { z } from 'zod';
 
 // Social link schema
 export const socialLinkSchema = z.object({
-  platform: z.string().min(1, 'Platform is required'),
   url: z.string().url('Please enter a valid URL'),
-  displayName: z.string().optional()
+  name: z.string().min(1, 'Display name is required')
 });
 
 // Personal information schema
@@ -76,17 +75,4 @@ export const localeOptions = [
   { value: 'zh-TW', label: 'Chinese (Traditional)' }
 ];
 
-// Common social platforms
-export const socialPlatformOptions = [
-  { value: 'twitter', label: 'Twitter/X' },
-  { value: 'linkedin', label: 'LinkedIn' },
-  { value: 'github', label: 'GitHub' },
-  { value: 'website', label: 'Personal Website' },
-  { value: 'blog', label: 'Blog' },
-  { value: 'youtube', label: 'YouTube' },
-  { value: 'instagram', label: 'Instagram' },
-  { value: 'facebook', label: 'Facebook' },
-  { value: 'medium', label: 'Medium' },
-  { value: 'dev.to', label: 'Dev.to' },
-  { value: 'other', label: 'Other' }
-];
+

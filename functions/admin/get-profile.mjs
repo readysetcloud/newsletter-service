@@ -1,13 +1,16 @@
 import { CognitoIdentityProviderClient, AdminGetUserCommand, ListUsersCommand } from "@aws-sdk/client-cognito-identity-provider";
+import { DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
+import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { formatResponse } from '../utils/helpers.mjs';
 import { getUserContext, formatAuthError } from '../auth/get-user-context.mjs';
 
 const cognito = new CognitoIdentityProviderClient();
+const ddb = new DynamoDBClient();
 
 export const handler = async (event) => {
   try {
     const userContext = getUserContext(event);
-    const { userId, email: currentUserEmail } = userContext;
+    const { userId, email: currentUserEmail, tenantId } = userContext;
 
     const requestedUsername = event.pathParameters?.username;
     const isOwnProfile = !requestedUsername;
@@ -33,8 +36,8 @@ export const handler = async (event) => {
     }, {});
 
     const profile = isOwnProfile
-      ? buildOwnProfile(userId, attributes, userResult)
-      : buildPublicProfile(attributes);
+      ? await buildOwnProfile(userId, attributes, userResult, tenantId)
+      : await buildPublicProfile(attributes);
 
     return formatResponse(200, profile);
 
@@ -74,20 +77,45 @@ const findUserEmailByUsername = async (username) => {
   }
 };
 
-const buildOwnProfile = (userId, attributes, userResult) => {
+const buildOwnProfile = async (userId, attributes, userResult, tenantId) => {
+  let brandData = {};
+  if (tenantId) {
+    try {
+      const tenantResult = await ddb.send(new GetItemCommand({
+        TableName: process.env.TABLE_NAME,
+        Key: marshall({
+          pk: tenantId,
+          sk: 'tenant'
+        })
+      }));
+
+      if (tenantResult.Item) {
+        const tenant = unmarshall(tenantResult.Item);
+        brandData = {
+          brandId: tenantId,
+          brandName: tenant.brandName || null,
+          website: tenant.website || null,
+          industry: tenant.industry || null,
+          brandDescription: tenant.brandDescription || null,
+          brandLogo: tenant.brandLogo || null,
+          tags: tenant.tags || null,
+          lastUpdated: tenant.updatedAt || null,
+        };
+      } else if (tenantId) {
+        // User has tenantId but no tenant record exists
+        brandData = { brandId: tenantId };
+      }
+    } catch (error) {
+      console.error('Error fetching tenant data:', error);
+      // Fallback to just the brandId if tenant fetch fails
+      brandData = tenantId ? { brandId: tenantId } : {};
+    }
+  }
+
   return {
     userId,
     ...(attributes.email && { email: attributes.email }),
-    brand: {
-      ...(attributes['custom:tenant_id'] && { brandId: attributes['custom:tenant_id'] }), // brandId is the tenantId
-      ...(attributes['custom:brand_name'] && { brandName: attributes['custom:brand_name'] }),
-      ...(attributes.website && { website: attributes.website }),
-      ...(attributes['custom:industry'] && { industry: attributes['custom:industry'] }),
-      ...(attributes['custom:brand_description'] && { brandDescription: attributes['custom:brand_description'] }),
-      ...(attributes['custom:brand_logo'] && { brandLogo: attributes['custom:brand_logo'] }),
-      ...(parseTagsArray(attributes['custom:brand_tags']) && { tags: parseTagsArray(attributes['custom:brand_tags']) }),
-      ...(attributes['custom:brand_updated_at'] && { lastUpdated: attributes['custom:brand_updated_at'] }),
-    },
+    brand: brandData,
     profile: {
       ...(attributes.given_name && { firstName: attributes.given_name }),
       ...(attributes.family_name && { lastName: attributes.family_name }),
@@ -103,17 +131,45 @@ const buildOwnProfile = (userId, attributes, userResult) => {
 };
 
 
-const buildPublicProfile = (attributes) => {
+const buildPublicProfile = async (attributes) => {
+  // Get brand data from DynamoDB if user has a tenantId
+  let brandData = {};
+  const tenantId = attributes['custom:tenant_id'];
+
+  if (tenantId) {
+    try {
+      const tenantResult = await ddb.send(new GetItemCommand({
+        TableName: process.env.TABLE_NAME,
+        Key: marshall({
+          pk: tenantId,
+          sk: 'tenant'
+        })
+      }));
+
+      if (tenantResult.Item) {
+        const tenant = unmarshall(tenantResult.Item);
+        brandData = {
+          brandId: tenantId,
+          brandName: tenant.brandName || null,
+          website: tenant.website || null,
+          industry: tenant.industry || null,
+          brandDescription: tenant.brandDescription || null,
+          brandLogo: tenant.brandLogo || null,
+          tags: tenant.tags || null,
+        };
+      } else if (tenantId) {
+        // User has tenantId but no tenant record exists
+        brandData = { brandId: tenantId };
+      }
+    } catch (error) {
+      console.error('Error fetching tenant data for public profile:', error);
+      // Fallback to just the brandId if tenant fetch fails
+      brandData = tenantId ? { brandId: tenantId } : {};
+    }
+  }
+
   return {
-    brand: {
-      ...(attributes['custom:tenant_id'] && { brandId: attributes['custom:tenant_id'] }), // brandId is the tenantId
-      ...(attributes['custom:brand_name'] && { brandName: attributes['custom:brand_name'] }),
-      ...(attributes.website && { website: attributes.website }),
-      ...(attributes['custom:industry'] && { industry: attributes['custom:industry'] }),
-      ...(attributes['custom:brand_description'] && { brandDescription: attributes['custom:brand_description'] }),
-      ...(attributes['custom:brand_logo'] && { brandLogo: attributes['custom:brand_logo'] }),
-      ...(parseTagsArray(attributes['custom:brand_tags']) && { tags: parseTagsArray(attributes['custom:brand_tags']) }),
-    },
+    brand: brandData,
     ...(attributes.given_name && { firstName: attributes.given_name }),
     ...(attributes.family_name && { lastName: attributes.family_name }),
     ...(parseLinksArray(attributes['custom:profile_links']) && { links: parseLinksArray(attributes['custom:profile_links']) })

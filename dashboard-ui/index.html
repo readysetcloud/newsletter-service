@@ -8,10 +8,9 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
-    <link rel="manifest" href="/site.webmanifest">
 
     <!-- Viewport and responsive design -->
-    <meta name="viewport" content="width=device-width, initia0, maximum-scale=5.0, user-scalable=yes" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes" />
 
     <!-- SEO and meta information -->
     <title>Newsletter Admin Dashboard</title>
@@ -35,18 +34,17 @@
 
     <!-- Security headers -->
     <meta http-equiv="X-Content-Type-Options" content="nosniff" />
-    <meta http-equiv="X-Frame-Options" content="DENY" />
     <meta http-equiv="X-XSS-Protection" content="1; mode=block" />
     <meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin" />
 
     <!-- Content Security Policy -->
     <meta http-equiv="Content-Security-Policy" content="
       default-src 'self';
-      script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cognito-idp.*.amazonaws.com;
+      script-src 'self' 'unsafe-inline' 'unsafe-eval';
       style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
       font-src 'self' https://fonts.gstatic.com;
       img-src 'self' data: https: blob:;
-      connect-src 'self' https://*.amazonaws.com https://*.execute-api.*.amazonaws.com wss://*.amazonaws.com;
+      connect-src 'self' https://*.amazonaws.com https://*.momentohq.com;
       frame-src 'none';
       object-src 'none';
       base-uri 'self';
@@ -138,7 +136,8 @@
     <!-- Main application script -->
     <script type="module" src="/src/main.tsx"></script>
 
-    <!-- Service worker registration for PWA capabilities -->
+    <!-- Service worker registration disabled until sw.js is created -->
+    <!--
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
@@ -152,6 +151,7 @@
         });
       }
     </script>
+    -->
 
     <!-- Error boundary fallback -->
     <noscript>

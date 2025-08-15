@@ -87,6 +87,7 @@ const generateUploadUrl = async (tenantId, body) => {
     Bucket: process.env.HOSTING_BUCKET_NAME,
     Key: key,
     ContentType: contentType,
+    ACL: 'public-read', // Make the uploaded file publicly readable
     ContentLengthRange: [1, 2 * 1024 * 1024], // 1 byte to 2MB
     Metadata: {
       tenantId: tenantId,

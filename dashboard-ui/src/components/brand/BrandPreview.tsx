@@ -14,7 +14,7 @@ export const BrandPreview: React.FC<BrandPreviewProps> = ({
   previewPhoto,
   className
 }) => {
-  const displayLogo = previewPhoto || brand.brandLogo;
+  const displayLogo = previewPhoto || brand.brandLogo || brand.brandPhoto;
 
   return (
     <Card className={className}>

@@ -94,24 +94,16 @@ export function extractMomentoTokenFromJWT(jwtToken: string): MomentoTokenInfo |
     // Check if token is expired
     const isExpired = expiresAt ? new Date(expiresAt) <= new Date() : false;
 
-    // Basic token format validation (should be a JWT-like string)
-    const isValidFormat = typeof momentoToken === 'string' &&
-                         momentoToken.split('.').length === 3;
-
     const tokenInfo: MomentoTokenInfo = {
       token: momentoToken,
       cacheName: cacheName,
       expiresAt: expiresAt || '',
-      isValid: isValidFormat && !isExpired,
+      isValid: !isExpired,
       isExpired: isExpired
     };
 
     if (isExpired) {
       console.warn('Momento token has expired:', expiresAt);
-    }
-
-    if (!isValidFormat) {
-      console.warn('Momento token has invalid format');
     }
 
     return tokenInfo;
@@ -211,11 +203,6 @@ export function validateMomentoTokenInfo(tokenInfo: MomentoTokenInfo | null): {
 
   if (!tokenInfo.isValid) {
     errors.push('Momento token format is invalid');
-  }
-
-  // Additional validation for token format
-  if (tokenInfo.token && tokenInfo.token.split('.').length !== 3) {
-    errors.push('Momento token does not have valid JWT format');
   }
 
   return {

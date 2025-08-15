@@ -156,12 +156,12 @@ export const ApiKeyCreatedModal: React.FC<ApiKeyCreatedModalProps> = ({
                 <p className="text-gray-900">
                   {apiKey.expiresAt
                     ? new Date(apiKey.expiresAt).toLocaleDateString('en-US', {
-                        year: 'numeric',
-                        month: 'long',
-                        day: 'numeric',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })
+                      year: 'numeric',
+                      month: 'long',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })
                     : 'Never'
                   }
                 </p>
@@ -174,10 +174,10 @@ export const ApiKeyCreatedModal: React.FC<ApiKeyCreatedModalProps> = ({
             <h4 className="text-sm font-medium text-blue-900 mb-2">
               How to use this API key
             </h4>
-            <div className="text-sm text-blue-800 space-y-2">
+            <div className="text-sm text-blue-800 space-y-2 text-wrap">
               <p>Include this API key in your requests using the Authorization header:</p>
-              <code className="block bg-blue-100 px-3 py-2 rounded text-xs font-mono">
-                Authorization: Bearer {apiKey.keyValue}
+              <code className="block bg-blue-100 px-3 py-2 rounded text-xs font-mono text-wrap">
+                Authorization: {apiKey.keyValue}
               </code>
               <p className="text-xs">
                 Keep this key secure and never expose it in client-side code or public repositories.
@@ -189,7 +189,7 @@ export const ApiKeyCreatedModal: React.FC<ApiKeyCreatedModalProps> = ({
 
       <ModalFooter>
         <Button onClick={handleClose} className="w-full">
-          I've Saved the API Key
+          I've saved the API key
         </Button>
       </ModalFooter>
     </Modal>

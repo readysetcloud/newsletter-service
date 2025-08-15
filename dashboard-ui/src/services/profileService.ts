@@ -57,8 +57,8 @@ export class ProfileService {
   /**
    * Confirm brand photo upload after successful S3 upload
    */
-  async confirmBrandPhotoUpload(photoUrl: string): Promise<ApiResponse<{ message: string }>> {
-    return apiClient.put<{ message: string }>('/brand/logo', { photoUrl });
+  async confirmBrandPhotoUpload(key: string): Promise<ApiResponse<{ message: string }>> {
+    return apiClient.put<{ message: string }>('/brand/logo', { key });
   }
 
   /**
@@ -79,7 +79,7 @@ export class ProfileService {
         };
       }
 
-      const { uploadUrl, publicUrl } = uploadUrlResponse.data;
+      const { uploadUrl, publicUrl, key } = uploadUrlResponse.data;
 
       // Step 2: Upload file to S3
       const uploadResponse = await fetch(uploadUrl, {
@@ -97,8 +97,8 @@ export class ProfileService {
         };
       }
 
-      // Step 3: Confirm upload
-      const confirmResponse = await this.confirmBrandPhotoUpload(publicUrl);
+      // Step 3: Confirm upload with the S3 key
+      const confirmResponse = await this.confirmBrandPhotoUpload(key);
 
       if (!confirmResponse.success) {
         return {

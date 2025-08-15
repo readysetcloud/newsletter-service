@@ -44,7 +44,7 @@ describe('SocialLinksManager', () => {
         {
           platform: 'twitter',
           url: 'https://twitter.com/user',
-          displayName: '',
+          name: '',
         },
       ]);
     });

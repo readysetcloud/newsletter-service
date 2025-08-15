@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { PhotoIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { Button } from '../ui/Button';
 import { cn } from '../../utils/cn';
@@ -21,7 +21,13 @@ export const BrandPhotoUpload: React.FC<BrandPhotoUploadProps> = ({
   className
 }) => {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [isCurrentPhotoRemoved, setIsCurrentPhotoRemoved] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Reset removal state when currentPhoto changes
+  useEffect(() => {
+    setIsCurrentPhotoRemoved(false);
+  }, [currentPhoto]);
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -40,6 +46,7 @@ export const BrandPhotoUpload: React.FC<BrandPhotoUploadProps> = ({
     // Create preview URL
     const url = URL.createObjectURL(file);
     setPreviewUrl(url);
+    setIsCurrentPhotoRemoved(false); // Reset removal state when new file is selected
     onPhotoChange(file);
   };
 
@@ -48,6 +55,8 @@ export const BrandPhotoUpload: React.FC<BrandPhotoUploadProps> = ({
       URL.revokeObjectURL(previewUrl);
       setPreviewUrl(null);
     }
+    // Mark current photo as removed
+    setIsCurrentPhotoRemoved(true);
     onPhotoRemove();
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -64,11 +73,12 @@ export const BrandPhotoUpload: React.FC<BrandPhotoUploadProps> = ({
     if (file && file.type.startsWith('image/')) {
       const url = URL.createObjectURL(file);
       setPreviewUrl(url);
+      setIsCurrentPhotoRemoved(false); // Reset removal state when new file is dropped
       onPhotoChange(file);
     }
   };
 
-  const displayImage = previewUrl || currentPhoto;
+  const displayImage = previewUrl || (isCurrentPhotoRemoved ? null : currentPhoto);
 
   return (
     <div className={cn('w-full', className)}>
@@ -88,7 +98,7 @@ export const BrandPhotoUpload: React.FC<BrandPhotoUploadProps> = ({
               type="button"
               onClick={handleRemovePhoto}
               disabled={isUploading}
-              className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 hover:bg-red-600 disabled:opacity-50"
+              className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 hover:bg-red-600 disabled:opacity-50 z-10 shadow-lg"
             >
               <XMarkIcon className="h-4 w-4" />
             </button>

@@ -13,7 +13,7 @@ const mockInitialData: PersonalInfo = {
   firstName: 'John',
   lastName: 'Doe',
   links: [
-    { platform: 'twitter', url: 'https://twitter.com/johndoe', displayName: 'John Doe' }
+    { platform: 'twitter', url: 'https://twitter.com/johndoe', name: 'John Doe' }
   ]
 };
 

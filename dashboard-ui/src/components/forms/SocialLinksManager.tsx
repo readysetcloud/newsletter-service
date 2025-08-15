@@ -4,11 +4,9 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { PlusIcon, TrashIcon } from '@heroicons/react/24/outline';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { Select } from '@/components/ui/Select';
 import { Card } from '@/components/ui/Card';
 import {
-  socialLinkSchema,
-  socialPlatformOptions
+  socialLinkSchema
 } from '@/schemas/profileSchema';
 import type { SocialLink } from '@/types/api';
 import { z } from 'zod';
@@ -36,7 +34,7 @@ export function SocialLinksManager({ initialLinks = [], onUpdate, isLoading = fa
   } = useForm<SocialLinksFormData>({
     resolver: zodResolver(socialLinksArraySchema),
     defaultValues: {
-      links: initialLinks.length > 0 ? initialLinks : [{ platform: '', url: '', displayName: '' }]
+      links: initialLinks.length > 0 ? initialLinks : [{ url: '', name: '' }]
     }
   });
 
@@ -48,8 +46,7 @@ export function SocialLinksManager({ initialLinks = [], onUpdate, isLoading = fa
   const handleFormSubmit = async (data: SocialLinksFormData) => {
     setIsSubmitting(true);
     try {
-      // Filter out empty links
-      const validLinks = data.links.filter(link => link.platform && link.url);
+      const validLinks = data.links.filter(link => link.url && link.name);
       await onUpdate(validLinks);
     } catch (error) {
       console.error('Failed to update social links:', error);
@@ -59,7 +56,7 @@ export function SocialLinksManager({ initialLinks = [], onUpdate, isLoading = fa
   };
 
   const addNewLink = () => {
-    append({ platform: '', url: '', displayName: '' });
+    append({ url: '', name: '' });
   };
 
   const removeLink = (index: number) => {
@@ -94,18 +91,7 @@ export function SocialLinksManager({ initialLinks = [], onUpdate, isLoading = fa
               )}
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div>
-                <Select
-                  label="Platform"
-                  {...register(`links.${index}.platform`)}
-                  error={errors.links?.[index]?.platform?.message}
-                  disabled={isLoading || isSubmitting}
-                  options={socialPlatformOptions}
-                  placeholder="Select platform"
-                />
-              </div>
-
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
                 <Input
                   label="URL"
@@ -119,11 +105,11 @@ export function SocialLinksManager({ initialLinks = [], onUpdate, isLoading = fa
 
               <div>
                 <Input
-                  label="Display Name (Optional)"
-                  {...register(`links.${index}.displayName`)}
-                  error={errors.links?.[index]?.displayName?.message}
+                  label="Display Name"
+                  {...register(`links.${index}.name`)}
+                  error={errors.links?.[index]?.name?.message}
                   disabled={isLoading || isSubmitting}
-                  placeholder="Custom display name"
+                  placeholder="My Website"
                 />
               </div>
             </div>

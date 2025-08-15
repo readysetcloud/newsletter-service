@@ -15,6 +15,7 @@ interface NotificationContextType {
   removeNotification: (notificationId: string) => void;
   clearAllNotifications: () => void;
   isSubscribed: boolean;
+  refreshNotificationToken: () => Promise<boolean>;
 }
 
 // Notification State
@@ -180,7 +181,7 @@ export function NotificationProvider({ children }: NotificationProviderProps) {
     dispatch({ type: 'ADD_NOTIFICATION', payload: notification });
   }, []);
 
-  // Subscribe to notifications when user is authenticated
+  // Subscribe to notifications when user is authenticated (non-blocking)
   useEffect(() => {
     const subscribeToNotifications = async () => {
       if (!isAuthenticated || !user?.userId || !user?.tenantId) {
@@ -220,9 +221,11 @@ export function NotificationProvider({ children }: NotificationProviderProps) {
         console.error('Failed to subscribe to notifications:', error);
         dispatch({ type: 'SET_ERROR', payload: 'Failed to connect to notifications' });
         dispatch({ type: 'SET_SUBSCRIBED', payload: false });
+        dispatch({ type: 'SET_LOADING', payload: false }); // Don't block UI on notification failure
       }
     };
 
+    // Don't block the UI - run subscription in background
     subscribeToNotifications();
 
     // Cleanup on unmount or when user changes
@@ -233,7 +236,7 @@ export function NotificationProvider({ children }: NotificationProviderProps) {
         dispatch({ type: 'SET_SUBSCRIBED', payload: false });
       }
     };
-  }, [isAuthenticated, user?.userId, user?.tenantId, handleIncomingNotification]);
+  }, [isAuthenticated, user?.userId, user?.tenantId]);
 
   // Context value functions
   const addNotification = useCallback((notification: Omit<Notification, 'id' | 'timestamp' | 'read'>) => {
@@ -262,6 +265,23 @@ export function NotificationProvider({ children }: NotificationProviderProps) {
     dispatch({ type: 'CLEAR_ALL_NOTIFICATIONS' });
   }, []);
 
+  const refreshNotificationToken = useCallback(async () => {
+    if (!isAuthenticated || !user?.userId || !user?.tenantId) {
+      return false;
+    }
+
+    try {
+      await notificationService.refreshMomentoToken();
+      dispatch({ type: 'SET_SUBSCRIBED', payload: true });
+      dispatch({ type: 'SET_ERROR', payload: null });
+      return true;
+    } catch (error) {
+      console.error('Failed to refresh notification token:', error);
+      dispatch({ type: 'SET_ERROR', payload: 'Failed to refresh notifications' });
+      return false;
+    }
+  }, [isAuthenticated, user?.userId, user?.tenantId]);
+
   const contextValue: NotificationContextType = {
     notifications: state.notifications,
     unreadCount: state.unreadCount,
@@ -273,6 +293,7 @@ export function NotificationProvider({ children }: NotificationProviderProps) {
     markAllAsRead,
     removeNotification,
     clearAllNotifications,
+    refreshNotificationToken,
   };
 
   return (

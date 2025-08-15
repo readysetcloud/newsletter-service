@@ -31,7 +31,7 @@
                 "Headers": {
                   "Content-Type": "application/x-www-form-urlencoded"
                 },
-                "RequestBody": "{% 'email=' & $.userId & '&name=' & $.brandData.company & '&description=Newsletter tenant: ' & $.tenantId & '&metadata[tenant_id]=' & $.tenantId & '&metadata[subdomain]=' & $.subdomain %}",
+                "RequestBody": "{% 'email=' & $.userId & '&name=' & $.tenantId & '&description=Newsletter tenant' %}",
                 "Authentication": {
                   "ConnectionArn": "${StripeConnectionArn}"
                 }
@@ -43,7 +43,7 @@
                   ],
                   "IntervalSeconds": 2,
                   "MaxAttempts": 2,
-                  "BackoffRate": 2.0
+                  "BackoffRate": 2
                 },
                 {
                   "ErrorEquals": [
@@ -51,7 +51,7 @@
                   ],
                   "IntervalSeconds": 5,
                   "MaxAttempts": 3,
-                  "BackoffRate": 2.0
+                  "BackoffRate": 2
                 }
               ],
               "ResultPath": "$.stripeCustomer",
@@ -77,7 +77,7 @@
                   ],
                   "IntervalSeconds": 1,
                   "MaxAttempts": 1,
-                  "BackoffRate": 1.0
+                  "BackoffRate": 1
                 },
                 {
                   "ErrorEquals": [
@@ -85,7 +85,7 @@
                   ],
                   "IntervalSeconds": 2,
                   "MaxAttempts": 3,
-                  "BackoffRate": 2.0
+                  "BackoffRate": 2
                 }
               ],
               "ResultPath": "$.sesContactList",
@@ -160,7 +160,7 @@
             "S": "tenant"
           }
         },
-        "UpdateExpression": "SET #status = :status, #list = :listName, subscribers = :subscribers, billing = :billing, createdAt = if_not_exists(createdAt, :createdAt), lastUpdated = :lastUpdated",
+        "UpdateExpression": "SET #status = :status, #list = :listName, billing = :billing, lastUpdated = :lastUpdated",
         "ExpressionAttributeNames": {
           "#status": "status",
           "#list": "list"
@@ -171,9 +171,6 @@
           },
           ":listName": {
             "S": "{% $.tenantId %}"
-          },
-          ":subscribers": {
-            "N": "0"
           },
           ":billing": {
             "M": {
@@ -187,9 +184,6 @@
                 "S": "{% $now() %}"
               }
             }
-          },
-          ":createdAt": {
-            "S": "{% $now() %}"
           },
           ":lastUpdated": {
             "S": "{% $now() %}"

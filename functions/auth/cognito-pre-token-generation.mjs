@@ -7,7 +7,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { nonBlockingMomentoClient } from '../utils/non-blocking-momento.mjs';
+import { momentoClient } from '../utils/momento-client.mjs';
 import { createMetricsContext } from '../utils/cloudwatch-metrics.mjs';
 import { createLogger } from '../utils/structured-logger.mjs';
 
@@ -71,7 +71,7 @@ const generateMomentoReadOnlyToken = async (tenantId, userId, logger) => {
         return null;
     }
 
-    if (!nonBlockingMomentoClient.isAvailable()) {
+    if (!momentoClient.isAvailable()) {
         logger.warn('Momento not available - MOMENTO_API_KEY not configured', {
             tenantId,
             userId
@@ -82,18 +82,21 @@ const generateMomentoReadOnlyToken = async (tenantId, userId, logger) => {
     const startTime = Date.now();
 
     try {
+        const ttlHours = parseInt(process.env.TTL_HOURS || '24', 10);
 
         logger.momentoTokenGeneration('start', {
             tenantId,
-            userId
+            userId,
+            ttlHours
         });
 
-        const token = await nonBlockingMomentoClient.generateReadOnlyToken(tenantId, userId, 3000); // 3 second timeout
+        const token = await momentoClient.generateReadOnlyToken(tenantId, userId, ttlHours);
         const duration = Date.now() - startTime;
 
         logger.momentoTokenGeneration('success', {
             tenantId,
             userId,
+            ttlHours,
             tokenLength: token?.length || 0,
             durationMs: duration
         });
@@ -161,14 +164,16 @@ const enrichClaims = (event, momentoToken, logger) => {
     // Add Momento token to custom claims if available
     if (momentoToken) {
         claims['custom:momento_token'] = momentoToken;
-        claims['custom:momento_cache'] = nonBlockingMomentoClient.getCacheName();
+        claims['custom:momento_cache'] = momentoClient.getCacheName();
 
-        const expirationTime = new Date(Date.now() + (60 * 60 * 1000));
+        // Calculate expiration time based on TTL
+        const ttlHours = parseInt(process.env.TTL_HOURS || '24', 10);
+        const expirationTime = new Date(Date.now() + (ttlHours * 60 * 60 * 1000));
         claims['custom:momento_expires'] = expirationTime.toISOString();
 
         logger.info('Added Momento claims to JWT', {
             userName: event.userName,
-            cacheName: nonBlockingMomentoClient.getCacheName(),
+            cacheName: momentoClient.getCacheName(),
             expiresAt: expirationTime.toISOString(),
             tokenLength: momentoToken.length
         });

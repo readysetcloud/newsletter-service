@@ -97,6 +97,29 @@ export function RealTimeNotificationHandler() {
     }
   }, [showSuccess, showInfo, showWarning, showError]);
 
+  // Show connection status notifications
+  useEffect(() => {
+    if (user && isSubscribed) {
+      showSuccess(
+        'Real-time Updates Connected',
+        'You will now receive live notifications about your newsletter activity.',
+        undefined
+      );
+    }
+  }, [isSubscribed, user, showSuccess]);
+
+  // Show connection error notifications
+  useEffect(() => {
+    if (error && user) {
+      showError(
+        'Notification Connection Failed',
+        'Real-time notifications are temporarily unavailable. You may need to refresh the page.',
+        undefined
+      );
+    }
+  }, [error, user, showError]);
+
+  // This component doesn't render anything visible
   return null;
 }
 

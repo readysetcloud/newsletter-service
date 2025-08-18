@@ -70,106 +70,106 @@ Globals:
       AllowOrigin: "'https://www.readysetcloud.io'"
 
 Resources:
-  NewsletterUserPool:
-    Type: AWS::Cognito::UserPool
-    Properties:
-      UserPoolName: !Sub "${AWS::StackName}-admin-users"
-      UsernameAttributes:
-        - email
-      AutoVerifiedAttributes:
-        - email
-      Policies:
-        PasswordPolicy:
-          MinimumLength: 8
-          RequireUppercase: true
-          RequireLowercase: true
-          RequireNumbers: true
-          RequireSymbols: false
-      Schema:
-        - Name: email
-          AttributeDataType: String
-          Required: true
-          Mutable: true
-        - Name: tenant_id
-          AttributeDataType: String
-          Required: false
-          Mutable: true
-        - Name: role
-          AttributeDataType: String
-          Required: false
-          Mutable: true
+  # NewsletterUserPool:
+  #   Type: AWS::Cognito::UserPool
+  #   Properties:
+  #     UserPoolName: !Sub "${AWS::StackName}-admin-users"
+  #     UsernameAttributes:
+  #       - email
+  #     AutoVerifiedAttributes:
+  #       - email
+  #     Policies:
+  #       PasswordPolicy:
+  #         MinimumLength: 8
+  #         RequireUppercase: true
+  #         RequireLowercase: true
+  #         RequireNumbers: true
+  #         RequireSymbols: false
+  #     Schema:
+  #       - Name: email
+  #         AttributeDataType: String
+  #         Required: true
+  #         Mutable: true
+  #       - Name: tenant_id
+  #         AttributeDataType: String
+  #         Required: false
+  #         Mutable: true
+  #       - Name: role
+  #         AttributeDataType: String
+  #         Required: false
+  #         Mutable: true
 
-  NewsletterUserPoolClient:
-    Type: AWS::Cognito::UserPoolClient
-    Properties:
-      UserPoolId: !Ref NewsletterUserPool
-      ClientName: !Sub "${AWS::StackName}-admin-client"
-      AllowedOAuthFlows:
-        - code
-      AllowedOAuthScopes:
-        - email
-        - openid
-        - profile
-      ExplicitAuthFlows:
-        - ALLOW_ADMIN_USER_PASSWORD_AUTH
-        - ALLOW_USER_PASSWORD_AUTH
-        - ALLOW_USER_SRP_AUTH
-        - ALLOW_REFRESH_TOKEN_AUTH
-      TokenValidityUnits:
-        AccessToken: hours
-        IdToken: hours
-        RefreshToken: days
-      AccessTokenValidity: 24
-      IdTokenValidity: 24
-      RefreshTokenValidity: 30
-      AllowedOAuthFlowsUserPoolClient: true
-      CallbackURLs:
-        - http://localhost:3000
-        - http://localhost:3000/oauth2/idpresponse
-      LogoutURLs:
-        - http://localhost:3000/logout
+  # NewsletterUserPoolClient:
+  #   Type: AWS::Cognito::UserPoolClient
+  #   Properties:
+  #     UserPoolId: !Ref NewsletterUserPool
+  #     ClientName: !Sub "${AWS::StackName}-admin-client"
+  #     AllowedOAuthFlows:
+  #       - code
+  #     AllowedOAuthScopes:
+  #       - email
+  #       - openid
+  #       - profile
+  #     ExplicitAuthFlows:
+  #       - ALLOW_ADMIN_USER_PASSWORD_AUTH
+  #       - ALLOW_USER_PASSWORD_AUTH
+  #       - ALLOW_USER_SRP_AUTH
+  #       - ALLOW_REFRESH_TOKEN_AUTH
+  #     TokenValidityUnits:
+  #       AccessToken: hours
+  #       IdToken: hours
+  #       RefreshToken: days
+  #     AccessTokenValidity: 24
+  #     IdTokenValidity: 24
+  #     RefreshTokenValidity: 30
+  #     AllowedOAuthFlowsUserPoolClient: true
+  #     CallbackURLs:
+  #       - http://localhost:3000
+  #       - http://localhost:3000/oauth2/idpresponse
+  #     LogoutURLs:
+  #       - http://localhost:3000/logout
 
-  NewsletterIdentityPool:
-    Type: AWS::Cognito::IdentityPool
-    Properties:
-      IdentityPoolName: !Sub "${AWS::StackName}-identity-pool"
-      AllowUnauthenticatedIdentities: false
-      CognitoIdentityProviders:
-        - ClientId: !Ref NewsletterUserPoolClient
-          ProviderName: !GetAtt NewsletterUserPool.ProviderName
+  # NewsletterIdentityPool:
+  #   Type: AWS::Cognito::IdentityPool
+  #   Properties:
+  #     IdentityPoolName: !Sub "${AWS::StackName}-identity-pool"
+  #     AllowUnauthenticatedIdentities: false
+  #     CognitoIdentityProviders:
+  #       - ClientId: !Ref NewsletterUserPoolClient
+  #         ProviderName: !GetAtt NewsletterUserPool.ProviderName
 
-  # IAM roles for authenticated users
-  CognitoAuthenticatedRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Federated: cognito-identity.amazonaws.com
-            Action: sts:AssumeRoleWithWebIdentity
-            Condition:
-              StringEquals:
-                "cognito-identity.amazonaws.com:aud": !Ref NewsletterIdentityPool
-              "ForAnyValue:StringLike":
-                "cognito-identity.amazonaws.com:amr": authenticated
-      Policies:
-        - PolicyName: CognitoAuthenticatedPolicy
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - execute-api:Invoke
-                Resource: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${NewsletterApi}/*"
+  # # IAM roles for authenticated users
+  # CognitoAuthenticatedRole:
+  #   Type: AWS::IAM::Role
+  #   Properties:
+  #     AssumeRolePolicyDocument:
+  #       Version: "2012-10-17"
+  #       Statement:
+  #         - Effect: Allow
+  #           Principal:
+  #             Federated: cognito-identity.amazonaws.com
+  #           Action: sts:AssumeRoleWithWebIdentity
+  #           Condition:
+  #             StringEquals:
+  #               "cognito-identity.amazonaws.com:aud": !Ref NewsletterIdentityPool
+  #             "ForAnyValue:StringLike":
+  #               "cognito-identity.amazonaws.com:amr": authenticated
+  #     Policies:
+  #       - PolicyName: CognitoAuthenticatedPolicy
+  #         PolicyDocument:
+  #           Version: "2012-10-17"
+  #           Statement:
+  #             - Effect: Allow
+  #               Action:
+  #                 - execute-api:Invoke
+  #               Resource: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${NewsletterApi}/*"
 
-  IdentityPoolRoleAttachment:
-    Type: AWS::Cognito::IdentityPoolRoleAttachment
-    Properties:
-      IdentityPoolId: !Ref NewsletterIdentityPool
-      Roles:
-        authenticated: !GetAtt CognitoAuthenticatedRole.Arn
+  # IdentityPoolRoleAttachment:
+  #   Type: AWS::Cognito::IdentityPoolRoleAttachment
+  #   Properties:
+  #     IdentityPoolId: !Ref NewsletterIdentityPool
+  #     Roles:
+  #       authenticated: !GetAtt CognitoAuthenticatedRole.Arn
 
   NewsletterApi:
     Type: AWS::Serverless::Api
@@ -193,11 +193,11 @@ Resources:
     Properties:
       TracingEnabled: true
       StageName: api
-      Auth:
-        DefaultAuthorizer: CognitoAuthorizer
-        Authorizers:
-          CognitoAuthorizer:
-            UserPoolArn: !GetAtt NewsletterUserPool.Arn
+      # Auth:
+      #   DefaultAuthorizer: CognitoAuthorizer
+      #   Authorizers:
+      #     CognitoAuthorizer:
+      #       UserPoolArn: !GetAtt NewsletterUserPool.Arn
       MethodSettings:
         - MetricsEnabled: True
           ResourcePath: "/*"
@@ -701,18 +701,18 @@ Resources:
       Handler: admin/manage-user.handler
       Policies:
         - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - cognito-idp:AdminCreateUser
-                - cognito-idp:AdminGetUser
-                - cognito-idp:AdminUpdateUserAttributes
-                - cognito-idp:AdminSetUserAttributes
-              Resource: !GetAtt NewsletterUserPool.Arn
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref NewsletterUserPool
+      #   - Version: 2012-10-17
+      #     Statement:
+      #       - Effect: Allow
+      #         Action:
+      #           - cognito-idp:AdminCreateUser
+      #           - cognito-idp:AdminGetUser
+      #           - cognito-idp:AdminUpdateUserAttributes
+      #           - cognito-idp:AdminSetUserAttributes
+      #         Resource: !GetAtt NewsletterUserPool.Arn
+      # Environment:
+      #   Variables:
+      #     USER_POOL_ID: !Ref NewsletterUserPool
       Events:
         FromApi:
           Type: Api
@@ -1793,17 +1793,17 @@ Outputs:
     Export:
       Name: !Sub "${AWS::StackName}-ApiUrl"
 
-  UserPoolId:
-    Description: "Cognito User Pool ID for admin authentication"
-    Value: !Ref NewsletterUserPool
-    Export:
-      Name: !Sub "${AWS::StackName}-UserPoolId"
+  # UserPoolId:
+  #   Description: "Cognito User Pool ID for admin authentication"
+  #   Value: !Ref NewsletterUserPool
+  #   Export:
+  #     Name: !Sub "${AWS::StackName}-UserPoolId"
 
-  UserPoolClientId:
-    Description: "Cognito User Pool Client ID for admin authentication"
-    Value: !Ref NewsletterUserPoolClient
-    Export:
-      Name: !Sub "${AWS::StackName}-UserPoolClientId"
+  # UserPoolClientId:
+  #   Description: "Cognito User Pool Client ID for admin authentication"
+  #   Value: !Ref NewsletterUserPoolClient
+  #   Export:
+  #     Name: !Sub "${AWS::StackName}-UserPoolClientId"
 
   CloudFrontDistributionUrl:
     Description: "CloudFront distribution URL for subdomain routing"
@@ -1817,11 +1817,11 @@ Outputs:
     Export:
       Name: !Sub "${AWS::StackName}-HostingBucket"
 
-  IdentityPoolId:
-    Description: "Cognito Identity Pool ID"
-    Value: !Ref NewsletterIdentityPool
-    Export:
-      Name: !Sub "${AWS::StackName}-IdentityPoolId"
+  # IdentityPoolId:
+  #   Description: "Cognito Identity Pool ID"
+  #   Value: !Ref NewsletterIdentityPool
+  #   Export:
+  #     Name: !Sub "${AWS::StackName}-IdentityPoolId"
 
   Region:
     Description: "AWS Region"

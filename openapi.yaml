@@ -43,7 +43,7 @@ paths:
         httpMethod: POST
         type: aws_proxy
       security:
-        - CognitoUserPool: []
+        # - CognitoUserPool: []
 
   /users:
     post:
@@ -82,7 +82,7 @@ paths:
         httpMethod: POST
         type: aws_proxy
       security:
-        - CognitoUserPool: []
+        # - CognitoUserPool: []
 
 components:
   parameters:
@@ -170,12 +170,12 @@ components:
                 type: string
                 description: Unknown error message
                 example: An unexpected error occurred.
-  securitySchemes:
-    CognitoUserPool:
-      type: apiKey
-      name: Authorization
-      in: header
-      x-amazon-apigateway-authorizer:
-        type: cognito_user_pools
-        providerARNs:
-          - Fn::Sub: arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${NewsletterUserPool}
+  # securitySchemes:
+  #   CognitoUserPool:
+  #     type: apiKey
+  #     name: Authorization
+  #     in: header
+  #     x-amazon-apigateway-authorizer:
+  #       type: cognito_user_pools
+  #       providerARNs:
+  #         - Fn::Sub: arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${NewsletterUserPool}

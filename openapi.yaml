@@ -42,8 +42,8 @@ paths:
           Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetDashboardDataFunction.Arn}/invocations
         httpMethod: POST
         type: aws_proxy
-      security:
-        - CognitoUserPool: []
+      # security:
+        # - CognitoUserPool: []
 
   /users:
     post:
@@ -81,8 +81,8 @@ paths:
           Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ManageUserFunction.Arn}/invocations
         httpMethod: POST
         type: aws_proxy
-      security:
-        - CognitoUserPool: []
+      # security:
+        # - CognitoUserPool: []
 
 components:
   parameters:
@@ -170,12 +170,12 @@ components:
                 type: string
                 description: Unknown error message
                 example: An unexpected error occurred.
-  securitySchemes:
-    CognitoUserPool:
-      type: apiKey
-      name: Authorization
-      in: header
-      x-amazon-apigateway-authorizer:
-        type: cognito_user_pools
-        providerARNs:
-          - Fn::Sub: arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${NewsletterUserPool}
+  # securitySchemes:
+  #   CognitoUserPool:
+  #     type: apiKey
+  #     name: Authorization
+  #     in: header
+  #     x-amazon-apigateway-authorizer:
+  #       type: cognito_user_pools
+  #       providerARNs:
+  #         - Fn::Sub: arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${NewsletterUserPool}

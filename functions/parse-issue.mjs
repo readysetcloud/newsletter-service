@@ -34,10 +34,11 @@ export const handler = async (state) => {
       ...(author && { author })
     },
     ...(sponsor && { sponsor }),
-    content: {}
+    content: {},
+    ...state.votingOptions && { votingOptions: state.votingOptions }
   };
 
-  const tipOfTheWeekIndex = sections.findIndex(ps => ps.header.toLowerCase() === 'tip of the week');
+  const tipOfTheWeekIndex = sections.findIndex(ps => ps.header.toLowerCase().includes('tip of the week'));
   if (tipOfTheWeekIndex >= 0) {
     let tipOfTheWeek = sections[tipOfTheWeekIndex];
     tipOfTheWeek = processTipOfTheWeek(tipOfTheWeek);
@@ -45,7 +46,7 @@ export const handler = async (state) => {
     dataTemplate.content.tipOfTheWeek = tipOfTheWeek;
   }
 
-  const lastWordsIndex = sections.findIndex(ps => ps.header.toLowerCase() === 'last words');
+  const lastWordsIndex = sections.findIndex(ps => ps.header.toLowerCase().includes('last words'));
   if (lastWordsIndex >= 0) {
     let lastWords = sections[lastWordsIndex];
     sections.splice(lastWordsIndex, 1);
@@ -62,6 +63,16 @@ export const handler = async (state) => {
   });
 
   newsletterDate.setHours(14);
+  if (!newsletter.data.voting_options && Array.isArray(state.votingOptions) && state.votingOptions.every(vo => vo.id && vo.description)) {
+    newsletter.data.voting_options = state.votingOptions;
+    if (!newsletter.content.includes('{{<vote>}}')) {
+      const lastWordsIndex = newsletter.content.toLowerCase().indexOf('### last words');
+      if (lastWordsIndex >= 0) {
+        newsletter.content = newsletter.content.substring(0, lastWordsIndex) + '{{<vote>}}\n\n' + newsletter.content.substring(lastWordsIndex);
+      }
+    }
+  }
+
   if (!state.isPreview) {
     await updateSourceWithRedirects(state.fileName, newsletter.content, newsletter.data);
   }
@@ -72,9 +83,12 @@ export const handler = async (state) => {
   const reportStatsDate = new Date(newsletterDate);
   reportStatsDate.setDate(reportStatsDate.getDate() + 5);
 
+  const now = new Date();
+  const sendAtDate = newsletterDate < now ? 'now' : newsletterDate.toISOString();
+
   return {
     data: dataTemplate,
-    sendAtDate: newsletterDate.toISOString(),
+    sendAtDate,
     getTopStatsDate: topStatsDate.toISOString().split('.')[0],
     reportStatsDate: reportStatsDate.toISOString().split('.')[0],
     subject: `Serverless Picks of the Week #${dataTemplate.metadata.number} - ${dataTemplate.metadata.title}`
@@ -99,13 +113,14 @@ const processSection = (section, sponsor) => {
 };
 
 const processTipOfTheWeek = (section) => {
-  const tweets = section.raw.matchAll(/\{\{<tweet user="([a-zA-Z0-9_-]*)" id="([\d]*)">\}\}/g);
-  for (const tweet of tweets) {
-    let text = section.raw.replace(tweet[0], '').trim();
+  const socials = section.raw.matchAll(/\{\{<\s*social\s+url="([^"]+)"(?:\s+[^>]*)?>\}\}/g);
+
+  for (const social of socials) {
+    let text = section.raw.replace(social[0], '').trim();
     text = convertToHtml(text, true);
 
-    const tweetUrl = `https://twitter.com/${tweet[1]}/status/${tweet[2]}`;
-    return { text, url: tweetUrl };
+    const socialUrl = social[1];
+    return { text, url: socialUrl };
   }
 };
 

@@ -1,0 +1,906 @@
+{
+  "info": {
+    "name": "Newsletter Admin API",
+    "description": "Comprehensive API testing collection for Newsletter Admin UI covering authentication, profile management, brand management, API keys, and dashboard endpoints.",
+    "schema": "https://schema.getpostman.comlection/v2.1.0/collection.json",
+    "version": "1.0.0"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{jwt_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "{{api_url}}",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Authentication",
+      "description": "Authentication flows and token management",
+      "item": [
+        {
+          "name": "Get JWT Token (Manual)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// This is a manual step - use the login script to get a JWT token",
+                  "// Run: node scripts/login.mjs",
+                  "// Copy the Bearer token and set it in the jwt_token environment variable",
+                  "",
+                  "pm.test('JWT Token should be set', function () {",
+                  "    pm.expect(pm.environment.get('jwt_token')).to.not.be.empty;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/me",
+              "host": ["{{base_url}}"],
+              "path": ["me"]
+            },
+            "description": "Test endpoint to verify JWT token is working. Use scripts/login.mjs to get a valid JWT token first."
+          },
+          "response": []
+        },
+        {
+          "name": "Test API Key Authentication",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has user profile', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('userId');",
+                  "    pm.expect(jsonData).to.have.property('email');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{api_key}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/me",
+              "host": ["{{base_url}}"],
+              "path": ["me"]
+            },
+            "description": "Test API key authentication. Set api_key environment variable with a valid API key."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Profile Management",
+      "description": "User profile and personal information management",
+      "item": [
+        {
+          "name": "Get Complete Profile",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has complete profile structure', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('userId');",
+                  "    pm.expect(jsonData).to.have.property('email');",
+                  "    pm.expect(jsonData).to.have.property('brand');",
+                  "    pm.expect(jsonData).to.have.property('profile');",
+                  "    pm.expect(jsonData).to.have.property('preferences');",
+                  "    pm.expect(jsonData).to.have.property('lastModified');",
+                  "});",
+                  "",
+                  "// Store user data for other tests",
+                  "const jsonData = pm.response.json();",
+                  "pm.environment.set('user_id', jsonData.userId);",
+                  "pm.environment.set('user_email', jsonData.email);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/me",
+              "host": ["{{base_url}}"],
+              "path": ["me"]
+            },
+            "description": "Retrieve the authenticated user's complete profile including brand, personal details, and preferences."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Personal Profile",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response confirms profile update', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('message');",
+                  "    pm.expect(jsonData).to.have.property('profile');",
+                  "    pm.expect(jsonData.profile).to.have.property('updatedAt');",
+                  "});",
+                  "",
+                  "pm.test('Updated fields are reflected', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.profile.firstName).to.eql('John');",
+                  "    pm.expect(jsonData.profile.lastName).to.eql('Doe');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"John\",\n  \"lastName\": \"Doe\",\n  \"jobTitle\": \"Software Engineer\",\n  \"phoneNumber\": \"+1-555-0123\",\n  \"timezone\": \"America/New_York\",\n  \"locale\": \"en-US\",\n  \"links\": [\n    {\n      \"name\": \"LinkedIn\",\n      \"url\": \"https://linkedin.com/in/johndoe\"\n    },\n    {\n      \"name\": \"GitHub\",\n      \"url\": \"https://github.com/johndoe\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/me/profile",
+              "host": ["{{base_url}}"],
+              "path": ["me", "profile"]
+            },
+            "description": "Update the authenticated user's personal information and preferences."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Profile - Validation Error",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test('Response has validation error message', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('message');",
+                  "    pm.expect(jsonData.message).to.include('validation');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"\",\n  \"invalidField\": \"should not be allowed\",\n  \"links\": [\n    {\n      \"name\": \"LinkedIn\"\n      // Missing required url field\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/me/profile",
+              "host": ["{{base_url}}"],
+              "path": ["me", "profile"]
+            },
+            "description": "Test validation errors when updating profile with invalid data."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Brand Management",
+      "description": "Brand creation, configuration, and photo upload",
+      "item": [
+        {
+          "name": "Update Brand Details",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response confirms brand update', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('message');",
+                  "    pm.expect(jsonData).to.have.property('brand');",
+                  "    pm.expect(jsonData.brand).to.have.property('updatedAt');",
+                  "});",
+                  "",
+                  "pm.test('Updated brand fields are reflected', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.brand.brandName).to.eql('Acme Newsletter');",
+                  "    pm.expect(jsonData.brand.industry).to.eql('Technology');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"brandName\": \"Acme Newsletter\",\n  \"website\": \"https://acme-newsletter.com\",\n  \"industry\": \"Technology\",\n  \"brandDescription\": \"Weekly technology insights and industry trends for developers and tech leaders.\",\n  \"tags\": [\"technology\", \"software\", \"development\", \"trends\"]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/me/brand",
+              "host": ["{{base_url}}"],
+              "path": ["me", "brand"]
+            },
+            "description": "Update the authenticated user's brand and business information."
+          },
+          "response": []
+        },
+        {
+          "name": "Generate Brand Photo Upload URL",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has upload URL and metadata', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('uploadUrl');",
+                  "    pm.expect(jsonData).to.have.property('key');",
+                  "    pm.expect(jsonData).to.have.property('expiresIn');",
+                  "    pm.expect(jsonData).to.have.property('maxSize');",
+                  "    pm.expect(jsonData).to.have.property('publicUrl');",
+                  "});",
+                  "",
+                  "// Store upload details for confirmation step",
+                  "const jsonData = pm.response.json();",
+                  "pm.environment.set('upload_key', jsonData.key);",
+                  "pm.environment.set('upload_url', jsonData.uploadUrl);",
+                  "pm.environment.set('public_url', jsonData.publicUrl);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fileName\": \"brand-logo.png\",\n  \"contentType\": \"image/png\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/brand/logo",
+              "host": ["{{base_url}}"],
+              "path": ["brand", "logo"]
+            },
+            "description": "Generate a presigned URL for uploading a brand logo to S3."
+          },
+          "response": []
+        },
+        {
+          "name": "Confirm Brand Photo Upload",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response confirms photo upload', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('message');",
+                  "    pm.expect(jsonData).to.have.property('photoUrl');",
+                  "    pm.expect(jsonData).to.have.property('key');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"key\": \"{{upload_key}}\",\n  \"fileName\": \"brand-logo.png\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/brand/logo",
+              "host": ["{{base_url}}"],
+              "path": ["brand", "logo"]
+            },
+            "description": "Confirm that a brand logo has been successfully uploaded and update the tenant record. Run after uploading to the presigned URL."
+          },
+          "response": []
+        },
+        {
+          "name": "Brand Update - Validation Error",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test('Response has validation error message', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('message');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"website\": \"invalid-url\",\n  \"brandName\": \"\",\n  \"invalidField\": \"should not be allowed\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/me/brand",
+              "host": ["{{base_url}}"],
+              "path": ["me", "brand"]
+            },
+            "description": "Test validation errors when updating brand with invalid data."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "API Key Management",
+      "description": "Create, list, get, and delete API keys",
+      "item": [
+        {
+          "name": "Create API Key",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 201', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test('Response has API key details', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('message');",
+                  "    pm.expect(jsonData).to.have.property('apiKey');",
+                  "    pm.expect(jsonData.apiKey).to.have.property('keyId');",
+                  "    pm.expect(jsonData.apiKey).to.have.property('keyValue');",
+                  "    pm.expect(jsonData.apiKey).to.have.property('name');",
+                  "    pm.expect(jsonData.apiKey).to.have.property('createdAt');",
+                  "    pm.expect(jsonData.apiKey).to.have.property('status');",
+                  "});",
+                  "",
+                  "pm.test('API key value is visible (one-time only)', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.apiKey.keyValue).to.not.eql('***hidden***');",
+                  "    pm.expect(jsonData.apiKey.keyValue).to.match(/^ak_/);",
+                  "});",
+                  "",
+                  "// Store key details for other tests",
+                  "const jsonData = pm.response.json();",
+                  "pm.environment.set('test_key_id', jsonData.apiKey.keyId);",
+                  "pm.environment.set('test_api_key', jsonData.apiKey.keyValue);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Test API Key\",\n  \"description\": \"Created via Postman for testing purposes\",\n  \"expiresAt\": \"2024-12-31T23:59:59Z\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api-keys",
+              "host": ["{{base_url}}"],
+              "path": ["api-keys"]
+            },
+            "description": "Create a new API key for the authenticated user."
+          },
+          "response": []
+        },
+        {
+          "name": "List API Keys",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has API keys list', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('apiKeys');",
+                  "    pm.expect(jsonData).to.have.property('count');",
+                  "    pm.expect(jsonData.apiKeys).to.be.an('array');",
+                  "});",
+                  "",
+                  "pm.test('API key values are hidden in list', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    if (jsonData.apiKeys.length > 0) {",
+                  "        jsonData.apiKeys.forEach(key => {",
+                  "            pm.expect(key.keyValue).to.eql('***hidden***');",
+                  "            pm.expect(key).to.have.property('keyId');",
+                  "            pm.expect(key).to.have.property('name');",
+                  "            pm.expect(key).to.have.property('createdAt');",
+                  "            pm.expect(key).to.have.property('status');",
+                  "        });",
+                  "    }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api-keys",
+              "host": ["{{base_url}}"],
+              "path": ["api-keys"]
+            },
+            "description": "List all API keys for the authenticated user."
+          },
+          "response": []
+        },
+        {
+          "name": "Get API Key Details",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has API key details', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('apiKey');",
+                  "    pm.expect(jsonData.apiKey).to.have.property('keyId');",
+                  "    pm.expect(jsonData.apiKey).to.have.property('name');",
+                  "    pm.expect(jsonData.apiKey).to.have.property('keyValue');",
+                  "    pm.expect(jsonData.apiKey).to.have.property('createdAt');",
+                  "    pm.expect(jsonData.apiKey).to.have.property('status');",
+                  "});",
+                  "",
+                  "pm.test('API key value is hidden', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.apiKey.keyValue).to.eql('***hidden***');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api-keys/{{test_key_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api-keys", "{{test_key_id}}"]
+            },
+            "description": "Get details of a specific API key (without the key value)."
+          },
+          "response": []
+        },
+        {
+          "name": "Revoke API Key",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response confirms revocation', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('message');",
+                  "    pm.expect(jsonData).to.have.property('keyId');",
+                  "    pm.expect(jsonData).to.have.property('status');",
+                  "    pm.expect(jsonData).to.have.property('revokedAt');",
+                  "    pm.expect(jsonData.status).to.eql('revoked');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api-keys/{{test_key_id}}?revoke=true",
+              "host": ["{{base_url}}"],
+              "path": ["api-keys", "{{test_key_id}}"],
+              "query": [
+                {
+                  "key": "revoke",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "Revoke an API key (sets status to revoked but keeps the record)."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete API Key",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200 or 204', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 204]);",
+                  "});",
+                  "",
+                  "if (pm.response.code === 200) {",
+                  "    pm.test('Response confirms deletion', function () {",
+                  "        const jsonData = pm.response.json();",
+                  "        pm.expect(jsonData).to.have.property('message');",
+                  "        pm.expect(jsonData).to.have.property('keyId');",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api-keys/{{test_key_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api-keys", "{{test_key_id}}"]
+            },
+            "description": "Permanently delete an API key."
+          },
+          "response": []
+        },
+        {
+          "name": "Create API Key - Validation Error",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test('Response has validation error message', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('message');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"\",\n  \"expiresAt\": \"invalid-date\",\n  \"invalidField\": \"should not be allowed\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api-keys",
+              "host": ["{{base_url}}"],
+              "path": ["api-keys"]
+            },
+            "description": "Test validation errors when creating API key with invalid data."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Non-existent API Key",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test('Response has not found message', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('message');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api-keys/non-existent-key-id",
+              "host": ["{{base_url}}"],
+              "path": ["api-keys", "non-existent-key-id"]
+            },
+            "description": "Test 404 error when requesting a non-existent API key."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Dashboard",
+      "description": "Dashboard data and metrics",
+      "item": [
+        {
+          "name": "Get Dashboard Data",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has dashboard data structure', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    // The exact structure depends on the implementation",
+                  "    // but it should be a valid JSON object",
+                  "    pm.expect(jsonData).to.be.an('object');",
+                  "});",
+                  "",
+                  "pm.test('Response time is acceptable', function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/dashboard",
+              "host": ["{{base_url}}"],
+              "path": ["dashboard"]
+            },
+            "description": "Load summary data for the dashboard including metrics and recent activity."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Error Scenarios",
+      "description": "Test various error conditions and edge cases",
+      "item": [
+        {
+          "name": "Unauthorized Request (No Token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 401 or 403', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([401, 403]);",
+                  "});",
+                  "",
+                  "pm.test('Response has error message', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('message');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/me",
+              "host": ["{{base_url}}"],
+              "path": ["me"]
+            },
+            "description": "Test unauthorized access without authentication token."
+          },
+          "response": []
+        },
+        {
+          "name": "Invalid JWT Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 401 or 403', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([401, 403]);",
+                  "});",
+                  "",
+                  "pm.test('Response has error message', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('message');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "invalid.jwt.token",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/me",
+              "host": ["{{base_url}}"],
+              "path": ["me"]
+            },
+            "description": "Test authentication with an invalid JWT token."
+          },
+          "response": []
+        },
+        {
+          "name": "Invalid API Key",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 401 or 403', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([401, 403]);",
+                  "});",
+                  "",
+                  "pm.test('Response has error message', function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('message');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "invalid-api-key",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/me",
+              "host": ["{{base_url}}"],
+              "path": ["me"]
+            },
+            "description": "Test authentication with an invalid API key."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

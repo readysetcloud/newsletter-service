@@ -44,4 +44,5 @@ jobs:
           --resolve-s3 \
           --no-fail-on-empty-changeset \
           --capabilities CAPABILITY_IAM \
-          --parameter-overrides Environment=production SendGridDistributionListId=4e9ba0a2-7c0a-4946-93d9-7ece72d2d3aa
+          --parameter-overrides Environment=production EncryptionKey=${{secrets.ENCRYPTION_KEY}} MomentoCacheName=newsletter MomentoApiKey=${{secrets.MOMENTO_API_KEY}}
+

@@ -1,23 +1,37 @@
-AWSTemplateFormatVersion: '2010-09-09'
+AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 Description: >
   Newsletter service powering Serverless Picks of the Week
 
 Parameters:
-  SendGridDistributionListId:
-    Type: String
-  SendGridSenderId:
-    Type: String
-    Default: '4700440'
-  SendGridTemplateId:
-    Type: String
-    Default: d-b231d6ee5c2346e489b0cceb9a430582
-  SendGridTemplateVersionId:
-    Type: String
-    Default: cca59fb9-1507-4f2a-8df0-0b52b403a128
   Environment:
     Type: String
-    AllowedValues: [ sandbox, stage, production ]
+    AllowedValues: [sandbox, stage, production]
+  Origin:
+    Type: String
+    Default: "https://www.readysetcloud.io"
+  EncryptionKey:
+    Type: String
+    Description: Used to hash email addresses
+  HostedZoneId:
+    Type: String
+    Default: ""
+    Description: Route53 Hosted Zone ID for custom domain (optional)
+  DomainName:
+    Type: String
+    Default: ""
+    Description: Custom domain name (optional)
+  StripeApiKey:
+    Type: String
+    Default: "/stripe/api-key"
+    Description: SSM Parameter Store path for Stripe API key (secure string)
+  MomentoApiKey:
+    Type: String
+    Description: Super user API key for Momento
+  MomentoCacheName:
+    Type: String
+    Description: Momento cache name for real-time notifications
+
 
 Metadata:
   esbuild-properties: &esbuild-properties
@@ -32,18 +46,24 @@ Metadata:
     Banner:
       - js=import { createRequire } from 'module'; const require = createRequire(import.meta.url);
     External:
-      - '@aws-sdk/*'
+      - "@aws-sdk/*"
+    Loader:
+      - .hbs=text
 
 Conditions:
-  DeployProductionResources:
-    !Equals [!Ref Environment, 'production']
+  DeployProductionResources: !Equals [!Ref Environment, "production"]
   DeployStageResources:
     Fn::Not:
-      - !Equals [!Ref Environment, 'production']
+      - !Equals [!Ref Environment, "production"]
+  HasDomainName: !Not [!Equals [!Ref DomainName, ""]]
+  HasHostedZoneId: !Not [!Equals [!Ref HostedZoneId, ""]]
+  DeployCustomDomain: !And
+    - !Condition HasDomainName
+    - !Condition HasHostedZoneId
 
 Globals:
   Function:
-    Runtime: nodejs20.x
+    Runtime: nodejs22.x
     CodeUri: functions
     Architectures:
       - arm64
@@ -54,22 +74,214 @@ Globals:
       Variables:
         AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
         SECRET_ID: "{{resolve:ssm:/readysetcloud/secrets}}"
+        ORIGIN: !Ref Origin
+        MOMENTO_API_KEY: !Ref MomentoApiKey
+        MOMENTO_CACHE_NAME: !Ref MomentoCacheName
+        EVENT_BUS_NAME: newsletter-events
   Api:
     Cors:
-      AllowMethods: "'POST,OPTIONS'"
-      AllowHeaders: "'Content-Type'"
-      AllowOrigin: "'https://www.readysetcloud.io'"
+      AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+      AllowHeaders: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
+      AllowOrigin: !Sub "'${Origin}'"
 
 Resources:
+  NewsletterUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "${AWS::StackName}-admin-users"
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      UserAttributeUpdateSettings:
+        AttributesRequireVerificationBeforeUpdate:
+          - email
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          TemporaryPasswordValidityDays: 7
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+        - Name: given_name
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+        - Name: family_name
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+        - Name: tenant_id
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+        - Name: role
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+        - Name: profile_links
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+        - Name: profile_updated_at
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+
+  NewsletterUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref NewsletterUserPool
+      ClientName: !Sub "${AWS::StackName}-admin-client"
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - email
+        - openid
+        - profile
+      ExplicitAuthFlows:
+        - ALLOW_ADMIN_USER_PASSWORD_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_CUSTOM_AUTH
+        - ALLOW_USER_AUTH
+      AuthSessionValidity: 3
+      EnableTokenRevocation: true
+      PreventUserExistenceErrors: ENABLED
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+      AccessTokenValidity: 24
+      IdTokenValidity: 24
+      RefreshTokenValidity: 30
+      AllowedOAuthFlowsUserPoolClient: true
+      CallbackURLs:
+        - http://localhost:3000
+        - http://localhost:3000/oauth2/idpresponse
+      LogoutURLs:
+        - http://localhost:3000/logout
+      SupportedIdentityProviders:
+        - COGNITO
+
+  FreeTierGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: free-tier
+      UserPoolId: !Ref NewsletterUserPool
+      Description: Free tier users with basic newsletter features
+      Precedence: 3
+
+  CreatorTierGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: creator-tier
+      UserPoolId: !Ref NewsletterUserPool
+      Description: Creator tier users with enhanced newsletter features
+      Precedence: 2
+
+  ProTierGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: pro-tier
+      UserPoolId: !Ref NewsletterUserPool
+      Description: Pro tier users with premium newsletter features
+      Precedence: 1
+
+  NewsletterUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId: !Ref NewsletterUserPool
+      Domain: !Sub "${AWS::StackName}-auth-${AWS::AccountId}"
+
+  NewsletterIdentityPool:
+    Type: AWS::Cognito::IdentityPool
+    Properties:
+      IdentityPoolName: !Sub "${AWS::StackName}-identity-pool"
+      AllowUnauthenticatedIdentities: false
+      CognitoIdentityProviders:
+        - ClientId: !Ref NewsletterUserPoolClient
+          ProviderName: !GetAtt NewsletterUserPool.ProviderName
+
+  CognitoAuthenticatedRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: cognito-identity.amazonaws.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                "cognito-identity.amazonaws.com:aud": !Ref NewsletterIdentityPool
+              "ForAnyValue:StringLike":
+                "cognito-identity.amazonaws.com:amr": authenticated
+      Policies:
+        - PolicyName: CognitoAuthenticatedPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - execute-api:Invoke
+                Resource: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${NewsletterApi}/*"
+
+  IdentityPoolRoleAttachment:
+    Type: AWS::Cognito::IdentityPoolRoleAttachment
+    Properties:
+      IdentityPoolId: !Ref NewsletterIdentityPool
+      Roles:
+        authenticated: !GetAtt CognitoAuthenticatedRole.Arn
+
   NewsletterApi:
     Type: AWS::Serverless::Api
     Properties:
       TracingEnabled: true
-      StageName: v1
+      StageName: public
       MethodSettings:
         - MetricsEnabled: True
-          ResourcePath: '/*'
-          HttpMethod: '*'
+          ResourcePath: "/*"
+          HttpMethod: "*"
+          LoggingLevel: INFO
+          DataTraceEnabled: True
+      DefinitionBody:
+        Fn::Transform:
+          Name: AWS::Include
+          Parameters:
+            Location: ./publicapi.yaml
+
+  DashboardApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      TracingEnabled: true
+      StageName: api
+      Auth:
+        DefaultAuthorizer: LambdaAuthorizer
+        AddDefaultAuthorizerToCorsPreflight: false
+        Authorizers:
+          LambdaAuthorizer:
+            FunctionPayloadType: REQUEST
+            FunctionArn: !GetAtt LambdaAuthorizerFunction.Arn
+            Identity:
+              Headers:
+                - Authorization
+      MethodSettings:
+        - MetricsEnabled: True
+          ResourcePath: "/*"
+          HttpMethod: "*"
           LoggingLevel: ERROR
           DataTraceEnabled: True
       DefinitionBody:
@@ -105,11 +317,368 @@ Resources:
               KeyType: RANGE
           Projection:
             ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  NewsletterBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteRule
+            Status: Enabled
+            ExpirationInDays: 7
+      VersioningConfiguration:
+        Status: Enabled
+
+  HostingBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      VersioningConfiguration:
+        Status: Enabled
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - "*"
+            AllowedMethods:
+              - GET
+              - HEAD
+              - PUT
+              - POST
+            AllowedOrigins:
+              - "*"
+            MaxAge: 3600
+      LifecycleConfiguration:
+        Rules:
+          - Id: CleanupOrphanedBrandPhotos
+            Status: Enabled
+            Prefix: brand-photos/
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+            Transitions:
+              - StorageClass: STANDARD_IA
+                TransitionInDays: 30
+
+  TenantRoutingFunction:
+    Type: AWS::Lambda::Function
+    Condition: DeployCustomDomain
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-tenant-routing"
+      Handler: index.handler
+      Runtime: nodejs22.x
+      Role: !GetAtt LambdaEdgeRole.Arn
+      Code:
+        ZipFile: !Sub |
+          exports.handler = async (event) => {
+            const request = event.Records[0].cf.request;
+            const headers = request.headers;
+            const host = headers.host[0].value;
+            const uri = request.uri;
+
+            // Extract subdomain (everything before the first dot)
+            const hostParts = host.split('.');
+            const subdomain = hostParts.length > 2 ? hostParts[0] : null;
+            console.log('Processing request:', { host, uri, subdomain });
+            console.log('Original request URI:', uri);
+            if (subdomain && subdomain !== 'www') {
+              if (uri.startsWith('/api')) {
+                // Route to Newsletter API with subdomain as tenant
+                // Remove /api prefix and add tenant to path
+                const newUri = '/' + subdomain + uri.substring(4);
+                console.log('API routing - Original URI:', uri, 'New URI:', newUri);
+                request.uri = newUri;
+                request.origin = {
+                  custom: {
+                    domainName: '${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com',
+                    port: 443,
+                    protocol: 'https',
+                    path: '/public',
+                    sslProtocols: ['TLSv1.2'],
+                    readTimeout: 5,
+                    keepaliveTimeout: 5,
+                    customHeaders: {},
+                  }
+                };
+                request.headers['host'] = [{ key: 'host', value: '${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com'}];
+              } else {
+                // Route to S3 with subdomain as path prefix
+                const newUri = '/' + subdomain + uri;
+                console.log('S3 routing - Original URI:', uri, 'New URI:', newUri);
+                request.uri = newUri;
+                request.origin = {
+                  custom: {
+                    domainName: '${HostingBucket}.s3.${AWS::Region}.amazonaws.com',
+                    port: 443,
+                    protocol: 'https',
+                    path: '',
+                    sslProtocols: ['TLSv1.2'],
+                    readTimeout: 5,
+                    keepaliveTimeout: 5,
+                    customHeaders: {},
+                  }
+                };
+                request.headers['host'] = [{ key: 'host', value: '${HostingBucket}.s3.${AWS::Region}.amazonaws.com'}];
+              }
+            } else {
+              // Fallback to Dashboard API
+              request.origin = {
+                custom: {
+                  domainName: '${DashboardApi}.execute-api.${AWS::Region}.amazonaws.com',
+                  port: 443,
+                  protocol: 'https',
+                  path: '/api',
+                  sslProtocols: ['TLSv1.2'],
+                  readTimeout: 5,
+                  keepaliveTimeout: 5,
+                  customHeaders: {},
+                }
+              };
+              request.headers['host'] = [{ key: 'host', value: '${DashboardApi}.execute-api.${AWS::Region}.amazonaws.com'}];
+            }
+
+            console.log('Final request:', JSON.stringify(request, null, 2));
+            return request;
+          };
+
+  LambdaEdgeRole:
+    Type: AWS::IAM::Role
+    Condition: DeployCustomDomain
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - edgelambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  TenantRoutingFunctionVersion:
+    Type: AWS::Lambda::Version
+    Condition: DeployCustomDomain
+    Properties:
+      FunctionName: !Ref TenantRoutingFunction
+      Description: "Version with S3 as custom origin and enhanced logging - v9"
+
+  NewsletterDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "${AWS::StackName} Newsletter Distribution"
+        DefaultRootObject: index.html
+        Origins:
+          - Id: DashboardApiOrigin
+            DomainName: !Sub "${DashboardApi}.execute-api.${AWS::Region}.amazonaws.com"
+            OriginPath: /api
+            CustomOriginConfig:
+              HTTPPort: 443
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols:
+                - TLSv1.2
+          - Id: NewsletterApiOrigin
+            DomainName: !Sub "${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com"
+            OriginPath: /public
+            CustomOriginConfig:
+              HTTPPort: 443
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols:
+                - TLSv1.2
+          - Id: HostingBucketOrigin
+            DomainName: !Sub "${HostingBucket}.s3.${AWS::Region}.amazonaws.com"
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        DefaultCacheBehavior:
+          TargetOriginId: DashboardApiOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - DELETE
+            - GET
+            - HEAD
+            - OPTIONS
+            - PATCH
+            - POST
+            - PUT
+          CachedMethods:
+            - GET
+            - HEAD
+          ForwardedValues:
+            QueryString: true
+            Headers:
+              - Authorization
+              - Content-Type
+              - Accept
+            Cookies:
+              Forward: none
+          LambdaFunctionAssociations: !If
+            - DeployCustomDomain
+            - - EventType: origin-request
+                LambdaFunctionARN: !Ref TenantRoutingFunctionVersion
+            - !Ref "AWS::NoValue"
+          MinTTL: 0
+          DefaultTTL: 60
+          MaxTTL: 31536000
+        CacheBehaviors:
+          - PathPattern: "/api/*"
+            TargetOriginId: NewsletterApiOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - DELETE
+              - GET
+              - HEAD
+              - OPTIONS
+              - PATCH
+              - POST
+              - PUT
+            CachedMethods:
+              - GET
+              - HEAD
+            ForwardedValues:
+              QueryString: true
+              Headers:
+                - Authorization
+                - Content-Type
+                - Accept
+                - Host
+              Cookies:
+                Forward: none
+            LambdaFunctionAssociations: !If
+              - DeployCustomDomain
+              - - EventType: origin-request
+                  LambdaFunctionARN: !Ref TenantRoutingFunctionVersion
+              - !Ref "AWS::NoValue"
+            MinTTL: 0
+            DefaultTTL: 0
+            MaxTTL: 86400
+          - PathPattern: "/issues/*"
+            TargetOriginId: HostingBucketOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+            CachedMethods:
+              - GET
+              - HEAD
+            ForwardedValues:
+              QueryString: false
+              Headers:
+                - Host
+              Cookies:
+                Forward: none
+            LambdaFunctionAssociations: !If
+              - DeployCustomDomain
+              - - EventType: origin-request
+                  LambdaFunctionARN: !Ref TenantRoutingFunctionVersion
+              - !Ref "AWS::NoValue"
+            MinTTL: 0
+            DefaultTTL: 86400
+            MaxTTL: 31536000
+        PriceClass: PriceClass_100
+        ViewerCertificate: !If
+          - DeployCustomDomain
+          - AcmCertificateArn: !Ref SubdomainCertificate
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - CloudFrontDefaultCertificate: true
+        Aliases: !If
+          - DeployCustomDomain
+          - - !Sub "*.${DomainName}"
+          - !Ref "AWS::NoValue"
+
+  SubdomainCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Condition: DeployCustomDomain
+    Properties:
+      DomainName: !Sub "*.${DomainName}"
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Sub "*.${DomainName}"
+          HostedZoneId: !Ref HostedZoneId
+
+  Route53RecordSetIPV4:
+    Type: AWS::Route53::RecordSet
+    Condition: DeployCustomDomain
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub "*.${DomainName}"
+      Type: A
+      AliasTarget:
+        HostedZoneId: Z2FDTNDATAQYW2
+        DNSName: !GetAtt NewsletterDistribution.DomainName
+
+  Route53RecordSetIPV6:
+    Type: AWS::Route53::RecordSet
+    Condition: DeployCustomDomain
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub "*.${DomainName}"
+      Type: AAAA
+      AliasTarget:
+        HostedZoneId: Z2FDTNDATAQYW2
+        DNSName: !GetAtt NewsletterDistribution.DomainName
+
+  ConfigurationSet:
+    Type: AWS::SES::ConfigurationSet
+    Properties:
+      DeliveryOptions:
+        TlsPolicy: REQUIRE
+      ReputationOptions:
+        ReputationMetricsEnabled: true
+      SendingOptions:
+        SendingEnabled: true
+
+  ConfigurationSetDestination:
+    Type: AWS::SES::ConfigurationSetEventDestination
+    Properties:
+      ConfigurationSetName: !Ref ConfigurationSet
+      EventDestination:
+        Enabled: true
+        EventBridgeDestination:
+          EventBusArn: !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+        MatchingEventTypes:
+          - SEND
+          - REJECT
+          - BOUNCE
+          - COMPLAINT
+          - DELIVERY
 
   ScheduleGroup:
     Type: AWS::Scheduler::ScheduleGroup
     Properties:
       Name: newsletter
+
+  SchedulerExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EventBridgeAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: events:PutEvents
+                Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
 
   AddTenantFunction:
     Type: AWS::Serverless::Function
@@ -128,6 +697,9 @@ Resources:
             - Effect: Allow
               Action: dynamodb:PutItem
               Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action: ses:CreateContactList
+              Resource: "*"
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
@@ -141,6 +713,84 @@ Resources:
               detail-type:
                 - Add/Update Tenant
 
+  CognitoPostConfirmationFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - auth/cognito-post-confirmation.mjs
+    Properties:
+      Handler: auth/cognito-post-confirmation.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+      Events:
+        Cognito:
+          Type: Cognito
+          Properties:
+            Trigger: PostConfirmation
+            UserPool: !Ref NewsletterUserPool
+
+  CognitoPreTokenGenerationFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - auth/cognito-pre-token-generation.mjs
+    Properties:
+      Handler: auth/cognito-pre-token-generation.handler
+      Timeout: 10
+      Environment:
+        Variables:
+          TTL_HOURS: 24
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - cloudwatch:PutMetricData
+              Resource: "*"
+      Events:
+        Cognito:
+          Type: Cognito
+          Properties:
+            Trigger: PreTokenGeneration
+            UserPool: !Ref NewsletterUserPool
+
+  AddUserToGroupFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - admin/add-user-to-group.mjs
+    Properties:
+      Handler: admin/add-user-to-group.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: cognito-idp:AdminAddUserToGroup
+              Resource: !GetAtt NewsletterUserPool.Arn
+      Events:
+        UserConfirmedEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source: ["newsletter-service"]
+              detail-type: ["Add User to Group"]
+
   AddSubscriberFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -148,39 +798,717 @@ Resources:
       BuildProperties:
         <<: *esbuild-properties
         EntryPoints:
-          - add-subscriber.mjs
+          - subscribers/add-subscriber.mjs
     Properties:
-      Handler: add-subscriber.handler
+      Handler: subscribers/add-subscriber.handler
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
+              Action: ses:CreateContact
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          LIST_ID: !Ref SendGridDistributionListId
+          TABLE_NAME: !Ref NewsletterTable
+          ORIGIN: !Ref Origin
       Events:
         FromApi:
           Type: Api
           Properties:
             RestApiId: !Ref NewsletterApi
-            Path: /subscribers
+            Path: /{tenant}/subscribers
             Method: POST
+            Auth:
+              Authorizer: NONE
 
-  BuildReportEmailFunction:
+  GetDashboardDataFunction:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
         <<: *esbuild-properties
         EntryPoints:
-          - build-report-email.mjs
+          - get-dashboard-data.mjs
     Properties:
-      Handler: build-report-email.handler
+      Handler: get-dashboard-data.handler
       Policies:
         - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /dashboard
+            Method: GET
+
+  LambdaAuthorizerFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - auth/lambda-authorizer.mjs
+    Properties:
+      Handler: auth/lambda-authorizer.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref NewsletterUserPool
+          USER_POOL_CLIENT_ID: !Ref NewsletterUserPoolClient
+          TABLE_NAME: !Ref NewsletterTable
+
+  RefreshMomentoTokenFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - auth/refresh-momento-token.mjs
+    Properties:
+      Handler: auth/refresh-momento-token.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+      Environment:
+        Variables:
+          MOMENTO_API_KEY: !Ref MomentoApiKey
+          MOMENTO_CACHE_NAME: !Ref MomentoCacheName
+      Events:
+        RefreshToken:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /auth/refresh-momento-token
+            Method: POST
+
+  GetProfileFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - admin/get-profile.mjs
+    Properties:
+      Handler: admin/get-profile.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminGetUser
+                - cognito-idp:ListUsers
+              Resource: !GetAtt NewsletterUserPool.Arn
+            - Effect: Allow
+              Action: dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref NewsletterUserPool
+          TABLE_NAME: !Ref NewsletterTable
+      Events:
+        GetMyProfile:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /me
+            Method: GET
+        GetUserProfile:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /profiles/{userId}
+            Method: GET
+
+  CheckBrandIdFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - admin/check-brand-id.mjs
+    Properties:
+      Handler: admin/check-brand-id.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /brand/validate
+            Method: GET
+
+  UpdateBrandFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - admin/update-brand.mjs
+    Properties:
+      Handler: admin/update-brand.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminGetUser
+                - cognito-idp:AdminUpdateUserAttributes
+              Resource: !GetAtt NewsletterUserPool.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - events:PutEvents
+              Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref NewsletterUserPool
+          TABLE_NAME: !Ref NewsletterTable
+          HOSTING_BUCKET_NAME: !Ref HostingBucket
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /me/brand
+            Method: PUT
+
+  S3AssetCleanupFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - utils/s3-asset-cleanup.mjs
+    Properties:
+      Handler: utils/s3-asset-cleanup.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:DeleteObject
+              Resource: !Sub "${HostingBucket.Arn}/*"
+      Environment:
+        Variables:
+          HOSTING_BUCKET_NAME: !Ref HostingBucket
+      Events:
+        S3CleanupEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - newsletter-service
+              detail-type:
+                - S3 Asset Cleanup
+
+  SetupEmailTenantFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - setup-email-tenant.mjs
+    Properties:
+      Handler: setup-email-tenant.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - sesv2:CreateTenant
+                - sesv2:CreateContactList
+                - sesv2:TagResource
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+
+  UpdateProfileFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - admin/update-profile.mjs
+    Properties:
+      Handler: admin/update-profile.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminUpdateUserAttributes
+              Resource: !GetAtt NewsletterUserPool.Arn
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref NewsletterUserPool
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /me/profile
+            Method: PUT
+
+  ManageApiKeysFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - admin/manage-api-keys.mjs
+    Properties:
+      Handler: admin/manage-api-keys.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:Query
+                - dynamodb:DeleteItem
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          ORIGIN: !Ref Origin
+      Events:
+        CreateApiKey:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /api-keys
+            Method: POST
+        ListApiKeys:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /api-keys
+            Method: GET
+        GetApiKey:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /api-keys/{keyId}
+            Method: GET
+        DeleteApiKey:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /api-keys/{keyId}
+            Method: DELETE
+
+  UploadBrandPhotoFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - admin/upload-brand-photo.mjs
+    Properties:
+      Handler: admin/upload-brand-photo.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:PutObjectAcl
+                - s3:GetObject
+                - s3:GetObjectAttributes
+              Resource: !Sub "${HostingBucket.Arn}/*"
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          HOSTING_BUCKET_NAME: !Ref HostingBucket
+          TABLE_NAME: !Ref NewsletterTable
+          ORIGIN: !Ref Origin
+      Events:
+        GenerateUploadUrl:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /brand/logo
+            Method: POST
+        ConfirmUpload:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /brand/logo
+            Method: PUT
+
+  ImportSubscriberListFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - subscribers/import-subscriber-list.mjs
+    Properties:
+      Handler: subscribers/import-subscriber-list.handler
+      Timeout: 900
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - ses:CreateContact
+                - ses:ListContacts
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+
+  ExportSubscribersFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - subscribers/export-subscribers.mjs
+    Properties:
+      Handler: subscribers/export-subscribers.handler
+      Timeout: 300
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: ses:ListContacts
+              Resource: "*"
+            - Effect: Allow
+              Action: dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action: s3:PutObject
+              Resource: !Sub "${NewsletterBucket.Arn}/reports/*"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          BUCKET: !Ref NewsletterBucket
+
+  HandleEmailStatusFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - handle-email-status.mjs
+    Properties:
+      Handler: handle-email-status.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+      Events:
+        CreationEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - aws.ses
+              detail-type:
+                - Email Rejected
+                - Email Sent
+                - Email Delivered
+                - Email Bounced
+                - Email Complaint Received
+
+  CleanBouncedSubscribersFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - subscribers/clean-bounced-subscribers.mjs
+    Properties:
+      Handler: subscribers/clean-bounced-subscribers.handler
+      Timeout: 60
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - ses:DeleteContact
+                - ses:ListContacts
+              Resource: "*"
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+      Events:
+        CleanBouncedEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - newsletter-service
+              detail-type:
+                - Clean Bounced Subscribers
+
+  SetupVotingOptionsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - setup-voting-options.mjs
+    Properties:
+      Handler: setup-voting-options.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-pro-v1:0
+            - Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+
+  VoteFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - vote.mjs
+    Properties:
+      Handler: vote.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+                - dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          ORIGIN: !Ref Origin
+          EMAIL_ENCRYPTION_KEY: !Ref EncryptionKey
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /{tenant}/{slug}/votes
+            Method: POST
+            Auth:
+              Authorizer: NONE
+
+  OpenTrackingFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - open-tracking.mjs
+    Properties:
+      Handler: open-tracking.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          ORIGIN: !Ref Origin
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /{tenant}/{slug}/opens
+            Method: GET
+            Auth:
+              Authorizer: NONE
+
+  UnsubscribeFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - subscribers/unsubscribe.mjs
+    Properties:
+      Handler: subscribers/unsubscribe.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: ses:DeleteContact
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          ORIGIN: !Ref Origin
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /{tenant}/unsubscribe
+            Method: GET
+            Auth:
+              Authorizer: NONE
+
+  BuildReportDataFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - build-report-data.mjs
+    Properties:
+      Handler: build-report-data.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+
+  GetInsightsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - get-insights.mjs
+    Properties:
+      Handler: get-insights.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: dynamodb:Query
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}/index/GSI1
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-pro-v1:0
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
 
   GetNextIssueDateFunction:
     Type: AWS::Serverless::Function
@@ -218,14 +1546,58 @@ Resources:
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+              Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          LIST_ID: !Ref SendGridDistributionListId
-          SENDER_ID: !Ref SendGridSenderId
-          TEMPLATE_ID: !Ref SendGridTemplateId
-          VERSION_ID: !Ref SendGridTemplateVersionId
+          TABLE_NAME: !Ref NewsletterTable
+
+  SendEmailV2Function:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - send-email-v2.mjs
+    Properties:
+      Handler: send-email-v2.handler
+      Timeout: 900
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:ListContacts
+              Resource: "*"
+            - Effect: Allow
+              Action: scheduler:CreateSchedule
+              Resource: !Sub "arn:aws:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/newsletter/*"
+            - Effect: Allow
+              Action: iam:PassRole
+              Resource: !GetAtt SchedulerExecutionRole.Arn
+      Environment:
+        Variables:
+          FROM_EMAIL: allen@readysetcloud.io
+          SCHEDULER_ROLE_ARN: !GetAtt SchedulerExecutionRole.Arn
+          EMAIL_ENCRYPTION_KEY: !Ref EncryptionKey
+          CONFIGURATION_SET: !Ref ConfigurationSet
+      Events:
+        EmailEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - newsletter-service
+              detail-type:
+                - Send Email v2
 
   ParseIssueFunction:
     Type: AWS::Serverless::Function
@@ -252,8 +1624,8 @@ Resources:
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          OWNER: '{{resolve:ssm:/readysetcloud/github-owner}}'
-          REPO: '{{resolve:ssm:/readysetcloud/github-repo}}'
+          OWNER: "{{resolve:ssm:/readysetcloud/github-owner}}"
+          REPO: "{{resolve:ssm:/readysetcloud/github-repo}}"
           TABLE_NAME: !Ref NewsletterTable
 
   SyncRepoDataFunction:
@@ -284,8 +1656,8 @@ Resources:
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
-          OWNER: '{{resolve:ssm:/readysetcloud/github-owner}}'
-          REPO: '{{resolve:ssm:/readysetcloud/github-repo}}'
+          OWNER: "{{resolve:ssm:/readysetcloud/github-owner}}"
+          REPO: "{{resolve:ssm:/readysetcloud/github-repo}}"
       Events:
         AmplifyBuildSuccessful:
           Type: EventBridgeRule
@@ -297,7 +1669,7 @@ Resources:
                 - Amplify Deployment Status Change
               detail:
                 appId:
-                  - '{{resolve:ssm:/readysetcloud/amplify-app-id}}'
+                  - "{{resolve:ssm:/readysetcloud/amplify-app-id}}"
                 jobStatus:
                   - SUCCEED
 
@@ -367,32 +1739,36 @@ Resources:
       DefinitionUri: state-machines/report-stats.asl.json
       DefinitionSubstitutions:
         DynamodbQuery: !Sub arn:${AWS::Partition}:states:::aws-sdk:dynamodb:query
+        DynamodbGetItem: !Sub arn:${AWS::Partition}:states:::dynamodb:getItem
         TableName: !Ref NewsletterTable
         LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
         SendApiRequest: "{{resolve:ssm:/readysetcloud/send-api-request}}"
         GetTopLinks: !GetAtt GetTopLinkFunction.Arn
-        BuildReportEmail: !GetAtt BuildReportEmailFunction.Arn
+        BuildReportData: !GetAtt BuildReportDataFunction.Arn
+        GetInsights: !GetAtt GetInsightsFunction.Arn
         DynamodbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
-        AdminEmail: '{{resolve:ssm:/readysetcloud/admin-email}}'
-        ListId: !Ref SendGridDistributionListId
+        AdminEmail: "{{resolve:ssm:/readysetcloud/admin-email}}"
+
       Policies:
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
               Action:
-                - dynamodb:putItem
-                - dynamodb:query
+                - dynamodb:PutItem
+                - dynamodb:Query
+                - dynamodb:GetItem
               Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}
             - Effect: Allow
-              Action: dynamodb:query
+              Action: dynamodb:Query
               Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}/index/GSI1
             - Effect: Allow
               Action: lambda:InvokeFunction
               Resource:
                 - "{{resolve:ssm:/readysetcloud/send-api-request}}"
                 - !GetAtt GetTopLinkFunction.Arn
-                - !GetAtt BuildReportEmailFunction.Arn
+                - !GetAtt BuildReportDataFunction.Arn
+                - !GetAtt GetInsightsFunction.Arn
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
@@ -408,7 +1784,7 @@ Resources:
         GetNextIssueDate: !GetAtt GetNextIssueDateFunction.Arn
         DynamodbGetItem: !Sub arn:${AWS::Partition}:states:::dynamodb:getItem
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
-        AdminEmail: '{{resolve:ssm:/readysetcloud/admin-email}}'
+        AdminEmail: "{{resolve:ssm:/readysetcloud/admin-email}}"
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -439,7 +1815,7 @@ Resources:
         LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
         ParseIssue: !GetAtt ParseIssueFunction.Arn
         StageIssue: !GetAtt StageIssueFunction.Arn
-        DynamoDbUpdateItem: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
+        DynamodbUpdateItem: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
         SendApiRequest: "{{resolve:ssm:/readysetcloud/send-api-request}}"
         SfnStartExecution: !Sub arn:${AWS::Partition}:states:::states:startExecution.sync:2
@@ -451,6 +1827,8 @@ Resources:
         PublishTopContentRole: !GetAtt PublishTopContentRole.Arn
         ReportStatsStateMachine: !Ref ReportStatsStateMachine
         ReportStatsRole: !GetAtt ReportStatsRole.Arn
+        SetupVotingOptions: !GetAtt SetupVotingOptionsFunction.Arn
+        CleanupListRole: !GetAtt SchedulerExecutionRole.Arn
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -468,6 +1846,7 @@ Resources:
                 - "{{resolve:ssm:/readysetcloud/send-api-request}}"
                 - !GetAtt GetMarkdownLinksFunction.Arn
                 - !GetAtt UpdateLinksWithRedirectsFunction.Arn
+                - !GetAtt SetupVotingOptionsFunction.Arn
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
@@ -481,9 +1860,9 @@ Resources:
               Resource: !Sub arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${AddRedirectStateMachine.Name}:*
             - Effect: Allow
               Action:
-              - events:PutTargets
-              - events:PutRule
-              - events:DescribeRule
+                - events:PutTargets
+                - events:PutRule
+                - events:DescribeRule
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule
             - Effect: Allow
               Action: scheduler:CreateSchedule
@@ -495,6 +1874,33 @@ Resources:
               Resource:
                 - !GetAtt PublishTopContentRole.Arn
                 - !GetAtt ReportStatsRole.Arn
+                - !GetAtt SchedulerExecutionRole.Arn
+
+  CalculateClicksStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      DefinitionUri: state-machines/calculate-clicks.asl.json
+      DefinitionSubstitutions:
+        DynamoDbUpdate: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
+        TableName: !Ref NewsletterTable
+        CloudWatchStartQuery: !Sub arn:${AWS::Partition}:states:::aws-sdk:cloudwatchlogs:startQuery
+        LogGroupArn: !GetAtt RedirectLogGroup.Arn
+        RedirectLogs: !Ref RedirectLogGroup
+        HandleLogBatch: !GetAtt HandleLogBatchFunction.Arn
+        LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: logs:StartQuery
+              Resource: !GetAtt RedirectLogGroup.Arn
+            - Effect: Allow
+              Action: dynamodb:UpdateItem
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !GetAtt HandleLogBatchFunction.Arn
 
   RedirectKeyValueStore:
     Type: AWS::CloudFront::KeyValueStore
@@ -570,26 +1976,59 @@ Resources:
 
         async function handler(event) {
             const request = event.request;
-            const headers = request.headers;
             const pieces = request.uri.split('/');
             const key = pieces[pieces.length - 1];
+            let foundRedirect = true;
             let value = "https://readysetcloud.io";
             try {
                 value = await kvsHandle.get(key);
-                console.log(JSON.stringify({key, value}));
             } catch (err) {
-                console.log(`Kvs key lookup failed.`);
+                console.log("Kvs key lookup failed: " + key);
+                foundRedirect = false;
             }
+
+            const logData = { key: key, value: value };
+
+            const queryString = buildQueryString(request.querystring);
+            if('ref' in request.querystring){
+              const refQuery = request.querystring['ref'];
+              const refValue = refQuery.multiValue ?  refQuery.multiValue.map(function(q) { return q.value; }).join(',') : refQuery.value;
+              logData.ref = refValue;
+            }
+
+            if(foundRedirect){
+                console.log(JSON.stringify(logData));
+            }
+            value = value + (queryString ? "?" + queryString : '');
 
             const response = {
                 statusCode: 302,
                 statusDescription: 'Found',
-                headers:
-                    { "location": { "value": value } }
-                }
+                headers: { "location": { "value": value } }
+            };
 
             return response;
+        }
 
+        function buildQueryString(querystring) {
+            const params = [];
+
+            for (const param in querystring) {
+                const query = querystring[param];
+                const multiValue = query.multiValue;
+
+                if (multiValue) {
+                    multiValue.forEach(function(item) {
+                        params.push(param + "=" + encodeURIComponent(item.value));
+                    });
+                } else if (query.value === '') {
+                    params.push(encodeURIComponent(param));
+                } else {
+                    params.push(param + "=" + encodeURIComponent(query.value));
+                }
+            }
+
+            return params.join('&');
         }
       FunctionConfig:
         KeyValueStoreAssociations:
@@ -683,32 +2122,31 @@ Resources:
       RetentionInDays: 3
       LogGroupName: /aws/cloudfront/function/newsletter-redirect
 
-  HandleLogSubscriptionFunction:
+  HandleLogBatchFunction:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
         <<: *esbuild-properties
         EntryPoints:
-          - handle-log-subscription.mjs
+          - handle-log-batch.mjs
     Properties:
-      Handler: handle-log-subscription.handler
+      Handler: handle-log-batch.handler
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: dynamodb:updateItem
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:PutItem
               Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}
+            - Effect: Allow
+              Action: logs:GetQueryResults
+              Resource: "*"
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
-      Events:
-        Logs:
-          Type: CloudWatchLogs
-          Properties:
-            LogGroupName: /aws/cloudfront/function/newsletter-redirect
-            FilterPattern: '{$.key = *}'
 
   GetMarkdownLinksFunction:
     Type: AWS::Serverless::Function
@@ -760,11 +2198,6 @@ Resources:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
 
-  PublishTopContentStateMachineLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      RetentionInDays: 3
-
   PublishTopContentRole:
     Type: AWS::IAM::Role
     Properties:
@@ -789,38 +2222,34 @@ Resources:
     Type: AWS::Serverless::StateMachine
     Properties:
       DefinitionUri: state-machines/publish-top-content.asl.json
-      Tracing:
-        Enabled: true
-      Logging:
-        Level: ALL
-        IncludeExecutionData: True
-        Destinations:
-          - CloudWatchLogsLogGroup:
-              LogGroupArn: !GetAtt PublishTopContentStateMachineLogGroup.Arn
       DefinitionSubstitutions:
+        StepFunctionsStartExecution: !Sub arn:${AWS::Partition}:states:::states:startExecution.sync:2
+        CalculateClicks: !GetAtt CalculateClicksStateMachine.Arn
         LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
         GetTopLinks: !GetAtt GetTopLinkFunction.Arn
         PutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
       Policies:
         - Statement:
             - Effect: Allow
-              Action:
-                - logs:CreateLogDelivery
-                - logs:GetLogDelivery
-                - logs:UpdateLogDelivery
-                - logs:DeleteLogDelivery
-                - logs:ListLogDeliveries
-                - logs:PutResourcePolicy
-                - logs:DescribeResourcePolicies
-                - logs:DescribeLogGroups
-              Resource: "*"
-            - Effect: Allow
               Action: lambda:InvokeFunction
               Resource: !GetAtt GetTopLinkFunction.Arn
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
-      Type: EXPRESS
+            - Effect: Allow
+              Action: states:StartExecution
+              Resource: !GetAtt CalculateClicksStateMachine.Arn
+            - Effect: Allow
+              Action:
+                - states:DescribeExecution
+                - states:StopExecution
+              Resource: !Sub arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${CalculateClicksStateMachine.Name}:*
+            - Effect: Allow
+              Action:
+                - events:PutTargets
+                - events:PutRule
+                - events:DescribeRule
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule
 
   APIGatewayCloudWatchRole:
     Type: AWS::IAM::Role
@@ -840,3 +2269,96 @@ Resources:
     Type: AWS::ApiGateway::Account
     Properties:
       CloudWatchRoleArn: !GetAtt APIGatewayCloudWatchRole.Arn
+
+  TenantFinalizationStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: state-machines/tenant-finalization.asl.json
+      DefinitionSubstitutions:
+        StripeConnectionArn: !GetAtt StripeConnection.Arn
+        TableName: !Ref NewsletterTable
+        HTTPInvoke: !Sub arn:${AWS::Partition}:states:::http:invoke
+        SetupEmailTenantFunction: !GetAtt SetupEmailTenantFunction.Arn
+        DynamoDbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
+        DynamoDbUpdateItem: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
+        EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:PutItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+            - Effect: Allow
+              Action: states:InvokeHTTPEndpoint
+              Resource: "*"
+            - Effect: Allow
+              Action: events:RetrieveConnectionCredentials
+              Resource: !GetAtt StripeConnection.Arn
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+                - secretsmanager:DescribeSecret
+              Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:events!connection/*
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !GetAtt SetupEmailTenantFunction.Arn
+      Events:
+        TenantFinalizedEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source: ["newsletter.tenant"]
+              detail-type: ["Tenant Finalized"]
+
+  StripeConnection:
+    Type: AWS::Events::Connection
+    Properties:
+      Description: EventBridge connection to Stripe API for secure API key storage
+      AuthorizationType: API_KEY
+      AuthParameters:
+        ApiKeyAuthParameters:
+          ApiKeyName: Authorization
+          ApiKeyValue: !Sub StripeApiKey
+
+  NewsletterEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: newsletter-events
+      Description: Custom EventBridge bus for newsletter notification events
+
+Outputs:
+  NewsletterApiUrl:
+    Description: "API Gateway endpoint URL for Newsletter service"
+    Value: !Sub "https://${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com/public"
+
+  UserPoolId:
+    Description: "Cognito User Pool ID for admin authentication"
+    Value: !Ref NewsletterUserPool
+
+  UserPoolClientId:
+    Description: "Cognito User Pool Client ID for admin authentication"
+    Value: !Ref NewsletterUserPoolClient
+
+  UserPoolDomainUrl:
+    Description: "Cognito User Pool Domain URL for hosted UI and passwordless authentication"
+    Value: !Sub "https://${NewsletterUserPoolDomain}.auth.${AWS::Region}.amazoncognito.com"
+
+  IdentityPoolId:
+    Description: "Cognito Identity Pool ID"
+    Value: !Ref NewsletterIdentityPool
+
+  CloudFrontDistributionUrl:
+    Description: "CloudFront distribution URL for subdomain routing"
+    Value: !Sub "https://${NewsletterDistribution.DomainName}"
+
+  HostingBucketName:
+    Description: "S3 bucket name for hosting static content"
+    Value: !Ref HostingBucket
+
+  StripeConnectionArn:
+    Description: "EventBridge connection ARN for Stripe API integration"
+    Value: !GetAtt StripeConnection.Arn

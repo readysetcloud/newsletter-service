@@ -1,0 +1,122 @@
+{
+  "QueryLanguage": "JSONata",
+  "Comment": "Gets the click count through cloudwatch insights for the redirects",
+  "StartAt": "Has start time?",
+  "States": {
+    "Has start time?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Next": "Start query",
+          "Condition": "{% $exists($states.context.Execution.Input.startTime) %}",
+          "Assign": {
+            "start": "{% $floor($toMillis($states.context.Execution.Input.startTime) / 1000) %}"
+          }
+        }
+      ],
+      "Default": "Get last run"
+    },
+    "Get last run": {
+      "Type": "Task",
+      "Arguments": {
+        "TableName": "${TableName}",
+        "Key": {
+          "pk": { "S": "redirect" },
+          "sk": { "S": "lastRun" }
+        },
+        "UpdateExpression": "SET #time = :time",
+        "ExpressionAttributeNames": {
+          "#time": "time"
+        },
+        "ExpressionAttributeValues": {
+          ":time": "{% $states.context.Execution.StartTime %}"
+        },
+        "ReturnValues": "UPDATED_OLD"
+      },
+      "Resource": "${DynamoDbUpdate}",
+      "Next": "Start query",
+      "Assign": {
+        "start": "{% ($floor($toMillis($states.result.Attributes.time.S) / 1000) + 1) %}"
+      }
+    },
+    "Start query": {
+      "Type": "Task",
+      "Arguments": {
+        "EndTime": "{% $floor($millis() / 1000) %}",
+        "QueryString": "fields @message, @timestamp | filter strcontains(@message, \"value\") | sort @timestamp asc",
+        "StartTime": "{% $start %}",
+        "LogGroupName": "${RedirectLogs}"
+      },
+      "Resource": "${CloudWatchStartQuery}",
+      "Assign": {
+        "queryId": "{% $states.result.QueryId %}"
+      },
+      "Next": "Process query results"
+    },
+    "Process query results": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "Arguments": {
+        "FunctionName": "${HandleLogBatch}",
+        "Payload": "{% {\n \"queryId\": $queryId\n} %}"
+      },
+      "Output": "{% $states.result.Payload %}",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Next": "Check processing status"
+    },
+    "Check processing status": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Next": "Wait for query completion",
+          "Condition": "{% $states.input.status = \"Running\" %}"
+        },
+        {
+          "Next": "Check if more data needed",
+          "Condition": "{% $states.input.status = \"Complete\" %}"
+        }
+      ],
+      "Default": "Query failed"
+    },
+    "Wait for query completion": {
+      "Type": "Wait",
+      "Seconds": 5,
+      "Next": "Process query results"
+    },
+    "Check if more data needed": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Next": "Start query",
+          "Condition": "{% $states.input.processedCount >= 10000 %}",
+          "Assign": {
+            "start": "{% $floor($millis() / 1000) %}"
+          }
+        }
+      ],
+      "Default": "Success"
+    },
+    "Query failed": {
+      "Type": "Fail",
+      "Error": "QueryFailed",
+      "Cause": "CloudWatch Insights query failed"
+    },
+    "Success": {
+      "Type": "Succeed",
+      "Output": "{% {\n \"message\": \"Processing completed successfully\" \n} %}"
+    }
+  }
+}

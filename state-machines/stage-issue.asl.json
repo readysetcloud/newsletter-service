@@ -1,5 +1,5 @@
 {
-  "Comment": "Stages an issue in SendGrid for publishing",
+  "Comment": "Stages an issue of the newsletter for publishing",
   "StartAt": "Get Existing Issue",
   "States": {
     "Get Existing Issue": {
@@ -143,6 +143,32 @@
         }
       },
       "ResultPath": "$.redirects",
+      "Next": "Setup Voting Options"
+    },
+    "Setup Voting Options": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "Parameters": {
+        "FunctionName": "${SetupVotingOptions}",
+        "Payload": {
+          "content.$": "$$.Execution.Input.content",
+          "tenant.$": "$$.Execution.Input.tenant"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultPath": "$.votingOptions",
       "Next": "Update Content"
     },
     "Update Content": {
@@ -152,7 +178,8 @@
         "FunctionName": "${UpdateLinksWithRedirects}",
         "Payload": {
           "redirects.$": "$.redirects.Output.redirects",
-          "content.$": "$$.Execution.Input.content"
+          "content.$": "$$.Execution.Input.content",
+          "addRef": true
         }
       },
       "Retry": [
@@ -179,7 +206,8 @@
         "Payload": {
           "content.$": "$.updatedContent.Payload.content",
           "fileName.$": "$$.Execution.Input.fileName",
-          "isPreview.$": "$$.Execution.Input.isPreview"
+          "isPreview.$": "$$.Execution.Input.isPreview",
+          "votingOptions.$": "$.votingOptions.Payload"
         }
       },
       "Retry": [
@@ -223,7 +251,7 @@
           "Next": "Send Preview"
         }
       ],
-      "Default": "Stage In SendGrid"
+      "Default": "Stage Newsletter"
     },
     "Send Preview": {
       "Type": "Task",
@@ -258,12 +286,12 @@
           "Next": "Update Issue Record - Failure"
         }
       ],
-      "ResultPath": "$.sendgrid",
+      "ResultPath": null,
       "Next": "Update Issue Record - Previewed"
     },
     "Update Issue Record - Previewed": {
       "Type": "Task",
-      "Resource": "${DynamoDbUpdateItem}",
+      "Resource": "${DynamodbUpdateItem}",
       "Parameters": {
         "TableName": "${TableName}",
         "Key": {
@@ -287,11 +315,18 @@
       "End": true,
       "ResultPath": null
     },
-    "Stage In SendGrid": {
+    "Stage Newsletter": {
       "Type": "Task",
       "Resource": "${LambdaInvoke}",
       "Parameters": {
-        "Payload.$": "$",
+        "Payload": {
+          "data.$": "$.data",
+          "sendAtDate.$": "$.sendAtDate",
+          "getTopStatsDate.$": "$.getTopStatsDate",
+          "reportStatsDate.$": "$.reportStatsDate",
+          "subject.$": "$.subject",
+          "tenantId.$": "$$.Execution.Input.tenant.id"
+        },
         "FunctionName": "${StageIssue}"
       },
       "Retry": [
@@ -307,53 +342,7 @@
           "BackoffRate": 2
         }
       ],
-      "Next": "Schedule Send",
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "Next": "Update Issue Record - Failure"
-        }
-      ],
-      "ResultPath": "$.sendgrid"
-    },
-    "Schedule Send": {
-      "Type": "Task",
-      "Resource": "${LambdaInvoke}",
-      "Parameters": {
-        "FunctionName": "${SendApiRequest}",
-        "Payload": {
-          "secretKey": "sendgrid",
-          "auth": {
-            "location": "header",
-            "key": "Authorization",
-            "prefix": "Bearer"
-          },
-          "request": {
-            "method": "PUT",
-            "baseUrl.$": "States.Format('https://api.sendgrid.com/v3/marketing/campaigns/{}/schedule', $.sendgrid.Payload.id)",
-            "body": {
-              "send_at.$": "$.sendAtDate"
-            }
-          }
-        }
-      },
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException",
-            "Lambda.TooManyRequestsException"
-          ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 6,
-          "BackoffRate": 2
-        }
-      ],
       "Next": "Update Issue Record - Success",
-      "ResultPath": null,
       "Catch": [
         {
           "ErrorEquals": [
@@ -361,11 +350,12 @@
           ],
           "Next": "Update Issue Record - Failure"
         }
-      ]
+      ],
+      "ResultPath": null
     },
     "Update Issue Record - Failure": {
       "Type": "Task",
-      "Resource": "${DynamoDbUpdateItem}",
+      "Resource": "${DynamodbUpdateItem}",
       "Parameters": {
         "TableName": "${TableName}",
         "Key": {
@@ -391,7 +381,7 @@
     },
     "Update Issue Record - Success": {
       "Type": "Task",
-      "Resource": "${DynamoDbUpdateItem}",
+      "Resource": "${DynamodbUpdateItem}",
       "Parameters": {
         "TableName": "${TableName}",
         "Key": {
@@ -402,24 +392,40 @@
             "S": "newsletter"
           }
         },
-        "UpdateExpression": "SET #status = :status, #GSIPK = :GSIPK, #GSISK = :GSISK, #singleSendId = :singleSendId",
+        "UpdateExpression": "SET #status = :status, #GSIPK = :GSIPK, #GSISK = :GSISK, #slug = :slug, #subject = :subject, #description = :description",
         "ExpressionAttributeNames": {
           "#status": "status",
           "#GSIPK": "GSI1PK",
           "#GSISK": "GSI1SK",
-          "#singleSendId": "singleSendId"
+          "#slug": "slug",
+          "#subject": "subject",
+          "#description": "description"
         },
         "ExpressionAttributeValues": {
-          ":status": { "S": "succeeded" },
-          ":GSIPK": { "S.$": "States.Format('{}#newsletter', $$.Execution.Input.tenant.id)" },
-          ":GSISK": { "S.$": "$.sendAtDate" },
-          ":singleSendId": { "S.$": "$.sendgrid.Payload.id" }
+          ":status": {
+            "S": "succeeded"
+          },
+          ":GSIPK": {
+            "S.$": "States.Format('{}#newsletter', $$.Execution.Input.tenant.id)"
+          },
+          ":GSISK": {
+            "S.$": "$.sendAtDate"
+          },
+          ":slug": {
+            "S.$": "States.Format('{}', $.data.metadata.number)"
+          },
+          ":subject": {
+            "S.$": "$.data.metadata.title"
+          },
+          ":description": {
+            "S.$": "$.data.metadata.description"
+          }
         }
       },
       "ResultPath": null,
-      "Next": "Schedule Reports"
+      "Next": "Schedule Tasks"
     },
-    "Schedule Reports": {
+    "Schedule Tasks": {
       "Type": "Parallel",
       "Next": "Notify of Success",
       "ResultPath": null,
@@ -456,7 +462,6 @@
           "States": {
             "Schedule Issue Report": {
               "Type": "Task",
-              "End": true,
               "Parameters": {
                 "ActionAfterCompletion": "DELETE",
                 "FlexibleTimeWindow": {
@@ -474,6 +479,36 @@
                 }
               },
               "Resource": "${SchedulerCreateSchedule}",
+              "ResultPath": null,
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Schedule List Cleanup",
+          "States": {
+            "Schedule List Cleanup": {
+              "Type": "Task",
+              "End": true,
+              "Parameters": {
+                "ActionAfterCompletion": "DELETE",
+                "FlexibleTimeWindow": {
+                  "Mode": "OFF"
+                },
+                "GroupName": "newsletter",
+                "Name.$": "States.Format('{}-CLEAN-{}', $$.Execution.Input.tenant.id, $.data.metadata.number)",
+                "ScheduleExpression.$": "States.Format('at({})', $.getTopStatsDate)",
+                "Target": {
+                  "Arn": "arn:aws:scheduler:::aws-sdk:eventbridge:putEvents",
+                  "RoleArn": "${CleanupListRole}",
+                  "Input": {
+                    "tenantId": "$$.Execution.Input.tenant",
+                    "currentIssue.$": "States.Format('{}#{}', $$.Execution.Input.tenant, $.data.metadata.number)",
+                    "previousIssue.$": "States.Format('{}#{}', $$.Execution.Input.tenant, States.MathAdd($.data.metadata.number, -1))"
+                  }
+                }
+              },
+              "Resource": "${SchedulerCreateSchedule}",
               "ResultPath": null
             }
           }
@@ -487,12 +522,14 @@
         "Entries": [
           {
             "Detail": {
-              "to.$": "$$.Execution.Input.tenant.email",
+              "to": {
+                "email.$": "$$.Execution.Input.tenant.email"
+              },
               "subject.$": "States.Format('[Scheduled] {}', $.subject)",
-              "html.$": "States.Format('<p>The newsletter was successfully scheduled for sending. There is nothing more to do, but if you wish to see the single send, click the link below.</p><p><a href=\"https://mc.sendgrid.com/single-sends/{}/review\">Click to view</a></p>', $.sendgrid.Payload.id)"
+              "html.$": "States.Format('<p>The newsletter was successfully scheduled for sending at {}. Good luck!</p>', $.sendAtDate)"
             },
-            "DetailType": "Send Email",
-            "Source": "user.StageNewsletterStateMachine"
+            "DetailType": "Send Email v2",
+            "Source": "newsletter-service"
           }
         ]
       },

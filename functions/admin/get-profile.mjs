@@ -12,14 +12,14 @@ export const handler = async (event) => {
     const userContext = getUserContext(event);
     const { userId, email: currentUserEmail, tenantId } = userContext;
 
-    const requestedUsername = event.pathParameters?.username;
-    const isOwnProfile = !requestedUsername;
+    const requestedUserId = event.pathParameters?.userId;
+    const isOwnProfile = !requestedUserId;
 
     let targetEmail;
     if (isOwnProfile) {
       targetEmail = currentUserEmail;
     } else {
-      targetEmail = await findUserEmailByUsername(requestedUsername);
+      targetEmail = await findUserEmailBySub(requestedUserId);
       if (!targetEmail) {
         return formatResponse(404, 'User not found');
       }
@@ -56,11 +56,11 @@ export const handler = async (event) => {
   }
 };
 
-const findUserEmailByUsername = async (username) => {
+const findUserEmailBySub = async (userId) => {
   try {
     const listUsersResult = await cognito.send(new ListUsersCommand({
       UserPoolId: process.env.USER_POOL_ID,
-      Filter: `username = "${username}"`,
+      Filter: `sub = "${userId}"`,
       Limit: 1
     }));
 
@@ -72,7 +72,7 @@ const findUserEmailByUsername = async (username) => {
 
     return null;
   } catch (error) {
-    console.error('Error finding user by username:', error);
+    console.error('Error finding user by userId:', error);
     return null;
   }
 };

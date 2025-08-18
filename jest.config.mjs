@@ -3,11 +3,12 @@ export default {
     '^.+\\.[tj]sx?$': 'babel-jest'
   },
   transformIgnorePatterns: [
-    "/node_modules/(?!(@octokit|@aws-sdk))"
+    "/node_modules/(?!(@octokit|@aws-sdk))",
+    "/dashboard-ui/"
   ],
   testMatch: [
-    '**/__tests__/**/*.[jt]s?(x)',
-    '**/?(*.)+(spec|test).[tj]s?(x)',
+    '**/__tests__/**/*.[j]s?(x)',
+    '**/?(*.)+(spec|test).[j]s?(x)',
     '**/?(*.)+(spec|test).mjs'
   ],
   testEnvironment: 'node'

@@ -1,23 +1,28 @@
+// cognito-post-confirmation.test.mjs
 import { jest } from '@jest/globals';
-import { handler } from '../functions/auth/cognito-post-confirmation.mjs';
 
-// Mock AWS SDK
+// One shared mock for the AWS client's send()
 const mockSend = jest.fn();
-jest.unstable_mockModule('@aws-sdk/client-cognito-identity-provider', () => ({
-  CognitoIdentityProviderClient: jest.fn(() => ({
-    send: mockSend
-  })),
-  AdminAddUserToGroupCommand: jest.fn((params) => params)
+
+// Mock EventBridge client + command
+jest.unstable_mockModule('@aws-sdk/client-eventbridge', () => ({
+  EventBridgeClient: jest.fn(() => ({ send: mockSend })),
+  PutEventsCommand: jest.fn((params) => ({ __type: 'PutEvents', ...params })),
 }));
+
+// Import AFTER mocks
+const { handler } = await import('../functions/auth/cognito-post-confirmation.mjs');
 
 describe('Cognito Post Confirmation Function', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    process.env.USER_POOL_ID = 'test-pool-id';
   });
 
-  it('should add new user to free-tier group', async () => {
+  it('publishes a PutEvents entry to EventBridge and returns the event', async () => {
     const event = {
+      triggerSource: 'PostConfirmation_ConfirmSignUp',
+      userPoolId: 'us-east-1_abc',
+      userName: 'user-123',
       request: {
         userAttributes: {
           email: 'test@example.com',
@@ -27,45 +32,75 @@ describe('Cognito Post Confirmation Function', () => {
       }
     };
 
-    mockSend.mockResolvedValueOnce({});
-
-    const result = await handler(event);
-
-    expect(mockSend).toHaveBeenCalledWith({
-      UserPoolId: 'test-pool-id',
-      Username: 'test@example.com',
-      GroupName: 'free-tier'
+    mockSend.mockResolvedValueOnce({ // minimal success stub
+      FailedEntryCount: 0,
+      Entries: [{ EventId: 'evt-1' }]
     });
 
-    expect(result).toEqual(event);
-  });
-
-  it('should handle errors gracefully and not break Cognito flow', async () => {
-    const event = {
-      request: {
-        userAttributes: {
-          email: 'test@example.com'
-        }
-      }
-    };
-
-    mockSend.mockRejectedValueOnce(new Error('AWS Error'));
-
     const result = await handler(event);
 
-    expect(result).toEqual(event);
+    // Assert PutEvents was called with expected payload
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    const callArg = mockSend.mock.calls[0][0]; // the PutEventsCommand instance (we returned an object)
+    expect(callArg.__type).toBe('PutEvents');
+    expect(callArg.Entries).toHaveLength(1);
+
+    const entry = callArg.Entries[0];
+    expect(entry.Source).toBe('newsletter-service');
+    expect(entry.DetailType).toBe('Add User to Group');
+
+    // Detail payload checks
+    const detail = JSON.parse(entry.Detail);
+    expect(detail).toEqual({
+      userPoolId: 'us-east-1_abc',
+      username: 'user-123',
+      userAttributes: {
+        email: 'test@example.com',
+        given_name: 'John',
+        family_name: 'Doe'
+      },
+      groupName: 'free-tier'
+    });
+
+    // Handler returns original event on success
+    expect(result).toBe(event);
   });
 
-  it('should handle missing email gracefully', async () => {
+  it('bubbles EventBridge failures (throws)', async () => {
     const event = {
-      request: {
-        userAttributes: {}
-      }
+      userPoolId: 'us-east-1_abc',
+      userName: 'user-123',
+      request: { userAttributes: { email: 'x@y.com' } }
     };
 
-    const result = await handler(event);
+    mockSend.mockRejectedValueOnce(new Error('EventBridge down'));
 
-    expect(mockSend).not.toHaveBeenCalled();
-    expect(result).toEqual(event);
+    await expect(handler(event)).rejects.toThrow('EventBridge down');
+    expect(mockSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('still sends even with minimal/missing attributes (and returns the event)', async () => {
+    const event = {
+      userPoolId: 'us-east-1_abc',
+      userName: 'user-123',
+      request: { userAttributes: {} } // minimal shape
+    };
+
+    mockSend.mockResolvedValueOnce({ FailedEntryCount: 0, Entries: [{ EventId: 'evt-2' }] });
+
+    const result = await handler(event);
+    expect(result).toBe(event);
+
+    const entry = mockSend.mock.calls[0][0].Entries[0];
+    const detail = JSON.parse(entry.Detail);
+
+    // Still carries the required scaffolding
+    expect(detail).toMatchObject({
+      userPoolId: 'us-east-1_abc',
+      username: 'user-123',
+      groupName: 'free-tier'
+    });
+    // userAttributes is an empty object here, which is OK
+    expect(detail.userAttributes).toEqual({});
   });
 });

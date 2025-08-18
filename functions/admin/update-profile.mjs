@@ -17,6 +17,9 @@ export const handler = async (event) => {
     const body = JSON.parse(event.body || '{}');
 
     const profileData = extractProfileData(body);
+    if(!Object.keys(profileData).length){
+      return formatResponse(400, 'At least one field must be provided for an update');
+    }
 
     // Update personal information in Cognito
     const updatedProfile = await updatePersonalInfo(email, profileData);
@@ -44,7 +47,7 @@ export const handler = async (event) => {
 };
 
 const extractProfileData = (body) => {
-  const { firstName, lastName, jobTitle, phoneNumber, timezone, locale, links } = body;
+  const { firstName, lastName, timezone, locale, links } = body;
   const profileData = {};
 
   if (firstName !== undefined) profileData.firstName = firstName;

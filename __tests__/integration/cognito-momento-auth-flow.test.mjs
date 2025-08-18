@@ -139,15 +139,15 @@ describe('Cognito-Momento Auth Integration Tests', () => {
       // Verify token generation was called with correct parameters
       expect(mockMomentoClient.generateReadOnlyToken).toHaveBeenCalledWith(
         'techcorp',
-        'user-123',
-        24
+        'user-123'
       );
 
       // Verify JWT claims were enriched
       expect(result.response.claimsOverrideDetails.claimsToAddOrOverride).toEqual({
         'custom:momento_token': 'test-read-token',
         'custom:momento_cache': 'newsletter-notifications',
-        'custom:momento_expires': expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
+        'custom:momento_expires': expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
+        'custom:tenant_id': 'techcorp'
       });
     });
 
@@ -173,7 +173,8 @@ describe('Cognito-Momento Auth Integration Tests', () => {
       expect(result.response.claimsOverrideDetails.claimsToAddOrOverride).toEqual({
         'custom:momento_token': '',
         'custom:momento_cache': '',
-        'custom:momento_expires': ''
+        'custom:momento_expires': '',
+        'custom:tenant_id': 'techcorp'
       });
     });
 
@@ -489,7 +490,7 @@ describe('Cognito-Momento Auth Integration Tests', () => {
 
       // Step 4: Verify complete flow
       // - Read token was generated for authentication
-      expect(mockMomentoClient.generateReadOnlyToken).toHaveBeenCalledWith('techcorp', 'user-123', 24);
+      expect(mockMomentoClient.generateReadOnlyToken).toHaveBeenCalledWith('techcorp', 'user-123');
 
       // - Write token was generated for publishing
       expect(mockAuthClient.generateDisposableToken).toHaveBeenCalledWith(
@@ -592,7 +593,7 @@ describe('Cognito-Momento Auth Integration Tests', () => {
 
       await preTokenHandler(cognitoEventA);
 
-      expect(mockMomentoClient.generateReadOnlyToken).toHaveBeenCalledWith('tenant-a', 'user-A', 24);
+      expect(mockMomentoClient.generateReadOnlyToken).toHaveBeenCalledWith('tenant-a', 'user-A');
 
       // Test tenant B
       const cognitoEventB = {
@@ -610,7 +611,7 @@ describe('Cognito-Momento Auth Integration Tests', () => {
 
       await preTokenHandler(cognitoEventB);
 
-      expect(mockMomentoClient.generateReadOnlyToken).toHaveBeenCalledWith('tenant-b', 'user-B', 24);
+      expect(mockMomentoClient.generateReadOnlyToken).toHaveBeenCalledWith('tenant-b', 'user-B');
     });
 
     it('should ensure notifications are published to correct tenant channels', async () => {

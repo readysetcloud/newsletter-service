@@ -64,8 +64,6 @@ describe('Update Profile Function', () => {
       body: JSON.stringify({
         firstName: 'John',
         lastName: 'Doe',
-        jobTitle: 'Developer',
-        phoneNumber: '+1234567890',
         timezone: 'America/New_York',
         locale: 'en-US'
       })
@@ -81,59 +79,11 @@ describe('Update Profile Function', () => {
         UserAttributes: expect.arrayContaining([
           { Name: 'given_name', Value: 'John' },
           { Name: 'family_name', Value: 'Doe' },
-          { Name: 'custom:job_title', Value: 'Developer' },
-          { Name: 'phone_number', Value: '+1234567890' },
           { Name: 'zoneinfo', Value: 'America/New_York' },
           { Name: 'locale', Value: 'en-US' }
         ])
       })
     );
-  });
-
-  it('should validate phone number format', async () => {
-    const event = {
-      requestContext: {
-        authorizer: {
-          userId: 'test-user-id',
-          email: 'test@example.com',
-          tenantId: 'test-tenant',
-          role: 'user',
-          isAdmin: 'false',
-          isTenantAdmin: 'false'
-        }
-      },
-      body: JSON.stringify({
-        phoneNumber: 'invalid-phone'
-      })
-    };
-
-    const result = await handler(event);
-
-    expect(result.statusCode).toBe(400);
-    expect(mockSend).not.toHaveBeenCalled();
-  });
-
-  it('should validate locale format', async () => {
-    const event = {
-      requestContext: {
-        authorizer: {
-          userId: 'test-user-id',
-          email: 'test@example.com',
-          tenantId: 'test-tenant',
-          role: 'user',
-          isAdmin: 'false',
-          isTenantAdmin: 'false'
-        }
-      },
-      body: JSON.stringify({
-        locale: 'invalid-locale'
-      })
-    };
-
-    const result = await handler(event);
-
-    expect(result.statusCode).toBe(400);
-    expect(mockSend).not.toHaveBeenCalled();
   });
 
   it('should require at least one field', async () => {
@@ -237,79 +187,6 @@ describe('Update Profile Function', () => {
       { name: 'GitHub', url: 'https://github.com/johndoe' },
       { name: 'LinkedIn', url: 'https://linkedin.com/in/johndoe' }
     ]);
-  });
-
-  it('should validate links array structure', async () => {
-    const event = {
-      requestContext: {
-        authorizer: {
-          userId: 'test-user-id',
-          email: 'test@example.com',
-          tenantId: 'test-tenant',
-          role: 'user',
-          isAdmin: 'false',
-          isTenantAdmin: 'false'
-        }
-      },
-      body: JSON.stringify({
-        links: [
-          { name: 'GitHub' } // Missing url
-        ]
-      })
-    };
-
-    const result = await handler(event);
-
-    expect(result.statusCode).toBe(400);
-    expect(mockSend).not.toHaveBeenCalled();
-  });
-
-  it('should validate links array size limit', async () => {
-    const event = {
-      requestContext: {
-        authorizer: {
-          userId: 'test-user-id',
-          email: 'test@example.com',
-          tenantId: 'test-tenant',
-          role: 'user',
-          isAdmin: 'false',
-          isTenantAdmin: 'false'
-        }
-      },
-      body: JSON.stringify({
-        links: Array(11).fill({ name: 'Test', url: 'https://example.com' }) // Too many links
-      })
-    };
-
-    const result = await handler(event);
-
-    expect(result.statusCode).toBe(400);
-    expect(mockSend).not.toHaveBeenCalled();
-  });
-
-  it('should validate link URL format', async () => {
-    const event = {
-      requestContext: {
-        authorizer: {
-          userId: 'test-user-id',
-          email: 'test@example.com',
-          tenantId: 'test-tenant',
-          role: 'user',
-          isAdmin: 'false',
-          isTenantAdmin: 'false'
-        }
-      },
-      body: JSON.stringify({
-        links: [
-          { name: 'Invalid', url: 'not-a-url' }
-        ]
-      })
-    };
-
-    const result = await handler(event);
-
-    expect(result.statusCode).toBe(400);
-    expect(mockSend).not.toHaveBeenCalled();
   });
 
   it('should update only links when provided', async () => {

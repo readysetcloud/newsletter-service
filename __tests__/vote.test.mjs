@@ -1,413 +1,283 @@
+// __tests__/vote.test.mjs
 import { jest } from '@jest/globals';
 
-// Mock AWS SDK
+// ---- Shared client send ----
 const mockSend = jest.fn();
-const mockMarshall = jest.fn();
-const mockUnmarshall = jest.fn();
-const mockGetItemCommand = jest.fn();
-const mockUpdateItemCommand = jest.fn();
-const mockPutItemCommand = jest.fn();
+
+// ---- AWS SDK mocks ----
+const mockGetItemCommand = jest.fn((params) => ({ __type: 'GetItem', ...params }));
+const mockPutItemCommand = jest.fn((params) => ({ __type: 'PutItem', ...params }));
+const mockUpdateItemCommand = jest.fn((params) => ({ __type: 'UpdateItem', ...params }));
 
 jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
   DynamoDBClient: jest.fn(() => ({ send: mockSend })),
   GetItemCommand: mockGetItemCommand,
+  PutItemCommand: mockPutItemCommand,
   UpdateItemCommand: mockUpdateItemCommand,
-  PutItemCommand: mockPutItemCommand
 }));
 
+// Keep marshall/unmarshall simple so we can assert plain JS objects
 jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
-  marshall: mockMarshall,
-  unmarshall: mockUnmarshall
+  marshall: (x) => x,
+  unmarshall: (x) => x,
 }));
 
+// Import after mocks
 const { handler } = await import('../functions/vote.mjs');
 
-describe('Vote Function', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    process.env.TABLE_NAME = 'test-table';
-    process.env.ORIGIN = 'https://test.com';
-
-    // Set up marshall/unmarshall mocks
-    mockMarshall.mockImplementation((obj) => {
-      // Simple mock that just returns the object (DynamoDB would normally convert to DynamoDB format)
-      return obj;
-    });
-
-    mockUnmarshall.mockImplementation((obj) => {
-      // Simple mock that just returns the object (DynamoDB would normally convert from DynamoDB format)
-      return obj;
-    });
-
-    // Set up command mocks to return the input for verification
-    mockGetItemCommand.mockImplementation((params) => params);
-    mockUpdateItemCommand.mockImplementation((params) => params);
-    mockPutItemCommand.mockImplementation((params) => params);
-  });
-
-  const mockEvent = {
+describe('vote handler', () => {
+  const baseEvent = {
     pathParameters: { tenant: 'test-tenant', slug: 'test-issue' },
     requestContext: { identity: { sourceIp: '192.168.1.1' } },
     httpMethod: 'POST',
-    body: JSON.stringify({ choice: 'option1' })
+    body: JSON.stringify({ choice: 'option1' }),
   };
 
   const mockVoteData = {
     options: [
       { id: 'option1', description: 'Option 1' },
-      { id: 'option2', description: 'Option 2' }
+      { id: 'option2', description: 'Option 2' },
     ],
     option1: 5,
-    option2: 3
+    option2: 3,
   };
 
-  test('should record new vote successfully', async () => {
-    // Mock getting existing vote data
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env.TABLE_NAME = 'test-table';
+    process.env.ORIGIN = 'https://test.com';
+  });
+
+  it('records a new vote and returns updated counts', async () => {
     mockSend
-      .mockResolvedValueOnce({ Item: mockVoteData }) // GetItem
-      .mockResolvedValueOnce({}) // PutItem (new voter)
+      .mockResolvedValueOnce({ Item: mockVoteData })     // GetItem (vote doc)
+      .mockResolvedValueOnce({})                         // PutItem (new voter success)
       .mockResolvedValueOnce({ Attributes: { ...mockVoteData, option1: 6 } }); // UpdateItem
 
-    const result = await handler(mockEvent);
+    const res = await handler(baseEvent);
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body).toEqual({ option1: 6, option2: 3 });
 
-    expect(result.statusCode).toBe(200);
-    const body = JSON.parse(result.body);
-
-    // Check the simple response format (just vote counts)
-    expect(body.option1).toBe(6);
-    expect(body.option2).toBe(3);
-  });
-
-  test('should return current results when user has already voted', async () => {
-    // Mock getting existing vote data
-    mockSend
-      .mockResolvedValueOnce({ Item: mockVoteData }) // GetItem
-      .mockRejectedValueOnce({ name: 'ConditionalCheckFailedException' }); // PutItem fails
-
-    const result = await handler(mockEvent);
-
-    expect(result.statusCode).toBe(200);
-    const body = JSON.parse(result.body);
-
-    // Should return current vote counts (no increment since user already voted)
-    expect(body.option1).toBe(5);
-    expect(body.option2).toBe(3);
-  });
-
-  test('should return 400 when missing request body', async () => {
-    const eventWithoutBody = {
-      ...mockEvent,
-      body: null
-    };
-
-    const result = await handler(eventWithoutBody);
-
-    expect(result.statusCode).toBe(400);
-    const body = JSON.parse(result.body);
-    expect(body.message).toBe('Missing request body');
-  });
-
-  test('should return 400 for invalid JSON body', async () => {
-    const invalidEvent = {
-      ...mockEvent,
-      body: 'invalid-json'
-    };
-
-    const result = await handler(invalidEvent);
-
-    expect(result.statusCode).toBe(400);
-    const body = JSON.parse(result.body);
-    expect(body.message).toBe('Invalid JSON body');
-  });
-
-  test('should return 400 when missing choice', async () => {
-    const eventWithoutChoice = {
-      ...mockEvent,
-      body: JSON.stringify({})
-    };
-
-    const result = await handler(eventWithoutChoice);
-
-    expect(result.statusCode).toBe(400);
-    const body = JSON.parse(result.body);
-    expect(body.message).toBe('Missing choice');
-  });
-
-  test('should return 404 when vote not found', async () => {
-    mockSend.mockResolvedValueOnce({ Item: null }); // GetItem returns null
-
-    const result = await handler(mockEvent);
-
-    expect(result.statusCode).toBe(404);
-    const body = JSON.parse(result.body);
-    expect(body.message).toBe('Vote not found');
-  });
-
-  test('should return 400 for invalid choice', async () => {
-    const invalidEvent = {
-      ...mockEvent,
-      body: JSON.stringify({ choice: 'invalid-option' })
-    };
-
-    mockSend.mockResolvedValueOnce({ Item: mockVoteData }); // GetItem
-
-    const result = await handler(invalidEvent);
-
-    expect(result.statusCode).toBe(400);
-    const body = JSON.parse(result.body);
-    expect(body.message).toBe('Invalid choice');
-  });
-
-  test('should return 400 when missing tenant or slug', async () => {
-    const eventWithoutParams = {
-      ...mockEvent,
-      pathParameters: { tenant: 'test-tenant' } // missing slug
-    };
-
-    const result = await handler(eventWithoutParams);
-
-    expect(result.statusCode).toBe(400);
-    const body = JSON.parse(result.body);
-    expect(body.message).toBe('Missing tenant or slug');
-  });
-
-  test('should return 400 when unable to identify voter', async () => {
-    const eventWithoutIp = {
-      ...mockEvent,
-      requestContext: { identity: {} } // missing sourceIp
-    };
-
-    const result = await handler(eventWithoutIp);
-
-    expect(result.statusCode).toBe(400);
-    const body = JSON.parse(result.body);
-    expect(body.message).toBe('Unable to identify voter');
-  });
-
-  test('should handle database errors gracefully', async () => {
-    mockSend
-      .mockResolvedValueOnce({ Item: mockVoteData }) // GetItem
-      .mockRejectedValueOnce(new Error('Database connection failed')); // PutItem fails with unexpected error
-
-    const result = await handler(mockEvent);
-
-    expect(result.statusCode).toBe(500);
-    const body = JSON.parse(result.body);
-    expect(body.message).toBe('Something went wrong');
-  });
-
-  test('should handle vote with zero existing votes', async () => {
-    const emptyVoteData = {
-      options: [
-        { id: 'option1', description: 'Option 1' },
-        { id: 'option2', description: 'Option 2' }
-      ]
-      // No existing vote counts
-    };
-
-    mockSend
-      .mockResolvedValueOnce({ Item: emptyVoteData }) // GetItem
-      .mockResolvedValueOnce({}) // PutItem (new voter)
-      .mockResolvedValueOnce({ Attributes: { ...emptyVoteData, option1: 1 } }); // UpdateItem
-
-    const result = await handler(mockEvent);
-
-    expect(result.statusCode).toBe(200);
-    const body = JSON.parse(result.body);
-    expect(body.option1).toBe(1);
-    expect(body.option2).toBe(0); // Should default to 0 for options with no votes
-  });
-
-  test('should verify correct DynamoDB commands are called', async () => {
-    mockSend
-      .mockResolvedValueOnce({ Item: mockVoteData }) // GetItem
-      .mockResolvedValueOnce({}) // PutItem (new voter)
-      .mockResolvedValueOnce({ Attributes: { ...mockVoteData, option1: 6 } }); // UpdateItem
-
-    await handler(mockEvent);
-
-    // Verify GetItemCommand was called with correct parameters
+    // Verify command shapes
     expect(mockGetItemCommand).toHaveBeenCalledWith({
       TableName: 'test-table',
-      Key: {
-        pk: 'test-tenant#test-issue',
-        sk: 'votes'
-      }
+      Key: { pk: 'test-tenant#test-issue', sk: 'votes' },
     });
 
-    // Verify PutItemCommand was called with hashed IP
-    expect(mockPutItemCommand).toHaveBeenCalledWith({
-      TableName: 'test-table',
-      Item: {
-        pk: 'test-tenant#test-issue',
-        sk: expect.stringMatching(/^voter#[a-f0-9]{64}$/), // SHA256 hash
-        createdAt: expect.any(String),
-        ttl: expect.any(Number)
-      },
-      ConditionExpression: 'attribute_not_exists(pk)'
-    });
+    const putItem = mockPutItemCommand.mock.calls[0][0];
+    expect(putItem.TableName).toBe('test-table');
+    expect(putItem.Item.pk).toBe('test-tenant#test-issue');
+    expect(putItem.Item.sk).toMatch(/^voter#[a-f0-9]{64}$/);
+    expect(putItem.ConditionExpression).toBe('attribute_not_exists(pk)');
 
-    // Verify UpdateItemCommand was called with correct parameters
     expect(mockUpdateItemCommand).toHaveBeenCalledWith({
       TableName: 'test-table',
-      Key: {
-        pk: 'test-tenant#test-issue',
-        sk: 'votes'
-      },
+      Key: { pk: 'test-tenant#test-issue', sk: 'votes' },
       UpdateExpression: 'SET #choice = #choice + :inc',
-      ExpressionAttributeNames: {
-        '#choice': 'option1'
-      },
-      ExpressionAttributeValues: {
-        ':inc': 1
-      },
-      ReturnValues: 'ALL_NEW'
+      ExpressionAttributeNames: { '#choice': 'option1' },
+      ExpressionAttributeValues: { ':inc': 1 },
+      ReturnValues: 'ALL_NEW',
     });
   });
 
-  test('should handle different IP addresses correctly', async () => {
-    const eventWithDifferentIp = {
-      ...mockEvent,
-      requestContext: { identity: { sourceIp: '10.0.0.1' } }
-    };
+  it('returns current counts when voter already voted (idempotent)', async () => {
+    mockSend
+      .mockResolvedValueOnce({ Item: mockVoteData }) // GetItem
+      .mockRejectedValueOnce({ name: 'ConditionalCheckFailedException' }); // PutItem blocked
+
+    const res = await handler(baseEvent);
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body).toEqual({ option1: 5, option2: 3 });
+
+    // UpdateItem not called
+    expect(mockUpdateItemCommand).not.toHaveBeenCalled();
+  });
+
+  it('400 when missing body', async () => {
+    const res = await handler({ ...baseEvent, body: null });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).message).toBe('Missing request body');
+  });
+
+  it('400 when invalid JSON body', async () => {
+    const res = await handler({ ...baseEvent, body: 'not-json' });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).message).toBe('Invalid JSON body');
+  });
+
+  it('400 when missing choice', async () => {
+    const res = await handler({ ...baseEvent, body: JSON.stringify({}) });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).message).toBe('Missing choice');
+  });
+
+  it('404 when vote doc not found', async () => {
+    mockSend.mockResolvedValueOnce({ Item: null }); // GetItem
+    const res = await handler(baseEvent);
+    expect(res.statusCode).toBe(404);
+    expect(JSON.parse(res.body).message).toBe('Vote not found');
+  });
+
+  it('400 when choice is not a valid option', async () => {
+    mockSend.mockResolvedValueOnce({ Item: mockVoteData }); // GetItem
+    const res = await handler({ ...baseEvent, body: JSON.stringify({ choice: 'nope' }) });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).message).toBe('Invalid choice');
+  });
+
+  it('400 when missing tenant or slug', async () => {
+    const res = await handler({ ...baseEvent, pathParameters: { tenant: 'only-tenant' } });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).message).toBe('Missing tenant or slug');
+  });
+
+  it('400 when cannot identify voter (no sourceIp)', async () => {
+    const res = await handler({ ...baseEvent, requestContext: { identity: {} } });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).message).toBe('Unable to identify voter');
+  });
+
+  it('500 on unexpected DB error', async () => {
+    mockSend
+      .mockResolvedValueOnce({ Item: mockVoteData }) // GetItem
+      .mockRejectedValueOnce(new Error('boom'));     // PutItem unexpected
+
+    const res = await handler(baseEvent);
+    expect(res.statusCode).toBe(500);
+    expect(JSON.parse(res.body).message).toBe('Something went wrong');
+  });
+
+  it('handles zero-existing votes', async () => {
+    const empty = { options: [{ id: 'option1' }, { id: 'option2' }] };
+    mockSend
+      .mockResolvedValueOnce({ Item: empty })                           // GetItem
+      .mockResolvedValueOnce({})                                        // PutItem
+      .mockResolvedValueOnce({ Attributes: { ...empty, option1: 1 } }); // UpdateItem
+
+    const res = await handler(baseEvent);
+    const body = JSON.parse(res.body);
+    expect(body).toEqual({ option1: 1, option2: 0 });
+  });
+
+  it('sets a 7-day TTL on voter record', async () => {
+    const fixedNow = 1_700_000_000_000;
+    const realNow = Date.now;
+    // @ts-ignore
+    Date.now = jest.fn(() => fixedNow);
 
     mockSend
       .mockResolvedValueOnce({ Item: mockVoteData }) // GetItem
-      .mockResolvedValueOnce({}) // PutItem (new voter)
-      .mockResolvedValueOnce({ Attributes: { ...mockVoteData, option1: 6 } }); // UpdateItem
+      .mockResolvedValueOnce({})                     // PutItem
+      .mockResolvedValueOnce({ Attributes: { ...mockVoteData, option1: 6 } });
 
-    await handler(eventWithDifferentIp);
+    await handler(baseEvent);
 
-    // Verify PutItemCommand was called with different hashed IP
-    const putItemCall = mockPutItemCommand.mock.calls[0][0];
-    expect(putItemCall.Item.sk).toMatch(/^voter#[a-f0-9]{64}$/);
-    // The hash should be different from the default IP
-    expect(putItemCall.Item.sk).not.toBe('voter#4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a'); // hash of 192.168.1.1
+    const putCall = mockPutItemCommand.mock.calls[0][0];
+    const expected = Math.floor(fixedNow / 1000) + 7 * 24 * 60 * 60;
+    expect(putCall.Item.ttl).toBe(expected);
+
+    // restore
+    // @ts-ignore
+    Date.now = realNow;
   });
 
-  test('should set correct TTL for voter record', async () => {
-    const mockDate = Date.now();
-    const originalDateNow = Date.now;
-    Date.now = jest.fn(() => mockDate);
-
-    mockSend
-      .mockResolvedValueOnce({ Item: mockVoteData }) // GetItem
-      .mockResolvedValueOnce({}) // PutItem (new voter)
-      .mockResolvedValueOnce({ Attributes: { ...mockVoteData, option1: 6 } }); // UpdateItem
-
-    await handler(mockEvent);
-
-    const expectedTtl = Math.floor(mockDate / 1000) + (7 * 24 * 60 * 60); // 7 days
-    const putItemCall = mockPutItemCommand.mock.calls[0][0];
-    expect(putItemCall.Item.ttl).toBe(expectedTtl);
-
-    Date.now = originalDateNow;
-  });
-
-  test('should handle multiple vote options correctly', async () => {
-    const multiOptionVoteData = {
+  it('works with more than two options', async () => {
+    const multi = {
       options: [
-        { id: 'option1', description: 'Option 1' },
-        { id: 'option2', description: 'Option 2' },
-        { id: 'option3', description: 'Option 3' },
-        { id: 'option4', description: 'Option 4' }
+        { id: 'option1' },
+        { id: 'option2' },
+        { id: 'option3' },
+        { id: 'option4' },
       ],
       option1: 10,
       option2: 5,
       option3: 2,
-      option4: 0
+      option4: 0,
     };
-
-    const eventWithOption3 = {
-      ...mockEvent,
-      body: JSON.stringify({ choice: 'option3' })
-    };
+    const event = { ...baseEvent, body: JSON.stringify({ choice: 'option3' }) };
 
     mockSend
-      .mockResolvedValueOnce({ Item: multiOptionVoteData }) // GetItem
-      .mockResolvedValueOnce({}) // PutItem (new voter)
-      .mockResolvedValueOnce({ Attributes: { ...multiOptionVoteData, option3: 3 } }); // UpdateItem
+      .mockResolvedValueOnce({ Item: multi }) // GetItem
+      .mockResolvedValueOnce({})              // PutItem
+      .mockResolvedValueOnce({ Attributes: { ...multi, option3: 3 } });
 
-    const result = await handler(eventWithOption3);
-
-    expect(result.statusCode).toBe(200);
-    const body = JSON.parse(result.body);
-    expect(body.option1).toBe(10);
-    expect(body.option2).toBe(5);
-    expect(body.option3).toBe(3); // Incremented
-    expect(body.option4).toBe(0);
+    const res = await handler(event);
+    const body = JSON.parse(res.body);
+    expect(body).toEqual({ option1: 10, option2: 5, option3: 3, option4: 0 });
   });
 
-  test('should include CORS headers in response', async () => {
+  it('includes CORS headers (when ORIGIN set)', async () => {
     mockSend
-      .mockResolvedValueOnce({ Item: mockVoteData }) // GetItem
-      .mockResolvedValueOnce({}) // PutItem (new voter)
-      .mockResolvedValueOnce({ Attributes: { ...mockVoteData, option1: 6 } }); // UpdateItem
+      .mockResolvedValueOnce({ Item: mockVoteData })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ Attributes: { ...mockVoteData, option1: 6 } });
 
-    const result = await handler(mockEvent);
-
-    expect(result.headers).toEqual({
+    const res = await handler(baseEvent);
+    expect(res.headers).toEqual({
       'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': 'https://test.com'
+      'Access-Control-Allow-Origin': 'https://test.com',
     });
   });
 
-  test('should handle CORS headers when ORIGIN is not set', async () => {
+  it('omits CORS origin header if ORIGIN not set', async () => {
     delete process.env.ORIGIN;
 
     mockSend
-      .mockResolvedValueOnce({ Item: mockVoteData }) // GetItem
-      .mockResolvedValueOnce({}) // PutItem (new voter)
-      .mockResolvedValueOnce({ Attributes: { ...mockVoteData, option1: 6 } }); // UpdateItem
+      .mockResolvedValueOnce({ Item: mockVoteData })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ Attributes: { ...mockVoteData, option1: 6 } });
 
-    const result = await handler(mockEvent);
+    const res = await handler(baseEvent);
+    expect(res.headers).toEqual({ 'Content-Type': 'application/json' });
 
-    expect(result.headers).toEqual({
-      'Content-Type': 'application/json'
-    });
-
-    // Restore for other tests
+    // restore
     process.env.ORIGIN = 'https://test.com';
   });
 
-  test('should create consistent hash for same IP address', async () => {
-    const sameIpEvent1 = {
-      ...mockEvent,
-      requestContext: { identity: { sourceIp: '203.0.113.1' } }
-    };
-
-    const sameIpEvent2 = {
-      ...mockEvent,
-      requestContext: { identity: { sourceIp: '203.0.113.1' } }
-    };
-
-    // First vote
+  it('produces consistent hash for same IP (different invocations)', async () => {
     mockSend
-      .mockResolvedValueOnce({ Item: mockVoteData }) // GetItem
-      .mockResolvedValueOnce({}) // PutItem (new voter)
-      .mockResolvedValueOnce({ Attributes: { ...mockVoteData, option1: 6 } }); // UpdateItem
+      .mockResolvedValueOnce({ Item: mockVoteData })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ Attributes: { ...mockVoteData, option1: 6 } });
 
-    await handler(sameIpEvent1);
-    const firstHash = mockPutItemCommand.mock.calls[0][0].Item.sk;
+    await handler(baseEvent);
+    const firstSk = mockPutItemCommand.mock.calls[0][0].Item.sk;
 
-    // Reset mocks for second call
     jest.clearAllMocks();
-    mockMarshall.mockImplementation((obj) => obj);
-    mockUnmarshall.mockImplementation((obj) => obj);
-    mockGetItemCommand.mockImplementation((params) => params);
-    mockUpdateItemCommand.mockImplementation((params) => params);
-    mockPutItemCommand.mockImplementation((params) => params);
 
-    // Second vote with same IP
     mockSend
-      .mockResolvedValueOnce({ Item: mockVoteData }) // GetItem
-      .mockResolvedValueOnce({}) // PutItem (new voter)
-      .mockResolvedValueOnce({ Attributes: { ...mockVoteData, option1: 7 } }); // UpdateItem
+      .mockResolvedValueOnce({ Item: mockVoteData })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ Attributes: { ...mockVoteData, option1: 7 } });
 
-    await handler(sameIpEvent2);
-    const secondHash = mockPutItemCommand.mock.calls[0][0].Item.sk;
+    await handler(baseEvent);
+    const secondSk = mockPutItemCommand.mock.calls[0][0].Item.sk;
 
-    expect(firstHash).toBe(secondHash);
-    expect(firstHash).toMatch(/^voter#[a-f0-9]{64}$/);
+    expect(firstSk).toBe(secondSk);
+    expect(firstSk).toMatch(/^voter#[a-f0-9]{64}$/);
+  });
+
+  it('different IPs -> different voter hash', async () => {
+    mockSend
+      .mockResolvedValueOnce({ Item: mockVoteData })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ Attributes: { ...mockVoteData, option1: 6 } });
+
+    await handler({ ...baseEvent, requestContext: { identity: { sourceIp: '10.0.0.1' } } });
+    const sk1 = mockPutItemCommand.mock.calls[0][0].Item.sk;
+
+    jest.clearAllMocks();
+
+    mockSend
+      .mockResolvedValueOnce({ Item: mockVoteData })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ Attributes: { ...mockVoteData, option1: 6 } });
+
+    await handler({ ...baseEvent, requestContext: { identity: { sourceIp: '203.0.113.42' } } });
+    const sk2 = mockPutItemCommand.mock.calls[0][0].Item.sk;
+
+    expect(sk1).not.toBe(sk2);
   });
 });

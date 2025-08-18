@@ -54,17 +54,15 @@ const handleApiKeyAuth = async (apiKey, event) => {
 };
 
 const handleJwtAuth = async (token, event) => {
-  await verifier.verify(token);
+  const verifiedToken = await verifier.verify(token);
   const userInfo = await getUserAttributes(token);
   const tenantId = userInfo?.['custom:tenant_id'] || null;
   const apiArn = getApiArnPattern(event.methodArn);
-  const policy = generatePolicy(userInfo.sub, 'Allow', apiArn, {
-    userId: userInfo.sub,
+  const policy = generatePolicy(userInfo.sub ?? verifiedToken.sub, 'Allow', apiArn, {
+    userId: userInfo.sub ?? verifiedToken.sub,
     email: userInfo.email,
-    name: {
-      firstName: userInfo.given_name,
-      lastName: userInfo.family_name
-    },
+    firstName: userInfo.given_name,
+    lastName: userInfo.family_name,
     ...userInfo.zoneinfo && { timezone: userInfo.zoneinfo },
     tenantId,
     authType: 'jwt',

@@ -945,7 +945,7 @@ Resources:
           Type: Api
           Properties:
             RestApiId: !Ref DashboardApi
-            Path: /profiles/{username}
+            Path: /profiles/{userId}
             Method: GET
 
   CheckBrandIdFunction:

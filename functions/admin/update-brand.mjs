@@ -22,7 +22,7 @@ export const handler = async (event) => {
 
     // If this is first time and brandId is provided, we need to create the tenant record
     let finalTenantId = tenantId;
-    const isFirstTimeBrandSave = !hasBrandAlready && brandData.brandId;
+    const isFirstTimeBrandSave = !hasBrandAlready && brandData.hasOwnProperty('brandId');
 
     if (isFirstTimeBrandSave) {
       const isBrandIdAvailable = await checkBrandIdAvailability(brandData.brandId);
@@ -124,9 +124,11 @@ const updateBrandInfo = async (tenantId, brandData) => {
       const oldBrandLogo = oldAttributes.brandLogo;
 
       if (oldBrandLogo && oldBrandLogo !== brandData.brandLogo) {
-        triggerS3Cleanup(oldBrandLogo).catch(error => {
+        try {
+          await triggerS3Cleanup(oldBrandLogo);
+        } catch (error) {
           console.error('Failed to trigger S3 cleanup event:', error);
-        });
+        };
       }
     }
   }

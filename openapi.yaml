@@ -42,7 +42,7 @@ paths:
           Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetDashboardDataFunction.Arn}/invocations
         httpMethod: POST
         type: aws_proxy
-      security:
+      # security:
         # - CognitoUserPool: []
 
   /users:
@@ -81,7 +81,7 @@ paths:
           Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ManageUserFunction.Arn}/invocations
         httpMethod: POST
         type: aws_proxy
-      security:
+      # security:
         # - CognitoUserPool: []
 
 components:

@@ -167,7 +167,7 @@ paths:
         description: The user id to look up
     get:
       summary: Get public profile by user id
-      description: Retrieves another user's public profile information (sensitive data excluded)
+      description: Retrieves another user's public profile information
       tags:
         - Profile
       responses:

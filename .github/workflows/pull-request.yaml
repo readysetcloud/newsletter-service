@@ -46,7 +46,7 @@ jobs:
           --resolve-s3 \
           --no-fail-on-empty-changeset \
           --capabilities CAPABILITY_IAM \
-          --parameter-overrides Environment=stage EncryptionKey=${{secrets.ENCRYPTION_KEY}}
+          --parameter-overrides Environment=stage EncryptionKey=${{secrets.ENCRYPTION_KEY}} MomentoCacheName=newsletter MomentoApiKey=${{secrets.MOMENTO_API_KEY}}
 
   deploy-dependabot:
     name: Deploy Dependabot Updates
@@ -77,7 +77,7 @@ jobs:
           --resolve-s3 \
           --no-fail-on-empty-changeset \
           --capabilities CAPABILITY_IAM \
-          --parameter-overrides Environment=stage EncryptionKey=${{secrets.ENCRYPTION_KEY}}
+          --parameter-overrides Environment=stage EncryptionKey=${{secrets.ENCRYPTION_KEY}} MomentoCacheName=newsletter MomentoApiKey=${{secrets.MOMENTO_API_KEY}}
 
   auto-merge-dependabot-update:
     name: Auto Merge Dependabot Update

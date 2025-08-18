@@ -1,7 +1,12 @@
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { format, parseISO } from 'date-fns';
 
-export default function IssuePerformanceChart({ issues }) {
+import type { Issue } from '@/types/api';
+
+interface IssuePerformanceChartProps {
+  issues: Issue[];
+}
+
+export default function IssuePerformanceChart({ issues }: IssuePerformanceChartProps) {
   const chartData = issues?.map(issue => ({
     name: issue.title,
     slug: issue.slug,
@@ -11,12 +16,12 @@ export default function IssuePerformanceChart({ issues }) {
     bounceRate: issue.metrics?.bounceRate || 0
   })).reverse() || [];
 
-  const CustomTooltip = ({ active, payload, label }) => {
+  const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
       return (
         <div className="bg-white p-4 border border-gray-200 rounded-lg shadow-lg">
           <p className="font-medium text-gray-900">{label}</p>
-          {payload.map((entry, index) => (
+          {payload.map((entry: any, index: number) => (
             <p key={index} className="text-sm" style={{ color: entry.color }}>
               {entry.name}: {entry.value.toFixed(2)}%
             </p>

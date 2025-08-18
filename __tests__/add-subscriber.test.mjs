@@ -1,131 +1,214 @@
+// __tests__/add-subscriber.test.mjs
 import { jest, describe, test, expect, beforeEach } from '@jest/globals';
 
-// Mock SES client
-jest.unstable_mockModule('@aws-sdk/client-sesv2', () => ({
-  SESv2Client: jest.fn(() => ({
-    send: jest.fn()
-  })),
-  CreateContactCommand: jest.fn()
-}));
+let handler;
+let sesInstance;
+let ddbInstance;
+let CreateContactCommand;
+let UpdateItemCommand;
+let marshall;
+let publishSubscriberEvent;
+let EVENT_TYPES;
+let mockGetTenant;
+let mockFormatResponse;
 
-// Mock DynamoDB client
-jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
-  DynamoDBClient: jest.fn(() => ({
-    send: jest.fn()
-  })),
-  UpdateItemCommand: jest.fn()
-}));
+async function loadIsolated() {
+  await jest.isolateModulesAsync(async () => {
+    // Shared client instances captured at import time
+    sesInstance = { send: jest.fn() };
+    ddbInstance = { send: jest.fn() };
 
-// Mock util-dynamodb
-jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
-  marshall: jest.fn()
-}));
+    // SES
+    jest.unstable_mockModule('@aws-sdk/client-sesv2', () => ({
+      SESv2Client: jest.fn(() => sesInstance),
+      CreateContactCommand: jest.fn((params) => ({ __type: 'CreateContact', ...params })),
+    }));
 
-// Mock helpers
-jest.unstable_mockModule('../functions/utils/helpers.mjs', () => ({
-  getTenant: jest.fn(),
-  formatResponse: jest.fn()
-}));
+    // DDB
+    jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
+      DynamoDBClient: jest.fn(() => ddbInstance),
+      UpdateItemCommand: jest.fn((params) => ({ __type: 'UpdateItem', ...params })),
+    }));
 
-// Import handler AFTER mocks
-const { handler } = await import('../functions/subscribers/add-subscriber.mjs');
-const { SESv2Client, CreateContactCommand } = await import('@aws-sdk/client-sesv2');
-const { DynamoDBClient, UpdateItemCommand } = await import('@aws-sdk/client-dynamodb');
-const { marshall } = await import('@aws-sdk/util-dynamodb');
-const { getTenant, formatResponse } = await import('../functions/utils/helpers.mjs');
+    // util-dynamodb
+    jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
+      marshall: jest.fn((k) => k),
+    }));
 
-describe('Lambda Handler', () => {
-  let mockSesClient, mockDdbClient;
-
-  beforeEach(() => {
-    jest.resetAllMocks();
-    process.env.TABLE_NAME = 'test-table';
-    process.env.ORIGIN = 'https://www.readysetcloud.io';
-
-    mockSesClient = {
-      send: jest.fn()
-    };
-    mockDdbClient = {
-      send: jest.fn()
-    };
-
-    SESv2Client.mockReturnValue(mockSesClient);
-    DynamoDBClient.mockReturnValue(mockDdbClient);
-    marshall.mockReturnValue({ pk: { S: 'test' }, sk: { S: 'tenant' } });
-    formatResponse.mockImplementation((statusCode, body) => ({
+    // helpers (formatResponse + getTenant)
+    mockGetTenant = jest.fn();
+    mockFormatResponse = jest.fn((statusCode, body) => ({
       statusCode,
       body: JSON.stringify({ message: body }),
       headers: {
         'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': process.env.ORIGIN
-      }
+        ...(process.env.ORIGIN ? { 'Access-Control-Allow-Origin': process.env.ORIGIN } : {}),
+      },
     }));
+    jest.unstable_mockModule('../functions/utils/helpers.mjs', () => ({
+      getTenant: mockGetTenant,
+      formatResponse: mockFormatResponse,
+    }));
+
+    // event publisher
+    const _mockPublishSubscriberEvent = jest.fn();
+    jest.unstable_mockModule('../functions/utils/event-publisher.mjs', () => ({
+      publishSubscriberEvent: _mockPublishSubscriberEvent,
+      EVENT_TYPES: { SUBSCRIBER_ADDED: 'SUBSCRIBER_ADDED' },
+    }));
+
+    // Import AFTER mocks, inside isolation
+    ({ handler } = await import('../functions/subscribers/add-subscriber.mjs'));
+    ({ CreateContactCommand } = await import('@aws-sdk/client-sesv2'));
+    ({ UpdateItemCommand } = await import('@aws-sdk/client-dynamodb'));
+    ({ marshall } = await import('@aws-sdk/util-dynamodb'));
+    ({ publishSubscriberEvent, EVENT_TYPES } = await import('../functions/utils/event-publisher.mjs'));
   });
 
-  test('should handle missing tenant', async () => {
-    getTenant.mockResolvedValue(null);
-    formatResponse.mockReturnValue({
-      statusCode: 404,
-      body: JSON.stringify({ message: 'Tenant not found' })
-    });
+  return {
+    handler,
+    sesInstance,
+    ddbInstance,
+    CreateContactCommand,
+    UpdateItemCommand,
+    marshall,
+    publishSubscriberEvent,
+    EVENT_TYPES,
+    mockGetTenant,
+    mockFormatResponse,
+  };
+}
+
+describe('add-subscriber handler (isolated)', () => {
+  beforeEach(async () => {
+    jest.resetModules(); // clear module cache between tests
+    process.env.TABLE_NAME = 'test-table';
+    process.env.ORIGIN = 'https://www.readysetcloud.io';
+    await loadIsolated();
+  });
+
+  test('returns 404 when tenant not found', async () => {
+    mockGetTenant.mockResolvedValue(null);
 
     const event = {
-      pathParameters: { tenant: 'test-tenant' },
+      pathParameters: { tenant: 'missing-tenant' },
+      body: JSON.stringify({ email: 'a@b.com' }),
+    };
+
+    const res = await handler(event);
+    expect(mockGetTenant).toHaveBeenCalledWith('missing-tenant');
+    expect(res && res.statusCode).toBe(404);
+    expect(sesInstance.send).not.toHaveBeenCalled();
+    expect(ddbInstance.send).not.toHaveBeenCalled();
+    expect(publishSubscriberEvent).not.toHaveBeenCalled();
+  });
+
+  test('returns 400 when body is missing', async () => {
+    mockGetTenant.mockResolvedValue({ id: 't1', list: 'list-1', subscribers: 10 });
+
+    const event = { pathParameters: { tenant: 't1' } };
+    const res = await handler(event);
+
+    expect(res && res.statusCode).toBe(400);
+    expect(sesInstance.send).not.toHaveBeenCalled();
+    expect(ddbInstance.send).not.toHaveBeenCalled();
+    expect(publishSubscriberEvent).not.toHaveBeenCalled();
+  });
+
+  test('returns 400 when email is missing', async () => {
+    mockGetTenant.mockResolvedValue({ id: 't1', list: 'list-1', subscribers: 10 });
+
+    const event = {
+      pathParameters: { tenant: 't1' },
+      body: JSON.stringify({ firstName: 'John' }),
+    };
+
+    const res = await handler(event);
+
+    expect(res && res.statusCode).toBe(400);
+    expect(sesInstance.send).not.toHaveBeenCalled();
+    expect(ddbInstance.send).not.toHaveBeenCalled();
+    expect(publishSubscriberEvent).not.toHaveBeenCalled();
+  });
+
+  test('adds contact, increments count, and publishes event', async () => {
+    const tenant = { id: 't1', list: 'list-1', subscribers: 5 };
+    mockGetTenant.mockResolvedValue(tenant);
+    sesInstance.send.mockResolvedValue({});
+    ddbInstance.send.mockResolvedValue({});
+
+    const event = {
+      pathParameters: { tenant: 't1' },
       body: JSON.stringify({
         email: 'test@example.com',
         firstName: 'John',
-        lastName: 'Doe'
-      })
+        lastName: 'Doe',
+      }),
     };
 
-    const response = await handler(event);
+    const res = await handler(event);
+    expect(res && res.statusCode).toBe(201);
 
-    expect(getTenant).toHaveBeenCalledWith('test-tenant');
-    expect(response.statusCode).toBe(404);
-  });
+    // SES
+    expect(sesInstance.send).toHaveBeenCalledTimes(1);
+    const sesArg = sesInstance.send.mock.calls[0][0];
+    expect(sesArg.__type).toBe('CreateContact');
+    expect(sesArg.ContactListName).toBe('list-1');
+    expect(sesArg.EmailAddress).toBe('test@example.com');
+    expect(JSON.parse(sesArg.AttributesData)).toEqual({ firstName: 'John', lastName: 'Doe' });
 
-  test('should add contact successfully', async () => {
-    const mockTenant = { list: 'test-list', id: 'test-tenant' };
-    getTenant.mockResolvedValue(mockTenant);
-    mockSesClient.send.mockResolvedValue({});
-    mockDdbClient.send.mockResolvedValue({});
+    // DDB increment
+    expect(marshall).toHaveBeenCalledWith({ pk: 't1', sk: 'tenant' });
+    expect(ddbInstance.send).toHaveBeenCalledTimes(1);
+    const ddbArg = ddbInstance.send.mock.calls[0][0];
+    expect(ddbArg.__type).toBe('UpdateItem');
+    expect(ddbArg.TableName).toBe('test-table');
+    expect(ddbArg.UpdateExpression).toBe('SET #subscribers = #subscribers + :val');
 
-    const event = {
-      pathParameters: { tenant: 'test-tenant' },
-      body: JSON.stringify({
-        email: 'test@example.com',
-        firstName: 'John',
-        lastName: 'Doe'
-      })
-    };
-
-    const response = await handler(event);
-
-    expect(getTenant).toHaveBeenCalledWith('test-tenant');
-    expect(CreateContactCommand).toHaveBeenCalledWith({
-      ContactListName: 'test-list',
-      EmailAddress: 'test@example.com',
-      AttributesData: JSON.stringify({
-        firstName: 'John',
-        lastName: 'Doe'
-      })
+    // Event
+    expect(publishSubscriberEvent).toHaveBeenCalledTimes(1);
+    const [tenantId, userId, eventType, details] = publishSubscriberEvent.mock.calls[0];
+    expect(tenantId).toBe('t1');
+    expect(userId).toBeNull();
+    expect(eventType).toBe(EVENT_TYPES.SUBSCRIBER_ADDED);
+    expect(details).toMatchObject({
+      email: 'test@example.com',
+      firstName: 'John',
+      lastName: 'Doe',
+      subscriberCount: 6,
     });
-    expect(UpdateItemCommand).toHaveBeenCalled();
-    expect(response.statusCode).toBe(201);
+    expect(typeof details.addedAt).toBe('string');
   });
 
-  test('should handle errors gracefully', async () => {
-    getTenant.mockRejectedValue(new Error('Database error'));
+  test('AlreadyExistsException → still 201, no DDB increment or event', async () => {
+    const tenant = { id: 't1', list: 'list-1', subscribers: 5 };
+    mockGetTenant.mockResolvedValue(tenant);
+    sesInstance.send.mockRejectedValue(Object.assign(new Error('exists'), { name: 'AlreadyExistsException' }));
 
     const event = {
-      pathParameters: { tenant: 'test-tenant' },
-      body: JSON.stringify({
-        email: 'test@example.com'
-      })
+      pathParameters: { tenant: 't1' },
+      body: JSON.stringify({ email: 'dup@example.com' }),
     };
 
-    const response = await handler(event);
+    const res = await handler(event);
+    expect(res && res.statusCode).toBe(201);
+    expect(ddbInstance.send).not.toHaveBeenCalled();
+    expect(publishSubscriberEvent).not.toHaveBeenCalled();
+  });
 
-    expect(response.statusCode).toBe(500);
+  test('unexpected SES error → 500', async () => {
+    const tenant = { id: 't1', list: 'list-1', subscribers: 5 };
+    mockGetTenant.mockResolvedValue(tenant);
+    sesInstance.send.mockRejectedValue(new Error('SES blew up'));
+
+    const event = {
+      pathParameters: { tenant: 't1' },
+      body: JSON.stringify({ email: 'x@y.com' }),
+    };
+
+    const res = await handler(event);
+    expect(res && res.statusCode).toBe(500);
+    expect(ddbInstance.send).not.toHaveBeenCalled();
+    expect(publishSubscriberEvent).not.toHaveBeenCalled();
   });
 });

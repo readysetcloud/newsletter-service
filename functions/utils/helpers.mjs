@@ -72,6 +72,19 @@ export const formatEmptyResponse = () => {
     }
   };
 };
+/**
+ * Helper to format authorization error responses
+ */
+export const formatAuthError = (message = 'Unauthorized') => {
+  return {
+    statusCode: 403,
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': process.env.ORIGIN || '*'
+    },
+    body: JSON.stringify({ message })
+  };
+};
 
 const getKey = () => {
   return crypto.createHash('sha256').update(process.env.EMAIL_ENCRYPTION_KEY).digest();

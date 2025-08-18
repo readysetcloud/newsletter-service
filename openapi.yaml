@@ -1,13 +1,9 @@
 openapi: 3.0.0
 info:
-  title: Content Dashboard API
+  title: Content API
   description: |
     Used to manage content from the user interface
   version: 1.0.0
-
-servers:
-  - description: prod
-    url: https://api.readysetcloud.io
 
 x-amazon-apigateway-request-validators:
   Validate All:
@@ -19,7 +15,26 @@ x-amazon-apigateway-gateway-responses:
     responseTemplates:
       application/json: '{ "message": "$context.error.validationErrorString" }'
     responseParameters:
-      gatewayresponse.header.Access-Control-Allow-Origin: "'https://www.readysetcloud.io'"
+      gatewayresponse.header.Access-Control-Allow-Origin:
+        Fn::Sub: "'${Origin}'"
+      gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
+      gatewayresponse.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+  DEFAULT_4XX:
+    responseParameters:
+      gatewayresponse.header.Access-Control-Allow-Origin:
+        Fn::Sub: "'${Origin}'"
+      gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
+      gatewayresponse.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+  DEFAULT_5XX:
+    responseParameters:
+      gatewayresponse.header.Access-Control-Allow-Origin:
+        Fn::Sub: "'${Origin}'"
+      gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
+      gatewayresponse.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+
+tags:
+  - name: API Keys
+  - name: Profile
 
 paths:
   /dashboard:
@@ -42,12 +57,351 @@ paths:
           Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetDashboardDataFunction.Arn}/invocations
         httpMethod: POST
         type: aws_proxy
-      # security:
-        # - CognitoUserPool: []
 
-  /users:
+  /me:
+    get:
+      summary: Get my complete profile
+      description: Retrieves the authenticated user's complete profile including brand and personal details
+      tags:
+        - Profile
+      responses:
+        200:
+          description: Complete user profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  userId:
+                    type: string
+                  email:
+                    type: string
+                  username:
+                    type: string
+                    nullable: true
+                  # Brand & Business Details
+                  brand:
+                    type: object
+                    properties:
+                      brandName:
+                        type: string
+                        nullable: true
+                      website:
+                        type: string
+                        nullable: true
+                      industry:
+                        type: string
+                        nullable: true
+                      brandDescription:
+                        type: string
+                        nullable: true
+                      brandLogo:
+                        type: string
+                        nullable: true
+                      tags:
+                        type: array
+                        items:
+                          type: string
+                        nullable: true
+                  # Personal Details
+                  profile:
+                    type: object
+                    properties:
+                      firstName:
+                        type: string
+                        nullable: true
+                      lastName:
+                        type: string
+                        nullable: true
+                      links:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            name:
+                              type: string
+                            url:
+                              type: string
+                        nullable: true
+                  # Preferences
+                  preferences:
+                    type: object
+                    properties:
+                      timezone:
+                        type: string
+                        nullable: true
+                      locale:
+                        type: string
+                        nullable: true
+                  # Metadata
+                  lastModified:
+                    type: string
+                    format: date-time
+                  profileUpdatedAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+                  brandUpdatedAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetProfileFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
+  /profiles/{userId}:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The user id to look up
+    get:
+      summary: Get public profile by user id
+      description: Retrieves another user's public profile information
+      tags:
+        - Profile
+      responses:
+        200:
+          description: Public user profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  brand:
+                    type: object
+                    properties:
+                      brandName:
+                        type: string
+                        nullable: true
+                      website:
+                        type: string
+                        nullable: true
+                      industry:
+                        type: string
+                        nullable: true
+                      brandDescription:
+                        type: string
+                        nullable: true
+                      brandLogo:
+                        type: string
+                        nullable: true
+                      tags:
+                        type: array
+                        items:
+                          type: string
+                        nullable: true
+                  profile:
+                    type: object
+                    properties:
+                      firstName:
+                        type: string
+                        nullable: true
+                      lastName:
+                        type: string
+                        nullable: true
+                      links:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            name:
+                              type: string
+                            url:
+                              type: string
+                        nullable: true
+                  lastModified:
+                    type: string
+                    format: date-time
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetProfileFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
+  /brand/logo:
     post:
-      summary: Create an authorized user on the account
+      summary: Generate presigned URL for brand photo upload
+      description: Generates a presigned URL for uploading a brand photo to S3
+      tags:
+        - Profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - fileName
+                - contentType
+              properties:
+                fileName:
+                  type: string
+                  maxLength: 255
+                  description: Name of the file to upload
+                contentType:
+                  type: string
+                  enum: ["image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"]
+                  description: MIME type of the image file
+              additionalProperties: false
+      responses:
+        200:
+          description: Presigned URL generated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uploadUrl:
+                    type: string
+                    description: Presigned URL for uploading the file
+                  key:
+                    type: string
+                    description: S3 key where the file will be stored
+                  expiresIn:
+                    type: number
+                    description: URL expiration time in seconds
+                  maxSize:
+                    type: number
+                    description: Maximum file size in bytes (2MB)
+                  publicUrl:
+                    type: string
+                    description: Public URL where the file will be accessible
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-request-validator: Validate All
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UploadBrandPhotoFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
+    put:
+      summary: Confirm brand photo upload
+      description: Confirms that a brand photo has been successfully uploaded and updates the tenant record
+      tags:
+        - Profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - key
+              properties:
+                key:
+                  type: string
+                  description: S3 key of the uploaded file
+                fileName:
+                  type: string
+                  description: Original file name
+              additionalProperties: false
+      responses:
+        200:
+          description: Brand photo confirmed and tenant record updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  photoUrl:
+                    type: string
+                    description: Public URL of the uploaded photo
+                  key:
+                    type: string
+                    description: S3 key of the uploaded file
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-request-validator: Validate All
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UploadBrandPhotoFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
+  /brand/validate:
+    get:
+      summary: Validate brand ID
+      description: Validates a brand ID format and checks if it's available for use as a tenant identifier
+      parameters:
+        - name: brandId
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 3
+            maxLength: 50
+            pattern: '^[a-z]+$'
+          description: The brand ID to validate for availability
+      responses:
+        200:
+          description: Brand ID availability check result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  available:
+                    type: boolean
+                    description: Whether the brand ID is available
+                  brandId:
+                    type: string
+                    description: The brand ID that was checked
+                  suggestions:
+                    type: array
+                    description: Alternative brand ID suggestions if not available
+                    items:
+                      type: string
+                  error:
+                    type: string
+                    description: Error message if brand ID format is invalid
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CheckBrandIdFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
+  /me/brand:
+    put:
+      summary: Update my brand details
+      description: Updates the authenticated user's brand and business information
+      tags:
+        - Profile
       requestBody:
         required: true
         content:
@@ -55,34 +409,445 @@ paths:
             schema:
               type: object
               properties:
-                email:
+                brandId:
                   type: string
-                  description: Email address
-                  minLength: 4
-                firstName:
+                  minLength: 3
+                  maxLength: 50
+                  pattern: '^[a-z]+$'
+                  description: Unique brand identifier (becomes tenant ID and subdomain)
+                brandName:
                   type: string
-                lastName:
+                  maxLength: 100
+                  description: Brand or business name (primary identifier)
+                website:
                   type: string
-                role:
+                  maxLength: 200
+                  pattern: '^https?://.+'
+                  description: Brand website URL
+                industry:
                   type: string
-                temporaryPassword:
+                  maxLength: 100
+                  description: Industry or business category
+                brandDescription:
                   type: string
-              required: [email, temporaryPassword]
+                  maxLength: 500
+                  description: Brand description or mission statement
+                brandLogo:
+                  type: string
+                  maxLength: 500
+                  description: URL to brand logo image
+                tags:
+                  type: array
+                  items:
+                    type: string
+                    maxLength: 50
+                  maxItems: 10
+                  description: Brand tags for categorization
+              additionalProperties: false
+              minProperties: 1
       responses:
-        201:
-          $ref: "#/components/responses/Created"
+        200:
+          description: Brand details updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  brand:
+                    type: object
+                    properties:
+                      brandName:
+                        type: string
+                        nullable: true
+                      website:
+                        type: string
+                        nullable: true
+                      industry:
+                        type: string
+                        nullable: true
+                      brandDescription:
+                        type: string
+                        nullable: true
+                      brandLogo:
+                        type: string
+                        nullable: true
+                      tags:
+                        type: array
+                        items:
+                          type: string
+                        nullable: true
+                      updatedAt:
+                        type: string
+                        format: date-time
         400:
           $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
         500:
           $ref: "#/components/responses/UnknownError"
       x-amazon-apigateway-request-validator: Validate All
       x-amazon-apigateway-integration:
         uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ManageUserFunction.Arn}/invocations
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UpdateBrandFunction.Arn}/invocations
         httpMethod: POST
         type: aws_proxy
-      # security:
-        # - CognitoUserPool: []
+
+  /me/profile:
+    put:
+      summary: Update my personal profile
+      description: Updates the authenticated user's personal information and preferences
+      tags:
+        - Profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                firstName:
+                  type: string
+                  maxLength: 50
+                  description: User's first name
+                lastName:
+                  type: string
+                  maxLength: 50
+                  description: User's last name
+                timezone:
+                  type: string
+                  maxLength: 50
+                  description: User's timezone (e.g., America/New_York)
+                locale:
+                  type: string
+                  maxLength: 10
+                  pattern: '^[a-z]{2}(-[A-Z]{2})?$'
+                  description: User's locale (e.g., en-US)
+                links:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                        maxLength: 100
+                      url:
+                        type: string
+                        maxLength: 500
+                    required: [name, url]
+                  maxItems: 10
+                  description: User's social/professional links
+              additionalProperties: false
+              minProperties: 1
+      responses:
+        200:
+          description: Personal profile updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  profile:
+                    type: object
+                    properties:
+                      firstName:
+                        type: string
+                        nullable: true
+                      lastName:
+                        type: string
+                        nullable: true
+                      timezone:
+                        type: string
+                        nullable: true
+                      locale:
+                        type: string
+                        nullable: true
+                      links:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            name:
+                              type: string
+                            url:
+                              type: string
+                        nullable: true
+                      updatedAt:
+                        type: string
+                        format: date-time
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-request-validator: Validate All
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UpdateProfileFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
+  /api-keys:
+    post:
+      summary: Create a new API key
+      description: Creates a new API key for the authenticated user
+      tags:
+        - API Keys
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+                  maxLength: 100
+                  description: Human-readable name for the API key
+                description:
+                  type: string
+                  maxLength: 500
+                  description: Optional description of the API key's purpose
+                expiresAt:
+                  type: string
+                  format: date-time
+                  description: Optional expiration date (ISO 8601 format)
+              additionalProperties: false
+      responses:
+        201:
+          description: API key created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  apiKey:
+                    type: object
+                    properties:
+                      keyId:
+                        type: string
+                        description: Unique identifier for the API key
+                      name:
+                        type: string
+                      description:
+                        type: string
+                        nullable: true
+                      keyValue:
+                        type: string
+                        description: The actual API key value (only shown once)
+                      tenantId:
+                        type: string
+                        nullable: true
+                      createdAt:
+                        type: string
+                        format: date-time
+                      expiresAt:
+                        type: string
+                        format: date-time
+                        nullable: true
+                      status:
+                        type: string
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-request-validator: Validate All
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ManageApiKeysFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
+    get:
+      summary: List API keys
+      description: Lists all API keys for the authenticated user
+      tags:
+        - API Keys
+      responses:
+        200:
+          description: List of API keys
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  apiKeys:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        keyId:
+                          type: string
+                        name:
+                          type: string
+                        description:
+                          type: string
+                          nullable: true
+                        keyValue:
+                          type: string
+                          description: Always shows "***hidden***"
+                        tenantId:
+                          type: string
+                          nullable: true
+                        createdAt:
+                          type: string
+                          format: date-time
+                        lastUsed:
+                          type: string
+                          format: date-time
+                          nullable: true
+                        usageCount:
+                          type: number
+                        expiresAt:
+                          type: string
+                          format: date-time
+                          nullable: true
+                        status:
+                          type: string
+                        revokedAt:
+                          type: string
+                          format: date-time
+                          nullable: true
+                  count:
+                    type: number
+        403:
+          $ref: "#/components/responses/Forbidden"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ManageApiKeysFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
+  /api-keys/{keyId}:
+    parameters:
+      - name: keyId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The API key identifier
+    get:
+      summary: Get API key details
+      description: Gets details of a specific API key (without the key value)
+      tags:
+        - API Keys
+      responses:
+        200:
+          description: API key details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  apiKey:
+                    type: object
+                    properties:
+                      keyId:
+                        type: string
+                      name:
+                        type: string
+                      description:
+                        type: string
+                        nullable: true
+                      keyValue:
+                        type: string
+                        description: Always shows "***hidden***"
+                      tenantId:
+                        type: string
+                        nullable: true
+                      createdAt:
+                        type: string
+                        format: date-time
+                      lastUsed:
+                        type: string
+                        format: date-time
+                        nullable: true
+                      usageCount:
+                        type: number
+                      expiresAt:
+                        type: string
+                        format: date-time
+                        nullable: true
+                      status:
+                        type: string
+                      revokedAt:
+                        type: string
+                        format: date-time
+                        nullable: true
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ManageApiKeysFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
+    delete:
+      summary: Delete or revoke API key
+      description: Deletes a specific API key permanently, or revokes it if revoke=true query parameter is provided
+      tags:
+        - API Keys
+      parameters:
+        - name: revoke
+          in: query
+          required: false
+          schema:
+            type: boolean
+          description: If true, revokes the API key instead of deleting it
+      responses:
+        200:
+          description: API key deleted or revoked successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  keyId:
+                    type: string
+                  status:
+                    type: string
+                    description: Only present when revoking (status will be 'revoked')
+                  revokedAt:
+                    type: string
+                    format: date-time
+                    description: Only present when revoking
+        204:
+          description: API key deleted successfully (no content)
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ManageApiKeysFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
 
 components:
   parameters:
@@ -100,22 +865,6 @@ components:
       schema:
         type: string
         description: Issue slug
-
-  schemas:
-    Subscriber:
-      description: New subscriber details
-      type: object
-      required:
-        - email
-      properties:
-        email:
-          type: string
-          description: Email address
-          minLength: 4
-        firstName:
-          type: string
-        lastName:
-          type: string
 
   responses:
     Created:
@@ -144,6 +893,19 @@ components:
                 type: string
                 description: Message detailing what went wrong
                 example: The 'name' field is required and is missing.
+    Forbidden:
+      description: Access denied. User does not have permission to perform this action.
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - message
+            properties:
+              message:
+                type: string
+                description: Message explaining the access denial
+                example: Admin access required
     NotFound:
       description: The requested entity was not found
       content:
@@ -170,12 +932,3 @@ components:
                 type: string
                 description: Unknown error message
                 example: An unexpected error occurred.
-  # securitySchemes:
-  #   CognitoUserPool:
-  #     type: apiKey
-  #     name: Authorization
-  #     in: header
-  #     x-amazon-apigateway-authorizer:
-  #       type: cognito_user_pools
-  #       providerARNs:
-  #         - Fn::Sub: arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${NewsletterUserPool}

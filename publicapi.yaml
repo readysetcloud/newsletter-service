@@ -5,10 +5,6 @@ info:
     Public endpoints for content management
   version: 1.0.0
 
-servers:
-  - description: prod
-    url: https://api.readysetcloud.io
-
 x-amazon-apigateway-request-validators:
   Validate All:
     validateRequestParameters: true
@@ -19,7 +15,8 @@ x-amazon-apigateway-gateway-responses:
     responseTemplates:
       application/json: '{ "message": "$context.error.validationErrorString" }'
     responseParameters:
-      gatewayresponse.header.Access-Control-Allow-Origin: "'https://www.readysetcloud.io'"
+      gatewayresponse.header.Access-Control-Allow-Origin:
+        Fn::Sub: "'${Origin}'"
 
 tags:
   - name: Subscription

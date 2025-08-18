@@ -1,12 +1,16 @@
 import { useState, useEffect } from 'react';
-import { Users, Mail, TrendingUp, BarChart3 } from 'lucide-react';
+import { Users, Mail, TrendingUp, BarChart3, RefreshCw } from 'lucide-react';
 import MetricsCard from '../components/MetricsCard';
 import IssuePerformanceChart from '../components/IssuePerformanceChart';
+import { useNotifications } from '../hooks/useNotifications';
 
 export default function Dashboard() {
   const [dashboardData, setDashboardData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [timeframe, setTimeframe] = useState('30d');
+
+  const { isSubscribed, error: notificationError } = useNotifications();
 
   useEffect(() => {
     fetchDashboardData();
@@ -15,12 +19,14 @@ export default function Dashboard() {
   const fetchDashboardData = async () => {
     try {
       setLoading(true);
+      setError(null);
       // Replace with your actual API endpoint
       const response = await fetch(`/api/readysetcloud/dashboard?timeframe=${timeframe}`);
       const data = await response.json();
       setDashboardData(data);
-    } catch (error) {
-      console.error('Failed to fetch dashboard data:', error);
+    } catch (err) {
+      console.error('Failed to fetch dashboard data:', err);
+      setError(err.message);
     } finally {
       setLoading(false);
     }
@@ -30,6 +36,22 @@ export default function Dashboard() {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-red-600 mb-4">Failed to load dashboard: {error}</p>
+          <button
+            onClick={refresh}
+            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+          >
+            Try Again
+          </button>
+        </div>
       </div>
     );
   }
@@ -47,6 +69,25 @@ export default function Dashboard() {
               <p className="text-gray-600">{tenant?.name || 'Ready Set Cloud'}</p>
             </div>
             <div className="flex items-center space-x-4">
+              {/* Simple connection status */}
+              <div className="flex items-center space-x-2 text-sm">
+                <div className={`w-2 h-2 rounded-full ${isSubscribed ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                <span className={isSubscribed ? 'text-green-600' : 'text-red-600'}>
+                  {isSubscribed ? 'Live' : 'Offline'}
+                </span>
+                {notificationError && (
+                  <span className="text-red-500 text-xs">({notificationError})</span>
+                )}
+              </div>
+
+              <button
+                onClick={fetchDashboardData}
+                className="p-2 hover:bg-gray-100 rounded"
+                title="Refresh data"
+              >
+                <RefreshCw className="w-4 h-4 text-gray-600" />
+              </button>
+
               <select
                 value={timeframe}
                 onChange={(e) => setTimeframe(e.target.value)}
@@ -148,6 +189,8 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+
     </div>
   );
 }

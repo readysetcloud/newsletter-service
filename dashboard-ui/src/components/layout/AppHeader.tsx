@@ -48,8 +48,8 @@ export const AppHeader: React.FC = () => {
               <h1 className="text-xl md:text-2xl font-bold text-gray-900 truncate">
                 Newsletter Admin
               </h1>
-              <p className="text-gray-600 text-xs md:text-sm truncate" aria-label={`Welcome back, ${user?.email}`}>
-                Welcome back, {user?.email}
+              <p className="text-gray-600 text-xs md:text-sm truncate" aria-label={`Welcome back, ${user?.firstName ?? user?.email}`}>
+                Welcome back, {user?.firstName ?? user?.email}!
               </p>
             </div>
 

@@ -9,13 +9,14 @@ import { ErrorBoundary, RouteErrorBoundary } from '@/components/error';
 import { PageLoader } from '@/components/ui/LazyLoader';
 import {
   LazyLoginPage,
+  LazySignUpPage,
   LazyDashboardPage,
   LazyBrandPage,
   LazyProfilePage,
   LazyApiKeysPage,
   preloadCriticalRoutes
 } from '@/utils/lazyImports';
-import { BrandOnboardingPage } from '@/pages/onboarding/BrandOnboardingPage';
+import { BrandOnboardingPage, ProfileOnboardingPage } from '@/pages/onboarding';
 import { useEffect } from 'react';
 
 function App() {
@@ -49,6 +50,16 @@ function App() {
                       </RouteErrorBoundary>
                     }
                   />
+                  <Route
+                    path="/signup"
+                    element={
+                      <RouteErrorBoundary routeName="Sign Up">
+                        <PageLoader>
+                          <LazySignUpPage />
+                        </PageLoader>
+                      </RouteErrorBoundary>
+                    }
+                  />
 
                   {/* Onboarding Routes */}
                   <Route
@@ -57,6 +68,16 @@ function App() {
                       <RouteErrorBoundary routeName="Brand Onboarding">
                         <ProtectedRoute>
                           <BrandOnboardingPage />
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/onboarding/profile"
+                    element={
+                      <RouteErrorBoundary routeName="Profile Onboarding">
+                        <ProtectedRoute>
+                          <ProfileOnboardingPage />
                         </ProtectedRoute>
                       </RouteErrorBoundary>
                     }

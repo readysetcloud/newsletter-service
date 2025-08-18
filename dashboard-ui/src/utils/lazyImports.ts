@@ -9,6 +9,14 @@ export const LazyLoginPage = lazy(() =>
     })
 );
 
+export const LazySignUpPage = lazy(() =>
+  import('@/pages/auth/SignUpPage').then(module => ({ default: module.SignUpPage }))
+    .catch(error => {
+      console.error('Failed to load SignUpPage:', error);
+      throw error;
+    })
+);
+
 export const LazyDashboardPage = lazy(() =>
   import('@/pages/dashboard/DashboardPage').then(module => ({ default: module.DashboardPage }))
     .catch(error => {
@@ -49,6 +57,9 @@ export const preloadCriticalRoutes = () => {
   // Preload login page for unauthenticated users
   import('@/pages/auth/LoginPage');
 
+  // Preload signup page for new users
+  import('@/pages/auth/SignUpPage');
+
   // Preload onboarding for new users
   import('@/pages/onboarding/BrandOnboardingPage');
 };
@@ -70,6 +81,9 @@ export const preloadRoute = (routeName: string) => {
       break;
     case 'login':
       import('@/pages/auth/LoginPage');
+      break;
+    case 'signup':
+      import('@/pages/auth/SignUpPage');
       break;
     default:
       console.warn(`Unknown route for preloading: ${routeName}`);

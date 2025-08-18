@@ -1050,6 +1050,34 @@ Resources:
               detail-type:
                 - S3 Asset Cleanup
 
+  SetupEmailTenantFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - setup-email-tenant.mjs
+    Properties:
+      Handler: setup-email-tenant.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - sesv2:CreateTenant
+                - sesv2:CreateContactList
+                - sesv2:TagResource
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+
   UpdateProfileFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2250,7 +2278,7 @@ Resources:
         StripeConnectionArn: !GetAtt StripeConnection.Arn
         TableName: !Ref NewsletterTable
         HTTPInvoke: !Sub arn:${AWS::Partition}:states:::http:invoke
-        SESCreateContactList: !Sub arn:${AWS::Partition}:states:::aws-sdk:sesv2:createContactList
+        SetupEmailTenantFunction: !GetAtt SetupEmailTenantFunction.Arn
         DynamoDbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
         DynamoDbUpdateItem: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
@@ -2276,8 +2304,8 @@ Resources:
                 - secretsmanager:DescribeSecret
               Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:events!connection/*
             - Effect: Allow
-              Action: sesv2:CreateContactList
-              Resource: "*"
+              Action: lambda:InvokeFunction
+              Resource: !GetAtt SetupEmailTenantFunction.Arn
       Events:
         TenantFinalizedEvent:
           Type: EventBridgeRule

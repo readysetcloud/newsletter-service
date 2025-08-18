@@ -1,5 +1,5 @@
 
-import { Navigate } from 'react-router-dom';
+import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { LoginForm } from '@/components/auth/LoginForm';
 
@@ -47,6 +47,15 @@ export function LoginPage() {
 
       <div className="mt-8 text-center">
         <p className="text-sm text-gray-500">
+          Don't have an account?{' '}
+          <Link
+            to="/signup"
+            className="text-blue-600 hover:text-blue-700 font-medium"
+          >
+            Sign up
+          </Link>
+        </p>
+        <p className="text-sm text-gray-500 mt-2">
           Need help? Contact your administrator
         </p>
       </div>

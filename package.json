@@ -30,7 +30,7 @@
     "@aws-sdk/client-s3": "^3.844.0",
     "@aws-sdk/client-scheduler": "^3.844.0",
     "@aws-sdk/client-secrets-manager": "^3.592.0",
-    "@aws-sdk/client-sesv2": "^3.844.0",
+    "@aws-sdk/client-sesv2": "^3.864.0",
     "@aws-sdk/client-sfn": "^3.592.0",
     "@aws-sdk/client-ssm": "^3.592.0",
     "@aws-sdk/util-dynamodb": "^3.592.0",

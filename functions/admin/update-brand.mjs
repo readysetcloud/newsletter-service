@@ -17,7 +17,7 @@ export const handler = async (event) => {
     const { userId, email, tenantId } = userContext;
 
     const body = JSON.parse(event.body || '{}');
-    const hasBrandAlready = tenantId !== undefined;
+    const hasBrandAlready = tenantId !== undefined && tenantId != null;
     const brandData = extractBrandData(body);
 
     // If this is first time and brandId is provided, we need to create the tenant record
@@ -29,14 +29,13 @@ export const handler = async (event) => {
       if (!isBrandIdAvailable) {
         throw new Error(`Brand ID '${brandData.brandId}' is already taken`);
       }
-
       finalTenantId = brandData.brandId;
-      await createTenant(finalTenantId, userId, brandData);
+      await createTenantWithBrandData(finalTenantId, userId, brandData);
       await setUserTenantId(email, finalTenantId);
       await triggerTenantFinalizationWorkflows(finalTenantId, userId);
+    } else {
+      await updateBrandInfo(finalTenantId, brandData);
     }
-
-    await updateBrandInfo(finalTenantId, brandData);
 
     // Publish brand updated event after successful update
     await publishBrandEvent(
@@ -107,6 +106,7 @@ const updateBrandInfo = async (tenantId, brandData) => {
   const { updateExpression, expressionAttributeNames, expressionAttributeValues } = buildUpdateExpression(updateData);
 
   if (updateExpression) {
+    console.log('updating', updateExpression, tenantId);
     const updateResult = await ddb.send(new UpdateItemCommand({
       TableName: process.env.TABLE_NAME,
       Key: marshall({
@@ -149,24 +149,33 @@ const checkBrandIdAvailability = async (brandId) => {
   }
 };
 
-const createTenant = async (tenantId, userId, brandData) => {
+const createTenantWithBrandData = async (tenantId, userId, brandData) => {
   const now = new Date().toISOString();
+
+  const tenantItem = {
+    pk: tenantId,
+    sk: 'tenant',
+    brandName: brandData.brandName || 'Unknown',
+    createdBy: userId,
+    createdAt: now,
+    updatedAt: now,
+    status: 'pending',
+    subscribers: 0
+  };
+
+  if (brandData.website) tenantItem.website = brandData.website;
+  if (brandData.industry) tenantItem.industry = brandData.industry;
+  if (brandData.brandDescription) tenantItem.brandDescription = brandData.brandDescription;
+  if (brandData.brandLogo) tenantItem.brandLogo = brandData.brandLogo;
+  if (brandData.tags) tenantItem.tags = brandData.tags;
 
   await ddb.send(new PutItemCommand({
     TableName: process.env.TABLE_NAME,
-    Item: marshall({
-      pk: tenantId,
-      sk: 'tenant',
-      brandName: brandData.brandName || 'Unknown',
-      createdBy: userId,
-      createdAt: now,
-      status: 'pending',
-      subscribers: 0
-    }),
+    Item: marshall(tenantItem),
     ConditionExpression: 'attribute_not_exists(pk)'
   }));
 
-  console.log(`Tenant ${tenantId} created by user ${userId} at ${now}`);
+  console.log(`Tenant ${tenantId} created with brand data by user ${userId} at ${now}`);
 };
 
 const setUserTenantId = async (email, tenantId) => {

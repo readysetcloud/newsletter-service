@@ -60,15 +60,15 @@
           }
         },
         {
-          "StartAt": "CreateSESContactList",
+          "StartAt": "SetupEmailTenant",
           "States": {
-            "CreateSESContactList": {
+            "SetupEmailTenant": {
               "Type": "Task",
-              "Resource": "${SESCreateContactList}",
-              "Comment": "Create SES contact list for the tenant",
+              "Resource": "${SetupEmailTenantFunction}",
+              "Comment": "Setup SES tenant and contact list for the tenant",
               "Parameters": {
-                "ContactListName": "{% $.tenantId %}",
-                "Description": "{% 'Contact list for ' & $.tenantId & ' newsletter' %}"
+                "tenantId": "{% $.tenantId %}",
+                "userId": "{% $.userId %}"
               },
               "Retry": [
                 {
@@ -88,7 +88,6 @@
                   "BackoffRate": 2
                 }
               ],
-              "ResultPath": "$.sesContactList",
               "End": true
             }
           }
@@ -160,17 +159,13 @@
             "S": "tenant"
           }
         },
-        "UpdateExpression": "SET #status = :status, #list = :listName, billing = :billing, lastUpdated = :lastUpdated",
+        "UpdateExpression": "SET #status = :status, billing = :billing, lastUpdated = :lastUpdated, email = :email, finalizedAt = :finalizedAt",
         "ExpressionAttributeNames": {
-          "#status": "status",
-          "#list": "list"
+          "#status": "status"
         },
         "ExpressionAttributeValues": {
           ":status": {
             "S": "active"
-          },
-          ":listName": {
-            "S": "{% $.tenantId %}"
           },
           ":billing": {
             "M": {
@@ -187,6 +182,19 @@
           },
           ":lastUpdated": {
             "S": "{% $now() %}"
+          },
+          ":email": {
+            "M": {
+              "tenantArn": {
+                "S": "{% $[1].tenantArn %}"
+              },
+              "contactList": {
+                "S": "{% $[1].contactList %}"
+              }
+            }
+          },
+          ":finalizedAt": {
+            "S": "{% $now() %}"
           }
         }
       },
@@ -202,7 +210,7 @@
           {
             "Source": "newsletter.tenant",
             "DetailType": "Tenant Setup Complete",
-            "Detail": "{% $string({ 'tenantId': $.tenantId, 'userId': $.userId, 'subdomain': $.subdomain, 'setupCompletedAt': $now(), 'customerId': $[0].stripeCustomer.ResponseBody.id, 'sesContactList': $.tenantId, 'message': 'Tenant setup completed successfully' }) %}"
+            "Detail": "{% $string({ 'tenantId': $.tenantId, 'userId': $.userId, 'subdomain': $.subdomain, 'setupCompletedAt': $now(), 'customerId': $[0].stripeCustomer.ResponseBody.id, 'email': $[1].emailSetup.email, 'message': 'Tenant setup completed successfully' }) %}"
           }
         ]
       },

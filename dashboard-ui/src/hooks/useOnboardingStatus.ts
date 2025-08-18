@@ -24,9 +24,11 @@ export function useOnboardingStatus(): OnboardingStatus {
   // Check if user has tenantId (indicates brand setup is complete)
   const needsBrandSetup = !user.tenantId;
 
-  // Check if user has basic profile info (first/last name)
-  // This would need to be expanded based on your profile requirements
-  const needsProfileSetup = false; // For now, we'll focus on brand setup
+  // Check if user needs profile setup
+  // For now, we'll consider profile setup needed if brand is complete but user hasn't completed profile
+  // This could be expanded to check for specific profile fields
+  const needsProfileSetup = !needsBrandSetup && !(user.firstName || user.lastName);
+  console.log(user);
 
   const isNewUser = needsBrandSetup || needsProfileSetup;
   const isOnboardingComplete = !isNewUser;

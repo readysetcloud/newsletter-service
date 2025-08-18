@@ -9,54 +9,11 @@ import { profileService } from '@/services/profileService';
 
 export function BrandOnboardingPage() {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const { addToast } = useToast();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Async function to upload logo after tenant creation
-  const uploadLogoAsync = async (logoFile: File) => {
-    try {
-      console.log('Uploading brand logo asynchronously...', {
-        fileName: logoFile.name,
-        fileSize: logoFile.size,
-        fileType: logoFile.type
-      });
 
-      const uploadResponse = await profileService.uploadBrandPhoto(logoFile);
-      console.log('Async upload response:', uploadResponse);
-
-      if (uploadResponse.success && uploadResponse.data) {
-        console.log('Logo uploaded successfully:', uploadResponse.data);
-
-        // Update the brand with the logo URL
-        await updateBrand({ brandLogo: uploadResponse.data });
-        console.log('Brand updated with logo URL');
-
-        addToast({
-          type: 'success',
-          title: 'Logo Uploaded!',
-          message: 'Your brand logo has been uploaded successfully.',
-          duration: 3000
-        });
-      } else {
-        console.error('Async upload failed:', uploadResponse);
-        addToast({
-          type: 'warning',
-          title: 'Logo Upload Failed',
-          message: 'Your brand was created but the logo upload failed. You can upload it later from your brand settings.',
-          duration: 5000
-        });
-      }
-    } catch (error) {
-      console.error('Async logo upload error:', error);
-      addToast({
-        type: 'warning',
-        title: 'Logo Upload Failed',
-        message: 'Your brand was created but the logo upload failed. You can upload it later from your brand settings.',
-        duration: 5000
-      });
-    }
-  };
 
   const handleBrandSubmit = async (brandData: any, logoFile?: File) => {
     console.log('=== Brand Submit Started ===');
@@ -65,22 +22,44 @@ export function BrandOnboardingPage() {
 
     setIsSubmitting(true);
     try {
-      // Step 1: Create tenant first (synchronous) - this establishes proper auth context
+      // Step 1: Create tenant first - this establishes proper auth context
       console.log('Step 1: Creating tenant and updating brand information...');
       const updateResponse = await updateBrand(brandData);
       console.log('Brand/tenant creation response:', updateResponse);
 
-      // Step 2: Upload logo asynchronously if provided (now with proper tenant context)
+      // Step 2: Upload logo synchronously if provided (wait for completion)
       if (logoFile) {
-        console.log('Step 2: Starting async logo upload with tenant context...');
-        // Don't await - let it happen in background
-        uploadLogoAsync(logoFile);
+        console.log('Step 2: Uploading logo synchronously...');
 
-        addToast({
-          type: 'success',
-          title: 'Brand Setup Complete!',
-          message: 'Your brand has been created successfully. Logo is being uploaded...',
-        });
+        try {
+          const uploadResponse = await profileService.uploadBrandPhoto(logoFile);
+          console.log('Logo upload response:', uploadResponse);
+
+          if (uploadResponse.success && uploadResponse.data) {
+            console.log('Logo uploaded successfully, updating brand with logo URL...');
+            await updateBrand({ brandLogo: uploadResponse.data });
+
+            addToast({
+              type: 'success',
+              title: 'Brand Setup Complete!',
+              message: 'Your brand and logo have been set up successfully.',
+            });
+          } else {
+            console.error('Logo upload failed:', uploadResponse);
+            addToast({
+              type: 'success',
+              title: 'Brand Setup Complete!',
+              message: 'Your brand was created successfully, but logo upload failed. You can upload it later.',
+            });
+          }
+        } catch (logoError) {
+          console.error('Logo upload error:', logoError);
+          addToast({
+            type: 'success',
+            title: 'Brand Setup Complete!',
+            message: 'Your brand was created successfully, but logo upload failed. You can upload it later.',
+          });
+        }
       } else {
         console.log('Step 2: No logo file to upload');
         addToast({
@@ -90,16 +69,19 @@ export function BrandOnboardingPage() {
         });
       }
 
-      // Small delay to allow the backend to update the user's tenantId
-      setTimeout(() => {
-        // Force a page refresh to get updated user info, or redirect to dashboard
-        window.location.href = '/dashboard';
-      }, 1000);
+      // Step 3: Refresh user context and navigate to profile setup
+      console.log('Step 3: Refreshing user context and navigating to profile setup...');
+      await refreshUser();
+
+      // Small delay to ensure token refresh propagates
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Navigate to profile onboarding as step 2
+      navigate('/onboarding/profile', { replace: true });
 
     } catch (error) {
       console.error('Brand setup error:', error);
 
-      // Extract more detailed error information
       let errorMessage = 'There was an error setting up your brand. Please try again.';
       if (error instanceof Error) {
         errorMessage = error.message;
@@ -113,7 +95,6 @@ export function BrandOnboardingPage() {
         message: errorMessage,
       });
 
-      // Re-throw the error so the form can handle it
       throw error;
     } finally {
       setIsSubmitting(false);

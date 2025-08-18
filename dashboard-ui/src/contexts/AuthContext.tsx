@@ -2,6 +2,9 @@ import { createContext, useContext, useEffect, useState, ReactNode } from 'react
 import {
   signIn as amplifySignIn,
   signOut as amplifySignOut,
+  signUp as amplifySignUp,
+  confirmSignUp as amplifyConfirmSignUp,
+  resendSignUpCode as amplifyResendSignUpCode,
   getCurrentUser,
   fetchAuthSession,
 } from 'aws-amplify/auth';
@@ -15,6 +18,9 @@ interface User {
   role?: string;
   isAdmin?: boolean;
   isTenantAdmin?: boolean;
+  profileCompleted?: boolean;
+  firstName?: string;
+  lastName?: string;
 }
 
 interface AuthContextType {
@@ -23,6 +29,9 @@ interface AuthContextType {
   isLoading: boolean;
   error: string | null;
   signIn: (email: string, password: string) => Promise<void>;
+  signUp: (email: string, password: string, firstName: string, lastName: string) => Promise<{ isSignUpComplete: boolean; nextStep?: any }>;
+  confirmSignUp: (email: string, confirmationCode: string) => Promise<void>;
+  resendSignUpCode: (email: string) => Promise<void>;
   signOut: () => Promise<void>;
   getToken: () => Promise<string>;
   refreshUser: () => Promise<void>;
@@ -53,7 +62,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
         role: payload['custom:role'],
         isAdmin: payload['custom:role'] === 'admin',
         isTenantAdmin: payload['custom:role'] === 'tenant_admin',
+        profileCompleted: payload['custom:profile_completed'] === 'true',
         groups: payload['cognito:groups'] || [],
+        firstName: payload.given_name,
+        lastName: payload.family_name
       };
     } catch (error) {
       console.error('Error parsing JWT token:', error);
@@ -163,7 +175,125 @@ export function AuthProvider({ children }: AuthProviderProps) {
   };
 
   const refreshUser = async () => {
-    await checkAuthStatus();
+    try {
+      // Force a fresh token fetch by clearing the cached session
+      const session = await fetchAuthSession({ forceRefresh: true });
+
+      if (session.tokens?.idToken) {
+        const currentUser = await getCurrentUser();
+        const userInfo = parseJwtToken(session.tokens.idToken.toString());
+        setUser({
+          userId: currentUser.userId,
+          email: currentUser.signInDetails?.loginId || '',
+          emailVerified: true,
+          ...userInfo,
+        });
+        console.log('User refreshed with new token, tenantId:', userInfo.tenantId);
+      }
+    } catch (error) {
+      console.error('Error refreshing user:', error);
+      // Fallback to regular checkAuthStatus
+      await checkAuthStatus();
+    }
+  };
+
+  const signUp = async (email: string, password: string, firstName: string, lastName: string) => {
+    try {
+      setIsLoading(true);
+      setError(null);
+
+      const { isSignUpComplete, nextStep } = await amplifySignUp({
+        username: email,
+        password,
+        options: {
+          userAttributes: {
+            email,
+            given_name: firstName,
+            family_name: lastName,
+          },
+        },
+      });
+
+      return { isSignUpComplete, nextStep };
+    } catch (error: any) {
+      console.error('Sign up error:', error);
+      let errorMessage = 'An error occurred during sign up';
+
+      if (error.name === 'UsernameExistsException') {
+        errorMessage = 'An account with this email already exists';
+      } else if (error.name === 'InvalidPasswordException') {
+        errorMessage = 'Password does not meet requirements';
+      } else if (error.name === 'InvalidParameterException') {
+        errorMessage = 'Invalid email or password format';
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+
+      setError(errorMessage);
+      throw error;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const confirmSignUp = async (email: string, confirmationCode: string) => {
+    try {
+      setIsLoading(true);
+      setError(null);
+
+      await amplifyConfirmSignUp({
+        username: email,
+        confirmationCode,
+      });
+
+      // After successful confirmation, automatically sign in
+      await checkAuthStatus();
+    } catch (error: any) {
+      console.error('Confirm sign up error:', error);
+      let errorMessage = 'An error occurred during confirmation';
+
+      if (error.name === 'CodeMismatchException') {
+        errorMessage = 'Invalid confirmation code';
+      } else if (error.name === 'ExpiredCodeException') {
+        errorMessage = 'Confirmation code has expired';
+      } else if (error.name === 'NotAuthorizedException') {
+        errorMessage = 'User is already confirmed';
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+
+      setError(errorMessage);
+      throw error;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const resendSignUpCode = async (email: string) => {
+    try {
+      setIsLoading(true);
+      setError(null);
+
+      await amplifyResendSignUpCode({
+        username: email,
+      });
+    } catch (error: any) {
+      console.error('Resend code error:', error);
+      let errorMessage = 'An error occurred while resending code';
+
+      if (error.name === 'LimitExceededException') {
+        errorMessage = 'Too many requests. Please wait before requesting another code.';
+      } else if (error.name === 'InvalidParameterException') {
+        errorMessage = 'Invalid email address';
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+
+      setError(errorMessage);
+      throw error;
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const clearError = () => {
@@ -176,6 +306,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
     isLoading,
     error,
     signIn,
+    signUp,
+    confirmSignUp,
+    resendSignUpCode,
     signOut,
     getToken,
     refreshUser,

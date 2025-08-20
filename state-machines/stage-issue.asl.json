@@ -82,7 +82,7 @@
           "Next": "Wait For Future Date"
         }
       ],
-      "Default": "Get Links From Content"
+      "Default": "Update Links With Tracking Data"
     },
     "Wait For Future Date": {
       "Type": "Wait",
@@ -103,17 +103,19 @@
           }
         ]
       },
-      "Next": "Get Links From Content",
+      "Next": "Update Links With Tracking Data",
       "ResultPath": null
     },
-    "Get Links From Content": {
+    "Update Links With Tracking Data": {
       "Type": "Task",
       "Resource": "${LambdaInvoke}",
       "Parameters": {
         "Payload": {
-          "content.$": "$$.Execution.Input.content"
+          "content.$": "$$.Execution.Input.content",
+          "tenantId.$": "$$.Execution.Input.tenant.id",
+          "issueId.$": "$.data.metadata.number"
         },
-        "FunctionName": "${GetMarkdownLinks}"
+        "FunctionName": "${UpdateLinksWithTrackingData}"
       },
       "Retry": [
         {
@@ -128,22 +130,8 @@
           "BackoffRate": 2
         }
       ],
-      "Next": "Create Redirects",
-      "ResultPath": "$.links"
-    },
-    "Create Redirects": {
-      "Type": "Task",
-      "Resource": "${SfnStartExecution}",
-      "Parameters": {
-        "StateMachineArn": "${AddRedirectsStateMachine}",
-        "Input": {
-          "AWS_STEP_FUNCTIONS_STARTED_BY_EXECUTION_ID.$": "$$.Execution.Id",
-          "links.$": "$.links.Payload.links",
-          "campaign.$": "$$.Execution.Input.key"
-        }
-      },
-      "ResultPath": "$.redirects",
-      "Next": "Setup Voting Options"
+      "Next": "Setup Voting Options",
+      "ResultPath": "$.updatedContent"
     },
     "Setup Voting Options": {
       "Type": "Task",
@@ -169,33 +157,6 @@
         }
       ],
       "ResultPath": "$.votingOptions",
-      "Next": "Update Content"
-    },
-    "Update Content": {
-      "Type": "Task",
-      "Resource": "${LambdaInvoke}",
-      "Parameters": {
-        "FunctionName": "${UpdateLinksWithRedirects}",
-        "Payload": {
-          "redirects.$": "$.redirects.Output.redirects",
-          "content.$": "$$.Execution.Input.content",
-          "addRef": true
-        }
-      },
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException",
-            "Lambda.TooManyRequestsException"
-          ],
-          "IntervalSeconds": 1,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ],
-      "ResultPath": "$.updatedContent",
       "Next": "Parse Issue"
     },
     "Parse Issue": {

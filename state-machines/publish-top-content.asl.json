@@ -1,19 +1,7 @@
 {
   "Comment": "Gets the top issue content and schedules Twitter messages",
-  "StartAt": "Calculate clicks",
+  "StartAt": "Get Links From Content",
   "States": {
-    "Calculate clicks": {
-      "Type": "Task",
-      "Resource": "${StepFunctionsStartExecution}",
-      "Parameters": {
-        "StateMachineArn": "${CalculateClicks}",
-        "Input": {
-          "AWS_STEP_FUNCTIONS_STARTED_BY_EXECUTION_ID.$": "$$.Execution.Id"
-        }
-      },
-      "Next": "Get Links From Content",
-      "ResultPath": null
-    },
     "Get Links From Content": {
       "Type": "Task",
       "Resource": "${LambdaInvoke}",

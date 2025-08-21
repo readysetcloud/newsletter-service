@@ -21,6 +21,10 @@ Parameters:
     Type: String
     Default: ""
     Description: Custom domain name (optional)
+  RedirectCustomDomain:
+    Type: String
+    Default: ""
+    Description: Custom domain for link redirects
   StripeApiKey:
     Type: String
     Default: "/stripe/api-key"
@@ -60,6 +64,7 @@ Conditions:
   DeployCustomDomain: !And
     - !Condition HasDomainName
     - !Condition HasHostedZoneId
+  HasRedirectCustomDomain: !Not [!Equals [!Ref RedirectCustomDomain, ""]]
 
 Globals:
   Function:
@@ -655,6 +660,8 @@ Resources:
           - BOUNCE
           - COMPLAINT
           - DELIVERY
+          - OPEN
+          - CLICK
 
   ScheduleGroup:
     Type: AWS::Scheduler::ScheduleGroup
@@ -1277,7 +1284,9 @@ Resources:
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: dynamodb:UpdateItem
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:PutItem
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
@@ -1295,6 +1304,8 @@ Resources:
                 - Email Delivered
                 - Email Bounced
                 - Email Complaint Received
+                - Email Opened
+                - Email Clicked
 
   CleanBouncedSubscribersFunction:
     Type: AWS::Serverless::Function
@@ -1391,41 +1402,8 @@ Resources:
           Type: Api
           Properties:
             RestApiId: !Ref NewsletterApi
-            Path: /{tenant}/{slug}/votes
+            Path: /{tenant}/{issueId}/votes
             Method: POST
-            Auth:
-              Authorizer: NONE
-
-  OpenTrackingFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - open-tracking.mjs
-    Properties:
-      Handler: open-tracking.handler
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - dynamodb:PutItem
-                - dynamodb:UpdateItem
-              Resource: !GetAtt NewsletterTable.Arn
-      Environment:
-        Variables:
-          TABLE_NAME: !Ref NewsletterTable
-          ORIGIN: !Ref Origin
-      Events:
-        FromApi:
-          Type: Api
-          Properties:
-            RestApiId: !Ref NewsletterApi
-            Path: /{tenant}/{slug}/opens
-            Method: GET
             Auth:
               Authorizer: NONE
 
@@ -1531,16 +1509,16 @@ Resources:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
 
-  StageIssueFunction:
+  PublishIssueFunction:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
         <<: *esbuild-properties
         EntryPoints:
-          - stage-issue.mjs
+          - publish-issue.mjs
     Properties:
-      Handler: stage-issue.handler
+      Handler: publish-issue.handler
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -1599,34 +1577,48 @@ Resources:
               detail-type:
                 - Send Email v2
 
-  ParseIssueFunction:
+  ParseMdToJsonFunction:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
         <<: *esbuild-properties
         EntryPoints:
-          - parse-issue.mjs
+          - parse-md-to-json.mjs
     Properties:
-      Handler: parse-issue.handler
+      Handler: parse-md-to-json.handler
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: events:PutEvents
-              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
-            - Effect: Allow
-              Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
-            - Effect: Allow
               Action: dynamodb:GetItem
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
+          TABLE_NAME: !Ref NewsletterTable
+
+  TransformAndCallbackFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - transform-and-callback.mjs
+    Properties:
+      Handler: transform-and-callback.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
+      Environment:
+        Variables:
           OWNER: "{{resolve:ssm:/readysetcloud/github-owner}}"
           REPO: "{{resolve:ssm:/readysetcloud/github-repo}}"
-          TABLE_NAME: !Ref NewsletterTable
 
   SyncRepoDataFunction:
     Type: AWS::Serverless::Function
@@ -1813,22 +1805,17 @@ Resources:
         TableName: !Ref NewsletterTable
         DynamodbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
         LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
-        ParseIssue: !GetAtt ParseIssueFunction.Arn
-        StageIssue: !GetAtt StageIssueFunction.Arn
+        ParseMdToJson: !GetAtt ParseMdToJsonFunction.Arn
+        PublishIssue: !GetAtt PublishIssueFunction.Arn
         DynamodbUpdateItem: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
-        SendApiRequest: "{{resolve:ssm:/readysetcloud/send-api-request}}"
-        SfnStartExecution: !Sub arn:${AWS::Partition}:states:::states:startExecution.sync:2
-        GetMarkdownLinks: !GetAtt GetMarkdownLinksFunction.Arn
-        UpdateLinksWithRedirects: !GetAtt UpdateLinksWithRedirectsFunction.Arn
-        AddRedirectsStateMachine: !Ref AddRedirectStateMachine
+        UpdateLinksWithTrackingData: !GetAtt UpdateLinksWithTrackingDataFunction.Arn
         SchedulerCreateSchedule: !Sub arn:${AWS::Partition}:states:::aws-sdk:scheduler:createSchedule
-        PublishTopContentStateMachine: !Ref PublishTopContentStateMachine
-        PublishTopContentRole: !GetAtt PublishTopContentRole.Arn
         ReportStatsStateMachine: !Ref ReportStatsStateMachine
         ReportStatsRole: !GetAtt ReportStatsRole.Arn
         SetupVotingOptions: !GetAtt SetupVotingOptionsFunction.Arn
         CleanupListRole: !GetAtt SchedulerExecutionRole.Arn
+        TransformAndCallback: !GetAtt TransformAndCallbackFunction.Arn
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -1841,128 +1828,29 @@ Resources:
             - Effect: Allow
               Action: lambda:InvokeFunction
               Resource:
-                - !GetAtt StageIssueFunction.Arn
-                - !GetAtt ParseIssueFunction.Arn
-                - "{{resolve:ssm:/readysetcloud/send-api-request}}"
-                - !GetAtt GetMarkdownLinksFunction.Arn
-                - !GetAtt UpdateLinksWithRedirectsFunction.Arn
+                - !GetAtt PublishIssueFunction.Arn
+                - !GetAtt ParseMdToJsonFunction.Arn
+                - !GetAtt UpdateLinksWithTrackingDataFunction.Arn
                 - !GetAtt SetupVotingOptionsFunction.Arn
+                - !GetAtt TransformAndCallbackFunction.Arn
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
             - Effect: Allow
-              Action: states:StartExecution
-              Resource: !Ref AddRedirectStateMachine
-            - Effect: Allow
-              Action:
-                - states:DescribeExecution
-                - states:StopExecution
-              Resource: !Sub arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${AddRedirectStateMachine.Name}:*
-            - Effect: Allow
-              Action:
-                - events:PutTargets
-                - events:PutRule
-                - events:DescribeRule
-              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule
-            - Effect: Allow
               Action: scheduler:CreateSchedule
               Resource:
-                - !Sub arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/newsletter/NEWSLETTER-STATS*
                 - !Sub arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/newsletter/ISSUE-STATS*
+                - !Sub arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/newsletter/*-CLEAN-*
             - Effect: Allow
               Action: iam:PassRole
               Resource:
-                - !GetAtt PublishTopContentRole.Arn
                 - !GetAtt ReportStatsRole.Arn
                 - !GetAtt SchedulerExecutionRole.Arn
-
-  CalculateClicksStateMachine:
-    Type: AWS::Serverless::StateMachine
-    Properties:
-      Type: STANDARD
-      DefinitionUri: state-machines/calculate-clicks.asl.json
-      DefinitionSubstitutions:
-        DynamoDbUpdate: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
-        TableName: !Ref NewsletterTable
-        CloudWatchStartQuery: !Sub arn:${AWS::Partition}:states:::aws-sdk:cloudwatchlogs:startQuery
-        LogGroupArn: !GetAtt RedirectLogGroup.Arn
-        RedirectLogs: !Ref RedirectLogGroup
-        HandleLogBatch: !GetAtt HandleLogBatchFunction.Arn
-        LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
-      Policies:
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action: logs:StartQuery
-              Resource: !GetAtt RedirectLogGroup.Arn
-            - Effect: Allow
-              Action: dynamodb:UpdateItem
-              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}
-            - Effect: Allow
-              Action: lambda:InvokeFunction
-              Resource: !GetAtt HandleLogBatchFunction.Arn
 
   RedirectKeyValueStore:
     Type: AWS::CloudFront::KeyValueStore
     Properties:
       Name: newsletter-redirect
-
-  AddRedirectStateMachineLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      RetentionInDays: 3
-
-  AddRedirectStateMachine:
-    Type: AWS::Serverless::StateMachine
-    Properties:
-      DefinitionUri: state-machines/add-redirect.asl.json
-      Tracing:
-        Enabled: true
-      Logging:
-        Level: ALL
-        IncludeExecutionData: True
-        Destinations:
-          - CloudWatchLogsLogGroup:
-              LogGroupArn: !GetAtt AddRedirectStateMachineLogGroup.Arn
-      DefinitionSubstitutions:
-        KvsArn: !GetAtt RedirectKeyValueStore.Arn
-        DescribeKVS: !Sub arn:${AWS::Partition}:states:::aws-sdk:cloudfrontkeyvaluestore:describeKeyValueStore
-        PutKey: !Sub arn:${AWS::Partition}:states:::aws-sdk:cloudfrontkeyvaluestore:putKey
-        DdbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
-        TableName: !Ref NewsletterTable
-        PutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
-      Policies:
-        - Statement:
-            - Effect: Allow
-              Action:
-                - logs:CreateLogDelivery
-                - logs:GetLogDelivery
-                - logs:UpdateLogDelivery
-                - logs:DeleteLogDelivery
-                - logs:ListLogDeliveries
-                - logs:PutResourcePolicy
-                - logs:DescribeResourcePolicies
-                - logs:DescribeLogGroups
-              Resource: "*"
-            - Effect: Allow
-              Action:
-                - cloudfront-keyvaluestore:DescribeKeyValueStore
-                - cloudfront-keyvaluestore:PutKey
-              Resource: !GetAtt RedirectKeyValueStore.Arn
-            - Effect: Allow
-              Action: dynamodb:PutItem
-              Resource: !GetAtt NewsletterTable.Arn
-            - Effect: Allow
-              Action: events:PutEvents
-              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
-      Type: EXPRESS
-      Events:
-        EventBridge:
-          Type: EventBridgeRule
-          Properties:
-            Pattern:
-              detail-type:
-                - Add Redirects
 
   RedirectFunction:
     Type: AWS::CloudFront::Function
@@ -2037,9 +1925,77 @@ Resources:
         Comment: Function to return redirects
       Name: newsletter-redirect
 
+  GenericRedirectFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      AutoPublish: true
+      FunctionCode: !Sub |
+        function handler(event) {
+          var req = event.request || {};
+          var qs  = req.querystring || {};
+          var headers = req.headers || {};
+
+          var FALLBACK_URL = '${Origin}';
+
+          function get(n){ return qs[n] && qs[n].value; }
+
+          var rawU   = get('u');                 // encoded destination
+          var rawCid = get('cid');               // campaign/issue id
+          var src = get('src') || 'web';
+
+          // Reliable in CloudFront Functions:
+          var ip  = (event.viewer && event.viewer.ip) || null;
+
+          function redirect(to){
+            return {
+              statusCode: 302,
+              statusDescription: 'Found',
+              headers: {
+                location: { value: to },
+                'cache-control': { value: 'no-store' },
+                'referrer-policy': { value: 'no-referrer-when-downgrade' },
+                'x-content-type-options': { value: 'nosniff' }
+              }
+            };
+          }
+
+          function fallback(reason){
+            var q='?reason='+encodeURIComponent(reason)
+                +(cid?'&cid='+encodeURIComponent(cid):'')
+                +(src?'&src='+encodeURIComponent(src):'');
+            var to = FALLBACK_URL + (FALLBACK_URL.indexOf('?')===-1 ? q : '&'+q.slice(1));
+            return redirect(to);
+          }
+
+          // Validate & decode destination
+          if (!rawU) return fallback('missing_u');
+          var dest, cid = null;
+          try { dest = decodeURIComponent(rawU); } catch(e) { return fallback('bad_encoding'); }
+          if (!/^https?:\/\//i.test(dest)) return fallback('bad_scheme');
+
+           if (rawCid) {
+            try { cid = decodeURIComponent(rawCid); } catch(e) { cid = rawCid; }
+            cid = cid.replace(/_/g, '#');
+          }
+
+          // Loop guard: don't redirect back to the tracker host
+          var hostHdr = headers.host && headers.host[0] && headers.host[0].value || '';
+          var destHost = ''; try { destHost = dest.split('/')[2].toLowerCase(); } catch(e) { return fallback('bad_url'); }
+          if (hostHdr && destHost === hostHdr.toLowerCase()) return fallback('loop_to_tracker');
+
+          if (dest.length > 2048) return fallback('url_too_long');
+
+          // SUCCESS: log minimal fields only, then redirect
+          try { console.log(JSON.stringify({ cid: cid || null, u: dest, src, ip })); } catch(_) {}
+          return redirect(dest);
+        }
+      FunctionConfig:
+        Runtime: cloudfront-js-2.0
+        Comment: Generic redirect url
+      Name: generic-redirect
+
   RedirectCFDistribution:
     Type: AWS::CloudFront::Distribution
-    Condition: DeployProductionResources
     Properties:
       DistributionConfig:
         DefaultCacheBehavior:
@@ -2054,6 +2010,25 @@ Resources:
               FunctionARN: !GetAtt RedirectFunction.FunctionMetadata.FunctionARN
           TargetOriginId: dummy.origin
           ViewerProtocolPolicy: redirect-to-https
+        CacheBehaviors:
+          - PathPattern: /r
+            TargetOriginId: dummy.origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [ GET, HEAD, OPTIONS ]
+            Compress: false
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt GenericRedirectFunction.FunctionMetadata.FunctionARN
+          - PathPattern: /r/*
+            TargetOriginId: dummy.origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [ GET, HEAD, OPTIONS ]
+            Compress: false
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt GenericRedirectFunction.FunctionMetadata.FunctionARN
         DefaultRootObject: index.html
         Enabled: True
         PriceClass: PriceClass_100
@@ -2062,59 +2037,48 @@ Resources:
             Id: dummy.origin
             CustomOriginConfig:
               OriginProtocolPolicy: match-viewer
-        ViewerCertificate:
-          AcmCertificateArn: !Ref RedirectCertificate
-          SslSupportMethod: sni-only
-          MinimumProtocolVersion: TLSv1.2_2021
-        Aliases:
-          - rdyset.click
+        ViewerCertificate: !If
+          - HasRedirectCustomDomain
+          - AcmCertificateArn: !Ref RedirectCertificate
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - CloudFrontDefaultCertificate: true
+        Aliases: !If
+          - HasRedirectCustomDomain
+          - [ !Ref RedirectCustomDomain ]
+          - !Ref "AWS::NoValue"
 
   RedirectCertificate:
     Type: AWS::CertificateManager::Certificate
-    Condition: DeployProductionResources
+    Condition: HasRedirectCustomDomain
     Properties:
-      DomainName: rdyset.click
+      DomainName: !Ref RedirectCustomDomain
       ValidationMethod: DNS
       DomainValidationOptions:
-        - DomainName: rdyset.click
+        - DomainName: !Ref RedirectCustomDomain
           HostedZoneId: Z09437152FAVHJ1MPFQYO
 
-  Route53RecordSet:
+  RedirectRecordSet:
     Type: AWS::Route53::RecordSet
-    Condition: DeployProductionResources
+    Condition: HasRedirectCustomDomain
     Properties:
       HostedZoneId: Z09437152FAVHJ1MPFQYO
-      Name: rdyset.click
+      Name: !Ref RedirectCustomDomain
       Type: A
       AliasTarget:
         HostedZoneId: Z2FDTNDATAQYW2
         DNSName: !GetAtt RedirectCFDistribution.DomainName
 
-  NonProdRedirectCFDistribution:
-    Type: AWS::CloudFront::Distribution
-    Condition: DeployStageResources
+  RedirectRecordSetIPV6:
+    Type: AWS::Route53::RecordSet
+    Condition: HasRedirectCustomDomain
     Properties:
-      DistributionConfig:
-        DefaultCacheBehavior:
-          AllowedMethods:
-            - "GET"
-            - "HEAD"
-            - "OPTIONS"
-          Compress: False
-          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
-          FunctionAssociations:
-            - EventType: viewer-request
-              FunctionARN: !GetAtt RedirectFunction.FunctionMetadata.FunctionARN
-          TargetOriginId: dummy.origin
-          ViewerProtocolPolicy: redirect-to-https
-        DefaultRootObject: index.html
-        Enabled: True
-        PriceClass: PriceClass_100
-        Origins:
-          - DomainName: dummy.origin
-            Id: dummy.origin
-            CustomOriginConfig:
-              OriginProtocolPolicy: match-viewer
+      HostedZoneId: Z09437152FAVHJ1MPFQYO
+      Name: !Ref RedirectCustomDomain
+      Type: AAAA
+      AliasTarget:
+        HostedZoneId: Z2FDTNDATAQYW2
+        DNSName: !GetAtt RedirectCFDistribution.DomainName
 
   RedirectLogGroup:
     Type: AWS::Logs::LogGroup
@@ -2122,60 +2086,71 @@ Resources:
       RetentionInDays: 3
       LogGroupName: /aws/cloudfront/function/newsletter-redirect
 
-  HandleLogBatchFunction:
+  GenericRedirectLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 3
+      LogGroupName: /aws/cloudfront/function/generic-redirect
+
+  UpdateLinksWithTrackingDataFunction:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
         <<: *esbuild-properties
         EntryPoints:
-          - handle-log-batch.mjs
+          - update-link-tracking.mjs
     Properties:
-      Handler: handle-log-batch.handler
+      Handler: update-link-tracking.handler
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action:
-                - dynamodb:UpdateItem
-                - dynamodb:PutItem
-              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}
+              Action: dynamodb:PutItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          REDIRECT_URL: !If
+            - HasRedirectCustomDomain
+            - !Sub https://${RedirectCustomDomain}/r
+            - !Sub https://${RedirectCFDistribution.DomainName}/r
+
+  ProcessLinkClickFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - process-link-click.mjs
+    Properties:
+      Handler: process-link-click.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
             - Effect: Allow
-              Action: logs:GetQueryResults
-              Resource: "*"
+              Action: dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
 
-  GetMarkdownLinksFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - get-markdown-links.mjs
+  RedirectLogsSubscription:
+    Type: AWS::Logs::SubscriptionFilter
     Properties:
-      Handler: get-markdown-links.handler
-      Policies:
-        - AWSLambdaBasicExecutionRole
+      LogGroupName: !Ref GenericRedirectLogGroup
+      DestinationArn: !GetAtt ProcessLinkClickFunction.Arn
+      FilterPattern: '{ $.cid = * }'
 
-  UpdateLinksWithRedirectsFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - update-links-with-redirects.mjs
+  ProcessClicksPermission:
+    Type: AWS::Lambda::Permission
     Properties:
-      Handler: update-links-with-redirects.handler
-      Policies:
-        - AWSLambdaBasicExecutionRole
-      Environment:
-        Variables:
-          REDIRECT_URL: https://rdyset.click
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ProcessLinkClickFunction
+      Principal: logs.amazonaws.com
 
   GetTopLinkFunction:
     Type: AWS::Serverless::Function
@@ -2197,59 +2172,6 @@ Resources:
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
-
-  PublishTopContentRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - scheduler.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: PublishTopContent
-          PolicyDocument:
-            Version: 2012-10-17
-            Statement:
-              - Effect: Allow
-                Action: states:StartExecution
-                Resource: !GetAtt PublishTopContentStateMachine.Arn
-
-  PublishTopContentStateMachine:
-    Type: AWS::Serverless::StateMachine
-    Properties:
-      DefinitionUri: state-machines/publish-top-content.asl.json
-      DefinitionSubstitutions:
-        StepFunctionsStartExecution: !Sub arn:${AWS::Partition}:states:::states:startExecution.sync:2
-        CalculateClicks: !GetAtt CalculateClicksStateMachine.Arn
-        LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
-        GetTopLinks: !GetAtt GetTopLinkFunction.Arn
-        PutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
-      Policies:
-        - Statement:
-            - Effect: Allow
-              Action: lambda:InvokeFunction
-              Resource: !GetAtt GetTopLinkFunction.Arn
-            - Effect: Allow
-              Action: events:PutEvents
-              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
-            - Effect: Allow
-              Action: states:StartExecution
-              Resource: !GetAtt CalculateClicksStateMachine.Arn
-            - Effect: Allow
-              Action:
-                - states:DescribeExecution
-                - states:StopExecution
-              Resource: !Sub arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${CalculateClicksStateMachine.Name}:*
-            - Effect: Allow
-              Action:
-                - events:PutTargets
-                - events:PutRule
-                - events:DescribeRule
-              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule
 
   APIGatewayCloudWatchRole:
     Type: AWS::IAM::Role
@@ -2362,3 +2284,10 @@ Outputs:
   StripeConnectionArn:
     Description: "EventBridge connection ARN for Stripe API integration"
     Value: !GetAtt StripeConnection.Arn
+
+  RedirectTrackingBase:
+    Description: "Base URL for click tracking"
+    Value: !If
+      - HasRedirectCustomDomain
+      - !Sub "https://${RedirectCustomDomain}/r"
+      - !Sub "https://${RedirectCFDistribution.DomainName}/r"

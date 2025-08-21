@@ -7,8 +7,8 @@ const ddb = new DynamoDBClient();
 
 export const handler = async (event) => {
   try {
-    if (!event.pathParameters?.tenant || !event.pathParameters?.slug) {
-      return formatResponse(400, 'Missing tenant or slug');
+    if (!event.pathParameters?.tenant || !event.pathParameters?.issueId) {
+      return formatResponse(400, 'Missing tenant or issueId');
     }
     if (!event.body) {
       return formatResponse(400, 'Missing request body');
@@ -17,7 +17,7 @@ export const handler = async (event) => {
       return formatResponse(400, 'Unable to identify voter');
     }
 
-    const { tenant, slug } = event.pathParameters;
+    const { tenant, issueId } = event.pathParameters;
     let choice;
 
     try {
@@ -33,7 +33,7 @@ export const handler = async (event) => {
     const voteResponse = await ddb.send(new GetItemCommand({
       TableName: process.env.TABLE_NAME,
       Key: marshall({
-        pk: `${tenant}#${slug}`,
+        pk: `${tenant}#${issueId}`,
         sk: 'votes',
       })
     }));
@@ -56,7 +56,7 @@ export const handler = async (event) => {
       await ddb.send(new PutItemCommand({
         TableName: process.env.TABLE_NAME,
         Item: marshall({
-          pk: `${tenant}#${slug}`,
+          pk: `${tenant}#${issueId}`,
           sk: `voter#${hashedIp}`,
           createdAt: new Date().toISOString(),
           ttl: Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60)
@@ -68,7 +68,7 @@ export const handler = async (event) => {
       const updateResponse = await ddb.send(new UpdateItemCommand({
         TableName: process.env.TABLE_NAME,
         Key: marshall({
-          pk: `${tenant}#${slug}`,
+          pk: `${tenant}#${issueId}`,
           sk: 'votes'
         }),
         UpdateExpression: 'SET #choice = #choice + :inc',

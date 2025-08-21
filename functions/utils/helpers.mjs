@@ -90,6 +90,10 @@ const getKey = () => {
   return crypto.createHash('sha256').update(process.env.EMAIL_ENCRYPTION_KEY).digest();
 };
 
+export const hash = (data) => {
+  return crypto.createHash('sha256').update(data).digest('hex').slice(0, 16);
+};
+
 export const encrypt = (email) => {
   const key = getKey();
   const iv = crypto.randomBytes(ivLength);

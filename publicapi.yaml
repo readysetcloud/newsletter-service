@@ -84,10 +84,10 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
-  /{tenant}/{slug}/votes:
+  /{tenant}/{issueId}/votes:
     parameters:
       - $ref: "#/components/parameters/Tenant"
-      - $ref: "#/components/parameters/Slug"
+      - $ref: "#/components/parameters/IssueId"
     post:
       summary: Submit a vote
       tags:
@@ -124,30 +124,6 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
-  /{tenant}/{slug}/opens:
-    parameters:
-      - $ref: "#/components/parameters/Tenant"
-      - $ref: "#/components/parameters/Slug"
-    get:
-      summary: Track email opens
-      tags:
-        - Tracking
-      responses:
-        204:
-          description: The open was registered
-        400:
-          $ref: "#/components/responses/BadRequest"
-        404:
-          $ref: "#/components/responses/NotFound"
-        500:
-          $ref: "#/components/responses/UnknownError"
-      x-amazon-apigateway-request-validator: Validate All
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OpenTrackingFunction.Arn}/invocations
-        httpMethod: POST
-        type: aws_proxy
-
 components:
   parameters:
     Tenant:
@@ -157,13 +133,13 @@ components:
       schema:
         type: string
       description: The tenant identifier
-    Slug:
-      name: slug
+    IssueId:
+      name: issueId
       in: path
       required: true
       schema:
         type: string
-        description: Issue slug
+        description: Issue id
 
   schemas:
     Subscriber:

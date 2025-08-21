@@ -58,6 +58,9 @@ const processNewIssue = async (data) => {
     data.futureDate = `${metadata.data.date.toISOString().split('T')[0]}T12:00:00Z`;
   }
 
+  const match = metadata.data.slug.match(/\d+/);
+  data.issueId = Number(match[0])
+  
   await sfn.send(new StartExecutionCommand({
     stateMachineArn: process.env.STATE_MACHINE_ARN,
     input: JSON.stringify(data)

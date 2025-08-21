@@ -10,7 +10,7 @@ const MAX_ATTEMPTS = 3;
 export const handler = async (state) => {
   const { content, tenant } = state;
   const newsletter = frontmatter(content);
-  const slug = newsletter.data.slug.substring(1).toLowerCase();
+  const issueId = newsletter.data.slug.substring(1).toLowerCase();
 
   let options = [];
   for (let attempts = 0; attempts < MAX_ATTEMPTS; attempts++) {
@@ -73,7 +73,7 @@ ${content}`
     const contentBlock = response.output.message?.content?.find(c => c.toolUse);
     if (!contentBlock) continue;
 
-    options = getFormattedOptions(slug, contentBlock.toolUse.input.options);
+    options = getFormattedOptions(issueId, contentBlock.toolUse.input.options);
     break;
   }
   if (!options?.length) {
@@ -81,7 +81,7 @@ ${content}`
   }
 
   const voteItem = {
-    pk: `${tenant.id}#${slug}`,
+    pk: `${tenant.id}#${issueId}`,
     sk: 'votes',
     options
   };
@@ -98,11 +98,11 @@ ${content}`
   return options;
 };
 
-const getFormattedOptions = (slug, options) => {
+const getFormattedOptions = (issueId, options) => {
   const newOptions = options.map((option, index) => {
     const { description } = option;
     return {
-      id: `${slug}-${index}`,
+      id: `${issueId}-${index}`,
       description
     };
   });

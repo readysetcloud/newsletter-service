@@ -46,12 +46,12 @@ export const handler = async (state) => {
           metadata: state.data.metadata
         }
       );
-
-      return state;
     }
+
+    return { success: true };
   } catch (err) {
     console.error(err);
-    throw err;
+    return { success: false };
   }
 };
 
@@ -111,5 +111,5 @@ const setupIssueStats = async (tenant, slug) => {
       subscribers: tenant.subscribers,
       failedAddresses: []
     })
-  }))
-}
+  }));
+};

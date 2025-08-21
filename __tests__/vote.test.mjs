@@ -27,7 +27,7 @@ const { handler } = await import('../functions/vote.mjs');
 
 describe('vote handler', () => {
   const baseEvent = {
-    pathParameters: { tenant: 'test-tenant', slug: 'test-issue' },
+    pathParameters: { tenant: 'test-tenant', issueId: 'test-issue' },
     requestContext: { identity: { sourceIp: '192.168.1.1' } },
     httpMethod: 'POST',
     body: JSON.stringify({ choice: 'option1' }),
@@ -127,10 +127,10 @@ describe('vote handler', () => {
     expect(JSON.parse(res.body).message).toBe('Invalid choice');
   });
 
-  it('400 when missing tenant or slug', async () => {
+  it('400 when missing tenant or issueId', async () => {
     const res = await handler({ ...baseEvent, pathParameters: { tenant: 'only-tenant' } });
     expect(res.statusCode).toBe(400);
-    expect(JSON.parse(res.body).message).toBe('Missing tenant or slug');
+    expect(JSON.parse(res.body).message).toBe('Missing tenant or issueId');
   });
 
   it('400 when cannot identify voter (no sourceIp)', async () => {

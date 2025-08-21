@@ -84,10 +84,10 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
-  /{tenant}/{slug}/votes:
+  /{tenant}/{issueId}/votes:
     parameters:
       - $ref: "#/components/parameters/Tenant"
-      - $ref: "#/components/parameters/Slug"
+      - $ref: "#/components/parameters/IssueId"
     post:
       summary: Submit a vote
       tags:
@@ -133,13 +133,13 @@ components:
       schema:
         type: string
       description: The tenant identifier
-    Slug:
-      name: slug
+    IssueId:
+      name: issueId
       in: path
       required: true
       schema:
         type: string
-        description: Issue slug
+        description: Issue id
 
   schemas:
     Subscriber:

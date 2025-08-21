@@ -1402,7 +1402,7 @@ Resources:
           Type: Api
           Properties:
             RestApiId: !Ref NewsletterApi
-            Path: /{tenant}/{slug}/votes
+            Path: /{tenant}/{issueId}/votes
             Method: POST
             Auth:
               Authorizer: NONE
@@ -1509,16 +1509,16 @@ Resources:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
 
-  StageIssueFunction:
+  PublishIssueFunction:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
         <<: *esbuild-properties
         EntryPoints:
-          - stage-issue.mjs
+          - publish-issue.mjs
     Properties:
-      Handler: stage-issue.handler
+      Handler: publish-issue.handler
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -1577,34 +1577,48 @@ Resources:
               detail-type:
                 - Send Email v2
 
-  ParseIssueFunction:
+  ParseMdToJsonFunction:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
         <<: *esbuild-properties
         EntryPoints:
-          - parse-issue.mjs
+          - parse-md-to-json.mjs
     Properties:
-      Handler: parse-issue.handler
+      Handler: parse-md-to-json.handler
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: events:PutEvents
-              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
-            - Effect: Allow
-              Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
-            - Effect: Allow
               Action: dynamodb:GetItem
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
+          TABLE_NAME: !Ref NewsletterTable
+
+  TransformAndCallbackFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - transform-and-callback.mjs
+    Properties:
+      Handler: transform-and-callback.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
+      Environment:
+        Variables:
           OWNER: "{{resolve:ssm:/readysetcloud/github-owner}}"
           REPO: "{{resolve:ssm:/readysetcloud/github-repo}}"
-          TABLE_NAME: !Ref NewsletterTable
 
   SyncRepoDataFunction:
     Type: AWS::Serverless::Function
@@ -1791,18 +1805,17 @@ Resources:
         TableName: !Ref NewsletterTable
         DynamodbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
         LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
-        ParseIssue: !GetAtt ParseIssueFunction.Arn
-        StageIssue: !GetAtt StageIssueFunction.Arn
+        ParseMdToJson: !GetAtt ParseMdToJsonFunction.Arn
+        PublishIssue: !GetAtt PublishIssueFunction.Arn
         DynamodbUpdateItem: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
         UpdateLinksWithTrackingData: !GetAtt UpdateLinksWithTrackingDataFunction.Arn
         SchedulerCreateSchedule: !Sub arn:${AWS::Partition}:states:::aws-sdk:scheduler:createSchedule
-        PublishTopContentStateMachine: !Ref PublishTopContentStateMachine
-        PublishTopContentRole: !GetAtt PublishTopContentRole.Arn
         ReportStatsStateMachine: !Ref ReportStatsStateMachine
         ReportStatsRole: !GetAtt ReportStatsRole.Arn
         SetupVotingOptions: !GetAtt SetupVotingOptionsFunction.Arn
         CleanupListRole: !GetAtt SchedulerExecutionRole.Arn
+        TransformAndCallback: !GetAtt TransformAndCallbackFunction.Arn
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -1815,22 +1828,22 @@ Resources:
             - Effect: Allow
               Action: lambda:InvokeFunction
               Resource:
-                - !GetAtt StageIssueFunction.Arn
-                - !GetAtt ParseIssueFunction.Arn
+                - !GetAtt PublishIssueFunction.Arn
+                - !GetAtt ParseMdToJsonFunction.Arn
                 - !GetAtt UpdateLinksWithTrackingDataFunction.Arn
                 - !GetAtt SetupVotingOptionsFunction.Arn
+                - !GetAtt TransformAndCallbackFunction.Arn
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
             - Effect: Allow
               Action: scheduler:CreateSchedule
               Resource:
-                - !Sub arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/newsletter/NEWSLETTER-STATS*
                 - !Sub arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/newsletter/ISSUE-STATS*
+                - !Sub arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/newsletter/*-CLEAN-*
             - Effect: Allow
               Action: iam:PassRole
               Resource:
-                - !GetAtt PublishTopContentRole.Arn
                 - !GetAtt ReportStatsRole.Arn
                 - !GetAtt SchedulerExecutionRole.Arn
 
@@ -2159,44 +2172,6 @@ Resources:
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
-
-  PublishTopContentRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - scheduler.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: PublishTopContent
-          PolicyDocument:
-            Version: 2012-10-17
-            Statement:
-              - Effect: Allow
-                Action: states:StartExecution
-                Resource: !GetAtt PublishTopContentStateMachine.Arn
-
-  PublishTopContentStateMachine:
-    Type: AWS::Serverless::StateMachine
-    Properties:
-      DefinitionUri: state-machines/publish-top-content.asl.json
-      DefinitionSubstitutions:
-        StepFunctionsStartExecution: !Sub arn:${AWS::Partition}:states:::states:startExecution.sync:2
-        LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
-        GetTopLinks: !GetAtt GetTopLinkFunction.Arn
-        PutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
-      Policies:
-        - Statement:
-            - Effect: Allow
-              Action: lambda:InvokeFunction
-              Resource: !GetAtt GetTopLinkFunction.Arn
-            - Effect: Allow
-              Action: events:PutEvents
-              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
 
   APIGatewayCloudWatchRole:
     Type: AWS::IAM::Role

@@ -87,7 +87,6 @@ export interface DashboardData {
 
 export interface Issue {
   id: string;
-  slug: string;
   title: string;
   sentDate: string;
   metrics?: IssueMetrics;

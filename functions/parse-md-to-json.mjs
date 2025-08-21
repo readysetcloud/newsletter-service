@@ -1,7 +1,6 @@
 
 import showdown from 'showdown';
 import frontmatter from '@github-docs/frontmatter';
-import { getOctokit } from './utils/helpers.mjs';
 import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 
@@ -63,22 +62,9 @@ export const handler = async (state) => {
   });
 
   newsletterDate.setHours(14);
-  if (!newsletter.data.voting_options && Array.isArray(state.votingOptions) && state.votingOptions.every(vo => vo.id && vo.description)) {
-    newsletter.data.voting_options = state.votingOptions;
-    if (!newsletter.content.includes('{{<vote>}}')) {
-      const lastWordsIndex = newsletter.content.toLowerCase().indexOf('### last words');
-      if (lastWordsIndex >= 0) {
-        newsletter.content = newsletter.content.substring(0, lastWordsIndex) + '{{<vote>}}\n\n' + newsletter.content.substring(lastWordsIndex);
-      }
-    }
-  }
 
-  if (!state.isPreview) {
-    await updateSourceWithRedirects(state.fileName, newsletter.content, newsletter.data);
-  }
-
-  const topStatsDate = new Date(newsletterDate);
-  topStatsDate.setDate(topStatsDate.getDate() + 3);
+  const listCleanupDate = new Date(newsletterDate);
+  listCleanupDate.setDate(listCleanupDate.getDate() + 3);
 
   const reportStatsDate = new Date(newsletterDate);
   reportStatsDate.setDate(reportStatsDate.getDate() + 5);
@@ -89,7 +75,7 @@ export const handler = async (state) => {
   return {
     data: dataTemplate,
     sendAtDate,
-    getTopStatsDate: topStatsDate.toISOString().split('.')[0],
+    listCleanupDate: listCleanupDate.toISOString().split('.')[0],
     reportStatsDate: reportStatsDate.toISOString().split('.')[0],
     subject: `Serverless Picks of the Week #${dataTemplate.metadata.number} - ${dataTemplate.metadata.title}`
   };
@@ -161,32 +147,6 @@ const formatSponsorAd = (ad) => {
 </div>`;
 };
 
-const updateSourceWithRedirects = async (fileName, content, data) => {
-  try {
-    const octokit = await getOctokit();
-    const markdown = frontmatter.stringify(content, data);
-
-    const { data: { sha } } = await octokit.rest.repos.getContent({
-      owner: process.env.OWNER,
-      repo: process.env.REPO,
-      path: fileName,
-    });
-
-    await octokit.rest.repos.createOrUpdateFileContents({
-      owner: process.env.OWNER,
-      repo: process.env.REPO,
-      path: fileName,
-      message: '[Automated] Updating newsletter with redirects',
-      content: Buffer.from(markdown).toString("base64"),
-      sha
-    });
-
-  } catch (error) {
-    console.error('Could not update links with redirects', error.message);
-    console.error(error);
-  }
-};
-
 const getAuthor = async (metadataAuthor) => {
   if (!metadataAuthor) return null;
 
@@ -210,7 +170,6 @@ const getAuthor = async (metadataAuthor) => {
 };
 
 const getSponsor = async (sponsorName) => {
-
   let data = await ddb.send(new GetItemCommand({
     TableName: process.env.TABLE_NAME,
     Key: marshall({

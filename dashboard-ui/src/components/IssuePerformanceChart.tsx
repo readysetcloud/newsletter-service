@@ -9,7 +9,7 @@ interface IssuePerformanceChartProps {
 export default function IssuePerformanceChart({ issues }: IssuePerformanceChartProps) {
   const chartData = issues?.map(issue => ({
     name: issue.title,
-    slug: issue.slug,
+    id: issue.id,
     date: issue.sentDate,
     openRate: issue.metrics?.openRate || 0,
     clickRate: issue.metrics?.clickThroughRate || 0,

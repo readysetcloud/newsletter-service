@@ -353,7 +353,7 @@ export function DashboardPage() {
                               <div className="text-sm text-gray-500 truncate max-w-xs sm:hidden">
                                 {new Date(issue.sentDate).toLocaleDateString()}
                               </div>
-                              <div className="text-xs text-gray-500 truncate max-w-xs hidden sm:block">{issue.slug}</div>
+                              <div className="text-xs text-gray-500 truncate max-w-xs hidden sm:block">{issue.id}</div>
                             </td>
                             <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-gray-900 hidden sm:table-cell">
                               <div className="flex items-center">

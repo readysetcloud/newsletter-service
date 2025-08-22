@@ -4,6 +4,8 @@ export interface ApiResponse<T = any> {
   data?: T;
   error?: string;
   message?: string;
+  errorCode?: string;
+  retryAttempts?: number;
 }
 
 export interface ApiError {
@@ -134,6 +136,7 @@ export interface BrandUpdateRequest {
   website?: string;
   industry?: string;
   brandDescription?: string;
+  brandLogo?: string;
   tags?: string[];
 }
 
@@ -173,4 +176,61 @@ export interface CognitoUser {
   email: string;
   emailVerified: boolean;
   groups?: string[];
+}
+
+// Sender Email Types
+export interface SenderEmail {
+  senderId: string;
+  email: string;
+  name?: string;
+  verificationType: 'mailbox' | 'domain';
+  verificationStatus: 'pending' | 'verified' | 'failed';
+  isDefault: boolean;
+  domain?: string;
+  createdAt: string;
+  updatedAt: string;
+  verifiedAt?: string;
+  failureReason?: string;
+}
+
+export interface TierLimits {
+  tier: 'free-tier' | 'creator-tier' | 'pro-tier';
+  maxSenders: number;
+  currentCount: number;
+  canUseDNS: boolean;
+  canUseMailbox: boolean;
+}
+
+export interface DomainVerification {
+  domain: string;
+  verificationStatus: 'pending' | 'verified' | 'failed';
+  dnsRecords: DnsRecord[];
+  instructions: string[];
+}
+
+export interface DnsRecord {
+  name: string;
+  type: string;
+  value: string;
+  description: string;
+}
+
+export interface CreateSenderRequest {
+  email: string;
+  name?: string;
+  verificationType: 'mailbox' | 'domain';
+}
+
+export interface UpdateSenderRequest {
+  name?: string;
+  isDefault?: boolean;
+}
+
+export interface VerifyDomainRequest {
+  domain: string;
+}
+
+export interface GetSendersResponse {
+  senders: SenderEmail[];
+  tierLimits: TierLimits;
 }

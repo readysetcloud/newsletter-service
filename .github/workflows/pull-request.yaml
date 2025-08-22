@@ -48,6 +48,11 @@ jobs:
           --capabilities CAPABILITY_IAM \
           --parameter-overrides Environment=stage EncryptionKey=${{secrets.ENCRYPTION_KEY}} MomentoCacheName=newsletter MomentoApiKey=${{secrets.MOMENTO_API_KEY}}
 
+      - name: Validate Deployment
+        run: |
+          chmod +x scripts/validate-sender-email-deployment.sh
+          ./scripts/validate-sender-email-deployment.sh stage
+
   deploy-dependabot:
     name: Deploy Dependabot Updates
     if: ${{ github.actor == 'dependabot[bot]' && github.event_name == 'pull_request' }}

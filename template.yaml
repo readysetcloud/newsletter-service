@@ -35,6 +35,10 @@ Parameters:
   MomentoCacheName:
     Type: String
     Description: Momento cache name for real-time notifications
+  VerifiedFromEmail:
+    Type: String
+    Default: ""
+    Description: Verified SES email address for custom verification emails (must be pre-verified in SES)
 
 
 Metadata:
@@ -65,6 +69,7 @@ Conditions:
     - !Condition HasDomainName
     - !Condition HasHostedZoneId
   HasRedirectCustomDomain: !Not [!Equals [!Ref RedirectCustomDomain, ""]]
+  HasVerifiedFromEmail: !Not [!Equals [!Ref VerifiedFromEmail, ""]]
 
 Globals:
   Function:
@@ -2251,6 +2256,390 @@ Resources:
     Properties:
       Name: newsletter-events
       Description: Custom EventBridge bus for newsletter notification events
+
+  # Sender Email Management Functions
+  GetSendersFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - senders/get-senders.mjs
+    Properties:
+      Handler: senders/get-senders.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          SES_CONFIGURATION_SET: !Ref ConfigurationSet
+      Events:
+        GetSenders:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /senders
+            Method: GET
+
+  CreateSenderFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - senders/create-sender.mjs
+          - senders/send-verification-email.mjs
+    Properties:
+      Handler: senders/create-sender.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:Query
+                - dynamodb:GetItem
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
+            - Effect: Allow
+              Action:
+                - ses:CreateEmailIdentity
+                - ses:SendEmail
+                - ses:CreateCustomVerificationEmailTemplate
+                - ses:UpdateCustomVerificationEmailTemplate
+                - ses:DeleteCustomVerificationEmailTemplate
+                - ses:GetCustomVerificationEmailTemplate
+                - ses:ListCustomVerificationEmailTemplates
+                - ses:SendCustomVerificationEmail
+              Resource: "*"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          SES_CONFIGURATION_SET: !Ref ConfigurationSet
+          SYSTEM_FROM_EMAIL: !If
+            - HasVerifiedFromEmail
+            - !Ref VerifiedFromEmail
+            - !Sub "noreply@${DomainName}"
+          FRONTEND_URL: !Sub "https://${DomainName}"
+          SES_VERIFY_TEMPLATE_NAME: !Sub "${AWS::StackName}-sender-verification"
+          VERIFY_SUCCESS_URL: !Sub "https://${DomainName}/verify-sender/success"
+          VERIFY_FAILURE_URL: !Sub "https://${DomainName}/verify-sender/failure"
+          USE_CUSTOM_VERIFY_EMAIL: "true"
+      Events:
+        CreateSender:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /senders
+            Method: POST
+
+  BootstrapVerificationTemplateFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - senders/bootstrap-verification-template.mjs
+    Properties:
+      Handler: senders/bootstrap-verification-template.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - ses:CreateCustomVerificationEmailTemplate
+                - ses:UpdateCustomVerificationEmailTemplate
+                - ses:GetCustomVerificationEmailTemplate
+              Resource: "*"
+      Environment:
+        Variables:
+          SES_VERIFY_TEMPLATE_NAME: !Sub "${AWS::StackName}-sender-verification"
+          SYSTEM_FROM_EMAIL: !If
+            - HasVerifiedFromEmail
+            - !Ref VerifiedFromEmail
+            - !Sub "noreply@${DomainName}"
+          VERIFY_SUCCESS_URL: !Sub "https://${DomainName}/verify-sender/success"
+          VERIFY_FAILURE_URL: !Sub "https://${DomainName}/verify-sender/failure"
+
+  BootstrapVerificationTemplate:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt BootstrapVerificationTemplateFunction.Arn
+      # Force update on every deployment by including a timestamp-like value
+      Version: !Sub "${AWS::StackName}-${Environment}"
+
+  UpdateSenderFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - senders/update-sender.mjs
+    Properties:
+      Handler: senders/update-sender.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:GetItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          SES_CONFIGURATION_SET: !Ref ConfigurationSet
+      Events:
+        UpdateSender:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /senders/{senderId}
+            Method: PUT
+
+  DeleteSenderFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - senders/delete-sender.mjs
+    Properties:
+      Handler: senders/delete-sender.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:DeleteItem
+                - dynamodb:GetItem
+                - dynamodb:Query
+                - dynamodb:UpdateItem
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
+            - Effect: Allow
+              Action:
+                - ses:DeleteIdentity
+                - ses:GetIdentityVerificationAttributes
+              Resource: "*"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          SES_CONFIGURATION_SET: !Ref ConfigurationSet
+      Events:
+        DeleteSender:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /senders/{senderId}
+            Method: DELETE
+
+  VerifyDomainFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - senders/verify-domain.mjs
+    Properties:
+      Handler: senders/verify-domain.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - ses:VerifyDomainIdentity
+                - ses:GetIdentityVerificationAttributes
+                - ses:GetIdentityDkimAttributes
+                - ses:PutEmailIdentity
+              Resource: "*"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          SES_CONFIGURATION_SET: !Ref ConfigurationSet
+      Events:
+        VerifyDomain:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /senders/verify-domain
+            Method: POST
+
+  GetDomainVerificationFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - senders/get-domain-verification.mjs
+    Properties:
+      Handler: senders/get-domain-verification.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - ses:GetIdentityVerificationAttributes
+                - ses:GetIdentityDkimAttributes
+                - dynamodb:UpdateItem
+                - dynamodb:Query
+              Resource:
+                - "*"
+                - !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          SES_CONFIGURATION_SET: !Ref ConfigurationSet
+      Events:
+        GetDomainVerification:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /senders/domain-verification/{domain}
+            Method: GET
+
+  VerifySenderEmailFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - senders/verify-sender-email.mjs
+    Properties:
+      Handler: senders/verify-sender-email.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - ses:PutEmailIdentityConfigurationSetAttributes
+              Resource: "*"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          SES_CONFIGURATION_SET: !Ref ConfigurationSet
+      Events:
+        VerifySenderEmail:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /verify-sender
+            Method: GET
+
+  ResendVerificationFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - senders/resend-verification.mjs
+          - senders/send-verification-email.mjs
+    Properties:
+      Handler: senders/resend-verification.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+              Resource: "*"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          SES_CONFIGURATION_SET: !Ref ConfigurationSet
+          SYSTEM_FROM_EMAIL: !Sub "noreply@${DomainName}"
+          FRONTEND_URL: !Sub "https://${DomainName}"
+      Events:
+        ResendVerification:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /senders/{senderId}/resend-verification
+            Method: POST
+
+  HandleSESEventFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - senders/handle-ses-event.mjs
+    Properties:
+      Handler: senders/handle-ses-event.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:Query
+                - dynamodb:Scan
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          MOMENTO_API_KEY: !Ref MomentoApiKey
+          MOMENTO_CACHE_NAME: !Ref MomentoCacheName
+      Events:
+        SESVerificationEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source: ["aws.ses"]
+              detail-type: ["SES Identity Verification Result"]
 
 Outputs:
   NewsletterApiUrl:

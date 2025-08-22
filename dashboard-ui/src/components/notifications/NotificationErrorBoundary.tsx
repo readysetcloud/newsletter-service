@@ -12,7 +12,7 @@ interface NotificationErrorBoundaryProps {
   children: ReactNode;
   fallback?: ReactNode;
   onError?: (error: Error, errorInfo: React.ErrorInfo) => void;
-tries?: number;
+  maxRetries?: number;
 }
 
 /**

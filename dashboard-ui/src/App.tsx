@@ -7,6 +7,7 @@ import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
 import { OnboardingGuard } from '@/components/auth/OnboardingGuard';
 import { ErrorBoundary, RouteErrorBoundary } from '@/components/error';
 import { PageLoader } from '@/components/ui/LazyLoader';
+import { VerifySenderPage } from '@/pages/verify-sender/VerifySenderPage';
 import {
   LazyLoginPage,
   LazySignUpPage,
@@ -14,9 +15,10 @@ import {
   LazyBrandPage,
   LazyProfilePage,
   LazyApiKeysPage,
+  LazySenderEmailSetupPage,
   preloadCriticalRoutes
 } from '@/utils/lazyImports';
-import { BrandOnboardingPage, ProfileOnboardingPage } from '@/pages/onboarding';
+import { BrandOnboardingPage, ProfileOnboardingPage, SenderOnboardingPage } from '@/pages/onboarding';
 import { useEffect } from 'react';
 
 function App() {
@@ -60,6 +62,16 @@ function App() {
                       </RouteErrorBoundary>
                     }
                   />
+                  <Route
+                    path="/verify-sender"
+                    element={
+                      <RouteErrorBoundary routeName="Verify Sender">
+                        <PageLoader>
+                          <VerifySenderPage />
+                        </PageLoader>
+                      </RouteErrorBoundary>
+                    }
+                  />
 
                   {/* Onboarding Routes */}
                   <Route
@@ -78,6 +90,16 @@ function App() {
                       <RouteErrorBoundary routeName="Profile Onboarding">
                         <ProtectedRoute>
                           <ProfileOnboardingPage />
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/onboarding/sender"
+                    element={
+                      <RouteErrorBoundary routeName="Sender Onboarding">
+                        <ProtectedRoute>
+                          <SenderOnboardingPage />
                         </ProtectedRoute>
                       </RouteErrorBoundary>
                     }
@@ -134,6 +156,20 @@ function App() {
                           <OnboardingGuard>
                             <PageLoader>
                               <LazyApiKeysPage />
+                            </PageLoader>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/senders"
+                    element={
+                      <RouteErrorBoundary routeName="Sender Email Setup">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <PageLoader>
+                              <LazySenderEmailSetupPage />
                             </PageLoader>
                           </OnboardingGuard>
                         </ProtectedRoute>

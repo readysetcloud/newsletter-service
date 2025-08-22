@@ -1,0 +1,777 @@
+import { useState, useEffect, useCallback } from 'react';
+import { AppHeader } from '@/components/layout/AppHeader';
+import { Loading } from '@/components/ui/Loading';
+import { ErrorDisplay, NetworkError } from '@/components/ui/ErrorDisplay';
+import { LoadingOverlay, ProgressIndicator, EmptyState, LoadingSpinner } from '@/components/ui/LoadingStates';
+
+import {
+  SenderEmailList,
+  AddSenderForm,
+  DomainVerificationGuide,
+  TierUpgradePrompt,
+  type SenderEmail,
+  type TierLimits,
+  type DomainVerification,
+  type CreateSenderRequest,
+  type UpdateSenderRequest,
+  type GetSendersResponse
+} from '@/components/senders';
+import { senderService } from '@/services/senderService';
+import { useNotifications } from '@/hooks/useNotifications';
+import { useAuth } from '@/contexts/AuthContext';
+import { getUserFriendlyErrorMessage, parseApiError } from '@/utils/errorHandling';
+import type { Notification } from '@/types';
+import {
+  EnvelopeIcon,
+  CheckCircleIcon,
+  ClockIcon,
+  ExclamationTriangleIcon,
+  WifiIcon,
+} from '@heroicons/react/24/outline';
+
+interface SenderSetupState {
+  senders: SenderEmail[];
+  tierLimits: TierLimits;
+  isLoading: boolean;
+  isRefreshing: boolean;
+  error: string | null;
+  selectedSender: SenderEmail | null;
+  showAddForm: boolean;
+  showDomainGuide: boolean;
+  domainVerification: DomainVerification | null;
+  verifyingDomain: string | null;
+  pollingStatuses: Set<string>; // Track which senders are being polled
+  operationInProgress: {
+    type: 'create' | 'update' | 'delete' | 'verify' | null;
+    senderId?: string;
+    message?: string;
+  };
+  verificationProgress: Array<{
+    id: string;
+    label: string;
+    status: 'pending' | 'in-progress' | 'completed' | 'failed';
+    description?: string;
+  }>;
+}
+
+export function SenderEmailSetupPage() {
+  const { user } = useAuth();
+  const { showSuccess, showError, showInfo, isSubscribed } = useNotifications();
+
+  const [state, setState] = useState<SenderSetupState>({
+    senders: [],
+    tierLimits: {
+      tier: 'free-tier',
+      maxSenders: 1,
+      currentCount: 0,
+      canUseDNS: false,
+      canUseMailbox: true
+    },
+    isLoading: true,
+    isRefreshing: false,
+    error: null,
+    selectedSender: null,
+    showAddForm: false,
+    showDomainGuide: false,
+    domainVerification: null,
+    verifyingDomain: null,
+    pollingStatuses: new Set(),
+    operationInProgress: { type: null },
+    verificationProgress: []
+  });
+
+  // Load sender data on component mount
+  useEffect(() => {
+    loadSenders();
+  }, []);
+
+  // Handle real-time notifications for sender verification updates
+  const handleSenderNotification = useCallback((notification: Notification) => {
+    // Check if this is a sender-related notification
+    const isSenderNotification =
+      notification.title.toLowerCase().includes('sender') ||
+      notification.title.toLowerCase().includes('domain') ||
+      notification.title.toLowerCase().includes('verification') ||
+      notification.title.toLowerCase().includes('email verified') ||
+      notification.title.toLowerCase().includes('email failed');
+
+    if (isSenderNotification) {
+      // Refresh sender data when verification status changes
+      loadSenders();
+
+      // Show appropriate notification based on type
+      switch (notification.type) {
+        case 'success':
+          showSuccess(notification.title, notification.message);
+          break;
+        case 'error':
+          showError(notification.title, notification.message);
+          break;
+        case 'info':
+          showInfo(notification.title, notification.message);
+          break;
+        default:
+          showInfo(notification.title, notification.message);
+      }
+    }
+  }, [showSuccess, showError, showInfo]);
+
+  // Set up real-time notification handling
+  useEffect(() => {
+    // The NotificationContext already handles the connection setup
+    // We just need to listen for notifications that affect senders
+    // This is handled through the notification system automatically
+
+    // Note: Real-time updates are handled by the NotificationContext
+    // and will trigger re-renders when sender status changes
+  }, []);
+
+  const loadSenders = async (isRefresh = false) => {
+    try {
+      setState(prev => ({
+        ...prev,
+        isLoading: !isRefresh,
+        isRefreshing: isRefresh,
+        error: null
+      }));
+
+      const response = await senderService.getSendersWithRetry();
+
+      if (response.success && response.data) {
+        setState(prev => ({
+          ...prev,
+          senders: response.data!.senders,
+          tierLimits: response.data!.tierLimits,
+          isLoading: false,
+          isRefreshing: false
+        }));
+      } else {
+        const errorMessage = getUserFriendlyErrorMessage(response, 'sender');
+        setState(prev => ({
+          ...prev,
+          error: errorMessage,
+          isLoading: false,
+          isRefreshing: false
+        }));
+      }
+    } catch (err) {
+      const errorMessage = getUserFriendlyErrorMessage(err, 'sender');
+      setState(prev => ({
+        ...prev,
+        error: errorMessage,
+        isLoading: false,
+        isRefreshing: false
+      }));
+    }
+  };
+
+  const handleRefresh = () => {
+    loadSenders(true);
+  };
+
+  const handleCreateSender = async (data: CreateSenderRequest) => {
+    try {
+      // Set operation in progress
+      setState(prev => ({
+        ...prev,
+        operationInProgress: {
+          type: 'create',
+          message: `Adding ${data.email}...`
+        }
+      }));
+
+      // Update verification progress
+      const progressSteps = [
+        { id: 'validate', label: 'Validating email address', status: 'in-progress' as const },
+        { id: 'create', label: 'Creating sender configuration', status: 'pending' as const },
+        { id: 'verify', label: 'Initiating verification', status: 'pending' as const }
+      ];
+      setState(prev => ({ ...prev, verificationProgress: progressSteps }));
+
+      const response = await senderService.createSenderWithRetry(data);
+
+      if (response.success && response.data) {
+        // Update progress
+        setState(prev => ({
+          ...prev,
+          verificationProgress: prev.verificationProgress.map(step => ({
+            ...step,
+            status: step.id === 'validate' ? 'completed' :
+                   step.id === 'create' ? 'in-progress' : 'pending'
+          }))
+        }));
+
+        // Add new sender to state
+        setState(prev => ({
+          ...prev,
+          senders: [...prev.senders, response.data!],
+          tierLimits: {
+            ...prev.tierLimits,
+            currentCount: prev.tierLimits.currentCount + 1
+          },
+          showAddForm: false,
+          operationInProgress: { type: null },
+          verificationProgress: prev.verificationProgress.map(step => ({
+            ...step,
+            status: 'completed'
+          }))
+        }));
+
+        // Add to polling statuses for UI feedback
+        setState(prev => ({
+          ...prev,
+          pollingStatuses: new Set([...prev.pollingStatuses, response.data!.senderId])
+        }));
+
+        // Start polling for verification status with enhanced feedback
+        senderService.startVerificationPolling(
+          response.data.senderId,
+          (sender, error) => {
+            if (error) {
+              showError('Verification Error', error);
+              // Remove from polling statuses
+              setState(prev => ({
+                ...prev,
+                pollingStatuses: new Set([...prev.pollingStatuses].filter(id => id !== response.data!.senderId))
+              }));
+            } else if (sender) {
+              // Update sender in state
+              setState(prev => ({
+                ...prev,
+                senders: prev.senders.map(s =>
+                  s.senderId === sender.senderId ? sender : s
+                )
+              }));
+
+              if (sender.verificationStatus === 'verified') {
+                showSuccess(
+                  'Email Verified',
+                  `${sender.email} has been successfully verified and is ready to use`
+                );
+                // Remove from polling statuses
+                setState(prev => ({
+                  ...prev,
+                  pollingStatuses: new Set([...prev.pollingStatuses].filter(id => id !== sender.senderId))
+                }));
+              } else if (sender.verificationStatus === 'failed') {
+                showError(
+                  'Verification Failed',
+                  `Failed to verify ${sender.email}. ${sender.failureReason || 'Please check your email and try again.'}`
+                );
+                // Remove from polling statuses
+                setState(prev => ({
+                  ...prev,
+                  pollingStatuses: new Set([...prev.pollingStatuses].filter(id => id !== sender.senderId))
+                }));
+              }
+            }
+          }
+        );
+
+        showSuccess(
+          'Sender Email Added',
+          `Verification email sent to ${data.email}. Check your inbox and click the verification link.`
+        );
+
+        // Clear progress after a delay
+        setTimeout(() => {
+          setState(prev => ({ ...prev, verificationProgress: [] }));
+        }, 3000);
+      } else {
+        throw new Error(response.error || 'Failed to create sender email');
+      }
+    } catch (err) {
+      setState(prev => ({
+        ...prev,
+        operationInProgress: { type: null },
+        verificationProgress: prev.verificationProgress.map(step => ({
+          ...step,
+          status: step.status === 'in-progress' ? 'failed' : step.status
+        }))
+      }));
+
+      const errorMessage = getUserFriendlyErrorMessage(err, 'sender');
+      showError('Error', errorMessage);
+      throw err;
+    }
+  };
+
+  const handleUpdateSender = async (senderId: string, data: UpdateSenderRequest) => {
+    try {
+      const response = await senderService.updateSenderWithRetry(senderId, data);
+
+      if (response.success && response.data) {
+        // Update sender in state
+        setState(prev => ({
+          ...prev,
+          senders: prev.senders.map(s =>
+            s.senderId === senderId ? response.data! : s
+          )
+        }));
+
+        showSuccess(
+          'Sender Updated',
+          'Sender email updated successfully'
+        );
+      } else {
+        throw new Error(response.error || 'Failed to update sender email');
+      }
+    } catch (err) {
+      showError(
+        'Error',
+        err instanceof Error ? err.message : 'Failed to update sender email'
+      );
+      throw err;
+    }
+  };
+
+  const handleDeleteSender = async (senderId: string) => {
+    try {
+      const response = await senderService.deleteSender(senderId);
+
+      if (response.success) {
+        // Remove sender from state
+        setState(prev => ({
+          ...prev,
+          senders: prev.senders.filter(s => s.senderId !== senderId),
+          tierLimits: {
+            ...prev.tierLimits,
+            currentCount: Math.max(0, prev.tierLimits.currentCount - 1)
+          }
+        }));
+
+        // Stop polling for this sender
+        senderService.stopVerificationPolling(senderId);
+
+        showSuccess(
+          'Sender Deleted',
+          'Sender email deleted successfully'
+        );
+      } else {
+        throw new Error(response.error || 'Failed to delete sender email');
+      }
+    } catch (err) {
+      showError(
+        'Error',
+        err instanceof Error ? err.message : 'Failed to delete sender email'
+      );
+      throw err;
+    }
+  };
+
+  const handleVerifyDomain = async (domain: string) => {
+    try {
+      setState(prev => ({ ...prev, verifyingDomain: domain }));
+
+      const response = await senderService.verifyDomainWithRetry({ domain });
+
+      if (response.success && response.data) {
+        setState(prev => ({
+          ...prev,
+          domainVerification: response.data!,
+          showDomainGuide: true,
+          verifyingDomain: null
+        }));
+
+        // Add domain to polling statuses for UI feedback
+        setState(prev => ({
+          ...prev,
+          pollingStatuses: new Set([...prev.pollingStatuses, `domain:${domain}`])
+        }));
+
+        // Start polling for domain verification status
+        senderService.startDomainVerificationPolling(
+          domain,
+          (verification, error) => {
+            if (error) {
+              showError('Domain Verification Error', error);
+              // Remove from polling statuses
+              setState(prev => ({
+                ...prev,
+                pollingStatuses: new Set([...prev.pollingStatuses].filter(id => id !== `domain:${domain}`))
+              }));
+            } else if (verification) {
+              setState(prev => ({
+                ...prev,
+                domainVerification: verification
+              }));
+
+              if (verification.verificationStatus === 'verified') {
+                showSuccess(
+                  'Domain Verified',
+                  `${domain} has been successfully verified`
+                );
+                // Remove from polling statuses
+                setState(prev => ({
+                  ...prev,
+                  pollingStatuses: new Set([...prev.pollingStatuses].filter(id => id !== `domain:${domain}`))
+                }));
+                // Refresh senders to show updated status
+                loadSenders();
+              } else if (verification.verificationStatus === 'failed') {
+                showError(
+                  'Domain Verification Failed',
+                  `Failed to verify ${domain}. Please check your DNS records.`
+                );
+                // Remove from polling statuses
+                setState(prev => ({
+                  ...prev,
+                  pollingStatuses: new Set([...prev.pollingStatuses].filter(id => id !== `domain:${domain}`))
+                }));
+              }
+            }
+          }
+        );
+
+        showInfo(
+          'Domain Verification Started',
+          `DNS records generated for ${domain}. Please add them to your DNS settings.`
+        );
+      } else {
+        throw new Error(response.error || 'Failed to initiate domain verification');
+      }
+    } catch (err) {
+      setState(prev => ({ ...prev, verifyingDomain: null }));
+      showError(
+        'Error',
+        err instanceof Error ? err.message : 'Failed to verify domain'
+      );
+      throw err;
+    }
+  };
+
+  const handleRetryVerification = async (senderId: string) => {
+    try {
+      const response = await senderService.retryVerification(senderId);
+
+      if (response.success && response.data) {
+        // Update sender in state
+        setState(prev => ({
+          ...prev,
+          senders: prev.senders.map(s =>
+            s.senderId === senderId ? response.data! : s
+          )
+        }));
+
+        // Start polling for verification status
+        senderService.startVerificationPolling(
+          response.data.senderId,
+          (sender, error) => {
+            if (error) {
+              showError('Verification Error', error);
+            } else if (sender) {
+              setState(prev => ({
+                ...prev,
+                senders: prev.senders.map(s =>
+                  s.senderId === sender.senderId ? sender : s
+                )
+              }));
+            }
+          }
+        );
+
+        showSuccess(
+          'Verification Retried',
+          'Verification process restarted'
+        );
+      } else {
+        throw new Error(response.error || 'Failed to retry verification');
+      }
+    } catch (err) {
+      showError(
+        'Error',
+        err instanceof Error ? err.message : 'Failed to retry verification'
+      );
+    }
+  };
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      senderService.stopAllPolling();
+    };
+  }, []);
+
+  if (state.isLoading && state.senders.length === 0) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <AppHeader />
+        <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+          <div className="px-4 py-6 sm:px-0">
+            <LoadingOverlay
+              isLoading={true}
+              message="Loading sender email configuration..."
+            >
+              <div className="space-y-6">
+                <div className="h-20 bg-gray-200 rounded-lg animate-pulse"></div>
+                <div className="h-32 bg-gray-200 rounded-lg animate-pulse"></div>
+                <div className="h-64 bg-gray-200 rounded-lg animate-pulse"></div>
+              </div>
+            </LoadingOverlay>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <AppHeader />
+
+      {/* Main Content */}
+      <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+        <div className="px-4 py-6 sm:px-0">
+          {state.error && state.senders.length === 0 ? (
+            <div className="space-y-6">
+              {/* Page Header */}
+              <div className="mb-6 sm:mb-8">
+                <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Sender Email Setup</h1>
+                <p className="text-gray-600 mt-2 text-sm sm:text-base">
+                  Configure verified email addresses for sending newsletters.
+                </p>
+              </div>
+
+              {/* Error Display */}
+              {parseApiError({ error: state.error }).type === 'network' ? (
+                <NetworkError onRetry={() => loadSenders()} />
+              ) : (
+                <ErrorDisplay
+                  title="Error Loading Sender Emails"
+                  message={state.error}
+                  severity="error"
+                  retryable={parseApiError({ error: state.error }).retryable}
+                  onRetry={() => loadSenders()}
+                  suggestions={[
+                    'Check your internet connection',
+                    'Refresh the page',
+                    'Try again in a few moments',
+                    'Contact support if the problem persists'
+                  ]}
+                />
+              )}
+            </div>
+          ) : (
+            <>
+              {/* Page Header */}
+              <div className="mb-6 sm:mb-8">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Sender Email Setup</h1>
+                    <p className="text-gray-600 mt-2 text-sm sm:text-base">
+                      Configure verified email addresses for sending newsletters.
+                      {state.tierLimits.tier === 'free-tier' && ' Upgrade to unlock DNS verification and multiple senders.'}
+                    </p>
+                  </div>
+
+                  {/* Real-time Status Indicator */}
+                  <div className="flex items-center space-x-4">
+                    {state.isRefreshing && (
+                      <div className="flex items-center space-x-2 text-sm text-blue-600">
+                        <LoadingSpinner size="sm" />
+                        <span>Refreshing...</span>
+                      </div>
+                    )}
+                    {state.pollingStatuses.size > 0 && (
+                      <div className="flex items-center space-x-2 text-sm text-blue-600">
+                        <ClockIcon className="w-4 h-4 animate-pulse" />
+                        <span>Checking verification status...</span>
+                      </div>
+                    )}
+                    {isSubscribed && (
+                      <div className="flex items-center space-x-1 text-sm text-green-600">
+                        <WifiIcon className="w-4 h-4" />
+                        <span>Real-time updates active</span>
+                      </div>
+                    )}
+                    <button
+                      onClick={handleRefresh}
+                      disabled={state.isRefreshing}
+                      className="text-sm text-gray-600 hover:text-gray-900 disabled:opacity-50"
+                      title="Refresh sender status"
+                    >
+                      Refresh
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Tier Information */}
+              <div className="mb-6">
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-sm font-medium text-blue-800">
+                        Current Plan: {state.tierLimits.tier.replace('-', ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                      </h3>
+                      <p className="text-sm text-blue-600 mt-1">
+                        {state.tierLimits.currentCount} of {state.tierLimits.maxSenders} sender emails configured
+                      </p>
+                    </div>
+                    {!senderService.canAddSender(state.tierLimits) && (
+                      <TierUpgradePrompt
+                        currentTier={state.tierLimits}
+                        context="sender-limit"
+                        feature="sender emails"
+                      />
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Operation Progress */}
+              {state.operationInProgress.type && (
+                <div className="mb-6">
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <div className="flex items-center space-x-3">
+                      <LoadingSpinner size="sm" />
+                      <div>
+                        <h4 className="text-sm font-medium text-blue-800">
+                          Operation in Progress
+                        </h4>
+                        <p className="text-sm text-blue-600">
+                          {state.operationInProgress.message}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Verification Progress */}
+              {state.verificationProgress.length > 0 && (
+                <div className="mb-6">
+                  <div className="bg-white border border-gray-200 rounded-lg p-4">
+                    <h4 className="text-sm font-medium text-gray-900 mb-3">
+                      Verification Progress
+                    </h4>
+                    <ProgressIndicator steps={state.verificationProgress} />
+                  </div>
+                </div>
+              )}
+
+              {/* Error Display for Partial Failures */}
+              {state.error && state.senders.length > 0 && (
+                <div className="mb-6">
+                  <ErrorDisplay
+                    title="Some operations failed"
+                    message={state.error}
+                    severity="warning"
+                    retryable={parseApiError({ error: state.error }).retryable}
+                    onRetry={handleRefresh}
+                    onDismiss={() => setState(prev => ({ ...prev, error: null }))}
+                    compact={true}
+                  />
+                </div>
+              )}
+
+              {/* Sender Email List */}
+              <div className="mb-6">
+                {state.senders.length === 0 && !state.isLoading ? (
+                  <EmptyState
+                    title="No sender emails configured"
+                    description="Add your first sender email to start sending newsletters from your own address."
+                    icon={<EnvelopeIcon className="w-12 h-12 text-gray-400" />}
+                    action={
+                      senderService.canAddSender(state.tierLimits) ? {
+                        label: "Add Sender Email",
+                        onClick: () => setState(prev => ({ ...prev, showAddForm: true })),
+                        isLoading: state.operationInProgress.type === 'create'
+                      } : undefined
+                    }
+                  />
+                ) : (
+                  <SenderEmailList
+                    senders={state.senders}
+                    tierLimits={state.tierLimits}
+                    onSenderDeleted={(senderId) => {
+                      setState(prev => ({
+                        ...prev,
+                        senders: prev.senders.filter(s => s.senderId !== senderId),
+                        tierLimits: {
+                          ...prev.tierLimits,
+                          currentCount: Math.max(0, prev.tierLimits.currentCount - 1)
+                        }
+                      }));
+                    }}
+                    onSenderUpdated={(sender) => {
+                      setState(prev => ({
+                        ...prev,
+                        senders: prev.senders.map(s =>
+                          s.senderId === sender.senderId ? sender : s
+                        )
+                      }));
+                    }}
+                    isLoading={state.isLoading}
+                  />
+                )}
+              </div>
+
+              {/* Add Sender Form */}
+              {state.showAddForm && (
+                <div className="mb-6">
+                  <AddSenderForm
+                    tierLimits={state.tierLimits}
+                    existingSenders={state.senders}
+                    onSenderCreated={handleCreateSender}
+                    onCancel={() => setState(prev => ({ ...prev, showAddForm: false }))}
+                  />
+                </div>
+              )}
+
+              {/* Domain Verification Guide */}
+              {state.showDomainGuide && state.domainVerification && (
+                <div className="mb-6">
+                  <DomainVerificationGuide
+                    domain={state.domainVerification.domain}
+                    onClose={() => setState(prev => ({
+                      ...prev,
+                      showDomainGuide: false,
+                      domainVerification: null
+                    }))}
+                    onVerificationComplete={() => {
+                      if (state.domainVerification) {
+                        senderService.getDomainVerification(state.domainVerification.domain)
+                          .then(response => {
+                            if (response.success && response.data) {
+                              setState(prev => ({
+                                ...prev,
+                                domainVerification: response.data!
+                              }));
+                            }
+                          });
+                      }
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* Add Sender Button */}
+              {!state.showAddForm && senderService.canAddSender(state.tierLimits) && (
+                <div className="text-center">
+                  <button
+                    onClick={() => setState(prev => ({ ...prev, showAddForm: true }))}
+                    className="bg-blue-600 text-white px-6 py-3 rounded-md hover:bg-blue-700 transition-colors font-medium"
+                  >
+                    Add Sender Email
+                  </button>
+                </div>
+              )}
+
+              {/* Tier Upgrade Prompt for No Senders */}
+              {state.senders.length === 0 && !senderService.canAddSender(state.tierLimits) && (
+                <div className="text-center">
+                  <TierUpgradePrompt
+                    currentTier={state.tierLimits}
+                    context="sender-limit"
+                    feature="sender emails"
+                    variant="card"
+                  />
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </main>
+    </div>
+  );
+}

@@ -35,6 +35,7 @@ x-amazon-apigateway-gateway-responses:
 tags:
   - name: API Keys
   - name: Profile
+  - name: Senders
 
 paths:
   /dashboard:
@@ -257,7 +258,14 @@ paths:
                   description: Name of the file to upload
                 contentType:
                   type: string
-                  enum: ["image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"]
+                  enum:
+                    [
+                      "image/jpeg",
+                      "image/jpg",
+                      "image/png",
+                      "image/gif",
+                      "image/webp",
+                    ]
                   description: MIME type of the image file
               additionalProperties: false
       responses:
@@ -360,7 +368,7 @@ paths:
             type: string
             minLength: 3
             maxLength: 50
-            pattern: '^[a-z]+$'
+            pattern: "^[a-z]+$"
           description: The brand ID to validate for availability
       responses:
         200:
@@ -413,7 +421,7 @@ paths:
                   type: string
                   minLength: 3
                   maxLength: 50
-                  pattern: '^[a-z]+$'
+                  pattern: "^[a-z]+$"
                   description: Unique brand identifier (becomes tenant ID and subdomain)
                 brandName:
                   type: string
@@ -422,7 +430,7 @@ paths:
                 website:
                   type: string
                   maxLength: 200
-                  pattern: '^https?://.+'
+                  pattern: "^https?://.+"
                   description: Brand website URL
                 industry:
                   type: string
@@ -524,7 +532,7 @@ paths:
                 locale:
                   type: string
                   maxLength: 10
-                  pattern: '^[a-z]{2}(-[A-Z]{2})?$'
+                  pattern: "^[a-z]{2}(-[A-Z]{2})?$"
                   description: User's locale (e.g., en-US)
                 links:
                   type: array
@@ -849,6 +857,194 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
+  /senders:
+    get:
+      summary: List sender emails
+      tags:
+        - Senders
+      responses:
+        200:
+          description: List of sender emails with tier limits
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  senders:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SenderEmail"
+                  tierLimits:
+                    $ref: "#/components/schemas/TierLimits"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetSendersFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+    post:
+      summary: Create a new sender email
+      tags:
+        - Senders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSenderRequest"
+      responses:
+        201:
+          description: Sender email created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SenderEmail"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        409:
+          description: Tier limit exceeded or email already exists
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  tierLimits:
+                    $ref: "#/components/schemas/TierLimits"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CreateSenderFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
+  /senders/{senderId}:
+    parameters:
+      - name: senderId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The sender ID
+    put:
+      summary: Update sender email
+      tags:
+        - Senders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSenderRequest"
+      responses:
+        200:
+          description: Sender email updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SenderEmail"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UpdateSenderFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+    delete:
+      summary: Delete sender email
+      tags:
+        - Senders
+      responses:
+        204:
+          description: Sender email deleted successfully
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DeleteSenderFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
+  /senders/verify-domain:
+    post:
+      summary: Initiate domain verification
+      tags:
+        - Senders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyDomainRequest"
+      responses:
+        201:
+          description: Domain verification initiated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainVerification"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        409:
+          description: Domain already verified or verification in progress
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${VerifyDomainFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
+  /senders/domain-verification/{domain}:
+    parameters:
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The domain name
+    get:
+      summary: Get domain verification status and DNS records
+      tags:
+        - Senders
+      responses:
+        200:
+          description: Domain verification details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainVerification"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetDomainVerificationFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
 components:
   parameters:
     Tenant:
@@ -925,3 +1121,165 @@ components:
                 type: string
                 description: Unknown error message
                 example: An unexpected error occurred.
+
+  schemas:
+    SenderEmail:
+      type: object
+      required:
+        - senderId
+        - email
+        - verificationType
+        - verificationStatus
+        - isDefault
+        - createdAt
+        - updatedAt
+      properties:
+        senderId:
+          type: string
+          description: Unique identifier for the sender
+        email:
+          type: string
+          format: email
+          description: Sender email address
+        name:
+          type: string
+          description: Display name for the sender
+        verificationType:
+          type: string
+          enum: [mailbox, domain]
+          description: Type of verification used
+        verificationStatus:
+          type: string
+          enum: [pending, verified, failed]
+          description: Current verification status
+        isDefault:
+          type: boolean
+          description: Whether this is the default sender for the tenant
+        domain:
+          type: string
+          description: Domain name (for domain verification)
+        createdAt:
+          type: string
+          format: date-time
+          description: When the sender was created
+        updatedAt:
+          type: string
+          format: date-time
+          description: When the sender was last updated
+        verifiedAt:
+          type: string
+          format: date-time
+          description: When the sender was verified
+        failureReason:
+          type: string
+          description: Reason for verification failure
+
+    TierLimits:
+      type: object
+      required:
+        - tier
+        - maxSenders
+        - currentCount
+        - canUseDNS
+        - canUseMailbox
+      properties:
+        tier:
+          type: string
+          enum: [free-tier, creator-tier, pro-tier]
+          description: User's current tier
+        maxSenders:
+          type: integer
+          description: Maximum number of senders allowed
+        currentCount:
+          type: integer
+          description: Current number of senders configured
+        canUseDNS:
+          type: boolean
+          description: Whether DNS verification is allowed
+        canUseMailbox:
+          type: boolean
+          description: Whether mailbox verification is allowed
+
+    DomainVerification:
+      type: object
+      required:
+        - domain
+        - verificationStatus
+        - dnsRecords
+        - instructions
+      properties:
+        domain:
+          type: string
+          description: Domain name being verified
+        verificationStatus:
+          type: string
+          enum: [pending, verified, failed]
+          description: Current verification status
+        dnsRecords:
+          type: array
+          items:
+            $ref: "#/components/schemas/DnsRecord"
+          description: DNS records to add for verification
+        instructions:
+          type: array
+          items:
+            type: string
+          description: Step-by-step verification instructions
+
+    DnsRecord:
+      type: object
+      required:
+        - name
+        - type
+        - value
+        - description
+      properties:
+        name:
+          type: string
+          description: DNS record name
+        type:
+          type: string
+          description: DNS record type (TXT, CNAME, etc.)
+        value:
+          type: string
+          description: DNS record value
+        description:
+          type: string
+          description: User-friendly description of the record
+
+    CreateSenderRequest:
+      type: object
+      required:
+        - email
+        - verificationType
+      properties:
+        email:
+          type: string
+          format: email
+          description: Email address to verify
+        name:
+          type: string
+          description: Display name for the sender
+        verificationType:
+          type: string
+          enum: [mailbox, domain]
+          description: Type of verification to use
+
+    UpdateSenderRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Display name for the sender
+        isDefault:
+          type: boolean
+          description: Whether to set as default sender
+
+    VerifyDomainRequest:
+      type: object
+      required:
+        - domain
+      properties:
+        domain:
+          type: string
+          description: Domain name to verify

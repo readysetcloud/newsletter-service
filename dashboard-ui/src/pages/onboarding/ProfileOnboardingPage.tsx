@@ -75,14 +75,14 @@ export function ProfileOnboardingPage() {
           message: 'Your profile has been set up successfully.',
         });
 
-        // Refresh user context and navigate to dashboard
-        console.log('Refreshing user context and navigating...');
+        // Refresh user context and navigate to sender setup
+        console.log('Refreshing user context and navigating to sender setup...');
         await refreshUser();
 
         // Small delay to ensure any backend processing completes
         await new Promise(resolve => setTimeout(resolve, 500));
 
-        navigate('/dashboard', { replace: true });
+        navigate('/onboarding/sender', { replace: true });
       } else {
         throw new Error(response.error || 'Failed to update social links');
       }
@@ -123,10 +123,10 @@ export function ProfileOnboardingPage() {
           message: 'Your profile has been set up successfully.',
         });
 
-        // Refresh user context and navigate to dashboard
+        // Refresh user context and navigate to sender setup
         await refreshUser();
         await new Promise(resolve => setTimeout(resolve, 500));
-        navigate('/dashboard', { replace: true });
+        navigate('/onboarding/sender', { replace: true });
       } else {
         throw new Error(response.error || 'Failed to complete profile setup');
       }

@@ -46,3 +46,8 @@ jobs:
           --capabilities CAPABILITY_IAM \
           --parameter-overrides Environment=production EncryptionKey=${{secrets.ENCRYPTION_KEY}} MomentoCacheName=newsletter MomentoApiKey=${{secrets.MOMENTO_API_KEY}} RedirectCustomDomain=rdyset.click
 
+      - name: Validate Deployment
+        run: |
+          chmod +x scripts/validate-sender-email-deployment.sh
+          ./scripts/validate-sender-email-deployment.sh production
+

@@ -87,7 +87,7 @@ export const handler = async (event) => {
 
     // Send notification email to tenant if any subscribers were removed
     if (successfulRemovals > 0) {
-      await sendNotificationEmail(tenant, persistentFailures, successfulRemovals, subscriberCount);
+      await sendNotificationEmail(tenant, persistentFailures, successfulRemovals, subscriberCount, tenantId);
     }
 
     console.log(`Successfully cleaned up ${successfulRemovals} bounced subscribers`);
@@ -175,7 +175,7 @@ const updateCleanedCount = async (issueId, cleanedCount) => {
   }
 };
 
-const sendNotificationEmail = async (tenant, removedAddresses, successfulRemovals, subscriberCount) => {
+const sendNotificationEmail = async (tenant, removedAddresses, successfulRemovals, subscriberCount, tenantId) => {
   try {
     const subject = `Subscriber Cleanup Report - ${successfulRemovals} addresses removed`;
 
@@ -238,7 +238,8 @@ const sendNotificationEmail = async (tenant, removedAddresses, successfulRemoval
       html,
       to: {
         email: tenant.email
-      }
+      },
+      tenantId
     };
 
     await eventBridge.send(new PutEventsCommand({

@@ -6,7 +6,7 @@ let ddbInstance;
 let sesInstance;
 let PutItemCommand;
 let QueryCommand;
-let GetItemCommand;
+// GetItemCommand removed as it's no longer used
 let CreateEmailIdentityCommand;
 let SendCustomVerificationEmailCommand;
 let marshall;
@@ -26,7 +26,7 @@ async function loadIsolated() {
       DynamoDBClient: jest.fn(() => ddbInstance),
       PutItemCommand: jest.fn((params) => ({ __type: 'PutItem', ...params })),
       QueryCommand: jest.fn((params) => ({ __type: 'Query', ...params })),
-      GetItemCommand: jest.fn((params) => ({ __type: 'GetItem', ...params })),
+      // GetItemCommand removed as it's no longer used
     }));
 
     // SES SDK mocks
@@ -69,11 +69,7 @@ async function loadIsolated() {
       formatAuthError: mockFormatAuthError,
     }));
 
-    // Mock send-verification-email module
-    jest.unstable_mockModule('../functions/senders/send-verification-email.mjs', () => ({
-      sendVerificationEmail: jest.fn().mockResolvedValue({ success: true }),
-      getBrandInfo: jest.fn().mockResolvedValue({ brandName: 'Test Brand' }),
-    }));
+    // Note: send-verification-email module mock removed as we only use SES custom verification templates now
 
     // Mock types module
     jest.unstable_mockModule('../functions/senders/types.mjs', () => ({
@@ -90,7 +86,7 @@ async function loadIsolated() {
 
     // Import after mocks
     ({ handler } = await import('../functions/senders/create-sender.mjs'));
-    ({ PutItemCommand, QueryCommand, GetItemCommand } = await import('@aws-sdk/client-dynamodb'));
+    ({ PutItemCommand, QueryCommand } = await import('@aws-sdk/client-dynamodb'));
     ({ CreateEmailIdentityCommand, SendCustomVerificationEmailCommand } = await import('@aws-sdk/client-sesv2'));
     ({ marshall, unmarshall } = await import('@aws-sdk/util-dynamodb'));
   });
@@ -101,7 +97,7 @@ async function loadIsolated() {
     sesInstance,
     PutItemCommand,
     QueryCommand,
-    GetItemCommand,
+    // GetItemCommand removed
     CreateEmailIdentityCommand,
     SendCustomVerificationEmailCommand,
     marshall,
@@ -118,7 +114,6 @@ describe('create-sender handler', () => {
     jest.resetModules();
     process.env.TABLE_NAME = 'test-table';
     process.env.SES_CONFIGURATION_SET = 'test-config-set';
-    process.env.USE_CUSTOM_VERIFY_EMAIL = 'true';
     process.env.SES_VERIFY_TEMPLATE_NAME = 'test-verification-template';
     await loadIsolated();
   });
@@ -443,7 +438,7 @@ describe('create-sender handler', () => {
     expect(mockFormatResponse).toHaveBeenCalledWith(400, 'Verification type must be either "mailbox" or "domain"');
   });
 
-  test('uses SendCustomVerificationEmail when USE_CUSTOM_VERIFY_EMAIL is true', async () => {
+  test('uses SendCustomVerificationEmail for mailbox verification', async () => {
     mockGetUserContext.mockReturnValue({ tenantId: 'tenant-123' });
 
     // No existing senders
@@ -481,44 +476,9 @@ describe('create-sender handler', () => {
     }));
   });
 
-  test('falls back to legacy verification when USE_CUSTOM_VERIFY_EMAIL is false', async () => {
-    // Override environment variable for this test
-    process.env.USE_CUSTOM_VERIFY_EMAIL = 'false';
 
-    mockGetUserContext.mockReturnValue({ tenantId: 'tenant-123' });
 
-    // No existing senders
-    ddbInstance.send
-      .mockResolvedValueOnce({ Items: [] })
-      .mockResolvedValueOnce({})
-      .mockResolvedValueOnce({ Item: null }); // No user profile
-
-    // Mock legacy verification (no SES call expected for legacy method)
-    const event = {
-      body: JSON.stringify({
-        email: 'test@example.com',
-        name: 'Test Sender',
-        verificationType: 'mailbox'
-      }),
-      requestContext: { authorizer: { tier: 'free-tier' } }
-    };
-
-    const result = await handler(event);
-
-    // Should not call SES for custom verification
-    expect(sesInstance.send).not.toHaveBeenCalled();
-
-    expect(mockFormatResponse).toHaveBeenCalledWith(201, expect.objectContaining({
-      email: 'test@example.com',
-      verificationType: 'mailbox',
-      verificationStatus: 'pending'
-    }));
-
-    // Reset environment variable
-    process.env.USE_CUSTOM_VERIFY_EMAIL = 'true';
-  });
-
-  test('handles missing SES_VERIFY_TEMPLATE_NAME when custom verification is enabled', async () => {
+  test('handles missing SES_VERIFY_TEMPLATE_NAME', async () => {
     // Remove template name for this test
     delete process.env.SES_VERIFY_TEMPLATE_NAME;
 

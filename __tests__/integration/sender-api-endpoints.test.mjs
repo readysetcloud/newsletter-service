@@ -17,7 +17,8 @@ jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
 
 jest.unstable_mockModule('@aws-sdk/client-sesv2', () => ({
   SESv2Client: jest.fn(() => ({ send: mockSesSend })),
-  PutEmailIdentityCommand: jest.fn((params) => ({ __type: 'PutEmailIdentity', ...params })),
+  CreateEmailIdentityCommand: jest.fn((params) => ({ __type: 'CreateEmailIdentity', ...params })),
+  SendCustomVerificationEmailCommand: jest.fn((params) => ({ __type: 'SendCustomVerificationEmail', ...params })),
   GetEmailIdentityCommand: jest.fn((params) => ({ __type: 'GetEmailIdentity', ...params })),
   DeleteEmailIdentityCommand: jest.fn((params) => ({ __type: 'DeleteEmailIdentity', ...params }))
 }));
@@ -92,6 +93,7 @@ describe('Sender API Endpoints Integration Tests', () => {
     // Set environment variables
     process.env.TABLE_NAME = 'test-table';
     process.env.SES_CONFIGURATION_SET = 'test-config-set';
+    process.env.SES_VERIFY_TEMPLATE_NAME = 'test-template';
   });
 
   afterEach(() => {
@@ -216,9 +218,9 @@ describe('Sender API Endpoints Integration Tests', () => {
       // Verify SES call
       expect(mockSesSend).toHaveBeenCalledWith(
         expect.objectContaining({
-          __type: 'PutEmailIdentity',
-          EmailIdentity: 'test@example.com',
-          ConfigurationSetName: 'test-config-set'
+          __type: 'SendCustomVerificationEmail',
+          EmailAddress: 'test@example.com',
+          TemplateName: 'test-template'
         })
       );
 
@@ -337,7 +339,9 @@ describe('Sender API Endpoints Integration Tests', () => {
     });
 
     test('handles SES errors gracefully', async () => {
-      mockDdbSend.mockResolvedValue({ Items: [] });
+      mockDdbSend
+        .mockResolvedValueOnce({ Items: [] }) // getSendersByTenant
+        .mockResolvedValueOnce({}); // PutItem
       mockSesSend.mockRejectedValue(new Error('SES service unavailable'));
 
       const event = {
@@ -352,8 +356,12 @@ describe('Sender API Endpoints Integration Tests', () => {
 
       const result = await createSenderHandler(event);
 
-      expect(result.statusCode).toBe(500);
-      expect(JSON.parse(result.body).message).toBe('Failed to initiate email verification');
+      // Should still succeed even if email sending fails
+      // The sender is created, they can resend verification later
+      expect(result.statusCode).toBe(201);
+      const responseBody = JSON.parse(result.body);
+      expect(responseBody.email).toBe('test@example.com');
+      expect(responseBody.verificationStatus).toBe('pending');
     });
 
     test('validates input data', async () => {

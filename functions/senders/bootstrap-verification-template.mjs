@@ -127,25 +127,24 @@ export const handler = async (event, context) => {
  * Generate the HTML content for the custom verification email template
  * This template will be used by SES for sender email verification
  */
-const generateTemplateContent = () => `
+const generateTemplateContent = () => `<!DOCTYPE html>
 <html>
   <body>
     <h1>Newsletter Service</h1>
 
-    <h2>Verify your sender email</h2>
+    <h2>Verify Your Sender Email</h2>
     <p>Hello!</p>
 
     <p>You're adding a new sender address to your account. To finish setup and start sending from this address, please confirm ownership.</p>
 
     <p><strong>Email to verify:</strong> {{EmailAddress}}</p>
 
-    <p>Next step: click the verification link that appears below in this message.</p>
+    <p>Next step: click the verification link below to complete the process.</p>
 
     <p>If the link has expired, start a new verification from your account settings.</p>
 
     <hr />
     <p>This email was sent by Newsletter Service.</p>
   </body>
-</html>
-`.trim();
+</html>`.trim();
 

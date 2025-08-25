@@ -21,6 +21,8 @@
  * @property {string} updatedAt - ISO timestamp
  * @property {string} [verifiedAt] - ISO timestamp when verified
  * @property {string} [failureReason] - Reason for verification failure
+ * @property {number} [emailsSent] - Total number of emails sent from this sender
+ * @property {string} [lastSentAt] - ISO timestamp of last email sent
  */
 
 /**

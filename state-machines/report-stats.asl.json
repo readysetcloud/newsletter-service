@@ -240,7 +240,8 @@
               "to": {
                 "email.$": "$$.Execution.Input.tenant.email"
               },
-              "html.$": "$.updated.Payload.html"
+              "html.$": "$.updated.Payload.html",
+              "tenantId.$": "$.Execution.Input.tenant.id"
             },
             "DetailType": "Send Email v2",
             "Source": "newsletter-service"

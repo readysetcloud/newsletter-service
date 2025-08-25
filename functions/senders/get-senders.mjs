@@ -87,6 +87,8 @@ const formatSenderResponse = (sender) => {
     createdAt: sender.createdAt,
     updatedAt: sender.updatedAt,
     verifiedAt: sender.verifiedAt || null,
-    failureReason: sender.failureReason || null
+    failureReason: sender.failureReason || null,
+    emailsSent: sender.emailsSent || 0,
+    lastSentAt: sender.lastSentAt || null
   };
 };

@@ -1,10 +1,9 @@
-import { DynamoDBClient, PutItemCommand, QueryCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
+import { DynamoDBClient, PutItemCommand, QueryCommand } from "@aws-sdk/client-dynamodb";
 import { SESv2Client, CreateEmailIdentityCommand, SendCustomVerificationEmailCommand } from "@aws-sdk/client-sesv2";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { randomUUID } from 'crypto';
 import { formatResponse } from '../utils/helpers.mjs';
 import { getUserContext, formatAuthError } from '../auth/get-user-context.mjs';
-import { sendVerificationEmail, getBrandInfo } from './send-verification-email.mjs';
 import { TIER_LIMITS, KEY_PATTERNS } from './types.mjs';
 
 const ddb = new DynamoDBClient();
@@ -105,56 +104,26 @@ export const handler = async (event) => {
     // Send verification email for mailbox verification
     if (verificationType === 'mailbox') {
       try {
-        // Check if we should use custom verification email template
-        const useCustomVerifyEmail = process.env.USE_CUSTOM_VERIFY_EMAIL === 'true';
+        // Use SES custom verification email template
+        const templateName = process.env.SES_VERIFY_TEMPLATE_NAME;
 
-        if (useCustomVerifyEmail) {
-          // Use SES custom verification email template
-          const templateName = process.env.SES_VERIFY_TEMPLATE_NAME;
-
-          if (!templateName) {
-            throw new Error('SES_VERIFY_TEMPLATE_NAME environment variable is required for custom verification');
-          }
-
-          const sendCommand = new SendCustomVerificationEmailCommand({
-            EmailAddress: email,
-            TemplateName: templateName
-          });
-
-          const result = await ses.send(sendCommand);
-
-          console.log('Custom verification email sent successfully:', {
-            tenantId,
-            senderId,
-            email,
-            messageId: result.MessageId
-          });
-
-        } else {
-          // Fallback to old custom verification email method
-          // Get user profile for personalization
-          const userProfile = await getUserProfile(tenantId);
-          const userName = userProfile ? `${userProfile.firstName || ''} ${userProfile.lastName || ''}`.trim() : null;
-
-          // Get brand information
-          const brandInfo = await getBrandInfo(tenantId);
-
-          // Send custom verification email
-          await sendVerificationEmail({
-            tenantId,
-            senderId,
-            senderEmail: email,
-            senderName: name,
-            userName,
-            brandInfo
-          });
-
-          console.log('Legacy custom verification email sent successfully:', {
-            tenantId,
-            senderId,
-            email
-          });
+        if (!templateName) {
+          throw new Error('SES_VERIFY_TEMPLATE_NAME environment variable is required for custom verification');
         }
+
+        const sendCommand = new SendCustomVerificationEmailCommand({
+          EmailAddress: email,
+          TemplateName: templateName
+        });
+
+        const result = await ses.send(sendCommand);
+
+        console.log('Custom verification email sent successfully:', {
+          tenantId,
+          senderId,
+          email,
+          messageId: result.MessageId
+        });
 
       } catch (emailError) {
         console.error('Failed to send verification email:', emailError);
@@ -267,29 +236,3 @@ const extractDomain = (email) => {
   return email.split('@')[1];
 };
 
-/**
- * Get user profile information
- * @param {string} tenantId - Tenant ID
- * @returns {Promise<Object|null>} User profile or null
- */
-const getUserProfile = async (tenantId) => {
-  try {
-    const result = await ddb.send(new GetItemCommand({
-      TableName: process.env.TABLE_NAME,
-      Key: marshall({
-        pk: tenantId,
-        sk: 'PROFILE'
-      })
-    }));
-
-    if (result.Item) {
-      const profile = unmarshall(result.Item);
-      return profile.personal || null;
-    }
-
-    return null;
-  } catch (error) {
-    console.error('Error fetching user profile:', error);
-    return null;
-  }
-};

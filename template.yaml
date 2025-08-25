@@ -1739,13 +1739,11 @@ Resources:
         DynamodbGetItem: !Sub arn:${AWS::Partition}:states:::dynamodb:getItem
         TableName: !Ref NewsletterTable
         LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
-        SendApiRequest: "{{resolve:ssm:/readysetcloud/send-api-request}}"
         GetTopLinks: !GetAtt GetTopLinkFunction.Arn
         BuildReportData: !GetAtt BuildReportDataFunction.Arn
         GetInsights: !GetAtt GetInsightsFunction.Arn
         DynamodbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
-        AdminEmail: "{{resolve:ssm:/readysetcloud/admin-email}}"
 
       Policies:
         - Version: 2012-10-17
@@ -1762,7 +1760,6 @@ Resources:
             - Effect: Allow
               Action: lambda:InvokeFunction
               Resource:
-                - "{{resolve:ssm:/readysetcloud/send-api-request}}"
                 - !GetAtt GetTopLinkFunction.Arn
                 - !GetAtt BuildReportDataFunction.Arn
                 - !GetAtt GetInsightsFunction.Arn
@@ -2298,7 +2295,6 @@ Resources:
         <<: *esbuild-properties
         EntryPoints:
           - senders/create-sender.mjs
-          - senders/send-verification-email.mjs
     Properties:
       Handler: senders/create-sender.handler
       Policies:
@@ -2316,7 +2312,6 @@ Resources:
             - Effect: Allow
               Action:
                 - ses:CreateEmailIdentity
-                - ses:SendEmail
                 - ses:CreateCustomVerificationEmailTemplate
                 - ses:UpdateCustomVerificationEmailTemplate
                 - ses:DeleteCustomVerificationEmailTemplate
@@ -2336,7 +2331,6 @@ Resources:
           SES_VERIFY_TEMPLATE_NAME: !Sub "${AWS::StackName}-sender-verification"
           VERIFY_SUCCESS_URL: !Sub "https://${DomainName}/verify-sender/success"
           VERIFY_FAILURE_URL: !Sub "https://${DomainName}/verify-sender/failure"
-          USE_CUSTOM_VERIFY_EMAIL: "true"
       Events:
         CreateSender:
           Type: Api
@@ -2441,13 +2435,11 @@ Resources:
                 - !Sub "${NewsletterTable.Arn}/index/GSI1"
             - Effect: Allow
               Action:
-                - ses:DeleteIdentity
-                - ses:GetIdentityVerificationAttributes
+                - ses:DeleteEmailIdentity
               Resource: "*"
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
-          SES_CONFIGURATION_SET: !Ref ConfigurationSet
       Events:
         DeleteSender:
           Type: Api
@@ -2576,7 +2568,6 @@ Resources:
         <<: *esbuild-properties
         EntryPoints:
           - senders/resend-verification.mjs
-          - senders/send-verification-email.mjs
     Properties:
       Handler: senders/resend-verification.handler
       Policies:
@@ -2590,12 +2581,13 @@ Resources:
               Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
               Action:
-                - ses:SendEmail
+                - ses:SendCustomVerificationEmail
               Resource: "*"
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
           SES_CONFIGURATION_SET: !Ref ConfigurationSet
+          SES_VERIFY_TEMPLATE_NAME: !Sub "${AWS::StackName}-sender-verification"
           SYSTEM_FROM_EMAIL: !Sub "noreply@${DomainName}"
           FRONTEND_URL: !Sub "https://${DomainName}"
       Events:

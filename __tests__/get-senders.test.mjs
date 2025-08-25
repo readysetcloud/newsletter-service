@@ -134,7 +134,9 @@ describe('get-senders handler', () => {
         createdAt: '2024-01-01T00:00:00Z',
         updatedAt: '2024-01-01T00:00:00Z',
         verifiedAt: '2024-01-01T01:00:00Z',
-        failureReason: null
+        failureReason: null,
+        emailsSent: 0,
+        lastSentAt: null
       }],
       tierLimits: {
         tier: 'free-tier',
@@ -289,7 +291,9 @@ describe('get-senders handler', () => {
         createdAt: '2024-01-01T00:00:00Z',
         updatedAt: '2024-01-02T00:00:00Z',
         verifiedAt: null,
-        failureReason: 'DNS records not found'
+        failureReason: 'DNS records not found',
+        emailsSent: 0,
+        lastSentAt: null
       }],
       tierLimits: {
         tier: 'creator-tier',

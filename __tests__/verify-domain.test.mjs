@@ -6,7 +6,7 @@ let ddbInstance;
 let sesInstance;
 let PutItemCond;
 let QueryCommand;
-let PutEmailIdentityCommand;
+let CreateEmailIdentityCommand;
 let GetEmailIdentityCommand;
 let marshall;
 let unmarshall;
@@ -31,7 +31,7 @@ async function loadIsolated() {
     // SES SDK mocks
     jest.unstable_mockModule('@aws-sdk/client-sesv2', () => ({
       SESv2Client: jest.fn(() => sesInstance),
-      PutEmailIdentityCommand: jest.fn((params) => ({ __type: 'PutEmailIdentity', ...params })),
+      CreateEmailIdentityCommand: jest.fn((params) => ({ __type: 'CreateEmailIdentity', ...params })),
       GetEmailIdentityCommand: jest.fn((params) => ({ __type: 'GetEmailIdentity', ...params })),
     }));
 
@@ -71,7 +71,7 @@ async function loadIsolated() {
     // Import after mocks
     ({ handler } = await import('../functions/senders/verify-domain.mjs'));
     ({ PutItemCommand, QueryCommand } = await import('@aws-sdk/client-dynamodb'));
-    ({ PutEmailIdentityCommand, GetEmailIdentityCommand } = await import('@aws-sdk/client-sesv2'));
+    ({ CreateEmailIdentityCommand, GetEmailIdentityCommand } = await import('@aws-sdk/client-sesv2'));
     ({ marshall, unmarshall } = await import('@aws-sdk/util-dynamodb'));
   });
 
@@ -81,7 +81,7 @@ async function loadIsolated() {
     sesInstance,
     PutItemCommand,
     QueryCommand,
-    PutEmailIdentityCommand,
+    CreateEmailIdentityCommand,
     GetEmailIdentityCommand,
     marshall,
     unmarshall,
@@ -218,7 +218,7 @@ describe('verify-domain handler', () => {
 
     // Mock SES responses
     sesInstance.send
-      .mockResolvedValueOnce({ // PutEmailIdentity
+      .mockResolvedValueOnce({ // CreateEmailIdentity
         identityArn: 'arn:aws:ses:us-east-1:123456789012:identity/example.com'
       })
       .mockResolvedValueOnce({ // GetEmailIdentity
@@ -238,10 +238,10 @@ describe('verify-domain handler', () => {
     // Verify SES calls
     expect(sesInstance.send).toHaveBeenCalledTimes(2);
 
-    const putCall = sesInstance.send.mock.calls[0][0];
-    expect(putCall.__type).toBe('PutEmailIdentity');
-    expect(putCall.EmailIdentity).toBe('example.com');
-    expect(putCall.ConfigurationSetName).toBe('test-config-set');
+    const createCall = sesInstance.send.mock.calls[0][0];
+    expect(createCall.__type).toBe('CreateEmailIdentity');
+    expect(createCall.EmailIdentity).toBe('example.com');
+    expect(createCall.ConfigurationSetName).toBe('test-config-set');
 
     const getCall = sesInstance.send.mock.calls[1][0];
     expect(getCall.__type).toBe('GetEmailIdentity');

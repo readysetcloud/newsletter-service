@@ -263,7 +263,8 @@
                   "data.$": "$.data",
                   "subject.$": "$.subject",
                   "email.$": "$$.Execution.Input.tenant.email",
-                  "isPreview": true
+                  "isPreview": true,
+                  "tenantId.$": "$.Execution.Input.tenant.id"
                 }
               },
               "Retry": [
@@ -501,7 +502,8 @@
                 "email.$": "$$.Execution.Input.tenant.email"
               },
               "subject.$": "States.Format('[Scheduled] Newsletter Issue {}', $$.Execution.Input.issueId)",
-              "html": "<p>The newsletter was successfully scheduled for sending. Good luck!</p>"
+              "html": "<p>The newsletter was successfully scheduled for sending. Good luck!</p>",
+              "tenantId.$": "$.Execution.Input.tenant.id"
             },
             "DetailType": "Send Email v2",
             "Source": "newsletter-service"

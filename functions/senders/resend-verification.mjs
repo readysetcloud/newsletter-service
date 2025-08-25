@@ -1,11 +1,12 @@
 import { DynamoDBClient, GetItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import { SESv2Client, SendCustomVerificationEmailCommand } from "@aws-sdk/client-sesv2";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { formatResponse } from '../utils/helpers.mjs';
 import { getUserContext, formatAuthError } from '../auth/get-user-context.mjs';
-import { sendVerificationEmail, getBrandInfo } from './send-verification-email.mjs';
 import { KEY_PATTERNS } from './types.mjs';
 
 const ddb = new DynamoDBClient();
+const ses = new SESv2Client();
 
 export const handler = async (event) => {
   try {
@@ -43,6 +44,14 @@ export const handler = async (event) => {
       });
     }
 
+    // Only allow resending for mailbox verification
+    if (senderRecord.verificationType !== 'mailbox') {
+      return formatResponse(400, {
+        error: 'Resend not supported',
+        message: 'Verification email resend is only available for mailbox verification.'
+      });
+    }
+
     // Check rate limiting - prevent spam
     const lastVerificationSent = senderRecord.lastVerificationSent;
     if (lastVerificationSent) {
@@ -59,22 +68,21 @@ export const handler = async (event) => {
       }
     }
 
-    // Get user profile for personalization
-    const userProfile = await getUserProfile(tenantId);
-    const userName = userProfile ? `${userProfile.firstName || ''} ${userProfile.lastName || ''}`.trim() : null;
+    const templateName = process.env.SES_VERIFY_TEMPLATE_NAME;
 
-    // Get brand information
-    const brandInfo = await getBrandInfo(tenantId);
+    if (!templateName) {
+      return formatResponse(500, {
+        error: 'Configuration error',
+        message: 'Verification email template not configured.'
+      });
+    }
 
-    // Send verification email
-    const emailResult = await sendVerificationEmail({
-      tenantId,
-      senderId,
-      senderEmail: senderRecord.email,
-      senderName: senderRecord.name,
-      userName,
-      brandInfo
+    const sendCommand = new SendCustomVerificationEmailCommand({
+      EmailAddress: senderRecord.email,
+      TemplateName: templateName
     });
+
+    const emailResult = await ses.send(sendCommand);
 
     // Update sender record with last verification sent timestamp
     const now = new Date().toISOString();
@@ -95,7 +103,7 @@ export const handler = async (event) => {
       tenantId,
       senderId,
       email: senderRecord.email,
-      messageId: emailResult.messageId
+      messageId: emailResult.MessageId
     });
 
     return formatResponse(200, {
@@ -142,31 +150,5 @@ const getSenderRecord = async (tenantId, senderId) => {
   }
 };
 
-/**
- * Get user profile information
- * @param {string} tenantId - Tenant ID
- * @returns {Promise<Object|null>} User profile or null
- */
-const getUserProfile = async (tenantId) => {
-  try {
-    const result = await ddb.send(new GetItemCommand({
-      TableName: process.env.TABLE_NAME,
-      Key: marshall({
-        pk: tenantId,
-        sk: 'PROFILE'
-      })
-    }));
-
-    if (result.Item) {
-      const profile = unmarshall(result.Item);
-      return profile.personal || null;
-    }
-
-    return null;
-  } catch (error) {
-    console.error('Error fetching user profile:', error);
-    return null;
-  }
-};
 
 export default handler;

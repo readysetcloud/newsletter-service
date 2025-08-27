@@ -4,6 +4,7 @@ import { jest, describe, test, expect, beforeEach } from '@jest/globals';
 let handler;
 let ddbInstance;
 let sesInstance;
+let schedulerInstance;
 let PutItemCommand;
 let QueryCommand;
 // GetItemCommand removed as it's no longer used
@@ -15,6 +16,7 @@ let mockGetUserContext;
 let mockFormatResponse;
 let mockFormatAuthError;
 let mockRandomUUID;
+let mockScheduleInitialStatusCheck;
 
 async function loadIsolated() {
   await jest.isolateModulesAsync(async () => {
@@ -34,6 +36,14 @@ async function loadIsolated() {
       SESv2Client: jest.fn(() => sesInstance),
       CreateEmailIdentityCommand: jest.fn((params) => ({ __type: 'CreateEmailIdentity', ...params })),
       SendCustomVerificationEmailCommand: jest.fn((params) => ({ __type: 'SendCustomVerificationEmail', ...params })),
+      GetEmailIdentityCommand: jest.fn((params) => ({ __type: 'GetEmailIdentity', ...params })),
+    }));
+
+    // Scheduler SDK mocks
+    schedulerInstance = { send: jest.fn() };
+    jest.unstable_mockModule('@aws-sdk/client-scheduler', () => ({
+      SchedulerClient: jest.fn(() => schedulerInstance),
+      CreateScheduleCommand: jest.fn((params) => ({ __type: 'CreateSchedule', ...params })),
     }));
 
     // util-dynamodb mocks
@@ -82,6 +92,12 @@ async function loadIsolated() {
         SENDER: (id) => `sender#${id}`,
         SENDER_GSI1PK: (tenantId) => `sender#${tenantId}`
       }
+    }));
+
+    // Mock automatic status checking
+    mockScheduleInitialStatusCheck = jest.fn();
+    jest.unstable_mockModule('../functions/senders/check-sender-status-automatically.mjs', () => ({
+      scheduleInitialStatusCheck: mockScheduleInitialStatusCheck,
     }));
 
     // Import after mocks

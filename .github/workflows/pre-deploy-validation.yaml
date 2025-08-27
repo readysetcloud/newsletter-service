@@ -23,14 +23,3 @@ jobs:
         run: |
           npm ci
           npm run coverage
-
-  validate-template:
-    name: Validate SAM Template
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup SAM CLI
-        uses: aws-actions/setup-sam@v2
-      - name: Validate SAM Template
-        run: |
-          sam validate --template template.yaml

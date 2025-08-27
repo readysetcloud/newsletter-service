@@ -141,6 +141,17 @@ const generateTemplateContent = () => `<!DOCTYPE html>
 
     <p>Next step: click the verification link below to complete the process.</p>
 
+    <div style="text-align: center; margin: 20px 0;">
+      <a href="{{VerificationLink}}"
+         style="background-color: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; display: inline-block;"
+         class="verification-button">
+        Verify Email Address
+      </a>
+    </div>
+
+    <p>If the button doesn't work, you can copy and paste this link into your browser:</p>
+    <p style="word-break: break-all;">{{VerificationLink}}</p>
+
     <p>If the link has expired, start a new verification from your account settings.</p>
 
     <hr />

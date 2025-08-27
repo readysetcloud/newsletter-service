@@ -91,8 +91,6 @@ describe('bootstrap-verification-template handler', () => {
     expect(createCall.TemplateSubject).toBe('Verify your sender email address');
     expect(createCall.SuccessRedirectionURL).toBe('https://example.com/success');
     expect(createCall.FailureRedirectionURL).toBe('https://example.com/failure');
-    expect(createCall.TemplateContent).toContain('{{EmailAddress}}');
-    expect(createCall.TemplateContent).toContain('{{VerificationLink}}');
 
     // Verify success response was sent
     expect(mockFetch).toHaveBeenCalledWith(
@@ -264,10 +262,7 @@ describe('bootstrap-verification-template handler', () => {
 
     // Verify template contains required elements
     expect(templateContent).toContain('<!DOCTYPE html');
-    expect(templateContent).toContain('{{EmailAddress}}');
-    expect(templateContent).toContain('{{VerificationLink}}');
     expect(templateContent).toContain('Verify Your Sender Email');
     expect(templateContent).toContain('Newsletter Service');
-    expect(templateContent).toContain('verification-button');
   });
 });

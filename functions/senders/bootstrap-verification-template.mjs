@@ -137,8 +137,6 @@ const generateTemplateContent = () => `<!DOCTYPE html>
 
     <p>You're adding a new sender address to your account. To finish setup and start sending from this address, please confirm ownership.</p>
 
-    <p><strong>Email to verify:</strong> {{EmailAddress}}</p>
-
     <p>Next step: click the verification link below to complete the process.</p>
 
     <hr />

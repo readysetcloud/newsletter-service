@@ -15,6 +15,7 @@ import {
   StarIcon,
   EnvelopeIcon,
   GlobeAltIcon,
+  ArrowPathIcon,
 } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid';
 import { cn } from '@/utils/cn';
@@ -36,6 +37,7 @@ export const SenderEmailList: React.FC<SenderEmailListProps> = ({
 }) => {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [refreshingId, setRefreshingId] = useState<string | null>(null);
   const [operationErrors, setOperationErrors] = useState<Record<string, string>>({});
   const { showConfirmation, ConfirmationDialog } = useConfirmationDialog();
   const { addToast } = useToast();
@@ -231,6 +233,55 @@ export const SenderEmailList: React.FC<SenderEmailListProps> = ({
     }
   };
 
+  const handleRefreshStatus = async (sender: SenderEmail) => {
+    // Clear any previous errors for this sender
+    setOperationErrors(prev => {
+      const newErrors = { ...prev };
+      delete newErrors[sender.senderId];
+      return newErrors;
+    });
+
+    try {
+      setRefreshingId(sender.senderId);
+      const response = await senderService.getSenderStatus(sender.senderId);
+
+      if (response.success && response.data) {
+        // Update the sender with the latest status
+        onSenderUpdated(response.data);
+
+        if (response.data.verificationStatus !== sender.verificationStatus) {
+          addToast({
+            title: 'Status updated',
+            message: `${sender.email} status updated to ${response.data.verificationStatus}`,
+            type: 'info'
+          });
+        } else {
+          addToast({
+            title: 'Status checked',
+            message: `${sender.email} verification status is still ${response.data.verificationStatus}`,
+            type: 'info'
+          });
+        }
+      } else {
+        const errorMessage = getUserFriendlyErrorMessage(response, 'sender');
+        setOperationErrors(prev => ({
+          ...prev,
+          [sender.senderId]: errorMessage
+        }));
+        throw new Error(errorMessage);
+      }
+    } catch (error) {
+      const errorMessage = getUserFriendlyErrorMessage(error, 'sender');
+      addToast({
+        title: 'Failed to refresh status',
+        message: errorMessage,
+        type: 'error'
+      });
+    } finally {
+      setRefreshingId(null);
+    }
+  };
+
   if (isLoading) {
     return <SkeletonLoader count={3} />;
   }
@@ -319,6 +370,20 @@ export const SenderEmailList: React.FC<SenderEmailListProps> = ({
               </div>
 
               <div className="flex items-center space-x-2">
+                {/* Refresh Status Button - for pending verification */}
+                {sender.verificationStatus === 'pending' && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleRefreshStatus(sender)}
+                    disabled={refreshingId === sender.senderId}
+                    isLoading={refreshingId === sender.senderId}
+                    title="Check verification status"
+                  >
+                    <ArrowPathIcon className="w-4 h-4" />
+                  </Button>
+                )}
+
                 {/* Set as Default Button */}
                 {!sender.isDefault && sender.verificationStatus === 'verified' && (
                   <Button

@@ -268,25 +268,26 @@ export const TierUpgradePrompt: React.FC<TierUpgradePromptProps> = ({
         </p>
 
         {nextTier && (
-          <div className="bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200 rounded-lg p-4 mb-6">
-            <div className="flex items-center justify-center space-x-2 mb-3">
-              <SparklesIcon className="w-5 h-5 text-blue-600" />
-              <h4 className="font-semibold text-blue-900">
-                Upgrade to {nextTier.displayName}
-              </h4>
-              {nextTier.popular && (
-                <span className="bg-blue-600 text-white text-xs px-2 py-1 rounded-full">
-                  Popular
-                </span>
-              )}
-            </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+            {/* Upgrade Information */}
+            <div className="bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200 rounded-lg p-4">
+              <div className="flex items-center justify-center space-x-2 mb-3">
+                <SparklesIcon className="w-5 h-5 text-blue-600" />
+                <h4 className="font-semibold text-blue-900">
+                  Upgrade to {nextTier.displayName}
+                </h4>
+                {nextTier.popular && (
+                  <span className="bg-blue-600 text-white text-xs px-2 py-1 rounded-full">
+                    Popular
+                  </span>
+                )}
+              </div>
 
-            <div className="text-center mb-4">
-              <span className="text-2xl font-bold text-gray-900">{nextTier.price}</span>
-            </div>
+              <div className="text-center mb-4">
+                <span className="text-2xl font-bold text-gray-900">{nextTier.price}</span>
+              </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-              <div className="space-y-2">
+              <div className="space-y-2 text-sm">
                 <div className="flex items-center space-x-2">
                   <CheckIcon className="w-4 h-4 text-green-600" />
                   <span>{nextTier.maxSenders} sender email{nextTier.maxSenders !== 1 ? 's' : ''}</span>
@@ -312,14 +313,35 @@ export const TierUpgradePrompt: React.FC<TierUpgradePromptProps> = ({
                   </span>
                 </div>
               </div>
+            </div>
 
-              <div className="space-y-2">
+            {/* Additional Features */}
+            <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+              <h5 className="font-semibold text-gray-900 mb-3 flex items-center">
+                <ChartBarIcon className="w-5 h-5 text-gray-600 mr-2" />
+                Additional Benefits
+              </h5>
+              <div className="space-y-2 text-sm">
                 {nextTier.features.slice(3, 6).map((feature, index) => (
                   <div key={index} className="flex items-center space-x-2">
                     <CheckIcon className="w-4 h-4 text-green-600" />
-                    <span className="text-sm">{feature}</span>
+                    <span>{feature}</span>
                   </div>
                 ))}
+              </div>
+
+              {/* Visual enhancement - stats or icons */}
+              <div className="mt-4 pt-3 border-t border-gray-300">
+                <div className="flex items-center justify-between text-xs text-gray-600">
+                  <div className="flex items-center space-x-1">
+                    <UserGroupIcon className="w-4 h-4" />
+                    <span>More subscribers</span>
+                  </div>
+                  <div className="flex items-center space-x-1">
+                    <EnvelopeIcon className="w-4 h-4" />
+                    <span>Better deliverability</span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>

@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto';
 import { formatResponse } from '../utils/helpers.mjs';
 import { getUserContext, formatAuthError } from '../auth/get-user-context.mjs';
 import { TIER_LIMITS, KEY_PATTERNS } from './types.mjs';
+import { scheduleInitialStatusCheck } from './check-sender-status-automatically.mjs';
 
 const ddb = new DynamoDBClient();
 const ses = new SESv2Client();
@@ -103,33 +104,81 @@ export const handler = async (event) => {
 
     // Send verification email for mailbox verification
     if (verificationType === 'mailbox') {
-      try {
-        // Use SES custom verification email template
-        const templateName = process.env.SES_VERIFY_TEMPLATE_NAME;
+      const environment = process.env.ENVIRONMENT || 'production';
+      const isProduction = environment === 'production';
 
-        if (!templateName) {
-          throw new Error('SES_VERIFY_TEMPLATE_NAME environment variable is required for custom verification');
+      if (isProduction) {
+        try {
+          // Use SES custom verification email template
+          const templateName = process.env.SES_VERIFY_TEMPLATE_NAME;
+
+          if (!templateName) {
+            throw new Error('SES_VERIFY_TEMPLATE_NAME environment variable is required for custom verification');
+          }
+
+          const sendCommand = new SendCustomVerificationEmailCommand({
+            EmailAddress: email,
+            TemplateName: templateName
+          });
+
+          const result = await ses.send(sendCommand);
+
+          console.log('Custom verification email sent successfully:', {
+            tenantId,
+            senderId,
+            email,
+            messageId: result.MessageId
+          });
+
+        } catch (emailError) {
+          console.error('Failed to send verification email:', emailError);
+          // Don't fail the entire operation if email sending fails
+          // The sender is created, they can resend verification later
         }
+      } else {
+        try {
+          // Use standard AWS verification email for non-production environments
+          const sesResponse = await initiateEmailVerification(email, 'mailbox');
+          senderRecord.sesIdentityArn = sesResponse.identityArn;
 
-        const sendCommand = new SendCustomVerificationEmailCommand({
-          EmailAddress: email,
-          TemplateName: templateName
-        });
+          console.log('Standard AWS verification email sent successfully:', {
+            tenantId,
+            senderId,
+            email,
+            environment,
+            identityArn: sesResponse.identityArn
+          });
 
-        const result = await ses.send(sendCommand);
-
-        console.log('Custom verification email sent successfully:', {
-          tenantId,
-          senderId,
-          email,
-          messageId: result.MessageId
-        });
-
-      } catch (emailError) {
-        console.error('Failed to send verification email:', emailError);
-        // Don't fail the entire operation if email sending fails
-        // The sender is created, they can resend verification later
+        } catch (emailError) {
+          console.error('Failed to send standard verification email:', emailError);
+          // Don't fail the entire operation if email sending fails
+          // The sender is created, they can resend verification later
+        }
       }
+    }
+
+    // Schedule automatic status checking for mailbox verification
+    if (verificationType === 'mailbox') {
+      try {
+        await scheduleInitialStatusCheck(tenantId, senderId);
+        console.log('Automatic status checking scheduled for sender:', { senderId, email });
+      } catch (schedulingError) {
+        console.error('Failed to schedule automatic status checking:', schedulingError);
+        // Don't fail the entire operation if scheduling fails
+        // The sender is created, they can manually check status
+      }
+    }
+
+    const environment = process.env.ENVIRONMENT || 'production';
+    const isProduction = environment === 'production';
+
+    let message;
+    if (verificationType === 'mailbox') {
+      message = isProduction
+        ? 'Verification email sent. Please check your inbox and click the verification link.'
+        : 'AWS verification email sent. Please check your inbox and click the verification link.';
+    } else {
+      message = 'Domain verification initiated. DNS records will be provided separately.';
     }
 
     return formatResponse(201, {
@@ -142,9 +191,7 @@ export const handler = async (event) => {
       domain: senderRecord.domain,
       createdAt: now,
       updatedAt: now,
-      message: verificationType === 'mailbox'
-        ? 'Verification email sent. Please check your inbox and click the verification link.'
-        : 'Domain verification initiated. DNS records will be provided separately.'
+      message
     });
 
   } catch (error) {

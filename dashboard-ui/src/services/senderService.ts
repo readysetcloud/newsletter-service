@@ -60,6 +60,13 @@ export class SenderService {
   }
 
   /**
+   * Get current verification status for a specific sender
+   */
+  async getSenderStatus(senderId: string): Promise<ApiResponse<SenderEmail>> {
+    return apiClient.get<SenderEmail>(`/senders/${senderId}/status`);
+  }
+
+  /**
    * Start polling for verification status updates
    * @param senderId - The sender ID to poll for
    * @param onStatusUpdate - Callback function called when status changes

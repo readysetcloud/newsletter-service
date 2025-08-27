@@ -933,6 +933,68 @@ paths:
         schema:
           type: string
         description: The sender ID
+    get:
+      summary: Get sender email verification status
+      tags:
+        - Senders
+      responses:
+        200:
+          description: Current sender verification status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  senderId:
+                    type: string
+                  email:
+                    type: string
+                  verificationStatus:
+                    type: string
+                    enum: [pending, verified, failed]
+                  verificationType:
+                    type: string
+                    enum: [mailbox, domain]
+                  domain:
+                    type: string
+                    nullable: true
+                  isDefault:
+                    type: boolean
+                  createdAt:
+                    type: string
+                    format: date-time
+                  updatedAt:
+                    type: string
+                    format: date-time
+                  verifiedAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+                  failureReason:
+                    type: string
+                    nullable: true
+                  statusChanged:
+                    type: boolean
+                  sesStatus:
+                    type: object
+                    nullable: true
+                  sesError:
+                    type: string
+                    nullable: true
+                  lastChecked:
+                    type: string
+                    format: date-time
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetSenderStatusFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
     put:
       summary: Update sender email
       tags:
@@ -979,6 +1041,94 @@ paths:
       x-amazon-apigateway-integration:
         uri:
           Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DeleteSenderFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
+  /senders/{senderId}/status:
+    parameters:
+      - name: senderId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The sender ID
+    get:
+      summary: Get current sender verification status
+      description: Check the current verification status of a sender email by querying both DynamoDB and SES directly
+      tags:
+        - Senders
+      responses:
+        200:
+          description: Current sender verification status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  senderId:
+                    type: string
+                  email:
+                    type: string
+                  name:
+                    type: string
+                    nullable: true
+                  verificationType:
+                    type: string
+                    enum: [mailbox, domain]
+                  verificationStatus:
+                    type: string
+                    enum: [pending, verified, failed]
+                  isDefault:
+                    type: boolean
+                  domain:
+                    type: string
+                    nullable: true
+                  createdAt:
+                    type: string
+                    format: date-time
+                  updatedAt:
+                    type: string
+                    format: date-time
+                  verifiedAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+                  failureReason:
+                    type: string
+                    nullable: true
+                  emailsSent:
+                    type: integer
+                  lastSentAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+                  statusChanged:
+                    type: boolean
+                    description: Whether the status was updated during this request
+                  sesStatus:
+                    type: object
+                    nullable: true
+                    properties:
+                      verificationStatus:
+                        type: string
+                      dkimStatus:
+                        type: string
+                      identityType:
+                        type: string
+                      error:
+                        type: string
+                  lastChecked:
+                    type: string
+                    format: date-time
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetSenderStatusFunction.Arn}/invocations
         httpMethod: POST
         type: aws_proxy
 

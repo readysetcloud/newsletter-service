@@ -360,9 +360,13 @@
                           "Arn": "arn:aws:scheduler:::aws-sdk:eventbridge:putEvents",
                           "RoleArn": "${CleanupListRole}",
                           "Input": {
-                            "tenantId": "$$.Execution.Input.tenant",
-                            "currentIssue.$": "States.Format('{}#{}', $$.Execution.Input.tenant, $$.Execution.Input.issueId)",
-                            "previousIssue.$": "States.Format('{}#{}', $$.Execution.Input.tenant, States.MathAdd($$.Execution.Input.issueId, -1))"
+                            "Entries": [
+                              {
+                                "tenantId": "$$.Execution.Input.tenant",
+                                "currentIssue.$": "States.Format('{}#{}', $$.Execution.Input.tenant, $$.Execution.Input.issueId)",
+                                "previousIssue.$": "States.Format('{}#{}', $$.Execution.Input.tenant, States.MathAdd($$.Execution.Input.issueId, -1))"
+                              }
+                            ]
                           }
                         }
                       },

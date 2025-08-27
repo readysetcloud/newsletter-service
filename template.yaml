@@ -40,7 +40,6 @@ Parameters:
     Default: ""
     Description: Verified SES email address for custom verification emails (must be pre-verified in SES)
 
-
 Metadata:
   esbuild-properties: &esbuild-properties
     Format: esm
@@ -2016,7 +2015,7 @@ Resources:
           - PathPattern: /r
             TargetOriginId: dummy.origin
             ViewerProtocolPolicy: redirect-to-https
-            AllowedMethods: [ GET, HEAD, OPTIONS ]
+            AllowedMethods: [GET, HEAD, OPTIONS]
             Compress: false
             CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
             FunctionAssociations:
@@ -2025,7 +2024,7 @@ Resources:
           - PathPattern: /r/*
             TargetOriginId: dummy.origin
             ViewerProtocolPolicy: redirect-to-https
-            AllowedMethods: [ GET, HEAD, OPTIONS ]
+            AllowedMethods: [GET, HEAD, OPTIONS]
             Compress: false
             CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
             FunctionAssociations:
@@ -2047,7 +2046,7 @@ Resources:
           - CloudFrontDefaultCertificate: true
         Aliases: !If
           - HasRedirectCustomDomain
-          - [ !Ref RedirectCustomDomain ]
+          - [!Ref RedirectCustomDomain]
           - !Ref "AWS::NoValue"
 
   RedirectCertificate:
@@ -2145,7 +2144,7 @@ Resources:
     Properties:
       LogGroupName: !Ref GenericRedirectLogGroup
       DestinationArn: !GetAtt ProcessLinkClickFunction.Arn
-      FilterPattern: '{ $.cid = * }'
+      FilterPattern: "{ $.cid = * }"
 
   ProcessClicksPermission:
     Type: AWS::Lambda::Permission
@@ -2287,6 +2286,42 @@ Resources:
             Path: /senders
             Method: GET
 
+  GetSenderStatusFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - senders/get-sender-status.mjs
+    Properties:
+      Handler: senders/get-sender-status.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - ses:GetEmailIdentity
+              Resource: "*"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          SES_CONFIGURATION_SET: !Ref ConfigurationSet
+      Events:
+        GetSenderStatus:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /senders/{senderId}/status
+            Method: GET
+
   CreateSenderFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2312,11 +2347,6 @@ Resources:
             - Effect: Allow
               Action:
                 - ses:CreateEmailIdentity
-                - ses:CreateCustomVerificationEmailTemplate
-                - ses:UpdateCustomVerificationEmailTemplate
-                - ses:DeleteCustomVerificationEmailTemplate
-                - ses:GetCustomVerificationEmailTemplate
-                - ses:ListCustomVerificationEmailTemplates
                 - ses:SendCustomVerificationEmail
               Resource: "*"
       Environment:
@@ -2331,6 +2361,7 @@ Resources:
           SES_VERIFY_TEMPLATE_NAME: !Sub "${AWS::StackName}-sender-verification"
           VERIFY_SUCCESS_URL: !Sub "https://${DomainName}/verify-sender/success"
           VERIFY_FAILURE_URL: !Sub "https://${DomainName}/verify-sender/failure"
+          ENVIRONMENT: !Ref Environment
       Events:
         CreateSender:
           Type: Api
@@ -2582,6 +2613,7 @@ Resources:
             - Effect: Allow
               Action:
                 - ses:SendCustomVerificationEmail
+                - ses:CreateEmailIdentity
               Resource: "*"
       Environment:
         Variables:
@@ -2590,6 +2622,7 @@ Resources:
           SES_VERIFY_TEMPLATE_NAME: !Sub "${AWS::StackName}-sender-verification"
           SYSTEM_FROM_EMAIL: !Sub "noreply@${DomainName}"
           FRONTEND_URL: !Sub "https://${DomainName}"
+          ENVIRONMENT: !Ref Environment
       Events:
         ResendVerification:
           Type: Api
@@ -2598,40 +2631,47 @@ Resources:
             Path: /senders/{senderId}/resend-verification
             Method: POST
 
-  HandleSESEventFunction:
+
+  CheckSenderStatusAutomaticallyFunction:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
         <<: *esbuild-properties
         EntryPoints:
-          - senders/handle-ses-event.mjs
+          - senders/check-sender-status-automatically.mjs
     Properties:
-      Handler: senders/handle-ses-event.handler
+      Handler: senders/check-sender-status-automatically.handler
+      Timeout: 60
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
               Action:
+                - dynamodb:GetItem
                 - dynamodb:UpdateItem
-                - dynamodb:Query
-                - dynamodb:Scan
               Resource:
                 - !GetAtt NewsletterTable.Arn
-                - !Sub "${NewsletterTable.Arn}/index/GSI1"
+            - Effect: Allow
+              Action:
+                - ses:GetEmailIdentity
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - scheduler:CreateSchedule
+              Resource: "*"
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
-          MOMENTO_API_KEY: !Ref MomentoApiKey
-          MOMENTO_CACHE_NAME: !Ref MomentoCacheName
+          SCHEDULER_ROLE_ARN: !GetAtt SchedulerExecutionRole.Arn
       Events:
-        SESVerificationEvent:
+        CheckSenderStatusEvent:
           Type: EventBridgeRule
           Properties:
             Pattern:
-              source: ["aws.ses"]
-              detail-type: ["SES Identity Verification Result"]
+              source: ["newsletter-service"]
+              detail-type: ["Check Sender Status"]
 
 Outputs:
   NewsletterApiUrl:

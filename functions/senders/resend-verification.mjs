@@ -1,5 +1,5 @@
 import { DynamoDBClient, GetItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
-import { SESv2Client, SendCustomVerificationEmailCommand } from "@aws-sdk/client-sesv2";
+import { SESv2Client, SendCustomVerificationEmailCommand, CreateEmailIdentityCommand } from "@aws-sdk/client-sesv2";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { formatResponse } from '../utils/helpers.mjs';
 import { getUserContext, formatAuthError } from '../auth/get-user-context.mjs';
@@ -68,21 +68,56 @@ export const handler = async (event) => {
       }
     }
 
-    const templateName = process.env.SES_VERIFY_TEMPLATE_NAME;
+    const environment = process.env.ENVIRONMENT || 'production';
+    const isProduction = environment === 'production';
 
-    if (!templateName) {
-      return formatResponse(500, {
-        error: 'Configuration error',
-        message: 'Verification email template not configured.'
+    let emailResult = null;
+    let message;
+
+    if (isProduction) {
+      const templateName = process.env.SES_VERIFY_TEMPLATE_NAME;
+
+      if (!templateName) {
+        return formatResponse(500, {
+          error: 'Configuration error',
+          message: 'Verification email template not configured.'
+        });
+      }
+
+      const sendCommand = new SendCustomVerificationEmailCommand({
+        EmailAddress: senderRecord.email,
+        TemplateName: templateName
       });
+
+      emailResult = await ses.send(sendCommand);
+
+      console.log('Verification email resent successfully:', {
+        tenantId,
+        senderId,
+        email: senderRecord.email,
+        messageId: emailResult.MessageId
+      });
+
+      message = 'Verification email sent successfully';
+    } else {
+      // Use standard AWS verification email for non-production environments
+      const createIdentityCommand = new CreateEmailIdentityCommand({
+        EmailIdentity: senderRecord.email,
+        ConfigurationSetName: process.env.SES_CONFIGURATION_SET
+      });
+
+      emailResult = await ses.send(createIdentityCommand);
+
+      console.log('Standard AWS verification email sent successfully:', {
+        tenantId,
+        senderId,
+        email: senderRecord.email,
+        environment,
+        identityArn: emailResult.IdentityArn
+      });
+
+      message = 'AWS verification email sent successfully';
     }
-
-    const sendCommand = new SendCustomVerificationEmailCommand({
-      EmailAddress: senderRecord.email,
-      TemplateName: templateName
-    });
-
-    const emailResult = await ses.send(sendCommand);
 
     // Update sender record with last verification sent timestamp
     const now = new Date().toISOString();
@@ -99,15 +134,8 @@ export const handler = async (event) => {
       })
     }));
 
-    console.log('Verification email resent successfully:', {
-      tenantId,
-      senderId,
-      email: senderRecord.email,
-      messageId: emailResult.MessageId
-    });
-
     return formatResponse(200, {
-      message: 'Verification email sent successfully',
+      message,
       senderId,
       email: senderRecord.email,
       sentAt: now

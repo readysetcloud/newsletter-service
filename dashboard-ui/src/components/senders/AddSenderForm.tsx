@@ -110,6 +110,11 @@ export const AddSenderForm: React.FC<AddSenderFormProps> = ({
   };
 
   const handleFormSubmit = async (data: CreateSenderFormData) => {
+    // Prevent multiple submissions
+    if (isSubmitting) {
+      return;
+    }
+
     // Clear previous errors
     setSubmitError(null);
 

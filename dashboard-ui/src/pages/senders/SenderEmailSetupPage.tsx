@@ -27,6 +27,9 @@ import {
   ClockIcon,
   ExclamationTriangleIcon,
   WifiIcon,
+  XCircleIcon,
+  SparklesIcon,
+  ArrowUpIcon,
 } from '@heroicons/react/24/outline';
 
 interface SenderSetupState {
@@ -169,131 +172,69 @@ export function SenderEmailSetupPage() {
     loadSenders(true);
   };
 
-  const handleCreateSender = async (data: CreateSenderRequest) => {
-    try {
-      // Set operation in progress
-      setState(prev => ({
-        ...prev,
-        operationInProgress: {
-          type: 'create',
-          message: `Adding ${data.email}...`
-        }
-      }));
+  const handleCreateSender = async (sender: SenderEmail) => {
+    // Add new sender to state and hide the form to show the sender list
+    setState(prev => ({
+      ...prev,
+      senders: [...prev.senders, sender],
+      tierLimits: {
+        ...prev.tierLimits,
+        currentCount: prev.tierLimits.currentCount + 1
+      },
+      showAddForm: false, // Hide the form to show the sender list
+      operationInProgress: { type: null }
+    }));
 
-      // Update verification progress
-      const progressSteps = [
-        { id: 'validate', label: 'Validating email address', status: 'in-progress' as const },
-        { id: 'create', label: 'Creating sender configuration', status: 'pending' as const },
-        { id: 'verify', label: 'Initiating verification', status: 'pending' as const }
-      ];
-      setState(prev => ({ ...prev, verificationProgress: progressSteps }));
+    // Add to polling statuses for UI feedback
+    setState(prev => ({
+      ...prev,
+      pollingStatuses: new Set([...prev.pollingStatuses, sender.senderId])
+    }));
 
-      const response = await senderService.createSenderWithRetry(data);
+    // Start polling for verification status with enhanced feedback
+    senderService.startVerificationPolling(
+      sender.senderId,
+      (updatedSender, error) => {
+        if (error) {
+          showError('Verification Error', error);
+          // Remove from polling statuses
+          setState(prev => ({
+            ...prev,
+            pollingStatuses: new Set([...prev.pollingStatuses].filter(id => id !== sender.senderId))
+          }));
+        } else if (updatedSender) {
+          // Update sender in state
+          setState(prev => ({
+            ...prev,
+            senders: prev.senders.map(s =>
+              s.senderId === updatedSender.senderId ? updatedSender : s
+            )
+          }));
 
-      if (response.success && response.data) {
-        // Update progress
-        setState(prev => ({
-          ...prev,
-          verificationProgress: prev.verificationProgress.map(step => ({
-            ...step,
-            status: step.id === 'validate' ? 'completed' :
-                   step.id === 'create' ? 'in-progress' : 'pending'
-          }))
-        }));
-
-        // Add new sender to state
-        setState(prev => ({
-          ...prev,
-          senders: [...prev.senders, response.data!],
-          tierLimits: {
-            ...prev.tierLimits,
-            currentCount: prev.tierLimits.currentCount + 1
-          },
-          showAddForm: false,
-          operationInProgress: { type: null },
-          verificationProgress: prev.verificationProgress.map(step => ({
-            ...step,
-            status: 'completed'
-          }))
-        }));
-
-        // Add to polling statuses for UI feedback
-        setState(prev => ({
-          ...prev,
-          pollingStatuses: new Set([...prev.pollingStatuses, response.data!.senderId])
-        }));
-
-        // Start polling for verification status with enhanced feedback
-        senderService.startVerificationPolling(
-          response.data.senderId,
-          (sender, error) => {
-            if (error) {
-              showError('Verification Error', error);
-              // Remove from polling statuses
-              setState(prev => ({
-                ...prev,
-                pollingStatuses: new Set([...prev.pollingStatuses].filter(id => id !== response.data!.senderId))
-              }));
-            } else if (sender) {
-              // Update sender in state
-              setState(prev => ({
-                ...prev,
-                senders: prev.senders.map(s =>
-                  s.senderId === sender.senderId ? sender : s
-                )
-              }));
-
-              if (sender.verificationStatus === 'verified') {
-                showSuccess(
-                  'Email Verified',
-                  `${sender.email} has been successfully verified and is ready to use`
-                );
-                // Remove from polling statuses
-                setState(prev => ({
-                  ...prev,
-                  pollingStatuses: new Set([...prev.pollingStatuses].filter(id => id !== sender.senderId))
-                }));
-              } else if (sender.verificationStatus === 'failed') {
-                showError(
-                  'Verification Failed',
-                  `Failed to verify ${sender.email}. ${sender.failureReason || 'Please check your email and try again.'}`
-                );
-                // Remove from polling statuses
-                setState(prev => ({
-                  ...prev,
-                  pollingStatuses: new Set([...prev.pollingStatuses].filter(id => id !== sender.senderId))
-                }));
-              }
-            }
+          if (updatedSender.verificationStatus === 'verified') {
+            showSuccess(
+              'Email Verified',
+              `${updatedSender.email} has been successfully verified and is ready to use`
+            );
+            // Remove from polling statuses
+            setState(prev => ({
+              ...prev,
+              pollingStatuses: new Set([...prev.pollingStatuses].filter(id => id !== updatedSender.senderId))
+            }));
+          } else if (updatedSender.verificationStatus === 'failed') {
+            showError(
+              'Verification Failed',
+              `Failed to verify ${updatedSender.email}. ${updatedSender.failureReason || 'Please check your email and try again.'}`
+            );
+            // Remove from polling statuses
+            setState(prev => ({
+              ...prev,
+              pollingStatuses: new Set([...prev.pollingStatuses].filter(id => id !== updatedSender.senderId))
+            }));
           }
-        );
-
-        showSuccess(
-          'Sender Email Added',
-          `Verification email sent to ${data.email}. Check your inbox and click the verification link.`
-        );
-
-        // Clear progress after a delay
-        setTimeout(() => {
-          setState(prev => ({ ...prev, verificationProgress: [] }));
-        }, 3000);
-      } else {
-        throw new Error(response.error || 'Failed to create sender email');
+        }
       }
-    } catch (err) {
-      setState(prev => ({
-        ...prev,
-        operationInProgress: { type: null },
-        verificationProgress: prev.verificationProgress.map(step => ({
-          ...step,
-          status: step.status === 'in-progress' ? 'failed' : step.status
-        }))
-      }));
-
-      const errorMessage = getUserFriendlyErrorMessage(err, 'sender');
-      showError('Error', errorMessage);
-      throw err;
-    }
+    );
   };
 
   const handleUpdateSender = async (senderId: string, data: UpdateSenderRequest) => {
@@ -563,7 +504,7 @@ export function SenderEmailSetupPage() {
                     </p>
                   </div>
 
-                  {/* Real-time Status Indicator */}
+                  {/* Status Indicator */}
                   <div className="flex items-center space-x-4">
                     {state.isRefreshing && (
                       <div className="flex items-center space-x-2 text-sm text-blue-600">
@@ -575,12 +516,6 @@ export function SenderEmailSetupPage() {
                       <div className="flex items-center space-x-2 text-sm text-blue-600">
                         <ClockIcon className="w-4 h-4 animate-pulse" />
                         <span>Checking verification status...</span>
-                      </div>
-                    )}
-                    {isSubscribed && (
-                      <div className="flex items-center space-x-1 text-sm text-green-600">
-                        <WifiIcon className="w-4 h-4" />
-                        <span>Real-time updates active</span>
                       </div>
                     )}
                     <button
@@ -597,25 +532,116 @@ export function SenderEmailSetupPage() {
 
               {/* Tier Information */}
               <div className="mb-6">
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="text-sm font-medium text-blue-800">
-                        Current Plan: {state.tierLimits.tier.replace('-', ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                      </h3>
-                      <p className="text-sm text-blue-600 mt-1">
-                        {state.tierLimits.currentCount} of {state.tierLimits.maxSenders} sender emails configured
-                      </p>
+                {!senderService.canAddSender(state.tierLimits) ? (
+                  /* Show upgrade prompt when limit reached */
+                  <TierUpgradePrompt
+                    currentTier={state.tierLimits}
+                    context="sender-limit"
+                    feature="sender emails"
+                    variant="card"
+                  />
+                ) : (
+                  /* Show balanced tier info when user can still add senders */
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* Current Plan Info */}
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                      <div className="flex items-center space-x-3 mb-3">
+                        <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
+                          <EnvelopeIcon className="w-5 h-5 text-blue-600" />
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-medium text-blue-800">
+                            Current Plan: {state.tierLimits.tier.replace('-', ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                          </h3>
+                          <p className="text-sm text-blue-600">
+                            {state.tierLimits.currentCount} of {state.tierLimits.maxSenders} sender emails configured
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Progress bar */}
+                      <div className="mb-3">
+                        <div className="flex justify-between text-xs text-blue-700 mb-1">
+                          <span>Usage</span>
+                          <span>{Math.round((state.tierLimits.currentCount / state.tierLimits.maxSenders) * 100)}%</span>
+                        </div>
+                        <div className="w-full bg-blue-200 rounded-full h-2">
+                          <div
+                            className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                            style={{ width: `${(state.tierLimits.currentCount / state.tierLimits.maxSenders) * 100}%` }}
+                          ></div>
+                        </div>
+                      </div>
+
+                      {/* Current plan features */}
+                      <div className="space-y-2 text-sm">
+                        <div className="flex items-center space-x-2 text-blue-700">
+                          <CheckCircleIcon className="w-4 h-4 text-green-600" />
+                          <span>{state.tierLimits.maxSenders} sender email{state.tierLimits.maxSenders !== 1 ? 's' : ''}</span>
+                        </div>
+                        <div className="flex items-center space-x-2 text-blue-700">
+                          {state.tierLimits.canUseMailbox ? (
+                            <CheckCircleIcon className="w-4 h-4 text-green-600" />
+                          ) : (
+                            <XCircleIcon className="w-4 h-4 text-gray-400" />
+                          )}
+                          <span>Email verification</span>
+                        </div>
+                        <div className="flex items-center space-x-2 text-blue-700">
+                          {state.tierLimits.canUseDNS ? (
+                            <CheckCircleIcon className="w-4 h-4 text-green-600" />
+                          ) : (
+                            <XCircleIcon className="w-4 h-4 text-gray-400" />
+                          )}
+                          <span>Domain verification</span>
+                        </div>
+                      </div>
                     </div>
-                    {!senderService.canAddSender(state.tierLimits) && (
-                      <TierUpgradePrompt
-                        currentTier={state.tierLimits}
-                        context="sender-limit"
-                        feature="sender emails"
-                      />
-                    )}
+
+                    {/* Upgrade Preview */}
+                    <div className="bg-gradient-to-r from-purple-50 to-blue-50 border border-purple-200 rounded-lg p-4">
+                      <div className="flex items-center space-x-3 mb-3">
+                        <div className="w-10 h-10 bg-purple-100 rounded-full flex items-center justify-center">
+                          <SparklesIcon className="w-5 h-5 text-purple-600" />
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-medium text-purple-800">
+                            Unlock More Features
+                          </h3>
+                          <p className="text-sm text-purple-600">
+                            Upgrade to get more sender emails and advanced features
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Next tier preview */}
+                      <div className="space-y-2 text-sm mb-4">
+                        <div className="flex items-center space-x-2 text-purple-700">
+                          <ArrowUpIcon className="w-4 h-4 text-purple-600" />
+                          <span>Up to 5 sender emails</span>
+                        </div>
+                        <div className="flex items-center space-x-2 text-purple-700">
+                          <ArrowUpIcon className="w-4 h-4 text-purple-600" />
+                          <span>Domain verification</span>
+                        </div>
+                        <div className="flex items-center space-x-2 text-purple-700">
+                          <ArrowUpIcon className="w-4 h-4 text-purple-600" />
+                          <span>Advanced analytics</span>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          // TODO: Implement upgrade flow
+                          console.log('Upgrade clicked');
+                        }}
+                        className="w-full bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium py-2 px-4 rounded-md transition-colors"
+                      >
+                        View Upgrade Options
+                      </button>
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
 
               {/* Operation Progress */}
@@ -745,14 +771,14 @@ export function SenderEmailSetupPage() {
                 </div>
               )}
 
-              {/* Add Sender Button */}
-              {!state.showAddForm && senderService.canAddSender(state.tierLimits) && (
+              {/* Add Sender Button - Only show if user has existing senders */}
+              {!state.showAddForm && senderService.canAddSender(state.tierLimits) && state.senders.length > 0 && (
                 <div className="text-center">
                   <button
                     onClick={() => setState(prev => ({ ...prev, showAddForm: true }))}
                     className="bg-blue-600 text-white px-6 py-3 rounded-md hover:bg-blue-700 transition-colors font-medium"
                   >
-                    Add Sender Email
+                    Add Another Sender Email
                   </button>
                 </div>
               )}

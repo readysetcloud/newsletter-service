@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import userEvent from '@testinlibrary/user-event';
+import * as userEvent from '@testing-library/user-event';
 import { SenderEmailList } from '../SenderEmailList';
 import { senderService } from '@/services/senderService';
 import type { TierLimits, SenderEmail } from '@/types';

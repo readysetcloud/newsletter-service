@@ -536,4 +536,205 @@ describe('create-sender handler', () => {
       verificationStatus: 'pending'
     }));
   });
+
+  test('uses standard AWS verification email in non-production environment', async () => {
+    // Set non-production environment
+    process.env.ENVIRONMENT = 'sandbox';
+
+    mockGetUserContext.mockReturnValue({ tenantId: 'tenant-123' });
+
+    ddbInstance.send
+      .mockResolvedValueOnce({ Items: [] })
+      .mockResolvedValueOnce({});
+
+    // Mock SES CreateEmailIdentity response
+    sesInstance.send.mockResolvedValue({
+      IdentityArn: 'arn:aws:ses:us-east-1:123456789012:identity/test@example.com'
+    });
+
+    const event = {
+      body: JSON.stringify({
+        email: 'test@example.com',
+        name: 'Test Sender',
+        verificationType: 'mailbox'
+      }),
+      requestContext: { authorizer: { tier: 'free-tier' } }
+    };
+
+    const result = await handler(event);
+
+    // Should call SES CreateEmailIdentity for standard verification
+    expect(sesInstance.send).toHaveBeenCalledTimes(1);
+    const sesCall = sesInstance.send.mock.calls[0][0];
+    expect(sesCall.__type).toBe('CreateEmailIdentity');
+    expect(sesCall.EmailIdentity).toBe('test@example.com');
+    expect(sesCall.ConfigurationSetName).toBe('test-config-set');
+
+    // Should still create the sender record
+    expect(ddbInstance.send).toHaveBeenCalledTimes(2);
+    const putCall = ddbInstance.send.mock.calls[1][0];
+    expect(putCall.__type).toBe('PutItem');
+
+    // Should return success with appropriate message
+    expect(mockFormatResponse).toHaveBeenCalledWith(201, expect.objectContaining({
+      email: 'test@example.com',
+      verificationType: 'mailbox',
+      verificationStatus: 'pending',
+      message: 'AWS verification email sent. Please check your inbox and click the verification link.'
+    }));
+
+    // Reset environment
+    process.env.ENVIRONMENT = 'production';
+  });
+
+  test('uses standard AWS verification email in stage environment', async () => {
+    // Set stage environment
+    process.env.ENVIRONMENT = 'stage';
+
+    mockGetUserContext.mockReturnValue({ tenantId: 'tenant-123' });
+
+    ddbInstance.send
+      .mockResolvedValueOnce({ Items: [] })
+      .mockResolvedValueOnce({});
+
+    // Mock SES CreateEmailIdentity response
+    sesInstance.send.mockResolvedValue({
+      IdentityArn: 'arn:aws:ses:us-east-1:123456789012:identity/test@example.com'
+    });
+
+    const event = {
+      body: JSON.stringify({
+        email: 'test@example.com',
+        verificationType: 'mailbox'
+      }),
+      requestContext: { authorizer: { tier: 'free-tier' } }
+    };
+
+    const result = await handler(event);
+
+    // Should call SES CreateEmailIdentity for standard verification
+    expect(sesInstance.send).toHaveBeenCalledTimes(1);
+    const sesCall = sesInstance.send.mock.calls[0][0];
+    expect(sesCall.__type).toBe('CreateEmailIdentity');
+    expect(sesCall.EmailIdentity).toBe('test@example.com');
+
+    // Should return success with appropriate message
+    expect(mockFormatResponse).toHaveBeenCalledWith(201, expect.objectContaining({
+      message: 'AWS verification email sent. Please check your inbox and click the verification link.'
+    }));
+
+    // Reset environment
+    process.env.ENVIRONMENT = 'production';
+  });
+
+  test('sends custom verification email in production environment', async () => {
+    // Explicitly set production environment
+    process.env.ENVIRONMENT = 'production';
+
+    mockGetUserContext.mockReturnValue({ tenantId: 'tenant-123' });
+
+    ddbInstance.send
+      .mockResolvedValueOnce({ Items: [] })
+      .mockResolvedValueOnce({});
+
+    sesInstance.send.mockResolvedValue({
+      MessageId: 'test-message-id-123'
+    });
+
+    const event = {
+      body: JSON.stringify({
+        email: 'test@example.com',
+        verificationType: 'mailbox'
+      }),
+      requestContext: { authorizer: { tier: 'free-tier' } }
+    };
+
+    const result = await handler(event);
+
+    // Should call SES for custom verification email
+    expect(sesInstance.send).toHaveBeenCalledTimes(1);
+    const sesCall = sesInstance.send.mock.calls[0][0];
+    expect(sesCall.__type).toBe('SendCustomVerificationEmail');
+
+    // Should return success with production message
+    expect(mockFormatResponse).toHaveBeenCalledWith(201, expect.objectContaining({
+      message: 'Verification email sent. Please check your inbox and click the verification link.'
+    }));
+  });
+
+  test('defaults to production behavior when ENVIRONMENT is not set', async () => {
+    // Remove environment variable
+    delete process.env.ENVIRONMENT;
+
+    mockGetUserContext.mockReturnValue({ tenantId: 'tenant-123' });
+
+    ddbInstance.send
+      .mockResolvedValueOnce({ Items: [] })
+      .mockResolvedValueOnce({});
+
+    sesInstance.send.mockResolvedValue({
+      MessageId: 'test-message-id-123'
+    });
+
+    const event = {
+      body: JSON.stringify({
+        email: 'test@example.com',
+        verificationType: 'mailbox'
+      }),
+      requestContext: { authorizer: { tier: 'free-tier' } }
+    };
+
+    const result = await handler(event);
+
+    // Should call SES for custom verification email (production default)
+    expect(sesInstance.send).toHaveBeenCalledTimes(1);
+    const sesCall = sesInstance.send.mock.calls[0][0];
+    expect(sesCall.__type).toBe('SendCustomVerificationEmail');
+
+    // Should return success with production message
+    expect(mockFormatResponse).toHaveBeenCalledWith(201, expect.objectContaining({
+      message: 'Verification email sent. Please check your inbox and click the verification link.'
+    }));
+
+    // Reset environment for other tests
+    process.env.ENVIRONMENT = 'production';
+  });
+
+  test('domain verification is not affected by environment setting', async () => {
+    // Set non-production environment
+    process.env.ENVIRONMENT = 'sandbox';
+
+    mockGetUserContext.mockReturnValue({ tenantId: 'tenant-123' });
+
+    ddbInstance.send
+      .mockResolvedValueOnce({ Items: [] })
+      .mockResolvedValueOnce({});
+
+    sesInstance.send.mockResolvedValue({
+      identityArn: 'arn:aws:ses:us-east-1:123456789012:identity/example.com'
+    });
+
+    const event = {
+      body: JSON.stringify({
+        email: 'test@example.com',
+        verificationType: 'domain'
+      }),
+      requestContext: { authorizer: { tier: 'creator-tier' } }
+    };
+
+    const result = await handler(event);
+
+    // Should still call SES for domain verification regardless of environment
+    expect(sesInstance.send).toHaveBeenCalledTimes(1);
+    const sesCall = sesInstance.send.mock.calls[0][0];
+    expect(sesCall.__type).toBe('CreateEmailIdentity');
+
+    // Should return domain verification message
+    expect(mockFormatResponse).toHaveBeenCalledWith(201, expect.objectContaining({
+      message: 'Domain verification initiated. DNS records will be provided separately.'
+    }));
+
+    // Reset environment
+    process.env.ENVIRONMENT = 'production';
+  });
 });

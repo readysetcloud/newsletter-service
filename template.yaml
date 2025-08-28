@@ -2362,14 +2362,6 @@ Resources:
             - !Sub "https://${DomainName}"
             - "http://localhost:3000"
           SES_VERIFY_TEMPLATE_NAME: !Sub "${AWS::StackName}-sender-verification"
-          VERIFY_SUCCESS_URL: !If
-            - HasDomainName
-            - !Sub "https://${DomainName}/verify-sender/success"
-            - "http://localhost:3000/verify-sender/success"
-          VERIFY_FAILURE_URL: !If
-            - HasDomainName
-            - !Sub "https://${DomainName}/verify-sender/failure"
-            - "http://localhost:3000/verify-sender/success"
           ENVIRONMENT: !Ref Environment
       Events:
         CreateSender:
@@ -2409,11 +2401,11 @@ Resources:
           VERIFY_SUCCESS_URL: !If
             - HasDomainName
             - !Sub "https://${DomainName}/verify-sender/success"
-            - "http://localhost:3000/verify-sender/success"
+            - !Sub "https://${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com/public/verify-sender/success"
           VERIFY_FAILURE_URL: !If
             - HasDomainName
             - !Sub "https://${DomainName}/verify-sender/failure"
-            - "http://localhost:3000/verify-sender/success"
+            - !Sub "https://${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com/public/verify-sender/failure"
 
   BootstrapVerificationTemplate:
     Type: AWS::CloudFormation::CustomResource

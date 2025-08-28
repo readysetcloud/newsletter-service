@@ -2357,7 +2357,10 @@ Resources:
             - HasVerifiedFromEmail
             - !Ref VerifiedFromEmail
             - !Sub "noreply@${DomainName}"
-          FRONTEND_URL: !Sub "https://${DomainName}"
+          FRONTEND_URL: !If
+            - HasDomainName
+            - !Sub "https://${DomainName}"
+            - "http://localhost:3000"
           SES_VERIFY_TEMPLATE_NAME: !Sub "${AWS::StackName}-sender-verification"
           VERIFY_SUCCESS_URL: !If
             - HasDomainName
@@ -2403,8 +2406,14 @@ Resources:
             - HasVerifiedFromEmail
             - !Ref VerifiedFromEmail
             - !Sub "noreply@${DomainName}"
-          VERIFY_SUCCESS_URL: !Sub "https://${DomainName}/verify-sender/success"
-          VERIFY_FAILURE_URL: !Sub "https://${DomainName}/verify-sender/failure"
+          VERIFY_SUCCESS_URL: !If
+            - HasDomainName
+            - !Sub "https://${DomainName}/verify-sender/success"
+            - "http://localhost:3000/verify-sender/success"
+          VERIFY_FAILURE_URL: !If
+            - HasDomainName
+            - !Sub "https://${DomainName}/verify-sender/failure"
+            - "http://localhost:3000/verify-sender/success"
 
   BootstrapVerificationTemplate:
     Type: AWS::CloudFormation::CustomResource

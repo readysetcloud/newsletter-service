@@ -47,6 +47,16 @@ export const SenderStatusWidget: React.FC<SenderStatusWidgetProps> = ({
       };
     }
 
+    if (senderStatus.timedOutCount > 0) {
+      return {
+        title: `${senderStatus.timedOutCount} sender${senderStatus.timedOutCount !== 1 ? 's' : ''} verification expired`,
+        description: 'Some sender verifications timed out and need to be retried',
+        action: 'Retry verification',
+        actionHref: '/senders',
+        priority: 'warning' as const,
+      };
+    }
+
     if (senderStatus.pendingCount > 0) {
       return {
         title: `${senderStatus.pendingCount} sender${senderStatus.pendingCount !== 1 ? 's' : ''} pending verification`,
@@ -149,6 +159,7 @@ export const SenderStatusWidget: React.FC<SenderStatusWidgetProps> = ({
             verifiedCount={senderStatus.verifiedCount}
             pendingCount={senderStatus.pendingCount}
             failedCount={senderStatus.failedCount}
+            timedOutCount={senderStatus.timedOutCount}
             totalCount={senderStatus.totalCount}
             size="md"
           />
@@ -181,7 +192,7 @@ export const SenderStatusWidget: React.FC<SenderStatusWidgetProps> = ({
 
       {/* Quick Stats */}
       {senderStatus.totalCount > 0 && (
-        <div className="grid grid-cols-3 gap-4 mb-4">
+        <div className="grid grid-cols-4 gap-3 mb-4">
           <div className="text-center">
             <div className="text-lg font-semibold text-green-600">
               {senderStatus.verifiedCount}
@@ -199,6 +210,12 @@ export const SenderStatusWidget: React.FC<SenderStatusWidgetProps> = ({
               {senderStatus.failedCount}
             </div>
             <div className="text-xs text-gray-500">Failed</div>
+          </div>
+          <div className="text-center">
+            <div className="text-lg font-semibold text-orange-600">
+              {senderStatus.timedOutCount}
+            </div>
+            <div className="text-xs text-gray-500">Expired</div>
           </div>
         </div>
       )}

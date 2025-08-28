@@ -65,6 +65,10 @@ export const handler = async (event) => {
 
       sesResponse = await ses.send(createCommand);
 
+      // Note: SES tenant association is not available in the current AWS SDK
+      // Identity isolation is handled at the application level through tenantId
+      console.log('SES domain identity created:', { domain, tenantId });
+
       // Get DNS records for verification
       try {
         const getCommand = new GetEmailIdentityCommand({

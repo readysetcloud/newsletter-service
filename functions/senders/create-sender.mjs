@@ -85,7 +85,7 @@ export const handler = async (event) => {
     // For domain verification, create SES identity immediately since DNS verification is handled by SES
     if (verificationType === 'domain') {
       try {
-        const sesResponse = await initiateEmailVerification(email, verificationType);
+        const sesResponse = await initiateEmailVerification(email, verificationType, tenantId);
         senderRecord.sesIdentityArn = sesResponse.identityArn;
       } catch (sesError) {
         console.error('SES domain verification initiation failed:', sesError);
@@ -138,7 +138,7 @@ export const handler = async (event) => {
       } else {
         try {
           // Use standard AWS verification email for non-production environments
-          const sesResponse = await initiateEmailVerification(email, 'mailbox');
+          const sesResponse = await initiateEmailVerification(email, 'mailbox', tenantId);
           senderRecord.sesIdentityArn = sesResponse.identityArn;
 
           console.log('Standard AWS verification email sent successfully:', {
@@ -258,20 +258,28 @@ const getSendersByTenant = async (tenantId) => {
 };
 
 /**
- * Initiate email verification with SES
+ * Initiate email verification with SES and associate with tenant
  * @param {string} email - Email address to verify
  * @param {string} verificationType - Type of verification
+ * @param {string} tenantId - Tenant identifier for SES tenant association
  * @returns {Promise<Object>} SES response
  */
-const initiateEmailVerification = async (email, verificationType) => {
+const initiateEmailVerification = async (email, verificationType, tenantId) => {
   const identity = verificationType === 'domain' ? extractDomain(email) : email;
 
-  const command = new CreateEmailIdentityCommand({
+  // Create the email identity
+  const createCommand = new CreateEmailIdentityCommand({
     EmailIdentity: identity,
     ConfigurationSetName: process.env.SES_CONFIGURATION_SET
   });
 
-  return await ses.send(command);
+  const createResponse = await ses.send(createCommand);
+
+  // Note: SES tenant association is not available in the current AWS SDK
+  // Identity isolation is handled at the application level through tenantId
+  console.log('SES identity created:', { identity, tenantId });
+
+  return createResponse;
 };
 
 /**

@@ -2348,11 +2348,13 @@ Resources:
               Action:
                 - ses:CreateEmailIdentity
                 - ses:SendCustomVerificationEmail
+                - ses:CreateTenantResourceAssociation
               Resource: "*"
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
           SES_CONFIGURATION_SET: !Ref ConfigurationSet
+          RESOURCE_ARN_PREFIX: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/"
           SYSTEM_FROM_EMAIL: !If
             - HasVerifiedFromEmail
             - !Ref VerifiedFromEmail
@@ -2363,6 +2365,7 @@ Resources:
             - "http://localhost:3000"
           SES_VERIFY_TEMPLATE_NAME: !Sub "${AWS::StackName}-sender-verification"
           ENVIRONMENT: !Ref Environment
+          RESOURCE_ARN_PREFIX: !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/
       Events:
         CreateSender:
           Type: Api
@@ -2398,14 +2401,6 @@ Resources:
             - HasVerifiedFromEmail
             - !Ref VerifiedFromEmail
             - !Sub "noreply@${DomainName}"
-          VERIFY_SUCCESS_URL: !If
-            - HasDomainName
-            - !Sub "https://${DomainName}/verify-sender/success"
-            - !Sub "https://${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com/public/verify-sender/success"
-          VERIFY_FAILURE_URL: !If
-            - HasDomainName
-            - !Sub "https://${DomainName}/verify-sender/failure"
-            - !Sub "https://${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com/public/verify-sender/failure"
 
   BootstrapVerificationTemplate:
     Type: AWS::CloudFormation::CustomResource
@@ -2474,10 +2469,13 @@ Resources:
             - Effect: Allow
               Action:
                 - ses:DeleteEmailIdentity
+                - ses:DeleteTenantResourceAssociation
               Resource: "*"
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
+          SES_CONFIGURATION_SET: !Ref ConfigurationSet
+          RESOURCE_ARN_PREFIX: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/"
       Events:
         DeleteSender:
           Type: Api
@@ -2507,15 +2505,16 @@ Resources:
               Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
               Action:
-                - ses:VerifyDomainIdentity
-                - ses:GetIdentityVerificationAttributes
-                - ses:GetIdentityDkimAttributes
-                - ses:PutEmailIdentity
+                - ses:CreateEmailIdentity
+                - ses:GetEmailIdentity
+                - ses:DeleteEmailIdentity
+                - ses:CreateTenantResourceAssociation
               Resource: "*"
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
           SES_CONFIGURATION_SET: !Ref ConfigurationSet
+          RESOURCE_ARN_PREFIX: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/"
       Events:
         VerifyDomain:
           Type: Api
@@ -2563,80 +2562,6 @@ Resources:
             Path: /senders/domain-verification/{domain}
             Method: GET
 
-  VerifySenderEmailFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - senders/verify-sender-email.mjs
-    Properties:
-      Handler: senders/verify-sender-email.handler
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - dynamodb:GetItem
-                - dynamodb:UpdateItem
-              Resource: !GetAtt NewsletterTable.Arn
-            - Effect: Allow
-              Action:
-                - ses:PutEmailIdentityConfigurationSetAttributes
-              Resource: "*"
-      Environment:
-        Variables:
-          TABLE_NAME: !Ref NewsletterTable
-          SES_CONFIGURATION_SET: !Ref ConfigurationSet
-      Events:
-        VerifySenderEmail:
-          Type: Api
-          Properties:
-            RestApiId: !Ref NewsletterApi
-            Path: /verify-sender
-            Method: GET
-
-  ResendVerificationFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - senders/resend-verification.mjs
-    Properties:
-      Handler: senders/resend-verification.handler
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - dynamodb:GetItem
-                - dynamodb:UpdateItem
-              Resource: !GetAtt NewsletterTable.Arn
-            - Effect: Allow
-              Action:
-                - ses:SendCustomVerificationEmail
-                - ses:CreateEmailIdentity
-              Resource: "*"
-      Environment:
-        Variables:
-          TABLE_NAME: !Ref NewsletterTable
-          SES_CONFIGURATION_SET: !Ref ConfigurationSet
-          SES_VERIFY_TEMPLATE_NAME: !Sub "${AWS::StackName}-sender-verification"
-          SYSTEM_FROM_EMAIL: !Sub "noreply@${DomainName}"
-          FRONTEND_URL: !Sub "https://${DomainName}"
-          ENVIRONMENT: !Ref Environment
-      Events:
-        ResendVerification:
-          Type: Api
-          Properties:
-            RestApiId: !Ref DashboardApi
-            Path: /senders/{senderId}/resend-verification
-            Method: POST
 
   CheckSenderStatusAutomaticallyFunction:
     Type: AWS::Serverless::Function

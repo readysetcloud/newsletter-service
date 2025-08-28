@@ -54,10 +54,12 @@ export const handler = async (event, context) => {
 
     const templateName = process.env.SES_VERIFY_TEMPLATE_NAME;
     const fromEmailAddress = process.env.SYSTEM_FROM_EMAIL;
-    const successUrl = process.env.VERIFY_SUCCESS_URL;
-    const failureUrl = process.env.VERIFY_FAILURE_URL;
 
-    if (!templateName || !fromEmailAddress || !successUrl || !failureUrl) {
+    // Use environment variables for success/failure URLs
+    const successUrl = process.env.VERIFY_SUCCESS_URL || 'https://aws.amazon.com/ses/';
+    const failureUrl = process.env.VERIFY_FAILURE_URL || 'https://aws.amazon.com/ses/';
+
+    if (!templateName || !fromEmailAddress) {
       throw new Error('Missing required environment variables for template creation');
     }
 
@@ -135,11 +137,12 @@ const generateTemplateContent = () => `<!DOCTYPE html>
     <h2>Verify Your Sender Email</h2>
     <p>Hello!</p>
 
-    <p>You're adding a new sender address to your account. To finish setup and start sending from this address, please confirm ownership.</p>
+    <p>You're adding a new sender address to your account. To finish setup and start sending from this address, please confirm ownership by clicking the verification link below.</p>
 
-    <p>Next step: click the verification link below to complete the process.</p>
+    <p><strong>After clicking the verification link, please return to your dashboard to confirm your email is verified and ready to use.</strong></p>
 
     <hr />
+    <p><small>This verification ensures you own this email address and can send newsletters from it.</small></p>
   </body>
 </html>`.trim();
 

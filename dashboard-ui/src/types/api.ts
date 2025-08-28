@@ -184,9 +184,12 @@ export interface SenderEmail {
   email: string;
   name?: string;
   verificationType: 'mailbox' | 'domain';
-  verificationStatus: 'pending' | 'verified' | 'failed';
+  verificationStatus: 'pending' | 'verified' | 'failed' | 'verification_timed_out';
   isDefault: boolean;
   domain?: string;
+  verificationInitiatedAt: string;
+  verificationExpiresAt: string;
+  timeRemaining?: string;
   createdAt: string;
   updatedAt: string;
   verifiedAt?: string;
@@ -203,7 +206,7 @@ export interface TierLimits {
 
 export interface DomainVerification {
   domain: string;
-  verificationStatus: 'pending' | 'verified' | 'failed';
+  verificationStatus: 'pending' | 'verified' | 'failed' | 'verification_timed_out';
   dnsRecords: DnsRecord[];
   instructions: string[];
 }
@@ -233,4 +236,21 @@ export interface VerifyDomainRequest {
 export interface GetSendersResponse {
   senders: SenderEmail[];
   tierLimits: TierLimits;
+}
+
+// Cleanup and timeout related types
+export interface SenderStatusCheckResult {
+  senderId: string;
+  oldStatus: string;
+  newStatus: string;
+  statusChanged: boolean;
+  action: 'updated' | 'stopped' | 'timeout' | 'cleanup';
+  message: string;
+}
+
+export interface VerificationTimeoutInfo {
+  timeRemaining: string;
+  isExpired: boolean;
+  expiresAt: string;
+  canRetry: boolean;
 }

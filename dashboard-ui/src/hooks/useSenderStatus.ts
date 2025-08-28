@@ -7,10 +7,12 @@ interface SenderStatus {
   tierLimits: TierLimits | null;
   hasUnverified: boolean;
   hasFailed: boolean;
+  hasTimedOut: boolean;
   totalCount: number;
   verifiedCount: number;
   pendingCount: number;
   failedCount: number;
+  timedOutCount: number;
   loading: boolean;
   error: string | null;
 }
@@ -24,10 +26,12 @@ export const useSenderStatus = (refreshInterval: number = 30000) => {
     tierLimits: null,
     hasUnverified: false,
     hasFailed: false,
+    hasTimedOut: false,
     totalCount: 0,
     verifiedCount: 0,
     pendingCount: 0,
     failedCount: 0,
+    timedOutCount: 0,
     loading: true,
     error: null,
   });
@@ -42,16 +46,19 @@ export const useSenderStatus = (refreshInterval: number = 30000) => {
         const verifiedCount = senders.filter(s => s.verificationStatus === 'verified').length;
         const pendingCount = senders.filter(s => s.verificationStatus === 'pending').length;
         const failedCount = senders.filter(s => s.verificationStatus === 'failed').length;
+        const timedOutCount = senders.filter(s => s.verificationStatus === 'verification_timed_out').length;
 
         setStatus({
           senders,
           tierLimits,
           hasUnverified: pendingCount > 0,
           hasFailed: failedCount > 0,
+          hasTimedOut: timedOutCount > 0,
           totalCount: senders.length,
           verifiedCount,
           pendingCount,
           failedCount,
+          timedOutCount,
           loading: false,
           error: null,
         });

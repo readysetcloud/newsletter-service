@@ -13,10 +13,12 @@
  * @property {string} email - Sender email address
  * @property {string} [name] - Display name for sender
  * @property {'mailbox'|'domain'} verificationType - Type of verification
- * @property {'pending'|'verified'|'failed'} verificationStatus - Current status
+ * @property {'pending'|'verified'|'failed'|'verification_timed_out'} verificationStatus - Current status
  * @property {boolean} isDefault - Whether this is the default sender
  * @property {string} [domain] - Domain for domain verification
  * @property {string} [sesIdentityArn] - SES identity ARN
+ * @property {string} verificationInitiatedAt - ISO timestamp when verification started
+ * @property {string} verificationExpiresAt - ISO timestamp when verification expires (24h)
  * @property {string} createdAt - ISO timestamp
  * @property {string} updatedAt - ISO timestamp
  * @property {string} [verifiedAt] - ISO timestamp when verified
@@ -31,7 +33,7 @@
  * @property {string} sk - Sort key (domain#{domain})
  * @property {string} domain - Domain name
  * @property {string} tenantId - Tenant identifier
- * @property {'pending'|'verified'|'failed'} verificationStatus - Current status
+ * @property {'pending'|'verified'|'failed'|'verification_timed_out'} verificationStatus - Current status
  * @property {DnsRecord[]} dnsRecords - DNS records to add
  * @property {string} [sesIdentityArn] - SES identity ARN
  * @property {string} createdAt - ISO timestamp

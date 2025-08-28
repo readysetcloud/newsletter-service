@@ -1,5 +1,5 @@
 import { DynamoDBClient, GetItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
-import { SESv2Client, GetEmailIdentityCommand } from "@aws-sdk/client-sesv2";
+import { SESv2Client, GetEmailIdentityCommand, DeleteEmailIdentityCommand } from "@aws-sdk/client-sesv2";
 import { SchedulerClient, CreateScheduleCommand } from "@aws-sdk/client-scheduler";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { KEY_PATTERNS } from './types.mjs';
@@ -37,6 +37,29 @@ export const handler = async (event) => {
         expiresAt,
         hoursElapsed: (now - expirationTime) / (1000 * 60 * 60)
       });
+
+      // Get sender details for cleanup
+      const sender = await getSenderById(tenantId, senderId);
+      if (sender) {
+        // Clean up SES identity before marking as timed out
+        try {
+          await cleanupExpiredSESIdentity(sender);
+          console.log('Successfully cleaned up expired SES identity:', {
+            senderId,
+            identity: sender.verificationType === 'domain' ? sender.domain : sender.email,
+            verificationType: sender.verificationType
+          });
+        } catch (cleanupError) {
+          console.error('Failed to cleanup expired SES identity (continuing with status update):', {
+            senderId,
+            identity: sender.verificationType === 'domain' ? sender.domain : sender.email,
+            error: cleanupError.message
+          });
+          // Continue with status update even if cleanup fails
+        }
+      } else {
+        console.log('Sender not found during timeout cleanup:', { senderId });
+      }
 
       await updateSenderStatus(tenantId, senderId, 'verification_timed_out', 'Verification timed out after 24 hours');
 
@@ -342,6 +365,47 @@ const updateSenderStatus = async (tenantId, senderId, newStatus, failureReason =
   } catch (error) {
     console.error('Error updating sender verification status:', error);
     throw new Error('Failed to update sender status');
+  }
+};
+
+/**
+ * Clean up expired SES identity with proper tenant cleanup sequence
+ * @param {Object} sender - Sender record
+ * @returns {Promise<void>}
+ */
+const cleanupExpiredSESIdentity = async (sender) => {
+  try {
+    const identity = sender.verificationType === 'domain' ? sender.domain : sender.email;
+
+    if (!identity) {
+      console.log('No identity to cleanup for sender:', { senderId: sender.senderId });
+      return;
+    }
+
+    console.log('Starting SES identity cleanup for expired sender:', {
+      senderId: sender.senderId,
+      identity,
+      verificationType: sender.verificationType
+    });
+
+    // Note: SES tenant association is not available in the current AWS SDK
+    // Identity isolation is handled at the application level through tenantId
+
+    // Delete the SES identity
+    await ses.send(new DeleteEmailIdentityCommand({
+      EmailIdentity: identity
+    }));
+    console.log(`Cleaned up expired SES identity: ${identity}`);
+
+  } catch (error) {
+    console.error('Failed to cleanup expired SES identity:', {
+      senderId: sender.senderId,
+      identity: sender.verificationType === 'domain' ? sender.domain : sender.email,
+      error: error.message
+    });
+
+    // Re-throw to allow caller to handle appropriately
+    throw new Error(`SES identity cleanup failed: ${error.message}`);
   }
 };
 

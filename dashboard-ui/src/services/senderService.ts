@@ -68,27 +68,31 @@ export class SenderService {
 
   /**
    * Start polling for verification status updates
+   * Note: With automatic status checking, polling is simplified to reduce API calls
    * @param senderId - The sender ID to poll for
    * @param onStatusUpdate - Callback function called when status changes
-   * @param intervalMs - Polling interval in milliseconds (default: 5000)
+   * @param intervalMs - Polling interval in milliseconds (default: 30000 - reduced frequency)
    */
   startVerificationPolling(
     senderId: string,
     onStatusUpdate: (sender: SenderEmail | null, error?: string) => void,
-    intervalMs: number = 5000
+    intervalMs: number = 30000 // Reduced from 5000ms to 30000ms
   ): void {
     // Clear existing polling for this sender
     this.stopVerificationPolling(senderId);
 
     const pollStatus = async () => {
       try {
+        // Use the simplified getSenders call instead of individual status checks
         const response = await this.getSenders();
         if (response.success && response.data) {
           const sender = response.data.senders.find(s => s.senderId === senderId);
           onStatusUpdate(sender || null);
 
-          // Stop polling if verification is complete or failed
-          if (sender && (sender.verificationStatus === 'verified' || sender.verificationStatus === 'failed')) {
+          // Stop polling if verification is complete, failed, or timed out
+          if (sender && (sender.verificationStatus === 'verified' ||
+                        sender.verificationStatus === 'failed' ||
+                        sender.verificationStatus === 'verification_timed_out')) {
             this.stopVerificationPolling(senderId);
           }
         } else {
@@ -99,7 +103,7 @@ export class SenderService {
       }
     };
 
-    // Start polling
+    // Start polling with reduced frequency
     const intervalId = setInterval(pollStatus, intervalMs);
     this.pollingIntervals.set(senderId, intervalId);
 
@@ -131,14 +135,15 @@ export class SenderService {
 
   /**
    * Start polling for domain verification status
+   * Note: With automatic status checking, polling frequency is reduced
    * @param domain - The domain to poll for
    * @param onStatusUpdate - Callback function called when status changes
-   * @param intervalMs - Polling interval in milliseconds (default: 10000)
+   * @param intervalMs - Polling interval in milliseconds (default: 60000 - reduced frequency)
    */
   startDomainVerificationPolling(
     domain: string,
     onStatusUpdate: (verification: DomainVerification | null, error?: string) => void,
-    intervalMs: number = 10000
+    intervalMs: number = 60000 // Reduced from 10000ms to 60000ms
   ): void {
     const pollingKey = `domain:${domain}`;
 
@@ -151,8 +156,10 @@ export class SenderService {
         if (response.success && response.data) {
           onStatusUpdate(response.data);
 
-          // Stop polling if verification is complete or failed
-          if (response.data.verificationStatus === 'verified' || response.data.verificationStatus === 'failed') {
+          // Stop polling if verification is complete, failed, or timed out
+          if (response.data.verificationStatus === 'verified' ||
+              response.data.verificationStatus === 'failed' ||
+              response.data.verificationStatus === 'verification_timed_out') {
             this.stopVerificationPolling(pollingKey);
           }
         } else {
@@ -163,7 +170,7 @@ export class SenderService {
       }
     };
 
-    // Start polling
+    // Start polling with reduced frequency
     const intervalId = setInterval(pollStatus, intervalMs);
     this.pollingIntervals.set(pollingKey, intervalId);
 
@@ -173,56 +180,23 @@ export class SenderService {
 
   /**
    * Retry verification for a failed sender
+   * Note: With the streamlined verification process, retries are handled automatically
+   * by the backend. This method now simply refreshes the sender status.
    * @param senderId - The sender ID to retry verification for
    */
   async retryVerification(senderId: string): Promise<ApiResponse<SenderEmail>> {
     try {
-      // Get current sender details
-      const sendersResponse = await this.getSenders();
-      if (!sendersResponse.success || !sendersResponse.data) {
+      // Simply refresh the sender status - the backend handles verification retries automatically
+      const response = await this.getSenderStatus(senderId);
+
+      if (response.success && response.data) {
+        return response;
+      } else {
         return {
           success: false,
-          error: getUserFriendlyErrorMessage(sendersResponse.error, 'sender'),
+          error: getUserFriendlyErrorMessage(response.error, 'sender'),
         };
       }
-
-      const sender = sendersResponse.data.senders.find(s => s.senderId === senderId);
-      if (!sender) {
-        return {
-          success: false,
-          error: 'Sender not found',
-        };
-      }
-
-      // For domain verification, retry domain verification
-      if (sender.verificationType === 'domain' && sender.domain) {
-        const domainResponse = await this.verifyDomain({ domain: sender.domain });
-        if (!domainResponse.success) {
-          return {
-            success: false,
-            error: getUserFriendlyErrorMessage(domainResponse.error, 'sender'),
-          };
-        }
-        return {
-          success: true,
-          data: sender, // Return the existing sender as domain verification doesn't create a new one
-        };
-      }
-
-      // For mailbox verification, we need to recreate the sender
-      // This will trigger a new verification email
-      const retryResponse = await this.createSender({
-        email: sender.email,
-        name: sender.name,
-        verificationType: sender.verificationType,
-      });
-
-      if (retryResponse.success) {
-        // Delete the old failed sender
-        await this.deleteSender(senderId);
-      }
-
-      return retryResponse;
     } catch (error) {
       return {
         success: false,

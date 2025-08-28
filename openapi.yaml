@@ -951,7 +951,7 @@ paths:
                     type: string
                   verificationStatus:
                     type: string
-                    enum: [pending, verified, failed]
+                    enum: [pending, verified, failed, verification_timed_out]
                   verificationType:
                     type: string
                     enum: [mailbox, domain]
@@ -1077,7 +1077,7 @@ paths:
                     enum: [mailbox, domain]
                   verificationStatus:
                     type: string
-                    enum: [pending, verified, failed]
+                    enum: [pending, verified, failed, verification_timed_out]
                   isDefault:
                     type: boolean
                   domain:
@@ -1300,7 +1300,7 @@ components:
           description: Type of verification used
         verificationStatus:
           type: string
-          enum: [pending, verified, failed]
+          enum: [pending, verified, failed, verification_timed_out]
           description: Current verification status
         isDefault:
           type: boolean
@@ -1323,6 +1323,17 @@ components:
         failureReason:
           type: string
           description: Reason for verification failure
+        emailsSent:
+          type: integer
+          description: Total number of emails sent from this sender
+        lastSentAt:
+          type: string
+          format: date-time
+          description: When the last email was sent from this sender
+        verificationExpiresAt:
+          type: string
+          format: date-time
+          description: When the verification expires (24 hours after initiation)
 
     TierLimits:
       type: object
@@ -1363,7 +1374,7 @@ components:
           description: Domain name being verified
         verificationStatus:
           type: string
-          enum: [pending, verified, failed]
+          enum: [pending, verified, failed, verification_timed_out]
           description: Current verification status
         dnsRecords:
           type: array

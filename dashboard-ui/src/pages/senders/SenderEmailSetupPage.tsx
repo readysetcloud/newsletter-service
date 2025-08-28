@@ -394,34 +394,20 @@ export function SenderEmailSetupPage() {
           )
         }));
 
-        // Start polling for verification status
-        senderService.startVerificationPolling(
-          response.data.senderId,
-          (sender, error) => {
-            if (error) {
-              showError('Verification Error', error);
-            } else if (sender) {
-              setState(prev => ({
-                ...prev,
-                senders: prev.senders.map(s =>
-                  s.senderId === sender.senderId ? sender : s
-                )
-              }));
-            }
-          }
-        );
+        // Note: Verification status is now checked automatically by the backend
+        // No need for aggressive polling - status updates will be reflected on page refresh
 
         showSuccess(
-          'Verification Retried',
-          'Verification process restarted'
+          'Status Refreshed',
+          'Verification status has been updated. The system will automatically check verification progress.'
         );
       } else {
-        throw new Error(response.error || 'Failed to retry verification');
+        throw new Error(response.error || 'Failed to refresh verification status');
       }
     } catch (err) {
       showError(
         'Error',
-        err instanceof Error ? err.message : 'Failed to retry verification'
+        err instanceof Error ? err.message : 'Failed to refresh verification status'
       );
     }
   };

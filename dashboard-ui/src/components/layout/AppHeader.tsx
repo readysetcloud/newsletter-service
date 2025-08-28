@@ -87,6 +87,7 @@ export const AppHeader: React.FC = () => {
                         verifiedCount={senderStatus.verifiedCount}
                         pendingCount={senderStatus.pendingCount}
                         failedCount={senderStatus.failedCount}
+                        timedOutCount={senderStatus.timedOutCount}
                         totalCount={senderStatus.totalCount}
                         size="sm"
                         className="ml-1"

@@ -149,7 +149,7 @@ export const ProgressIndicator: React.FC<ProgressIndicatorProps> = ({
  */
 interface VerificationProgressProps {
   type: 'email' | 'domain';
-  status: 'pending' | 'verified' | 'failed';
+  status: 'pending' | 'verified' | 'failed' | 'verification_timed_out';
   email?: string;
   domain?: string;
   estimatedTime?: string;
@@ -187,6 +187,15 @@ export const VerificationProgress: React.FC<VerificationProgressProps> = ({
           bgColor: 'bg-red-50',
           borderColor: 'border-red-200',
           textColor: 'text-red-800'
+        };
+      case 'verification_timed_out':
+        return {
+          icon: <ExclamationTriangleIcon className="w-6 h-6 text-orange-600" />,
+          title: `${type === 'email' ? 'Email' : 'Domain'} Verification Expired`,
+          message: 'The verification process timed out after 24 hours. You can retry verification to start the process again.',
+          bgColor: 'bg-orange-50',
+          borderColor: 'border-orange-200',
+          textColor: 'text-orange-800'
         };
       default:
         return {

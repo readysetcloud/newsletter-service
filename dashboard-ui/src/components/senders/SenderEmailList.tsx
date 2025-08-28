@@ -50,6 +50,8 @@ export const SenderEmailList: React.FC<SenderEmailListProps> = ({
         return <ClockIcon className="w-5 h-5 text-yellow-600 animate-pulse" />;
       case 'failed':
         return <XCircleIcon className="w-5 h-5 text-red-600" />;
+      case 'verification_timed_out':
+        return <XCircleIcon className="w-5 h-5 text-orange-600" />;
       default:
         return <ClockIcon className="w-5 h-5 text-gray-400" />;
     }
@@ -63,6 +65,8 @@ export const SenderEmailList: React.FC<SenderEmailListProps> = ({
         return 'Pending verification';
       case 'failed':
         return 'Verification failed';
+      case 'verification_timed_out':
+        return 'Verification expired';
       default:
         return 'Unknown';
     }
@@ -76,6 +80,8 @@ export const SenderEmailList: React.FC<SenderEmailListProps> = ({
         return 'bg-yellow-100 text-yellow-800 border-yellow-200';
       case 'failed':
         return 'bg-red-100 text-red-800 border-red-200';
+      case 'verification_timed_out':
+        return 'bg-orange-100 text-orange-800 border-orange-200';
       default:
         return 'bg-gray-100 text-gray-800 border-gray-200';
     }
@@ -206,8 +212,8 @@ export const SenderEmailList: React.FC<SenderEmailListProps> = ({
 
       if (response.success) {
         addToast({
-          title: 'Verification retry initiated',
-          message: `Verification process restarted for ${sender.email}`,
+          title: 'Status refreshed',
+          message: `Verification status updated for ${sender.email}. The system will automatically check verification progress.`,
           type: 'success'
         });
         if (response.data) {
@@ -224,7 +230,7 @@ export const SenderEmailList: React.FC<SenderEmailListProps> = ({
     } catch (error) {
       const errorMessage = getUserFriendlyErrorMessage(error, 'sender');
       addToast({
-        title: 'Failed to retry verification',
+        title: 'Failed to refresh status',
         message: errorMessage,
         type: 'error'
       });
@@ -312,6 +318,8 @@ export const SenderEmailList: React.FC<SenderEmailListProps> = ({
               ? 'border-green-200 bg-green-50/30'
               : sender.verificationStatus === 'failed'
               ? 'border-red-200 bg-red-50/30'
+              : sender.verificationStatus === 'verification_timed_out'
+              ? 'border-orange-200 bg-orange-50/30'
               : 'border-gray-200 hover:border-gray-300'
           )}
         >
@@ -399,7 +407,7 @@ export const SenderEmailList: React.FC<SenderEmailListProps> = ({
                 )}
 
                 {/* Retry Verification Button */}
-                {sender.verificationStatus === 'failed' && (
+                {(sender.verificationStatus === 'failed' || sender.verificationStatus === 'verification_timed_out') && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -407,7 +415,7 @@ export const SenderEmailList: React.FC<SenderEmailListProps> = ({
                     disabled={updatingId === sender.senderId}
                     isLoading={updatingId === sender.senderId}
                   >
-                    Retry
+                    Refresh Status
                   </Button>
                 )}
 
@@ -436,6 +444,16 @@ export const SenderEmailList: React.FC<SenderEmailListProps> = ({
             </div>
           )}
 
+          {/* Timeout Message */}
+          {sender.verificationStatus === 'verification_timed_out' && (
+            <div className="mt-4 p-3 bg-orange-50 border border-orange-200 rounded-md">
+              <p className="text-sm text-orange-800">
+                <strong>Verification expired:</strong> The verification process timed out after 24 hours.
+                You can refresh the status to check if verification has completed.
+              </p>
+            </div>
+          )}
+
           {/* Operation Error Display */}
           {operationErrors[sender.senderId] && (
             <div className="mt-4">
@@ -457,7 +475,7 @@ export const SenderEmailList: React.FC<SenderEmailListProps> = ({
           )}
 
           {/* Verification Progress */}
-          {(sender.verificationStatus === 'pending' || sender.verificationStatus === 'failed') && (
+          {(sender.verificationStatus === 'pending' || sender.verificationStatus === 'failed' || sender.verificationStatus === 'verification_timed_out') && (
             <div className="mt-4">
               <VerificationProgress
                 type={sender.verificationType === 'domain' ? 'domain' : 'email'}
@@ -465,11 +483,13 @@ export const SenderEmailList: React.FC<SenderEmailListProps> = ({
                 email={sender.verificationType === 'mailbox' ? sender.email : undefined}
                 domain={sender.verificationType === 'domain' ? sender.domain : undefined}
                 estimatedTime={
-                  sender.verificationType === 'mailbox'
+                  sender.verificationStatus === 'verification_timed_out'
+                    ? 'Verification expired after 24 hours. Click refresh to check current status.'
+                    : sender.verificationType === 'mailbox'
                     ? 'Verification usually completes within a few minutes'
                     : 'DNS verification can take up to 72 hours'
                 }
-                onRetry={sender.verificationStatus === 'failed' ? () => handleRetryVerification(sender) : undefined}
+                onRetry={(sender.verificationStatus === 'failed' || sender.verificationStatus === 'verification_timed_out') ? () => handleRetryVerification(sender) : undefined}
               />
             </div>
           )}

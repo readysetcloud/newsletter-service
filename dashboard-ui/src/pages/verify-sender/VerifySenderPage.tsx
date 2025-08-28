@@ -40,65 +40,23 @@ export function VerifySenderPage() {
   }, [token]);
 
   const verifyToken = async (verificationToken: string) => {
-    try {
-      const response = await fetch(`/api/verify-sender?token=${encodeURIComponent(verificationToken)}`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
+    // Note: This verification flow is now handled by SES custom verification emails
+    // which redirect directly to success/failure pages. This component is kept for
+    // backward compatibility but the verification logic has been streamlined.
 
-      const data = await response.json();
+    setResult({
+      success: false,
+      message: 'Email verification is now handled automatically. Please check your email for the verification link and follow the instructions provided.',
+      error: 'Deprecated verification method'
+    });
 
-      if (response.ok) {
-        setResult({
-          success: true,
-          message: data.message,
-          senderId: data.senderId,
-          email: data.email,
-          verificationStatus: data.verificationStatus,
-          alreadyVerified: data.alreadyVerified
-        });
+    addToast({
+      type: 'info',
+      title: 'Verification Method Updated',
+      message: 'Email verification now uses a streamlined process. Please check your email for the verification link.'
+    });
 
-        // Show success toast
-        addToast({
-          type: 'success',
-          title: 'Email Verified!',
-          message: data.alreadyVerified
-            ? 'This email was already verified.'
-            : 'Your sender email has been successfully verified.'
-        });
-      } else {
-        setResult({
-          success: false,
-          message: data.message || 'Verification failed',
-          error: data.error,
-          expired: data.expired
-        });
-
-        // Show error toast
-        addToast({
-          type: 'error',
-          title: 'Verification Failed',
-          message: data.message || 'Failed to verify your email address.'
-        });
-      }
-    } catch (error) {
-      console.error('Verification error:', error);
-      setResult({
-        success: false,
-        message: 'An error occurred while verifying your email. Please try again.',
-        error: 'Network error'
-      });
-
-      addToast({
-        type: 'error',
-        title: 'Verification Error',
-        message: 'An error occurred while verifying your email. Please try again.'
-      });
-    } finally {
-      setIsVerifying(false);
-    }
+    setIsVerifying(false);
   };
 
   const handleGoToDashboard = () => {

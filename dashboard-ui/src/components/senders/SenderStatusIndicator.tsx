@@ -10,6 +10,7 @@ interface SenderStatusIndicatorProps {
   verifiedCount: number;
   pendingCount: number;
   failedCount: number;
+  timedOutCount?: number;
   totalCount: number;
   size?: 'sm' | 'md';
   showText?: boolean;
@@ -24,6 +25,7 @@ export const SenderStatusIndicator: React.FC<SenderStatusIndicatorProps> = ({
   verifiedCount,
   pendingCount,
   failedCount,
+  timedOutCount = 0,
   totalCount,
   size = 'sm',
   showText = false,
@@ -43,6 +45,16 @@ export const SenderStatusIndicator: React.FC<SenderStatusIndicatorProps> = ({
         bgColor: 'bg-red-100',
         text: `${failedCount} failed`,
         priority: 'error' as const,
+      };
+    }
+
+    if (timedOutCount > 0) {
+      return {
+        icon: ExclamationTriangleIcon,
+        color: 'text-orange-500',
+        bgColor: 'bg-orange-100',
+        text: `${timedOutCount} expired`,
+        priority: 'warning' as const,
       };
     }
 
@@ -88,7 +100,7 @@ export const SenderStatusIndicator: React.FC<SenderStatusIndicatorProps> = ({
           bgColor,
           containerSize
         )}
-        title={`${verifiedCount} verified, ${pendingCount} pending, ${failedCount} failed`}
+        title={`${verifiedCount} verified, ${pendingCount} pending, ${failedCount} failed, ${timedOutCount} expired`}
       >
         <Icon className={cn(iconSize, color)} aria-hidden="true" />
       </div>

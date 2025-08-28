@@ -12,7 +12,7 @@ vi.mock('@/utils/errorHandling', () => ({
 
 const mockApiClient = vi.mocked(apiClient);
 
-const mockTier: TierLimits = {
+const mockTierLimits: TierLimits = {
   tier: 'creator-tier',
   maxSenders: 2,
   currentCount: 1,
@@ -331,68 +331,38 @@ describe('SenderService', () => {
   });
 
   describe('retryVerification', () => {
-    it('retries domain verification', async () => {
-      const domainSender = { ...mockSender, verificationType: 'domain' as const, domain: 'example.com' };
-
+    it('refreshes sender status instead of retrying verification', async () => {
       mockApiClient.get.mockResolvedValue({
-        success: true,
-        data: {
-          senders: [domainSender],
-          tierLimits: mockTierLimits
-        }
-      });
-
-      mockApiClient.post.mockResolvedValue({
-        success: true,
-        data: mockDomainVerification
-      });
-
-      const result = await senderService.retryVerification('sender-123');
-
-      expect(mockApiClient.post).toHaveBeenCalledWith('/senders/verify-domain', { domain: 'example.com' });
-      expect(result.success).toBe(true);
-    });
-
-    it('retries mailbox verification by recreating sender', async () => {
-      mockApiClient.get.mockResolvedValue({
-        success: true,
-        data: {
-          senders: [mockSender],
-          tierLimits: mockTierLimits
-        }
-      });
-
-      mockApiClient.post.mockResolvedValue({
         success: true,
         data: mockSender
       });
 
-      mockApiClient.delete.mockResolvedValue({ success: true });
-
       const result = await senderService.retryVerification('sender-123');
 
-      expect(mockApiClient.post).toHaveBeenCalledWith('/senders', {
-        email: mockSender.email,
-        name: mockSender.name,
-        verificationType: mockSender.verificationType
-      });
-      expect(mockApiClient.delete).toHaveBeenCalledWith('/senders/sender-123');
+      expect(mockApiClient.get).toHaveBeenCalledWith('/senders/sender-123/status');
       expect(result.success).toBe(true);
+      expect(result.data).toEqual(mockSender);
     });
 
-    it('handles sender not found', async () => {
+    it('handles API errors when refreshing status', async () => {
       mockApiClient.get.mockResolvedValue({
-        success: true,
-        data: {
-          senders: [],
-          tierLimits: mockTierLimits
-        }
+        success: false,
+        error: 'Sender not found'
       });
 
       const result = await senderService.retryVerification('nonexistent');
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('Sender not found');
+    });
+
+    it('handles network errors', async () => {
+      mockApiClient.get.mockRejectedValue(new Error('Network error'));
+
+      const result = await senderService.retryVerification('sender-123');
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Network error');
     });
   });
 

@@ -13,10 +13,10 @@ const ses = new SESv2Client();
 export const handler = async (event) => {
   try {
     const userContext = getUserContext(event);
-    const { tenantId, userId } = userContext;
+    const { tenantId } = userContext;
 
     if (!tenantId) {
-      return formatAuthError('Tenant access required');
+      return formatAuthError('A brand is required before creating a sender');
     }
 
     // Parse request body

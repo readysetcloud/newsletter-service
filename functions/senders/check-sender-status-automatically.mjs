@@ -8,10 +8,6 @@ const ddb = new DynamoDBClient();
 const ses = new SESv2Client();
 const scheduler = new SchedulerClient();
 
-/**
- * Automatically check sender verification status
- * Triggered by EventBridge events for individual senders
- */
 export const handler = async (event) => {
   console.log('Sender status check triggered:', { event });
 
@@ -23,7 +19,7 @@ export const handler = async (event) => {
       console.error('Missing required fields in event:', { tenantId, senderId });
       return {
         statusCode: 400,
-        body: JSON.stringify({ error: 'Missing tenantId or senderId' })
+        body: JSON.stringify({ error: 'Missing tenant Id or sender Id' })
       };
     }
 

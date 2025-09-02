@@ -14,13 +14,13 @@ export const handler = async (event) => {
     const { tenantId } = userContext;
 
     if (!tenantId) {
-      return formatAuthError('Tenant access required');
+      return formatAuthError('A brand is required before deleting a sender');
     }
 
     // Get senderId from path parameters
     const senderId = event.pathParameters?.senderId;
     if (!senderId) {
-      return formatResponse(400, 'Sender ID is required');
+      return formatResponse(400, 'Sender Id is required');
     }
 
     // Check if sender exists and belongs to tenant

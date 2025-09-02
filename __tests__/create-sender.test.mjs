@@ -145,7 +145,7 @@ describe('create-sender handler', () => {
 
     const result = await handler(event);
 
-    expect(mockFormatAuthError).toHaveBeenCalledWith('Tenant access required');
+    expect(mockFormatAuthError).toHaveBeenCalledWith('A brand is required before creating a sender');
     expect(result.statusCode).toBe(401);
     expect(ddbInstance.send).not.toHaveBeenCalled();
     expect(sesInstance.send).not.toHaveBeenCalled();

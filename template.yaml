@@ -52,8 +52,7 @@ Metadata:
       - index.mjs
     Banner:
       - js=import { createRequire } from 'module'; const require = createRequire(import.meta.url);
-    External:
-      - "@aws-sdk/*"
+    External: []
     Loader:
       - .hbs=text
 

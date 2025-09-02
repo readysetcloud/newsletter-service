@@ -112,7 +112,7 @@ describe('delete-sender handler', () => {
 
     const result = await handler(event);
 
-    expect(mockFormatAuthError).toHaveBeenCalledWith('Tenant access required');
+    expect(mockFormatAuthError).toHaveBeenCalledWith('A brand is required before deleting a sender');
     expect(result.statusCode).toBe(401);
     expect(ddbInstance.send).not.toHaveBeenCalled();
     expect(sesInstance.send).not.toHaveBeenCalled();
@@ -127,7 +127,7 @@ describe('delete-sender handler', () => {
 
     const result = await handler(event);
 
-    expect(mockFormatResponse).toHaveBeenCalledWith(400, 'Sender ID is required');
+    expect(mockFormatResponse).toHaveBeenCalledWith(400, 'Sender Id is required');
     expect(ddbInstance.send).not.toHaveBeenCalled();
     expect(sesInstance.send).not.toHaveBeenCalled();
   });
@@ -423,7 +423,7 @@ describe('delete-sender handler', () => {
 
     const result = await handler(event);
 
-    expect(mockFormatResponse).toHaveBeenCalledWith(400, 'Sender ID is required');
+    expect(mockFormatResponse).toHaveBeenCalledWith(400, 'Sender Id is required');
   });
 
   test('continues with reassignment even if it fails', async () => {

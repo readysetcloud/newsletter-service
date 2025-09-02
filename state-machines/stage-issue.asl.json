@@ -362,9 +362,13 @@
                           "Input": {
                             "Entries": [
                               {
-                                "tenantId": "$$.Execution.Input.tenant",
-                                "currentIssue.$": "States.Format('{}#{}', $$.Execution.Input.tenant, $$.Execution.Input.issueId)",
-                                "previousIssue.$": "States.Format('{}#{}', $$.Execution.Input.tenant, States.MathAdd($$.Execution.Input.issueId, -1))"
+                                "Source": "newsletter-service",
+                                "DetailType": "Clean Bounced Subscribers",
+                                "Detail": {
+                                  "tenantId.$": "$$.Execution.Input.tenant",
+                                  "currentIssue.$": "States.Format('{}#{}', $$.Execution.Input.tenant, $$.Execution.Input.issueId)",
+                                  "previousIssue.$": "States.Format('{}#{}', $$.Execution.Input.tenant, States.MathAdd($$.Execution.Input.issueId, -1))"
+                                }
                               }
                             ]
                           }

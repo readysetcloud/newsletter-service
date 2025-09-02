@@ -35,6 +35,7 @@ async function loadIsolated() {
     jest.unstable_mockModule('@aws-sdk/client-sesv2', () => ({
       SESv2Client: jest.fn(() => sesInstance),
       DeleteEmailIdentityCommand: jest.fn((params) => ({ __type: 'DeleteEmailIdentity', ...params })),
+      DeleteTenantResourceAssociationCommand: jest.fn((params) => ({ __type: 'DeleteTenantResourceAssociation', ...params }))
     }));
 
     // util-dynamodb mocks
@@ -166,7 +167,7 @@ describe('delete-sender handler', () => {
       .mockResolvedValueOnce({ Item: existingSender }) // GetItem
       .mockResolvedValueOnce({}); // DeleteItem
 
-    // Mock SES cleanup
+    // Mock SES cleanup - should call both DeleteTenantResourceAssociation and DeleteEmailIdentity
     sesInstance.send.mockResolvedValue({});
 
     const event = {
@@ -176,12 +177,15 @@ describe('delete-sender handler', () => {
     const result = await handler(event);
 
     expect(ddbInstance.send).toHaveBeenCalledTimes(2);
-    expect(sesInstance.send).toHaveBeenCalledTimes(1);
+    expect(sesInstance.send).toHaveBeenCalledTimes(2); // Both tenant association and identity deletion
 
-    // Verify SES cleanup call
-    const sesCall = sesInstance.send.mock.calls[0][0];
-    expect(sesCall.__type).toBe('DeleteEmailIdentity');
-    expect(sesCall.EmailIdentity).toBe('test@example.com');
+    // Verify SES cleanup calls
+    const sesCall1 = sesInstance.send.mock.calls[0][0];
+    expect(sesCall1.__type).toBe('DeleteTenantResourceAssociation');
+
+    const sesCall2 = sesInstance.send.mock.calls[1][0];
+    expect(sesCall2.__type).toBe('DeleteEmailIdentity');
+    expect(sesCall2.EmailIdentity).toBe('test@example.com');
 
     // Verify DeleteItem call
     const deleteCall = ddbInstance.send.mock.calls[1][0];
@@ -215,9 +219,15 @@ describe('delete-sender handler', () => {
 
     const result = await handler(event);
 
+    expect(sesInstance.send).toHaveBeenCalledTimes(2);
+
     // Verify SES cleanup uses domain
-    const sesCall = sesInstance.send.mock.calls[0][0];
-    expect(sesCall.EmailIdentity).toBe('example.com');
+    const sesCall1 = sesInstance.send.mock.calls[0][0];
+    expect(sesCall1.__type).toBe('DeleteTenantResourceAssociation');
+
+    const sesCall2 = sesInstance.send.mock.calls[1][0];
+    expect(sesCall2.__type).toBe('DeleteEmailIdentity');
+    expect(sesCall2.EmailIdentity).toBe('example.com');
 
     expect(mockFormatEmptyResponse).toHaveBeenCalled();
   });
@@ -337,7 +347,7 @@ describe('delete-sender handler', () => {
       .mockResolvedValueOnce({ Item: existingSender })
       .mockResolvedValueOnce({});
 
-    // SES cleanup fails
+    // SES cleanup fails on first call (DeleteTenantResourceAssociation)
     sesInstance.send.mockRejectedValue(new Error('SES error'));
 
     const event = {
@@ -348,6 +358,7 @@ describe('delete-sender handler', () => {
 
     // Should still complete deletion despite SES error
     expect(ddbInstance.send).toHaveBeenCalledTimes(2);
+    expect(sesInstance.send).toHaveBeenCalledTimes(1); // Only first SES call attempted
     expect(mockFormatEmptyResponse).toHaveBeenCalled();
   });
 

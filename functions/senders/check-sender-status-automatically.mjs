@@ -1,5 +1,5 @@
 import { DynamoDBClient, GetItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
-import { SESv2Client, GetEmailIdentityCommand, DeleteEmailIdentityCommand } from "@aws-sdk/client-sesv2";
+import { SESv2Client, GetEmailIdentityCommand, DeleteEmailIdentityCommand, DeleteTenantResourceAssociationCommand } from "@aws-sdk/client-sesv2";
 import { SchedulerClient, CreateScheduleCommand } from "@aws-sdk/client-scheduler";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { KEY_PATTERNS } from './types.mjs';
@@ -43,7 +43,7 @@ export const handler = async (event) => {
       if (sender) {
         // Clean up SES identity before marking as timed out
         try {
-          await cleanupExpiredSESIdentity(sender);
+          await cleanupExpiredSESIdentity(sender, tenantId);
           console.log('Successfully cleaned up expired SES identity:', {
             senderId,
             identity: sender.verificationType === 'domain' ? sender.domain : sender.email,
@@ -371,9 +371,10 @@ const updateSenderStatus = async (tenantId, senderId, newStatus, failureReason =
 /**
  * Clean up expired SES identity with proper tenant cleanup sequence
  * @param {Object} sender - Sender record
+ * @param {string} tenantId - Tenant identifier
  * @returns {Promise<void>}
  */
-const cleanupExpiredSESIdentity = async (sender) => {
+const cleanupExpiredSESIdentity = async (sender, tenantId) => {
   try {
     const identity = sender.verificationType === 'domain' ? sender.domain : sender.email;
 
@@ -388,8 +389,10 @@ const cleanupExpiredSESIdentity = async (sender) => {
       verificationType: sender.verificationType
     });
 
-    // Note: SES tenant association is not available in the current AWS SDK
-    // Identity isolation is handled at the application level through tenantId
+    await ses.send(new DeleteTenantResourceAssociationCommand({
+      TenantName: tenantId,
+      ResourceArn: `${process.env.RESOURCE_ARN_PREFIX}${identity}`
+    }));
 
     // Delete the SES identity
     await ses.send(new DeleteEmailIdentityCommand({

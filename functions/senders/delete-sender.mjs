@@ -1,5 +1,5 @@
 import { DynamoDBClient, GetItemCommand, DeleteItemCommand, QueryCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
-import { SESv2Client, DeleteEmailIdentityCommand } from "@aws-sdk/client-sesv2";
+import { SESv2Client, DeleteEmailIdentityCommand, DeleteTenantResourceAssociationCommand } from "@aws-sdk/client-sesv2";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { formatResponse, formatEmptyResponse } from '../utils/helpers.mjs';
 import { getUserContext, formatAuthError } from '../auth/get-user-context.mjs';
@@ -31,7 +31,7 @@ export const handler = async (event) => {
 
     // Clean up SES identity
     try {
-      await cleanupSESIdentity(existingSender);
+      await cleanupSESIdentity(existingSender, tenantId);
     } catch (sesError) {
       console.error('SES cleanup failed (continuing with deletion):', sesError);
       // Continue with deletion even if SES cleanup fails
@@ -96,7 +96,7 @@ const getSenderById = async (tenantId, senderId) => {
  * Clean up SES identity (email or domain) with proper tenant cleanup sequence
  * @param {Object} sender - Sender record
  */
-const cleanupSESIdentity = async (sender) => {
+const cleanupSESIdentity = async (sender, tenantId) => {
   try {
     const identity = sender.verificationType === 'domain' ? sender.domain : sender.email;
 
@@ -104,8 +104,10 @@ const cleanupSESIdentity = async (sender) => {
       return;
     }
 
-    // Note: SES tenant association is not available in the current AWS SDK
-    // Identity isolation is handled at the application level through tenantId
+    await ses.send(new DeleteTenantResourceAssociationCommand({
+      TenantName: tenantId,
+      ResourceArn: `${process.env.RESOURCE_ARN_PREFIX}${identity}`
+    }));
 
     // Delete the SES identity
     await ses.send(new DeleteEmailIdentityCommand({

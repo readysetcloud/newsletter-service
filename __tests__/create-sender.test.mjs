@@ -37,6 +37,7 @@ async function loadIsolated() {
       CreateEmailIdentityCommand: jest.fn((params) => ({ __type: 'CreateEmailIdentity', ...params })),
       SendCustomVerificationEmailCommand: jest.fn((params) => ({ __type: 'SendCustomVerificationEmail', ...params })),
       GetEmailIdentityCommand: jest.fn((params) => ({ __type: 'GetEmailIdentity', ...params })),
+      CreateTenantResourceAssociationCommand: jest.fn((params) => ({ __type: 'CreateTenantResourceAssociation', ...params}))
     }));
 
     // Scheduler SDK mocks
@@ -254,7 +255,7 @@ describe('create-sender handler', () => {
       .mockResolvedValueOnce({ Items: [] }) // Query for existing senders
       .mockResolvedValueOnce({}); // PutItem success
 
-    // SES success for custom verification email
+    // SES success for custom verification email and tenant association
     sesInstance.send.mockResolvedValue({
       MessageId: 'test-message-id-123'
     });
@@ -270,12 +271,15 @@ describe('create-sender handler', () => {
 
     const result = await handler(event);
 
-    // Verify SES call for custom verification email
-    expect(sesInstance.send).toHaveBeenCalledTimes(1);
-    const sesCall = sesInstance.send.mock.calls[0][0];
-    expect(sesCall.__type).toBe('SendCustomVerificationEmail');
-    expect(sesCall.EmailAddress).toBe('test@example.com');
-    expect(sesCall.TemplateName).toBe('test-verification-template');
+    // Verify SES calls for custom verification email and tenant association
+    expect(sesInstance.send).toHaveBeenCalledTimes(2);
+    const sesCall1 = sesInstance.send.mock.calls[0][0];
+    expect(sesCall1.__type).toBe('SendCustomVerificationEmail');
+    expect(sesCall1.EmailAddress).toBe('test@example.com');
+    expect(sesCall1.TemplateName).toBe('test-verification-template');
+
+    const sesCall2 = sesInstance.send.mock.calls[1][0];
+    expect(sesCall2.__type).toBe('CreateTenantResourceAssociation');
 
     // Verify DynamoDB PutItem call
     expect(ddbInstance.send).toHaveBeenCalledTimes(2);
@@ -323,11 +327,14 @@ describe('create-sender handler', () => {
 
     const result = await handler(event);
 
-    // Verify SES call uses domain
-    expect(sesInstance.send).toHaveBeenCalledTimes(1);
-    const sesCall = sesInstance.send.mock.calls[0][0];
-    expect(sesCall.__type).toBe('CreateEmailIdentity');
-    expect(sesCall.EmailIdentity).toBe('example.com');
+    // Verify SES calls for domain verification and tenant association
+    expect(sesInstance.send).toHaveBeenCalledTimes(2);
+    const sesCall1 = sesInstance.send.mock.calls[0][0];
+    expect(sesCall1.__type).toBe('CreateEmailIdentity');
+    expect(sesCall1.EmailIdentity).toBe('example.com');
+
+    const sesCall2 = sesInstance.send.mock.calls[1][0];
+    expect(sesCall2.__type).toBe('CreateTenantResourceAssociation');
 
     // Verify response
     expect(mockFormatResponse).toHaveBeenCalledWith(201, {
@@ -479,11 +486,14 @@ describe('create-sender handler', () => {
     const result = await handler(event);
 
     // Verify SendCustomVerificationEmail was called with correct parameters
-    expect(sesInstance.send).toHaveBeenCalledTimes(1);
+    expect(sesInstance.send).toHaveBeenCalledTimes(2);
     const sesCall = sesInstance.send.mock.calls[0][0];
     expect(sesCall.__type).toBe('SendCustomVerificationEmail');
     expect(sesCall.EmailAddress).toBe('test@example.com');
     expect(sesCall.TemplateName).toBe('test-verification-template');
+
+    const tenantCall = sesInstance.send.mock.calls[1][0];
+    expect(tenantCall.__type).toBe('CreateTenantResourceAssociation');
 
     expect(mockFormatResponse).toHaveBeenCalledWith(201, expect.objectContaining({
       email: 'test@example.com',
@@ -580,11 +590,14 @@ describe('create-sender handler', () => {
     const result = await handler(event);
 
     // Should call SES CreateEmailIdentity for standard verification
-    expect(sesInstance.send).toHaveBeenCalledTimes(1);
+    expect(sesInstance.send).toHaveBeenCalledTimes(2);
     const sesCall = sesInstance.send.mock.calls[0][0];
     expect(sesCall.__type).toBe('CreateEmailIdentity');
     expect(sesCall.EmailIdentity).toBe('test@example.com');
     expect(sesCall.ConfigurationSetName).toBe('test-config-set');
+
+    const tenantCall = sesInstance.send.mock.calls[1][0];
+    expect(tenantCall.__type).toBe('CreateTenantResourceAssociation');
 
     // Should still create the sender record
     expect(ddbInstance.send).toHaveBeenCalledTimes(2);
@@ -629,10 +642,13 @@ describe('create-sender handler', () => {
     const result = await handler(event);
 
     // Should call SES CreateEmailIdentity for standard verification
-    expect(sesInstance.send).toHaveBeenCalledTimes(1);
+    expect(sesInstance.send).toHaveBeenCalledTimes(2);
     const sesCall = sesInstance.send.mock.calls[0][0];
     expect(sesCall.__type).toBe('CreateEmailIdentity');
     expect(sesCall.EmailIdentity).toBe('test@example.com');
+
+    const tenantCall = sesInstance.send.mock.calls[1][0];
+    expect(tenantCall.__type).toBe('CreateTenantResourceAssociation');
 
     // Should return success with appropriate message
     expect(mockFormatResponse).toHaveBeenCalledWith(201, expect.objectContaining({
@@ -668,9 +684,12 @@ describe('create-sender handler', () => {
     const result = await handler(event);
 
     // Should call SES for custom verification email
-    expect(sesInstance.send).toHaveBeenCalledTimes(1);
+    expect(sesInstance.send).toHaveBeenCalledTimes(2);
     const sesCall = sesInstance.send.mock.calls[0][0];
     expect(sesCall.__type).toBe('SendCustomVerificationEmail');
+
+    const tenantCall = sesInstance.send.mock.calls[1][0];
+    expect(tenantCall.__type).toBe('CreateTenantResourceAssociation');
 
     // Should return success with production message
     expect(mockFormatResponse).toHaveBeenCalledWith(201, expect.objectContaining({
@@ -703,9 +722,12 @@ describe('create-sender handler', () => {
     const result = await handler(event);
 
     // Should call SES for custom verification email (production default)
-    expect(sesInstance.send).toHaveBeenCalledTimes(1);
+    expect(sesInstance.send).toHaveBeenCalledTimes(2);
     const sesCall = sesInstance.send.mock.calls[0][0];
     expect(sesCall.__type).toBe('SendCustomVerificationEmail');
+
+    const tenantCall = sesInstance.send.mock.calls[1][0];
+    expect(tenantCall.__type).toBe('CreateTenantResourceAssociation');
 
     // Should return success with production message
     expect(mockFormatResponse).toHaveBeenCalledWith(201, expect.objectContaining({
@@ -741,9 +763,12 @@ describe('create-sender handler', () => {
     const result = await handler(event);
 
     // Should still call SES for domain verification regardless of environment
-    expect(sesInstance.send).toHaveBeenCalledTimes(1);
+    expect(sesInstance.send).toHaveBeenCalledTimes(2);
     const sesCall = sesInstance.send.mock.calls[0][0];
     expect(sesCall.__type).toBe('CreateEmailIdentity');
+
+    const tenantCall = sesInstance.send.mock.calls[1][0];
+    expect(tenantCall.__type).toBe('CreateTenantResourceAssociation');
 
     // Should return domain verification message
     expect(mockFormatResponse).toHaveBeenCalledWith(201, expect.objectContaining({

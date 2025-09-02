@@ -18,9 +18,11 @@ jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
 jest.unstable_mockModule('@aws-sdk/client-sesv2', () => ({
   SESv2Client: jest.fn(() => ({ send: mockSesSend })),
   CreateEmailIdentityCommand: jest.fn((params) => ({ __type: 'CreateEmailIdentity', ...params })),
+  CreateTenantResourceAssociationCommand: jest.fn((params) => ({ __type: 'CreateTenantResourceAssocation', ...params })),
   SendCustomVerificationEmailCommand: jest.fn((params) => ({ __type: 'SendCustomVerificationEmail', ...params })),
   GetEmailIdentityCommand: jest.fn((params) => ({ __type: 'GetEmailIdentity', ...params })),
-  DeleteEmailIdentityCommand: jest.fn((params) => ({ __type: 'DeleteEmailIdentity', ...params }))
+  DeleteEmailIdentityCommand: jest.fn((params) => ({ __type: 'DeleteEmailIdentity', ...params })),
+  DeleteTenantResourceAssociationCommand: jest.fn((params) => ({ __type: 'DeleteTenantResourceAssocation', ...params }))
 }));
 
 jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({

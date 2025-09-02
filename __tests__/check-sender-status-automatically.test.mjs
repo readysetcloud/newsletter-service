@@ -10,6 +10,7 @@ let GetItemCommand;
 let UpdateItemCommand;
 let GetEmailIdentityCommand;
 let DeleteEmailIdentityCommand;
+
 let CreateScheduleCommand;
 let marshall;
 let unmarshall;
@@ -37,6 +38,7 @@ async function loadIsolated() {
       SESv2Client: jest.fn(() => sesInstance),
       GetEmailIdentityCommand: jest.fn((params) => ({ __type: 'GetEmailIdentity', ...params })),
       DeleteEmailIdentityCommand: jest.fn((params) => ({ __type: 'DeleteEmailIdentity', ...params })),
+      DeleteTenantResourceAssociationCommand: jest.fn((params) => ({ __type: 'DeleteTenantResourceAssociation', ...params }))
     }));
 
     // Scheduler SDK mocks
@@ -69,6 +71,7 @@ async function loadIsolated() {
     UpdateItemCommand,
     GetEmailIdentityCommand,
     DeleteEmailIdentityCommand,
+
     CreateScheduleCommand,
     marshall,
     unmarshall
@@ -80,6 +83,8 @@ describe('check-sender-status-automatically handler', () => {
     jest.resetModules();
     process.env.TABLE_NAME = 'test-table';
     process.env.SCHEDULER_ROLE_ARN = 'arn:aws:iam::123456789012:role/test-role';
+    process.env.AWS_ACCOUNT_ID = '123456789012';
+    process.env.AWS_REGION = 'us-east-1';
     await loadIsolated();
   });
 
@@ -117,6 +122,9 @@ describe('check-sender-status-automatically handler', () => {
     });
 
     sesInstance.send.mockImplementation((command) => {
+      if (command.__type === 'DeleteTenantResourceAssociation') {
+        return Promise.resolve({});
+      }
       if (command.__type === 'DeleteEmailIdentity') {
         return Promise.resolve({});
       }
@@ -126,12 +134,15 @@ describe('check-sender-status-automatically handler', () => {
 
     expect(result.statusCode).toBe(200);
     expect(ddbInstance.send).toHaveBeenCalledTimes(2); // GetItem + UpdateItem
-    expect(sesInstance.send).toHaveBeenCalledTimes(1); // DeleteEmailIdentity only
+    expect(sesInstance.send).toHaveBeenCalledTimes(2); // Both DeleteTenantResourceAssociation and DeleteEmailIdentity
 
     const responseBody = JSON.parse(result.body);
     expect(responseBody.action).toBe('timed_out');
 
-    // Verify SES cleanup call
+    // Verify SES cleanup calls
+    const tenantAssociationCall = sesInstance.send.mock.calls.find(call => call[0].__type === 'DeleteTenantResourceAssociation')[0];
+    expect(tenantAssociationCall).toBeDefined();
+
     const identityDeletionCall = sesInstance.send.mock.calls.find(call => call[0].__type === 'DeleteEmailIdentity')[0];
     expect(identityDeletionCall.EmailIdentity).toBe('test@example.com');
 
@@ -174,6 +185,9 @@ describe('check-sender-status-automatically handler', () => {
     });
 
     sesInstance.send.mockImplementation((command) => {
+      if (command.__type === 'DeleteTenantResourceAssociation') {
+        return Promise.resolve({});
+      }
       if (command.__type === 'DeleteEmailIdentity') {
         return Promise.resolve({});
       }
@@ -182,9 +196,12 @@ describe('check-sender-status-automatically handler', () => {
     const result = await handler(event);
 
     expect(result.statusCode).toBe(200);
-    expect(sesInstance.send).toHaveBeenCalledTimes(1);
+    expect(sesInstance.send).toHaveBeenCalledTimes(2); // Both DeleteTenantResourceAssociation and DeleteEmailIdentity
 
     // Verify domain cleanup
+    const tenantAssociationCall = sesInstance.send.mock.calls.find(call => call[0].__type === 'DeleteTenantResourceAssociation')[0];
+    expect(tenantAssociationCall).toBeDefined();
+
     const identityDeletionCall = sesInstance.send.mock.calls.find(call => call[0].__type === 'DeleteEmailIdentity')[0];
     expect(identityDeletionCall.EmailIdentity).toBe('example.com');
 
@@ -226,6 +243,9 @@ describe('check-sender-status-automatically handler', () => {
     });
 
     sesInstance.send.mockImplementation((command) => {
+      if (command.__type === 'DeleteTenantResourceAssociation') {
+        return Promise.resolve({});
+      }
       if (command.__type === 'DeleteEmailIdentity') {
         return Promise.reject(new Error('SES cleanup failed'));
       }
@@ -235,7 +255,7 @@ describe('check-sender-status-automatically handler', () => {
 
     expect(result.statusCode).toBe(200);
     expect(ddbInstance.send).toHaveBeenCalledTimes(2); // GetItem + UpdateItem (should still update status)
-    expect(sesInstance.send).toHaveBeenCalledTimes(1); // DeleteEmailIdentity attempted
+    expect(sesInstance.send).toHaveBeenCalledTimes(2); // Both DeleteTenantResourceAssociation and DeleteEmailIdentity attempted
 
     const responseBody = JSON.parse(result.body);
     expect(responseBody.action).toBe('timed_out');
@@ -279,6 +299,9 @@ describe('check-sender-status-automatically handler', () => {
     });
 
     sesInstance.send.mockImplementation((command) => {
+      if (command.__type === 'DeleteTenantResourceAssociation') {
+        return Promise.resolve({});
+      }
       if (command.__type === 'DeleteEmailIdentity') {
         return Promise.reject(new Error('SES service error'));
       }
@@ -287,9 +310,12 @@ describe('check-sender-status-automatically handler', () => {
     const result = await handler(event);
 
     expect(result.statusCode).toBe(200);
-    expect(sesInstance.send).toHaveBeenCalledTimes(1); // DeleteEmailIdentity attempted
+    expect(sesInstance.send).toHaveBeenCalledTimes(2); // Both calls attempted
 
-    // Verify identity deletion was called
+    // Verify both SES calls were made
+    const tenantAssociationCall = sesInstance.send.mock.calls.find(call => call[0].__type === 'DeleteTenantResourceAssociation')[0];
+    expect(tenantAssociationCall).toBeDefined();
+
     const identityDeletionCall = sesInstance.send.mock.calls.find(call => call[0].__type === 'DeleteEmailIdentity')[0];
     expect(identityDeletionCall.EmailIdentity).toBe('test@example.com');
 

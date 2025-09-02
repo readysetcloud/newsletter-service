@@ -2339,10 +2339,12 @@ Resources:
             - Effect: Allow
               Action:
                 - dynamodb:PutItem
-                - dynamodb:Query
-                - dynamodb:GetItem
               Resource:
                 - !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource:
                 - !Sub "${NewsletterTable.Arn}/index/GSI1"
             - Effect: Allow
               Action:
@@ -2354,15 +2356,10 @@ Resources:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
           SES_CONFIGURATION_SET: !Ref ConfigurationSet
-          RESOURCE_ARN_PREFIX: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/"
           SYSTEM_FROM_EMAIL: !If
             - HasVerifiedFromEmail
             - !Ref VerifiedFromEmail
             - !Sub "noreply@${DomainName}"
-          FRONTEND_URL: !If
-            - HasDomainName
-            - !Sub "https://${DomainName}"
-            - "http://localhost:3000"
           SES_VERIFY_TEMPLATE_NAME: !Sub "${AWS::StackName}-sender-verification"
           ENVIRONMENT: !Ref Environment
           RESOURCE_ARN_PREFIX: !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/
@@ -2427,9 +2424,12 @@ Resources:
               Action:
                 - dynamodb:UpdateItem
                 - dynamodb:GetItem
-                - dynamodb:Query
               Resource:
                 - !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource:
                 - !Sub "${NewsletterTable.Arn}/index/GSI1"
       Environment:
         Variables:
@@ -2587,6 +2587,8 @@ Resources:
             - Effect: Allow
               Action:
                 - ses:GetEmailIdentity
+                - ses:DeleteEmailIdentity
+                - ses:DeleteTenantResourceAssociation
               Resource: "*"
             - Effect: Allow
               Action:
@@ -2596,6 +2598,7 @@ Resources:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
           SCHEDULER_ROLE_ARN: !GetAtt SchedulerExecutionRole.Arn
+          RESOURCE_ARN_PREFIX: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/"
       Events:
         CheckSenderStatusEvent:
           Type: EventBridgeRule

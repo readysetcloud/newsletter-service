@@ -1,5 +1,5 @@
 import { DynamoDBClient, PutItemCommand, QueryCommand } from "@aws-sdk/client-dynamodb";
-import { SESv2Client, CreateEmailIdentityCommand, SendCustomVerificationEmailCommand } from "@aws-sdk/client-sesv2";
+import { SESv2Client, CreateEmailIdentityCommand, SendCustomVerificationEmailCommand, CreateTenantResourceAssociationCommand } from "@aws-sdk/client-sesv2";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { randomUUID } from 'crypto';
 import { formatResponse } from '../utils/helpers.mjs';
@@ -129,6 +129,11 @@ export const handler = async (event) => {
             email,
             messageId: result.MessageId
           });
+
+          await ses.send(new CreateTenantResourceAssociationCommand({
+            TenantName: tenantId,
+            ResourceArn: `${process.env.RESOURCE_ARN_PREFIX}${email}`
+          }));
 
         } catch (emailError) {
           console.error('Failed to send verification email:', emailError);
@@ -275,8 +280,10 @@ const initiateEmailVerification = async (email, verificationType, tenantId) => {
 
   const createResponse = await ses.send(createCommand);
 
-  // Note: SES tenant association is not available in the current AWS SDK
-  // Identity isolation is handled at the application level through tenantId
+  await ses.send(new CreateTenantResourceAssociationCommand({
+    TenantName: tenantId,
+    ResourceArn: `${process.env.RESOURCE_ARN_PREFIX}${identity}`
+  }));
   console.log('SES identity created:', { identity, tenantId });
 
   return createResponse;

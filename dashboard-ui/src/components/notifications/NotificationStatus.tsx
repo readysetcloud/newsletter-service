@@ -27,7 +27,7 @@ export function NotificationStatus({
 }: NotificationStatusProps) {
   const { isSubscribed, error, isLoading } = useNotifications();
   const { user, isAuthenticated } = useAuth();
-  const [isRetrying, setIsRetryg] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
   const [lastRetryTime, setLastRetryTime] = useState<Date | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);

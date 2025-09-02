@@ -35,7 +35,10 @@ Parameters:
   MomentoCacheName:
     Type: String
     Description: Momento cache name for real-time notifications
-
+  VerifiedFromEmail:
+    Type: String
+    Default: ""
+    Description: Verified SES email address for custom verification emails (must be pre-verified in SES)
 
 Metadata:
   esbuild-properties: &esbuild-properties
@@ -49,8 +52,7 @@ Metadata:
       - index.mjs
     Banner:
       - js=import { createRequire } from 'module'; const require = createRequire(import.meta.url);
-    External:
-      - "@aws-sdk/*"
+    External: []
     Loader:
       - .hbs=text
 
@@ -65,6 +67,7 @@ Conditions:
     - !Condition HasDomainName
     - !Condition HasHostedZoneId
   HasRedirectCustomDomain: !Not [!Equals [!Ref RedirectCustomDomain, ""]]
+  HasVerifiedFromEmail: !Not [!Equals [!Ref VerifiedFromEmail, ""]]
 
 Globals:
   Function:
@@ -1734,13 +1737,11 @@ Resources:
         DynamodbGetItem: !Sub arn:${AWS::Partition}:states:::dynamodb:getItem
         TableName: !Ref NewsletterTable
         LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
-        SendApiRequest: "{{resolve:ssm:/readysetcloud/send-api-request}}"
         GetTopLinks: !GetAtt GetTopLinkFunction.Arn
         BuildReportData: !GetAtt BuildReportDataFunction.Arn
         GetInsights: !GetAtt GetInsightsFunction.Arn
         DynamodbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
-        AdminEmail: "{{resolve:ssm:/readysetcloud/admin-email}}"
 
       Policies:
         - Version: 2012-10-17
@@ -1757,7 +1758,6 @@ Resources:
             - Effect: Allow
               Action: lambda:InvokeFunction
               Resource:
-                - "{{resolve:ssm:/readysetcloud/send-api-request}}"
                 - !GetAtt GetTopLinkFunction.Arn
                 - !GetAtt BuildReportDataFunction.Arn
                 - !GetAtt GetInsightsFunction.Arn
@@ -2014,7 +2014,7 @@ Resources:
           - PathPattern: /r
             TargetOriginId: dummy.origin
             ViewerProtocolPolicy: redirect-to-https
-            AllowedMethods: [ GET, HEAD, OPTIONS ]
+            AllowedMethods: [GET, HEAD, OPTIONS]
             Compress: false
             CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
             FunctionAssociations:
@@ -2023,7 +2023,7 @@ Resources:
           - PathPattern: /r/*
             TargetOriginId: dummy.origin
             ViewerProtocolPolicy: redirect-to-https
-            AllowedMethods: [ GET, HEAD, OPTIONS ]
+            AllowedMethods: [GET, HEAD, OPTIONS]
             Compress: false
             CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
             FunctionAssociations:
@@ -2045,7 +2045,7 @@ Resources:
           - CloudFrontDefaultCertificate: true
         Aliases: !If
           - HasRedirectCustomDomain
-          - [ !Ref RedirectCustomDomain ]
+          - [!Ref RedirectCustomDomain]
           - !Ref "AWS::NoValue"
 
   RedirectCertificate:
@@ -2143,7 +2143,7 @@ Resources:
     Properties:
       LogGroupName: !Ref GenericRedirectLogGroup
       DestinationArn: !GetAtt ProcessLinkClickFunction.Arn
-      FilterPattern: '{ $.cid = * }'
+      FilterPattern: "{ $.cid = * }"
 
   ProcessClicksPermission:
     Type: AWS::Lambda::Permission
@@ -2251,6 +2251,360 @@ Resources:
     Properties:
       Name: newsletter-events
       Description: Custom EventBridge bus for newsletter notification events
+
+  # Sender Email Management Functions
+  GetSendersFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - senders/get-senders.mjs
+    Properties:
+      Handler: senders/get-senders.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          SES_CONFIGURATION_SET: !Ref ConfigurationSet
+      Events:
+        GetSenders:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /senders
+            Method: GET
+
+  GetSenderStatusFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - senders/get-sender-status.mjs
+    Properties:
+      Handler: senders/get-sender-status.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - ses:GetEmailIdentity
+              Resource: "*"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          SES_CONFIGURATION_SET: !Ref ConfigurationSet
+      Events:
+        GetSenderStatus:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /senders/{senderId}/status
+            Method: GET
+
+  CreateSenderFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - senders/create-sender.mjs
+    Properties:
+      Handler: senders/create-sender.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource:
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
+            - Effect: Allow
+              Action:
+                - ses:CreateEmailIdentity
+                - ses:SendCustomVerificationEmail
+                - ses:CreateTenantResourceAssociation
+              Resource: "*"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          SES_CONFIGURATION_SET: !Ref ConfigurationSet
+          SYSTEM_FROM_EMAIL: !If
+            - HasVerifiedFromEmail
+            - !Ref VerifiedFromEmail
+            - !Sub "noreply@${DomainName}"
+          SES_VERIFY_TEMPLATE_NAME: !Sub "${AWS::StackName}-sender-verification"
+          ENVIRONMENT: !Ref Environment
+          RESOURCE_ARN_PREFIX: !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/
+      Events:
+        CreateSender:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /senders
+            Method: POST
+
+  BootstrapVerificationTemplateFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - senders/bootstrap-verification-template.mjs
+    Properties:
+      Handler: senders/bootstrap-verification-template.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - ses:CreateCustomVerificationEmailTemplate
+                - ses:UpdateCustomVerificationEmailTemplate
+                - ses:GetCustomVerificationEmailTemplate
+              Resource: "*"
+      Environment:
+        Variables:
+          SES_VERIFY_TEMPLATE_NAME: !Sub "${AWS::StackName}-sender-verification"
+          SYSTEM_FROM_EMAIL: !If
+            - HasVerifiedFromEmail
+            - !Ref VerifiedFromEmail
+            - !Sub "noreply@${DomainName}"
+
+  BootstrapVerificationTemplate:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt BootstrapVerificationTemplateFunction.Arn
+      # Force update on every deployment by including a timestamp-like value
+      Version: !Sub "${AWS::StackName}-${Environment}"
+
+  UpdateSenderFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - senders/update-sender.mjs
+    Properties:
+      Handler: senders/update-sender.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:GetItem
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource:
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          SES_CONFIGURATION_SET: !Ref ConfigurationSet
+      Events:
+        UpdateSender:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /senders/{senderId}
+            Method: PUT
+
+  DeleteSenderFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - senders/delete-sender.mjs
+    Properties:
+      Handler: senders/delete-sender.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:DeleteItem
+                - dynamodb:GetItem
+                - dynamodb:Query
+                - dynamodb:UpdateItem
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
+            - Effect: Allow
+              Action:
+                - ses:DeleteEmailIdentity
+                - ses:DeleteTenantResourceAssociation
+              Resource: "*"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          SES_CONFIGURATION_SET: !Ref ConfigurationSet
+          RESOURCE_ARN_PREFIX: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/"
+      Events:
+        DeleteSender:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /senders/{senderId}
+            Method: DELETE
+
+  VerifyDomainFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - senders/verify-domain.mjs
+    Properties:
+      Handler: senders/verify-domain.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - ses:CreateEmailIdentity
+                - ses:GetEmailIdentity
+                - ses:DeleteEmailIdentity
+                - ses:CreateTenantResourceAssociation
+              Resource: "*"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          SES_CONFIGURATION_SET: !Ref ConfigurationSet
+          RESOURCE_ARN_PREFIX: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/"
+      Events:
+        VerifyDomain:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /senders/verify-domain
+            Method: POST
+
+  GetDomainVerificationFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - senders/get-domain-verification.mjs
+    Properties:
+      Handler: senders/get-domain-verification.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - ses:GetIdentityVerificationAttributes
+                - ses:GetIdentityDkimAttributes
+                - dynamodb:UpdateItem
+                - dynamodb:Query
+              Resource:
+                - "*"
+                - !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          SES_CONFIGURATION_SET: !Ref ConfigurationSet
+      Events:
+        GetDomainVerification:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /senders/domain-verification/{domain}
+            Method: GET
+
+
+  CheckSenderStatusAutomaticallyFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - senders/check-sender-status-automatically.mjs
+    Properties:
+      Handler: senders/check-sender-status-automatically.handler
+      Timeout: 60
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - ses:GetEmailIdentity
+                - ses:DeleteEmailIdentity
+                - ses:DeleteTenantResourceAssociation
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - scheduler:CreateSchedule
+              Resource: "*"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          SCHEDULER_ROLE_ARN: !GetAtt SchedulerExecutionRole.Arn
+          RESOURCE_ARN_PREFIX: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/"
+      Events:
+        CheckSenderStatusEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source: ["newsletter-service"]
+              detail-type: ["Check Sender Status"]
 
 Outputs:
   NewsletterApiUrl:

@@ -230,7 +230,7 @@ export function ErrorNotificationHandler() {
       lastErrorRef.current = error;
       handleConnectionError();
     }
-    
+
   }, [isAuthenticated, error, isSubscribed, handleConnectionError]);
 
   // Auto-retry connection after a delay
@@ -500,7 +500,7 @@ export function useErrorNotificationHandling() {
 
   // Retry connection
   const retryConnection = useCallback(async () => {
-    if (!user || isRetrying) return false;
+    if (!user || isRetrying) return { success: false, error: 'Already retrying or user not authenticated' };
 
     setIsRetrying(true);
     setRetryCount(prev => prev + 1);
@@ -514,12 +514,12 @@ export function useErrorNotificationHandling() {
       if (jwtToken) {
         await notificationService.refreshToken(jwtToken);
         setRetryCount(0);
-        return true;
+        return { success: true };
       }
-      return false;
+      return { success: false, error: 'No valid JWT token available' };
     } catch (error) {
       console.error('Connection retry failed:', error);
-      return false;
+      return { success: false, error: error instanceof Error ? error.message : 'Connection retry failed' };
     } finally {
       setIsRetrying(false);
     }

@@ -18,7 +18,8 @@ export const handler = async (state) => {
         subject: `[Preview] ${state.subject}`,
         html: template,
         to: { email: state.email },
-        sendAt: state.sendAtDate
+        sendAt: state.sendAtDate,
+        tenantId: state.tenantId
       });
     } else {
       const tenant = await getTenant(state.tenantId);
@@ -28,7 +29,8 @@ export const handler = async (state) => {
         html: template,
         to: { list: tenant.list },
         sendAt: state.sendAtDate,
-        referenceNumber: `${tenant.pk}_${state.data.metadata.number}`
+        referenceNumber: `${tenant.pk}_${state.data.metadata.number}`,
+        tenantId: state.tenantId
       });
 
       // Publish issue published event after successful email sending
@@ -86,6 +88,7 @@ const sendEmail = async (params) => {
         html: params.html,
         ...params.sendAt && { sendAt: params.sendAt },
         ...params.referenceNumber && { referenceNumber: params.referenceNumber },
+        ...params.tenantId && { tenantId: params.tenantId },
         replacements: {
           emailAddress: "__EMAIL__",
           emailAddressHash: "__EMAIL_HASH__"

@@ -7,6 +7,7 @@ import { Loading } from '@/components/ui/Loading';
 import MetricsCard from '@/components/MetricsCard';
 import IssuePerformanceChart from '@/components/IssuePerformanceChart';
 import { EngagementMetrics } from '@/components/EngagementMetrics';
+import { SenderStatusWidget } from '@/components/senders/SenderStatusWidget';
 import { NotificationDebug } from '@/components/notifications/NotificationDebug';
 import type { DashboardData } from '@/types/api';
 import {
@@ -185,9 +186,13 @@ export function DashboardPage() {
                   )}
                 </div>
 
-                {/* Performance Summary */}
-                <div className="bg-white rounded-lg shadow p-6">
-                  <h3 className="text-lg font-medium text-gray-900 mb-4">Performance Summary</h3>
+                <div className="space-y-6">
+                  {/* Sender Status Widget */}
+                  <SenderStatusWidget />
+
+                  {/* Performance Summary */}
+                  <div className="bg-white rounded-lg shadow p-6">
+                    <h3 className="text-lg font-medium text-gray-900 mb-4">Performance Summary</h3>
                   <div className="space-y-4">
                     <div>
                       <div className="flex justify-between text-sm">
@@ -246,6 +251,7 @@ export function DashboardPage() {
                         </div>
                       </div>
                     )}
+                    </div>
                   </div>
                 </div>
               </div>

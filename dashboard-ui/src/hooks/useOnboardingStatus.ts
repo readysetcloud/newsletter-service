@@ -4,8 +4,9 @@ export interface OnboardingStatus {
   isNewUser: boolean;
   needsBrandSetup: boolean;
   needsProfileSetup: boolean;
+  needsSenderSetup: boolean;
   isOnboardingComplete: boolean;
-  nextStep: 'brand' | 'profile' | 'complete' | null;
+  nextStep: 'brand' | 'profile' | 'sender' | 'complete' | null;
 }
 
 export function useOnboardingStatus(): OnboardingStatus {
@@ -16,6 +17,7 @@ export function useOnboardingStatus(): OnboardingStatus {
       isNewUser: false,
       needsBrandSetup: false,
       needsProfileSetup: false,
+      needsSenderSetup: false,
       isOnboardingComplete: false,
       nextStep: null,
     };
@@ -28,16 +30,24 @@ export function useOnboardingStatus(): OnboardingStatus {
   // For now, we'll consider profile setup needed if brand is complete but user hasn't completed profile
   // This could be expanded to check for specific profile fields
   const needsProfileSetup = !needsBrandSetup && !(user.firstName || user.lastName);
+
+  // Check if user needs sender setup (optional step)
+  // This is always optional, so we don't block onboarding completion on it
+  // But we can offer it as an optional third step
+  const needsSenderSetup = !needsBrandSetup && !needsProfileSetup;
+
   console.log(user);
 
   const isNewUser = needsBrandSetup || needsProfileSetup;
   const isOnboardingComplete = !isNewUser;
 
-  let nextStep: 'brand' | 'profile' | 'complete' | null = null;
+  let nextStep: 'brand' | 'profile' | 'sender' | 'complete' | null = null;
   if (needsBrandSetup) {
     nextStep = 'brand';
   } else if (needsProfileSetup) {
     nextStep = 'profile';
+  } else if (needsSenderSetup) {
+    nextStep = 'sender';
   } else {
     nextStep = 'complete';
   }
@@ -46,6 +56,7 @@ export function useOnboardingStatus(): OnboardingStatus {
     isNewUser,
     needsBrandSetup,
     needsProfileSetup,
+    needsSenderSetup,
     isOnboardingComplete,
     nextStep,
   };

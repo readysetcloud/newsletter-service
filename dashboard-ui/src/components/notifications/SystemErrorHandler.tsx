@@ -74,7 +74,7 @@ export function SystemErrorHandler() {
         }
         break;
 
-      case 'degraded_performance':
+      case 'degradede':
         enhancedTitle = `Performance Issue: ${title}`;
         enhancedMessage += ' Some features may be slower than usual.';
         if (estimatedResolution) {

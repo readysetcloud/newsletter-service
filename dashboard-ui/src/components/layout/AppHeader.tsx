@@ -3,24 +3,29 @@ import { Link, useLocation } from 'react-router-dom';
 import { LogoutButton } from '../auth/LogoutButton';
 import { NotificationDropdown } from '../notifications/NotificationDropdown';
 import { MobileNavigation } from './MobileNavigation';
+import { SenderStatusIndicator } from '../senders/SenderStatusIndicator';
 import { useAuth } from '../../contexts/AuthContext';
+import { useSenderStatus } from '../../hooks/useSenderStatus';
 import { ariaPatterns, responsiveA11y } from '../../utils/accessibility';
 import { preloadRoute } from '../../utils/lazyImports';
 import {
   ChartBarIcon,
   BuildingOfficeIcon,
   UserIcon,
-  KeyIcon
+  KeyIcon,
+  EnvelopeIcon
 } from '@heroicons/react/24/outline';
 
 export const AppHeader: React.FC = () => {
   const { user } = useAuth();
   const location = useLocation();
+  const senderStatus = useSenderStatus();
 
   const navigation = [
     { name: 'Dashboard', href: '/dashboard', icon: ChartBarIcon, preloadKey: 'dashboard' },
     { name: 'Brand', href: '/brand', icon: BuildingOfficeIcon, preloadKey: 'brand' },
     { name: 'Profile', href: '/profile', icon: UserIcon, preloadKey: 'profile' },
+    { name: 'Sender Emails', href: '/senders', icon: EnvelopeIcon, preloadKey: 'senders' },
     { name: 'API Keys', href: '/api-keys', icon: KeyIcon, preloadKey: 'api-keys' },
   ];
 
@@ -77,6 +82,17 @@ export const AppHeader: React.FC = () => {
                   >
                     <Icon className="w-4 h-4 mr-2" aria-hidden="true" />
                     <span className="hidden lg:inline">{item.name}</span>
+                    {item.name === 'Sender Emails' && !senderStatus.loading && (
+                      <SenderStatusIndicator
+                        verifiedCount={senderStatus.verifiedCount}
+                        pendingCount={senderStatus.pendingCount}
+                        failedCount={senderStatus.failedCount}
+                        timedOutCount={senderStatus.timedOutCount}
+                        totalCount={senderStatus.totalCount}
+                        size="sm"
+                        className="ml-1"
+                      />
+                    )}
                   </Link>
                 );
               })}

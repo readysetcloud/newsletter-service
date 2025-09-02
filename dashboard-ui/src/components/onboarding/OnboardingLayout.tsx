@@ -5,7 +5,7 @@ import { XCircleIcon } from '@heroicons/react/24/outline';
 
 interface OnboardingLayoutProps {
   children: React.ReactNode;
-  currentStep: 'brand' | 'profile';
+  currentStep: 'brand' | 'profile' | 'sender';
   title: string;
   description: string;
 }
@@ -16,7 +16,7 @@ export function OnboardingLayout({
   title,
   description
 }: OnboardingLayoutProps) {
-  const { needsBrandSetup, needsProfileSetup } = useOnboardingStatus();
+  const { needsBrandSetup, needsProfileSetup, needsSenderSetup } = useOnboardingStatus();
 
   const steps = [
     {
@@ -32,6 +32,14 @@ export function OnboardingLayout({
       description: 'Complete your profile',
       completed: !needsProfileSetup,
       current: currentStep === 'profile',
+    },
+    {
+      id: 'sender',
+      name: 'Sender Email',
+      description: 'Configure sender email (optional)',
+      completed: false, // This is always optional
+      current: currentStep === 'sender',
+      optional: true,
     },
   ];
 
@@ -51,7 +59,7 @@ export function OnboardingLayout({
                 </p>
               </div>
               <div className="text-sm text-gray-500">
-                Step {currentStep === 'brand' ? '1' : '2'} of 2
+                Step {currentStep === 'brand' ? '1' : currentStep === 'profile' ? '2' : '3'} of 3
               </div>
             </div>
           </div>
@@ -94,6 +102,9 @@ export function OnboardingLayout({
                         }`}
                       >
                         {step.name}
+                        {step.optional && (
+                          <span className="text-xs text-gray-400 ml-1">(optional)</span>
+                        )}
                       </p>
                       <p className="text-xs text-gray-500">{step.description}</p>
                     </div>

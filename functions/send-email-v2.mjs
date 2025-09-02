@@ -1,9 +1,13 @@
 import { SESv2Client, SendEmailCommand, ListContactsCommand } from "@aws-sdk/client-sesv2";
 import { SchedulerClient, CreateScheduleCommand } from "@aws-sdk/client-scheduler";
+import { DynamoDBClient, QueryCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { encrypt } from './utils/helpers.mjs';
+import { KEY_PATTERNS } from './senders/types.mjs';
 
 const ses = new SESv2Client();
 const scheduler = new SchedulerClient();
+const ddb = new DynamoDBClient();
 
 const tpsLimit = parseInt(process.env.SES_TPS_LIMIT || "14", 10);
 const delayMs = Math.ceil(1000 / tpsLimit);
@@ -25,6 +29,89 @@ const sendWithRetry = async (sendFn, maxRetries = 3) => {
   throw new Error('Max retries exceeded');
 };
 
+/**
+ * Get sender email by email address for a tenant
+ * @param {string} tenantId - Tenant identifier
+ * @param {string} email - Email address to find
+ * @returns {Promise<Object|null>} Sender record or null if not found
+ */
+const getSenderByEmail = async (tenantId, email) => {
+  try {
+    const result = await ddb.send(new QueryCommand({
+      TableName: process.env.TABLE_NAME,
+      IndexName: 'GSI1',
+      KeyConditionExpression: 'GSI1PK = :gsi1pk AND GSI1SK = :gsi1sk',
+      ExpressionAttributeValues: marshall({
+        ':gsi1pk': KEY_PATTERNS.SENDER_GSI1PK(tenantId),
+        ':gsi1sk': email
+      })
+    }));
+
+    if (result.Items && result.Items.length > 0) {
+      return unmarshall(result.Items[0]);
+    }
+    return null;
+  } catch (error) {
+    console.error('Error querying sender by email:', error);
+    throw new Error('Failed to query sender email');
+  }
+};
+
+/**
+ * Get default sender for a tenant
+ * @param {string} tenantId - Tenant identifier
+ * @returns {Promise<Object|null>} Default sender record or null if not found
+ */
+const getDefaultSender = async (tenantId) => {
+  try {
+    const result = await ddb.send(new QueryCommand({
+      TableName: process.env.TABLE_NAME,
+      IndexName: 'GSI1',
+      KeyConditionExpression: 'GSI1PK = :gsi1pk',
+      FilterExpression: 'isDefault = :isDefault AND verificationStatus = :verified',
+      ExpressionAttributeValues: marshall({
+        ':gsi1pk': KEY_PATTERNS.SENDER_GSI1PK(tenantId),
+        ':isDefault': true,
+        ':verified': 'verified'
+      })
+    }));
+
+    if (result.Items && result.Items.length > 0) {
+      return unmarshall(result.Items[0]);
+    }
+    return null;
+  } catch (error) {
+    console.error('Error querying default sender:', error);
+    throw new Error('Failed to query default sender');
+  }
+};
+
+/**
+ * Update sender metrics after sending emails
+ * @param {string} tenantId - Tenant identifier
+ * @param {string} senderId - Sender identifier
+ * @param {number} emailCount - Number of emails sent
+ */
+const updateSenderMetrics = async (tenantId, senderId, emailCount) => {
+  try {
+    await ddb.send(new UpdateItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({
+        pk: tenantId,
+        sk: KEY_PATTERNS.SENDER(senderId)
+      }),
+      UpdateExpression: 'ADD emailsSent :count SET lastSentAt = :timestamp',
+      ExpressionAttributeValues: marshall({
+        ':count': emailCount,
+        ':timestamp': new Date().toISOString()
+      })
+    }));
+  } catch (error) {
+    console.error('Error updating sender metrics:', error);
+    // Don't throw error here as it shouldn't fail the email send
+  }
+};
+
 export const handler = async (event) => {
   try {
 
@@ -33,7 +120,7 @@ export const handler = async (event) => {
     }
 
     const { detail: data } = event;
-    const { subject, html, to, sendAt, replacements } = data;
+    const { subject, html, to, sendAt, replacements, from, tenantId } = data;
 
     if (!subject || !html || !to) {
       throw new Error('Missing required fields: subject, html, or to');
@@ -42,6 +129,35 @@ export const handler = async (event) => {
     if (!to.email && !to.list) {
       throw new Error('Must specify either to.email or to.list');
     }
+
+    if (!tenantId) {
+      throw new Error('Missing required field: tenantId');
+    }
+
+    // Determine which sender email to use
+    let senderEmail = null;
+    let senderRecord = null;
+
+    if (from) {
+      // If from email is provided, verify it's configured for this tenant
+      senderRecord = await getSenderByEmail(tenantId, from);
+      if (!senderRecord) {
+        throw new Error(`From email '${from}' is not configured for this tenant`);
+      }
+      if (senderRecord.verificationStatus !== 'verified') {
+        throw new Error(`From email '${from}' is not verified`);
+      }
+      senderEmail = from;
+    } else {
+      // If no from email provided, use the default sender
+      senderRecord = await getDefaultSender(tenantId);
+      if (!senderRecord) {
+        throw new Error('No default sender configured for this tenant');
+      }
+      senderEmail = senderRecord.email;
+    }
+
+    console.log(`Using sender email: ${senderEmail} for tenant: ${tenantId}`);
 
     if (sendAt) {
       const sendAtDate = new Date(sendAt);
@@ -95,7 +211,7 @@ export const handler = async (event) => {
       }
     }
 
-    console.log(`Sending to ${emailAddresses.length} recipients with TPS limit ${tpsLimit}`);
+    console.log(`Sending to ${emailAddresses.length} recipients with TPS limit ${tpsLimit} from ${senderEmail}`);
 
     // Send each email with retry and TPS throttle
     for (const email of emailAddresses) {
@@ -110,7 +226,7 @@ export const handler = async (event) => {
         }
 
         await ses.send(new SendEmailCommand({
-          FromEmailAddress: process.env.FROM_EMAIL,
+          FromEmailAddress: senderEmail,
           Destination: { ToAddresses: [email] },
           Content: {
             Simple: {
@@ -127,7 +243,17 @@ export const handler = async (event) => {
       await new Promise(resolve => setTimeout(resolve, delayMs));
     }
 
-    return { sent: true, recipients: emailAddresses.length };
+    // Update sender metrics
+    if (senderRecord) {
+      await updateSenderMetrics(tenantId, senderRecord.senderId, emailAddresses.length);
+    }
+
+    return {
+      sent: true,
+      recipients: emailAddresses.length,
+      senderEmail: senderEmail,
+      senderId: senderRecord?.senderId
+    };
   } catch (err) {
     console.error('Send email error:', {
       error: err.message,

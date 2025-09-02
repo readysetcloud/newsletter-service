@@ -124,12 +124,76 @@ export function getUserFriendlyErrorMessage(error: any, context?: string): strin
           ? 'Upload failed due to connection issues. Please try again.'
           : `Upload failed: ${errorInfo.userFriendly}`;
 
+      case 'sender':
+        return getSenderErrorMessage(error, errorInfo);
+
       default:
         return errorInfo.userFriendly;
     }
   }
 
   return errorInfo.userFriendly;
+}
+
+/**
+ * Get sender-specific error messages
+ */
+function getSenderErrorMessage(error: any, errorInfo: ErrorInfo): string {
+  // Handle specific sender error codes
+  if (error?.errorCode) {
+    switch (error.errorCode) {
+      case 'INVALID_EMAIL':
+        return 'Please enter a valid email address (e.g., newsletter@yourdomain.com)';
+      case 'INVALID_DOMAIN':
+        return 'Please enter a valid domain name (e.g., yourdomain.com)';
+      case 'EMAIL_ALREADY_EXISTS':
+        return 'This email address is already configured. Please use a different email or update the existing one.';
+      case 'DOMAIN_ALREADY_EXISTS':
+        return 'This domain is already being verified. Please wait for verification to complete or use a different domain.';
+      case 'SENDER_LIMIT_EXCEEDED':
+        return 'You\'ve reached the maximum number of sender emails for your plan. Upgrade to add more senders.';
+      case 'DNS_VERIFICATION_NOT_ALLOWED':
+        return 'Domain verification is not available on your current plan. Upgrade to Creator tier or higher to use this feature.';
+      case 'MAILBOX_VERIFICATION_NOT_ALLOWED':
+        return 'Email verification is not available on your current plan. Please contact support.';
+      case 'SENDER_NOT_FOUND':
+        return 'The sender email was not found. It may have been deleted or you may not have permission to access it.';
+      case 'DOMAIN_NOT_FOUND':
+        return 'Domain verification not found. Please initiate domain verification first.';
+      case 'SES_IDENTITY_CREATION_FAILED':
+        return 'Failed to set up email verification with our email service. Please try again or contact support if the issue persists.';
+      case 'SES_IDENTITY_DELETION_FAILED':
+        return 'The sender has been removed from your account, but cleanup of the email service may have failed. This won\'t affect your ability to add new senders.';
+      case 'SES_VERIFICATION_FAILED':
+        return 'Email verification failed. Please check your email for the verification link or try resending the verification email.';
+      case 'SES_QUOTA_EXCEEDED':
+        return 'Email service quota exceeded. Please wait a few minutes before trying again.';
+      case 'DNS_RECORD_GENERATION_FAILED':
+        return 'Failed to generate DNS verification records. Please try again or contact support.';
+      case 'DNS_PROPAGATION_TIMEOUT':
+        return 'DNS verification is taking longer than expected. Please check that your DNS records are correctly configured.';
+      case 'TOO_MANY_REQUESTS':
+        return 'Too many requests. Please wait a moment before trying again.';
+      case 'VERIFICATION_ATTEMPTS_EXCEEDED':
+        return 'Too many verification attempts. Please wait 15 minutes before trying again.';
+      default:
+        break;
+    }
+  }
+
+  // Handle by error type for sender context
+  switch (errorInfo.type) {
+    case 'validation':
+      return 'Please check your sender email information and try again.';
+    case 'authorization':
+      return 'You don\'t have permission to manage sender emails. Please check your account permissions.';
+    case 'network':
+      return 'Unable to connect to the email service. Please check your internet connection and try again.';
+    case 'server':
+      return 'Our email service is temporarily unavailable. Please try again in a few moments.';
+    default:
+      return `Sender operation failed: ${errorInfo.userFriendly}`;
+  }
 }
 
 /**

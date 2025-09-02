@@ -1,7 +1,7 @@
 import React, { useEffect, useCallback, useState } from 'react';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useAuth } from '../../contexts/AuthContext';
-import { nocationService } from '../../services/notificationService';
+import { NotificationService } from '../../services/notificationService';
 import { parseApiError, shouldRetryError, getRetryDelay } from '../../utils/errorHandling';
 import {
   ErrorNotificationHandler,

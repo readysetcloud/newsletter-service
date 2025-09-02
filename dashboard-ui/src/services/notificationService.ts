@@ -404,6 +404,7 @@ export class NotificationService {
         token: data.momentoToken,
         cacheName: data.cacheName,
         expiresAt: data.expiresAt,
+        isValid: true,
         isExpired: false
       };
 
@@ -411,7 +412,7 @@ export class NotificationService {
       await this.unsubscribe();
 
       const credentialProvider = CredentialProvider.fromString({
-        authToken: this.momentoTokenInfo.token,
+        authToken: this.momentoTokenInfo?.token || '',
       });
 
       this.topicClient = new TopicClient({

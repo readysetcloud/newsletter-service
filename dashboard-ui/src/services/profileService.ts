@@ -18,6 +18,7 @@ export interface ProfileUpdateRequest {
     name: string;
     url: string;
   }>;
+  markAsCompleted?: boolean;
 }
 
 /**

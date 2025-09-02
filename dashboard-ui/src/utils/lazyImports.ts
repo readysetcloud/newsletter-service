@@ -49,6 +49,14 @@ export const LazyApiKeysPage = lazy(() =>
     })
 );
 
+export const LazySenderEmailSetupPage = lazy(() =>
+  import('@/pages/senders').then(module => ({ default: module.SenderEmailSetupPage }))
+    .catch(error => {
+      console.error('Failed to load SenderEmailSetupPage:', error);
+      throw error;
+    })
+);
+
 // Preload critical routes
 export const preloadCriticalRoutes = () => {
   // Preload dashboard since it's the default route
@@ -62,6 +70,7 @@ export const preloadCriticalRoutes = () => {
 
   // Preload onboarding for new users
   import('@/pages/onboarding/BrandOnboardingPage');
+  import('@/pages/onboarding/SenderOnboardingPage');
 };
 
 // Preload route on hover/focus for better UX
@@ -78,6 +87,9 @@ export const preloadRoute = (routeName: string) => {
       break;
     case 'api-keys':
       import('@/pages/api-keys');
+      break;
+    case 'senders':
+      import('@/pages/senders');
       break;
     case 'login':
       import('@/pages/auth/LoginPage');

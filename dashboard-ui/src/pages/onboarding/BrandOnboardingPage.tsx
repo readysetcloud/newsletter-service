@@ -37,7 +37,7 @@ export function BrandOnboardingPage() {
 
           if (uploadResponse.success && uploadResponse.data) {
             console.log('Logo uploaded successfully, updating brand with logo URL...');
-            await updateBrand({ brandLogo: uploadResponse.data });
+            await updateBrand({ ...brandData, brandLogo: uploadResponse.data });
 
             addToast({
               type: 'success',

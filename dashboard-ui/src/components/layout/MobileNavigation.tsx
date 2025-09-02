@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { useSenderStatus } from '../../hooks/useSenderStatus';
 import { LogoutButton } from '../auth/LogoutButton';
 import { NotificationDropdown } from '../notifications/NotificationDropdown';
+import { SenderStatusIndicator } from '../senders/SenderStatusIndicator';
 import { ariaPatterns, keyboardUtils, responsiveA11y } from '../../utils/accessibility';
 import { preloadRoute } from '../../utils/lazyImports';
 import {
@@ -10,6 +12,7 @@ import {
   BuildingOfficeIcon,
   UserIcon,
   KeyIcon,
+  EnvelopeIcon,
   Bars3Icon,
   XMarkIcon
 } from '@heroicons/react/24/outline';
@@ -19,6 +22,7 @@ export const MobileNavigation: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
   const { user } = useAuth();
   const location = useLocation();
+  const senderStatus = useSenderStatus();
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
@@ -26,6 +30,7 @@ export const MobileNavigation: React.FC = () => {
     { name: 'Dashboard', href: '/dashboard', icon: ChartBarIcon, preloadKey: 'dashboard' },
     { name: 'Brand', href: '/brand', icon: BuildingOfficeIcon, preloadKey: 'brand' },
     { name: 'Profile', href: '/profile', icon: UserIcon, preloadKey: 'profile' },
+    { name: 'Sender Emails', href: '/senders', icon: EnvelopeIcon, preloadKey: 'senders' },
     { name: 'API Keys', href: '/api-keys', icon: KeyIcon, preloadKey: 'api-keys' },
   ];
 
@@ -150,6 +155,17 @@ export const MobileNavigation: React.FC = () => {
                 >
                   <Icon className="w-6 h-6 mr-3" aria-hidden="true" />
                   {item.name}
+                  {item.name === 'Sender Emails' && !senderStatus.loading && (
+                    <SenderStatusIndicator
+                      verifiedCount={senderStatus.verifiedCount}
+                      pendingCount={senderStatus.pendingCount}
+                      failedCount={senderStatus.failedCount}
+                      timedOutCount={senderStatus.timedOutCount}
+                      totalCount={senderStatus.totalCount}
+                      size="sm"
+                      className="ml-auto"
+                    />
+                  )}
                 </Link>
               );
             })}

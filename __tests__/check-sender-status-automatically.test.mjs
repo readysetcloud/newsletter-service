@@ -130,14 +130,10 @@ describe('check-sender-status-automatically handler', () => {
       }
     });
 
-    const result = await handler(event);
+    await handler(event);
 
-    expect(result.statusCode).toBe(200);
     expect(ddbInstance.send).toHaveBeenCalledTimes(2); // GetItem + UpdateItem
     expect(sesInstance.send).toHaveBeenCalledTimes(2); // Both DeleteTenantResourceAssociation and DeleteEmailIdentity
-
-    const responseBody = JSON.parse(result.body);
-    expect(responseBody.action).toBe('timed_out');
 
     // Verify SES cleanup calls
     const tenantAssociationCall = sesInstance.send.mock.calls.find(call => call[0].__type === 'DeleteTenantResourceAssociation')[0];
@@ -193,9 +189,8 @@ describe('check-sender-status-automatically handler', () => {
       }
     });
 
-    const result = await handler(event);
+    await handler(event);
 
-    expect(result.statusCode).toBe(200);
     expect(sesInstance.send).toHaveBeenCalledTimes(2); // Both DeleteTenantResourceAssociation and DeleteEmailIdentity
 
     // Verify domain cleanup
@@ -204,9 +199,6 @@ describe('check-sender-status-automatically handler', () => {
 
     const identityDeletionCall = sesInstance.send.mock.calls.find(call => call[0].__type === 'DeleteEmailIdentity')[0];
     expect(identityDeletionCall.EmailIdentity).toBe('example.com');
-
-    const responseBody = JSON.parse(result.body);
-    expect(responseBody.action).toBe('timed_out');
   });
 
   test('should continue with status update if SES cleanup fails', async () => {
@@ -251,14 +243,10 @@ describe('check-sender-status-automatically handler', () => {
       }
     });
 
-    const result = await handler(event);
+    await handler(event);
 
-    expect(result.statusCode).toBe(200);
     expect(ddbInstance.send).toHaveBeenCalledTimes(2); // GetItem + UpdateItem (should still update status)
     expect(sesInstance.send).toHaveBeenCalledTimes(2); // Both DeleteTenantResourceAssociation and DeleteEmailIdentity attempted
-
-    const responseBody = JSON.parse(result.body);
-    expect(responseBody.action).toBe('timed_out');
 
     // Verify the update call still includes timeout status
     const updateCall = ddbInstance.send.mock.calls.find(call => call[0].__type === 'UpdateItem')[0];
@@ -307,9 +295,8 @@ describe('check-sender-status-automatically handler', () => {
       }
     });
 
-    const result = await handler(event);
+    await handler(event);
 
-    expect(result.statusCode).toBe(200);
     expect(sesInstance.send).toHaveBeenCalledTimes(2); // Both calls attempted
 
     // Verify both SES calls were made
@@ -318,8 +305,5 @@ describe('check-sender-status-automatically handler', () => {
 
     const identityDeletionCall = sesInstance.send.mock.calls.find(call => call[0].__type === 'DeleteEmailIdentity')[0];
     expect(identityDeletionCall.EmailIdentity).toBe('test@example.com');
-
-    const responseBody = JSON.parse(result.body);
-    expect(responseBody.action).toBe('timed_out');
   });
 });

@@ -29,6 +29,10 @@ Parameters:
     Type: String
     Default: "/stripe/api-key"
     Description: SSM Parameter Store path for Stripe API key (secure string)
+  StripeWebhookSecret:
+    Type: String
+    Default: "/stripe/webhook-secret"
+    Description: SSM Parameter Store path for Stripe webhook secret (secure string)
   MomentoApiKey:
     Type: String
     Description: Super user API key for Momento
@@ -316,6 +320,8 @@ Resources:
           AttributeType: S
         - AttributeName: GSI1SK
           AttributeType: S
+        - AttributeName: stripeCustomerId
+          AttributeType: S
       GlobalSecondaryIndexes:
         - IndexName: GSI1
           KeySchema:
@@ -323,6 +329,12 @@ Resources:
               KeyType: HASH
             - AttributeName: GSI1SK
               KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: StripeCustomerIndex
+          KeySchema:
+            - AttributeName: stripeCustomerId
+              KeyType: HASH
           Projection:
             ProjectionType: ALL
       TimeToLiveSpecification:
@@ -2252,6 +2264,165 @@ Resources:
       Name: newsletter-events
       Description: Custom EventBridge bus for newsletter notification events
 
+  # Stripe Billing Functions
+  StripeWebhookHandlerFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - billing/stripe-webhook-handler.mjs
+    Properties:
+      Handler: billing/stripe-webhook-handler.handler
+      Timeout: 30
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
+                - !Sub "${NewsletterTable.Arn}/index/StripeCustomerIndex"
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminAddUserToGroup
+                - cognito-idp:AdminRemoveUserFromGroup
+                - cognito-idp:ListUsersInGroup
+              Resource: !GetAtt NewsletterUserPool.Arn
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+              Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${StripeWebhookSecret}"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          USER_POOL_ID: !Ref NewsletterUserPool
+          STRIPE_WEBHOOK_SECRET_PARAM: !Ref StripeWebhookSecret
+      Events:
+        WebhookApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /stripe/webhook
+            Method: POST
+            Auth:
+              Authorizer: NONE
+
+  CreateCheckoutSessionFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - billing/create-checkout-session.mjs
+    Properties:
+      Handler: billing/create-checkout-session.handler
+      Timeout: 30
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+              Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${StripeApiKey}"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          STRIPE_API_KEY_PARAM: !Ref StripeApiKey
+      Events:
+        CreateCheckoutApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /billing/checkout-session
+            Method: POST
+            Auth:
+              Authorizer: !Ref NewsletterApiAuthorizer
+
+  CreateCustomerPortalSessionFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - billing/create-customer-portal-session.mjs
+    Properties:
+      Handler: billing/create-customer-portal-session.handler
+      Timeout: 30
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+              Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${StripeApiKey}"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          STRIPE_API_KEY_PARAM: !Ref StripeApiKey
+      Events:
+        CreateCustomerPortalApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /billing/customer-portal
+            Method: POST
+            Auth:
+              Authorizer: !Ref NewsletterApiAuthorizer
+
+  GetSubscriptionStatusFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - billing/get-subscription-status.mjs
+    Properties:
+      Handler: billing/get-subscription-status.handler
+      Timeout: 30
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+      Events:
+        GetSubscriptionStatusApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /billing/subscription-status
+            Method: GET
+            Auth:
+              Authorizer: !Ref NewsletterApiAuthorizer
+
   # Sender Email Management Functions
   GetSendersFunction:
     Type: AWS::Serverless::Function
@@ -2560,7 +2731,6 @@ Resources:
             RestApiId: !Ref DashboardApi
             Path: /senders/domain-verification/{domain}
             Method: GET
-
 
   CheckSenderStatusAutomaticallyFunction:
     Type: AWS::Serverless::Function

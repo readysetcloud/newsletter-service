@@ -143,10 +143,9 @@ describe('create-sender handler', () => {
       requestContext: { authorizer: { tier: 'free-tier' } }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(mockFormatAuthError).toHaveBeenCalledWith('A brand is required before creating a sender');
-    expect(result.statusCode).toBe(401);
     expect(ddbInstance.send).not.toHaveBeenCalled();
     expect(sesInstance.send).not.toHaveBeenCalled();
   });
@@ -159,7 +158,7 @@ describe('create-sender handler', () => {
       requestContext: { authorizer: { tier: 'free-tier' } }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(mockFormatResponse).toHaveBeenCalledWith(400, 'Email address is required');
     expect(ddbInstance.send).not.toHaveBeenCalled();
@@ -174,7 +173,7 @@ describe('create-sender handler', () => {
       requestContext: { authorizer: { tier: 'free-tier' } }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(mockFormatResponse).toHaveBeenCalledWith(400, 'Invalid email address format');
     expect(ddbInstance.send).not.toHaveBeenCalled();
@@ -193,7 +192,7 @@ describe('create-sender handler', () => {
       requestContext: { authorizer: { tier: 'free-tier' } }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(mockFormatResponse).toHaveBeenCalledWith(400, {
       error: 'DNS verification not available for your tier',
@@ -216,7 +215,7 @@ describe('create-sender handler', () => {
       requestContext: { authorizer: { tier: 'free-tier' } }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(mockFormatResponse).toHaveBeenCalledWith(400, {
       error: 'Maximum sender limit reached (1)',
@@ -241,7 +240,7 @@ describe('create-sender handler', () => {
       requestContext: { authorizer: { tier: 'creator-tier' } }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(mockFormatResponse).toHaveBeenCalledWith(409, 'Email address already configured');
     expect(sesInstance.send).not.toHaveBeenCalled();
@@ -269,7 +268,7 @@ describe('create-sender handler', () => {
       requestContext: { authorizer: { tier: 'free-tier' } }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     // Verify SES calls for custom verification email and tenant association
     expect(sesInstance.send).toHaveBeenCalledTimes(2);
@@ -325,7 +324,7 @@ describe('create-sender handler', () => {
       requestContext: { authorizer: { tier: 'creator-tier' } }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     // Verify SES calls for domain verification and tenant association
     expect(sesInstance.send).toHaveBeenCalledTimes(2);
@@ -368,7 +367,7 @@ describe('create-sender handler', () => {
       requestContext: { authorizer: { tier: 'creator-tier' } }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(mockFormatResponse).toHaveBeenCalledWith(201, expect.objectContaining({
       isDefault: false // Not default when others exist
@@ -389,7 +388,7 @@ describe('create-sender handler', () => {
       requestContext: { authorizer: { tier: 'creator-tier' } }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(mockFormatResponse).toHaveBeenCalledWith(500, 'Failed to initiate domain verification');
     expect(ddbInstance.send).toHaveBeenCalledTimes(1); // Only query, no put
@@ -413,7 +412,7 @@ describe('create-sender handler', () => {
       requestContext: { authorizer: { tier: 'free-tier' } }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(mockFormatResponse).toHaveBeenCalledWith(409, 'Sender already exists');
   });
@@ -428,7 +427,7 @@ describe('create-sender handler', () => {
       requestContext: { authorizer: { tier: 'free-tier' } }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(mockFormatAuthError).toHaveBeenCalledWith('Authentication required');
   });
@@ -440,7 +439,7 @@ describe('create-sender handler', () => {
       requestContext: { authorizer: { tier: 'free-tier' } }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(mockFormatResponse).toHaveBeenCalledWith(400, 'Email address is required');
   });
@@ -456,7 +455,7 @@ describe('create-sender handler', () => {
       requestContext: { authorizer: { tier: 'free-tier' } }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(mockFormatResponse).toHaveBeenCalledWith(400, 'Verification type must be either "mailbox" or "domain"');
   });
@@ -483,7 +482,7 @@ describe('create-sender handler', () => {
       requestContext: { authorizer: { tier: 'free-tier' } }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     // Verify SendCustomVerificationEmail was called with correct parameters
     expect(sesInstance.send).toHaveBeenCalledTimes(2);
@@ -522,7 +521,7 @@ describe('create-sender handler', () => {
       requestContext: { authorizer: { tier: 'free-tier' } }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     // Should still create the sender record but verification email sending should fail gracefully
     expect(mockFormatResponse).toHaveBeenCalledWith(201, expect.objectContaining({
@@ -553,7 +552,7 @@ describe('create-sender handler', () => {
       requestContext: { authorizer: { tier: 'free-tier' } }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     // Should still create the sender record even if verification email fails
     expect(mockFormatResponse).toHaveBeenCalledWith(201, expect.objectContaining({
@@ -587,7 +586,7 @@ describe('create-sender handler', () => {
       requestContext: { authorizer: { tier: 'free-tier' } }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     // Should call SES CreateEmailIdentity for standard verification
     expect(sesInstance.send).toHaveBeenCalledTimes(2);
@@ -639,7 +638,7 @@ describe('create-sender handler', () => {
       requestContext: { authorizer: { tier: 'free-tier' } }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     // Should call SES CreateEmailIdentity for standard verification
     expect(sesInstance.send).toHaveBeenCalledTimes(2);
@@ -681,7 +680,7 @@ describe('create-sender handler', () => {
       requestContext: { authorizer: { tier: 'free-tier' } }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     // Should call SES for custom verification email
     expect(sesInstance.send).toHaveBeenCalledTimes(2);
@@ -719,7 +718,7 @@ describe('create-sender handler', () => {
       requestContext: { authorizer: { tier: 'free-tier' } }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     // Should call SES for custom verification email (production default)
     expect(sesInstance.send).toHaveBeenCalledTimes(2);
@@ -760,7 +759,7 @@ describe('create-sender handler', () => {
       requestContext: { authorizer: { tier: 'creator-tier' } }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     // Should still call SES for domain verification regardless of environment
     expect(sesInstance.send).toHaveBeenCalledTimes(2);

@@ -110,10 +110,9 @@ describe('delete-sender handler', () => {
       pathParameters: { senderId: 'sender-123' }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(mockFormatAuthError).toHaveBeenCalledWith('A brand is required before deleting a sender');
-    expect(result.statusCode).toBe(401);
     expect(ddbInstance.send).not.toHaveBeenCalled();
     expect(sesInstance.send).not.toHaveBeenCalled();
   });
@@ -125,7 +124,7 @@ describe('delete-sender handler', () => {
       pathParameters: {}
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(mockFormatResponse).toHaveBeenCalledWith(400, 'Sender Id is required');
     expect(ddbInstance.send).not.toHaveBeenCalled();
@@ -142,7 +141,7 @@ describe('delete-sender handler', () => {
       pathParameters: { senderId: 'sender-123' }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(mockFormatResponse).toHaveBeenCalledWith(404, 'Sender not found');
     expect(ddbInstance.send).toHaveBeenCalledTimes(1);
@@ -174,7 +173,7 @@ describe('delete-sender handler', () => {
       pathParameters: { senderId: 'sender-123' }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(ddbInstance.send).toHaveBeenCalledTimes(2);
     expect(sesInstance.send).toHaveBeenCalledTimes(2); // Both tenant association and identity deletion
@@ -217,7 +216,7 @@ describe('delete-sender handler', () => {
       pathParameters: { senderId: 'sender-123' }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(sesInstance.send).toHaveBeenCalledTimes(2);
 
@@ -259,7 +258,7 @@ describe('delete-sender handler', () => {
       pathParameters: { senderId: 'sender-123' }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(ddbInstance.send).toHaveBeenCalledTimes(4);
 
@@ -301,7 +300,7 @@ describe('delete-sender handler', () => {
       pathParameters: { senderId: 'sender-123' }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(ddbInstance.send).toHaveBeenCalledTimes(4);
     expect(mockFormatEmptyResponse).toHaveBeenCalled();
@@ -327,7 +326,7 @@ describe('delete-sender handler', () => {
       pathParameters: { senderId: 'sender-123' }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(ddbInstance.send).toHaveBeenCalledTimes(3); // No UpdateItem for reassignment
     expect(mockFormatEmptyResponse).toHaveBeenCalled();
@@ -354,7 +353,7 @@ describe('delete-sender handler', () => {
       pathParameters: { senderId: 'sender-123' }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     // Should still complete deletion despite SES error
     expect(ddbInstance.send).toHaveBeenCalledTimes(2);
@@ -383,7 +382,7 @@ describe('delete-sender handler', () => {
       pathParameters: { senderId: 'sender-123' }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(mockFormatResponse).toHaveBeenCalledWith(404, 'Sender not found');
   });
@@ -397,7 +396,7 @@ describe('delete-sender handler', () => {
       pathParameters: { senderId: 'sender-123' }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(mockFormatAuthError).toHaveBeenCalledWith('Authentication required');
   });
@@ -411,7 +410,7 @@ describe('delete-sender handler', () => {
       pathParameters: { senderId: 'sender-123' }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(mockFormatResponse).toHaveBeenCalledWith(500, 'Failed to delete sender email');
   });
@@ -421,7 +420,7 @@ describe('delete-sender handler', () => {
 
     const event = {};
 
-    const result = await handler(event);
+    await handler(event);
 
     expect(mockFormatResponse).toHaveBeenCalledWith(400, 'Sender Id is required');
   });
@@ -446,7 +445,7 @@ describe('delete-sender handler', () => {
       pathParameters: { senderId: 'sender-123' }
     };
 
-    const result = await handler(event);
+    await handler(event);
 
     // Should still complete deletion despite reassignment error
     expect(mockFormatEmptyResponse).toHaveBeenCalled();

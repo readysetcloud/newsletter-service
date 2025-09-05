@@ -19,7 +19,10 @@ jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
     send: mockDynamoSend
   })),
   QueryCommand: jest.fn((params) => params),
-  UpdateItemCommand: jest.fn((params) => params),
+  UpdateItemCommand: jest.fn((params) => params)
+}));
+
+jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
   marshall: jest.fn((obj) => obj),
   unmarshall: jest.fn((obj) => obj)
 }));
@@ -725,6 +728,14 @@ describe('EventBridge Stripe Events Integration Tests', () => {
       );
 
       // 3. Subscription deleted - downgrade to free
+      mockGetSubscriptionRecord.mockResolvedValue({
+        pk: 'tenant-123',
+        sk: 'subscription',
+        stripeSubscriptionId: 'sub_test123',
+        status: 'active',
+        planId: 'pro'
+      });
+
       const deletedEvent = {
         id: 'event-deleted-789',
         source: 'stripe',

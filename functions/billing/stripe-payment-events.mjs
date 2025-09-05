@@ -79,12 +79,12 @@ async function sendUserNotification(tenantId, userId, notificationType, notifica
 /**
  * Handles successful payment events
  */
-async function handlePaymentSucceeded(invoice, eventId) {
-  const customerId = invoice.customer;
-  const subscriptionId = invoice.subscription;
-  const amountPaid = invoice.amount_paid;
-  const currency = invoice.currency;
-  const paidAt = new Date(invoice.status_transitions?.paid_at * 1000 || Date.now()).toISOString();
+async function handlePaymentSucceeded(paymentData, eventId) {
+  const customerId = paymentData.customerId;
+  const subscriptionId = paymentData.subscriptionId;
+  const amountPaid = paymentData.amountPaid;
+  const currency = paymentData.currency;
+  const paidAt = new Date().toISOString(); 
 
   if (!subscriptionId) {
     console.log('Invoice not associated with subscription, skipping');
@@ -151,7 +151,7 @@ async function handlePaymentSucceeded(invoice, eventId) {
     tenant.userId || null,
     'PAYMENT_SUCCEEDED',
     {
-      invoiceId: invoice.id,
+      invoiceId: paymentData.invoiceId,
       subscriptionId,
       amount: amountPaid,
       currency,
@@ -170,21 +170,19 @@ async function handlePaymentSucceeded(invoice, eventId) {
     amountPaid: amountPaid
   }, tenant.tenantId, eventId);
 
-  console.log(`Successfully processed payment.succeeded for tenant ${tenant.tenantId}, invoice ${invoice.id}`);
+  console.log(`Successfully processed payment.succeeded for tenant ${tenant.tenantId}, invoice ${paymentData.invoiceId}`);
 }
 
 /**
  * Handles failed payment events
  */
-async function handlePaymentFailed(invoice, eventId) {
-  console.log('Processing invoice.payment_failed event:', invoice.id);
+async function handlePaymentFailed(paymentData, eventId) {
+  console.log('Processing invoice.payment_failed event:', paymentData.invoiceId);
 
-  const customerId = invoice.customer;
-  const subscriptionId = invoice.subscription;
-  const attemptCount = invoice.attempt_count || 1;
-  const nextPaymentAttempt = invoice.next_payment_attempt
-    ? new Date(invoice.next_payment_attempt * 1000).toISOString()
-    : null;
+  const customerId = paymentData.customerId;
+  const subscriptionId = paymentData.subscriptionId;
+  const attemptCount = paymentData.attemptCount || 1;
+  const nextPaymentAttempt = paymentData.nextPaymentAttempt;
   const failedAt = new Date().toISOString();
 
   if (!subscriptionId) {
@@ -228,7 +226,7 @@ async function handlePaymentFailed(invoice, eventId) {
 
   let notificationType = 'PAYMENT_FAILED';
   let notificationData = {
-    invoiceId: invoice.id,
+    invoiceId: paymentData.invoiceId,
     subscriptionId,
     attemptCount,
     nextPaymentAttempt,
@@ -277,11 +275,11 @@ async function handlePaymentFailed(invoice, eventId) {
   // Publish failure metrics
   await publishPaymentMetric('failed', {
     status: 'failed',
-    currency: invoice.currency || 'usd',
-    amountDue: invoice.amount_due || 0
+    currency: paymentData.currency || 'usd',
+    amountDue: paymentData.amountDue || 0
   }, tenant.tenantId, eventId);
 
-  console.log(`Successfully processed payment.failed for tenant ${tenant.tenantId}, invoice ${invoice.id}, attempt ${attemptCount}`);
+  console.log(`Successfully processed payment.failed for tenant ${tenant.tenantId}, invoice ${paymentData.invoiceId}, attempt ${attemptCount}`);
 }
 
 /**

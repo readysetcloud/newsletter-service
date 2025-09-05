@@ -37,15 +37,15 @@ import {
  * Handles subscription created events
  */
 async function handleSubscriptionCreated(subscription, eventId) {
-  const customerId = subscription.customer;
+  const customerId = subscription.customerId;
   const subscriptionId = subscription.id;
   const status = subscription.status;
-  const currentPeriodStart = new Date(subscription.current_period_start * 1000).toISOString();
-  const currentPeriodEnd = new Date(subscription.current_period_end * 1000).toISOString();
-  const cancelAtPeriodEnd = subscription.cancel_at_period_end;
+  const currentPeriodStart = subscription.currentPeriodStart;
+  const currentPeriodEnd = subscription.currentPeriodEnd;
+  const cancelAtPeriodEnd = subscription.cancelAtPeriodEnd;
 
-  // Get plan ID from subscription items
-  const stripePriceId = subscription.items.data[0]?.price?.id;
+  // Get plan ID from transformed subscription data
+  const stripePriceId = subscription.priceId;
   if (!stripePriceId) {
     throw new Error('No price ID found in subscription');
   }
@@ -110,15 +110,15 @@ async function handleSubscriptionCreated(subscription, eventId) {
 async function handleSubscriptionUpdated(subscription, eventId) {
   console.log('Processing subscription.updated event:', subscription.id);
 
-  const customerId = subscription.customer;
+  const customerId = subscription.customerId;
   const subscriptionId = subscription.id;
   const status = subscription.status;
-  const currentPeriodStart = new Date(subscription.current_period_start * 1000).toISOString();
-  const currentPeriodEnd = new Date(subscription.current_period_end * 1000).toISOString();
-  const cancelAtPeriodEnd = subscription.cancel_at_period_end;
-  const canceledAt = subscription.canceled_at ? new Date(subscription.canceled_at * 1000).toISOString() : null;
+  const currentPeriodStart = subscription.currentPeriodStart;
+  const currentPeriodEnd = subscription.currentPeriodEnd;
+  const cancelAtPeriodEnd = subscription.cancelAtPeriodEnd;
+  const canceledAt = subscription.canceledAt;
 
-  const stripePriceId = subscription.items.data[0]?.price?.id;
+  const stripePriceId = subscription.priceId;
   const planId = stripePriceId ? getPlanByPriceId(stripePriceId) : null;
 
   // Find tenant by Stripe customer ID
@@ -215,7 +215,7 @@ async function handleSubscriptionUpdated(subscription, eventId) {
 async function handleSubscriptionDeleted(subscription, eventId) {
   console.log('Processing subscription.deleted event:', subscription.id);
 
-  const customerId = subscription.customer;
+  const customerId = subscription.customerId;
   const deletedAt = new Date().toISOString();
 
   // Find tenant by Stripe customer ID

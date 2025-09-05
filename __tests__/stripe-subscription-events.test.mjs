@@ -20,7 +20,10 @@ const mockQueryCommand = jest.fn();
 
 jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
   DynamoDBClient: jest.fn(() => mockDynamoClient),
-  QueryCommand: mockQueryCommand,
+  QueryCommand: mockQueryCommand
+}));
+
+jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
   marshall: jest.fn((obj) => obj),
   unmarshall: jest.fn((obj) => obj)
 }));
@@ -278,7 +281,10 @@ describe('Stripe Subscription EventBridge Handler', () => {
         expect.objectContaining({
           dimensions: expect.objectContaining({
             EventType: 'subscription.updated',
-            StatusChange: 'active->active'
+            TenantId: 'tenant-123',
+            SubscriptionStatus: 'active',
+            Action: 'updated',
+            PlanId: 'creator'
           })
         }),
         'event-123'
@@ -332,7 +338,7 @@ describe('Stripe Subscription EventBridge Handler', () => {
           dimensions: expect.objectContaining({
             EventType: 'subscription.deleted',
             TenantId: 'tenant-123',
-            PreviousPlanId: 'creator'
+            PlanId: 'creator'
           })
         }),
         'event-123'
@@ -380,19 +386,10 @@ describe('Stripe Subscription EventBridge Handler', () => {
         // Missing required fields
       };
 
-      await expect(handler(event)).rejects.toThrow('Invalid EventBridge event structure');
+      await expect(handler(event)).rejects.toThrow('Missing required EventBridge fields');
 
-      // Should publish failure metric
-      expect(mockPublishMetricEvent).toHaveBeenCalledWith(
-        'event.failed',
-        expect.objectContaining({
-          dimensions: expect.objectContaining({
-            EventType: 'unknown',
-            ErrorType: 'Error'
-          })
-        }),
-        'event-123'
-      );
+      // Invalid events fail before metrics can be published
+      expect(mockPublishMetricEvent).not.toHaveBeenCalled();
     });
 
     test('should handle unexpected event source', async () => {
@@ -410,10 +407,7 @@ describe('Stripe Subscription EventBridge Handler', () => {
         'detail-type': 'customer.subscription.unknown'
       };
 
-      await handler(event);
-
-      // Should not throw error, just log and return
-      expect(mockAtomicSubscriptionUpdate).not.toHaveBeenCalled();
+      await expect(handler(event)).rejects.toThrow('Unsupported billing event type: customer.subscription.unknown');
     });
 
     test('should publish duration metrics on success', async () => {

@@ -2,8 +2,6 @@
  * @fileoverview Simple integration test for Stripe payment event handler
  */
 
-import { jest } from '@jest/globals';
-
 describe('Stripe Payment Events Handler - Integration', () => {
   test('should export handler function', async () => {
     // Mock environment variables
@@ -25,7 +23,7 @@ describe('Stripe Payment Events Handler - Integration', () => {
       // Missing required fields
     };
 
-    await expect(handler(invalidEvent)).rejects.toThrow('Invalid EventBridge event structure');
+    await expect(handler(invalidEvent)).rejects.toThrow('Missing required EventBridge fields: id, detail-type, source, detail');
   });
 
   test('should handle non-stripe event source', async () => {
@@ -40,7 +38,7 @@ describe('Stripe Payment Events Handler - Integration', () => {
       detail: { id: 'test' }
     };
 
-    await expect(handler(nonStripeEvent)).rejects.toThrow('Unexpected event source: not-stripe');
+    await expect(handler(nonStripeEvent)).rejects.toThrow('Unexpected event source: not-stripe. Expected: stripe');
   });
 
   test('should handle unhandled event types gracefully', async () => {
@@ -55,7 +53,7 @@ describe('Stripe Payment Events Handler - Integration', () => {
       detail: { id: 'test' }
     };
 
-    // Should not throw for unknown event types
-    await expect(handler(unknownEvent)).resolves.toBeUndefined();
+    // Should throw for unknown event types
+    await expect(handler(unknownEvent)).rejects.toThrow('Unsupported billing event type: invoice.unknown_event');
   });
 });

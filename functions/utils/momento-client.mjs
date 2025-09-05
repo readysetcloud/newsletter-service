@@ -94,7 +94,7 @@ class MomentoClientUtil {
       const tokenResponse = await authClient.generateDisposableToken({ permissions }, ExpiresIn.hours(1), { tokenId: tenantId });
 
       if (tokenResponse instanceof GenerateDisposableToken.Success) {
-        console.log(`Generated read only token for tenant: ${tenantId}, user: ${userId}`);
+        console.log(`Generated read only token for tenant: ${tenantId}${userId ? `, user: ${userId}` : ''}`);
         return tokenResponse.authToken;
       } else {
         throw new Error(`Token read only failed: ${tokenResponse.message}`);
@@ -103,7 +103,7 @@ class MomentoClientUtil {
       console.error('Failed to generate subscribe token:', {
         error: error.message,
         tenantId,
-        userId,
+        ...userId && { userId },
         timestamp: new Date().toISOString()
       });
       throw error;

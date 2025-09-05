@@ -140,19 +140,6 @@ const confirmUpload = async (tenantId, body) => {
     throw error; // Re-throw other S3 errors
   }
 
-  // Check if tenant exists
-  const tenantResponse = await ddb.send(new GetItemCommand({
-    TableName: process.env.TABLE_NAME,
-    Key: marshall({
-      pk: tenantId,
-      sk: 'tenant'
-    })
-  }));
-
-  if (!tenantResponse.Item) {
-    return formatResponse(404, 'Tenant not found');
-  }
-
   // Update tenant record with logo information
   const publicUrl = `https://${process.env.HOSTING_BUCKET_NAME}.s3.amazonaws.com/${key}`;
 

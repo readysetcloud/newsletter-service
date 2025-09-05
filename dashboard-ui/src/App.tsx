@@ -16,6 +16,7 @@ import {
   LazyProfilePage,
   LazyApiKeysPage,
   LazySenderEmailSetupPage,
+  LazyBillingPage,
   preloadCriticalRoutes
 } from '@/utils/lazyImports';
 import { BrandOnboardingPage, ProfileOnboardingPage, SenderOnboardingPage } from '@/pages/onboarding';
@@ -170,6 +171,20 @@ function App() {
                           <OnboardingGuard>
                             <PageLoader>
                               <LazySenderEmailSetupPage />
+                            </PageLoader>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/billing"
+                    element={
+                      <RouteErrorBoundary routeName="Billing">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <PageLoader>
+                              <LazyBillingPage />
                             </PageLoader>
                           </OnboardingGuard>
                         </ProtectedRoute>

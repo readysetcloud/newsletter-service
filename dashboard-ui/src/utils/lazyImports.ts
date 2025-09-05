@@ -57,6 +57,14 @@ export const LazySenderEmailSetupPage = lazy(() =>
     })
 );
 
+export const LazyBillingPage = lazy(() =>
+  import('@/pages/billing').then(module => ({ default: module.BillingPage }))
+    .catch(error => {
+      console.error('Failed to load BillingPage:', error);
+      throw error;
+    })
+);
+
 // Preload critical routes
 export const preloadCriticalRoutes = () => {
   // Preload dashboard since it's the default route
@@ -90,6 +98,9 @@ export const preloadRoute = (routeName: string) => {
       break;
     case 'senders':
       import('@/pages/senders');
+      break;
+    case 'billing':
+      import('@/pages/billing');
       break;
     case 'login':
       import('@/pages/auth/LoginPage');

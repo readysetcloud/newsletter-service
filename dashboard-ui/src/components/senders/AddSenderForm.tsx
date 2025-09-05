@@ -27,6 +27,7 @@ interface AddSenderFormProps {
   existingSenders: SenderEmail[];
   onSenderCreated: (sender: SenderEmail) => void;
   onCancel?: () => void;
+  onUpgrade?: () => void;
   className?: string;
 }
 
@@ -35,6 +36,7 @@ export const AddSenderForm: React.FC<AddSenderFormProps> = ({
   existingSenders,
   onSenderCreated,
   onCancel,
+  onUpgrade,
   className
 }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -233,12 +235,16 @@ export const AddSenderForm: React.FC<AddSenderFormProps> = ({
               size="sm"
               className="mt-4"
               onClick={() => {
-                // TODO: Implement upgrade flow
-                addToast({
-                  title: 'Upgrade coming soon',
-                  message: 'Plan upgrade functionality will be available soon',
-                  type: 'info'
-                });
+                if (onUpgrade) {
+                  onUpgrade();
+                } else {
+                  // Fallback to coming soon message
+                  addToast({
+                    title: 'Upgrade coming soon',
+                    message: 'Plan upgrade functionality will be available soon',
+                    type: 'info'
+                  });
+                }
               }}
             >
               Upgrade Plan

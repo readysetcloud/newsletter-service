@@ -13,7 +13,8 @@ import {
   BuildingOfficeIcon,
   UserIcon,
   KeyIcon,
-  EnvelopeIcon
+  EnvelopeIcon,
+  CreditCardIcon
 } from '@heroicons/react/24/outline';
 
 export const AppHeader: React.FC = () => {
@@ -21,13 +22,21 @@ export const AppHeader: React.FC = () => {
   const location = useLocation();
   const senderStatus = useSenderStatus();
 
-  const navigation = [
+  const baseNavigation = [
     { name: 'Dashboard', href: '/dashboard', icon: ChartBarIcon, preloadKey: 'dashboard' },
     { name: 'Brand', href: '/brand', icon: BuildingOfficeIcon, preloadKey: 'brand' },
     { name: 'Profile', href: '/profile', icon: UserIcon, preloadKey: 'profile' },
     { name: 'Sender Emails', href: '/senders', icon: EnvelopeIcon, preloadKey: 'senders' },
     { name: 'API Keys', href: '/api-keys', icon: KeyIcon, preloadKey: 'api-keys' },
   ];
+
+  // Add billing navigation for admin users only
+  const navigation = user?.isAdmin || user?.isTenantAdmin
+    ? [
+        ...baseNavigation,
+        { name: 'Billing', href: '/billing', icon: CreditCardIcon, preloadKey: 'billing' },
+      ]
+    : baseNavigation;
 
   const handleLinkHover = (preloadKey: string) => {
     if (import.meta.env.VITE_PRELOAD_ROUTES === 'true') {

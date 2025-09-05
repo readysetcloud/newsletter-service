@@ -92,3 +92,28 @@ export type {
   AuthTokens,
   CognitoUser,
 } from './api';
+
+// Re-export billing types for convenience
+export type {
+  SubscriptionPlan,
+  PlanLimits,
+  Subscription,
+  SubscriptionStatus,
+  SubscriptionStatusResponse,
+  UsageMetrics,
+  BillingInfo,
+  PaymentMethod,
+  BillingAddress,
+  CheckoutSessionRequest,
+  CheckoutSessionResponse,
+  CustomerPortalRequest,
+  CustomerPortalResponse,
+  PlanChangeRequest,
+  PlanChangeResponse,
+  BillingAlert,
+  PlanSelectionFormData,
+  BillingPreferencesFormData,
+  BillingApiResponse,
+  BillingError,
+  BillingLoadingState,
+} from './billing';

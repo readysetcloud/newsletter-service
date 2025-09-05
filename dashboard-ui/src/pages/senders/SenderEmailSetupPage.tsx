@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { AppHeader } from '@/components/layout/AppHeader';
 import { Loading } from '@/components/ui/Loading';
 import { ErrorDisplay, NetworkError } from '@/components/ui/ErrorDisplay';
@@ -60,6 +61,7 @@ interface SenderSetupState {
 export function SenderEmailSetupPage() {
   const { user } = useAuth();
   const { showSuccess, showError, showInfo, isSubscribed } = useNotifications();
+  const navigate = useNavigate();
 
   const [state, setState] = useState<SenderSetupState>({
     senders: [],
@@ -412,6 +414,11 @@ export function SenderEmailSetupPage() {
     }
   };
 
+  // Handle upgrade navigation
+  const handleUpgrade = () => {
+    navigate('/billing');
+  };
+
   // Cleanup polling on unmount
   useEffect(() => {
     return () => {
@@ -525,6 +532,7 @@ export function SenderEmailSetupPage() {
                     context="sender-limit"
                     feature="sender emails"
                     variant="card"
+                    onUpgrade={handleUpgrade}
                   />
                 ) : (
                   /* Show balanced tier info when user can still add senders */
@@ -726,6 +734,7 @@ export function SenderEmailSetupPage() {
                     existingSenders={state.senders}
                     onSenderCreated={handleCreateSender}
                     onCancel={() => setState(prev => ({ ...prev, showAddForm: false }))}
+                    onUpgrade={handleUpgrade}
                   />
                 </div>
               )}
@@ -777,6 +786,7 @@ export function SenderEmailSetupPage() {
                     context="sender-limit"
                     feature="sender emails"
                     variant="card"
+                    onUpgrade={handleUpgrade}
                   />
                 </div>
               )}

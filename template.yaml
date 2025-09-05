@@ -29,10 +29,7 @@ Parameters:
     Type: String
     Default: "/stripe/api-key"
     Description: SSM Parameter Store path for Stripe API key (secure string)
-  StripeWebhookSecret:
-    Type: String
-    Default: "/stripe/webhook-secret"
-    Description: SSM Parameter Store path for Stripe webhook secret (secure string)
+
   MomentoApiKey:
     Type: String
     Description: Super user API key for Momento
@@ -2264,56 +2261,64 @@ Resources:
       Name: newsletter-events
       Description: Custom EventBridge bus for newsletter notification events
 
-  # Stripe Billing Functions
-  StripeWebhookHandlerFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - billing/stripe-webhook-handler.mjs
+  # EventBridge Rules for Stripe Events
+  StripeSubscriptionEventRule:
+    Type: AWS::Events::Rule
     Properties:
-      Handler: billing/stripe-webhook-handler.handler
-      Timeout: 30
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - dynamodb:GetItem
-                - dynamodb:UpdateItem
-                - dynamodb:Query
-              Resource:
-                - !GetAtt NewsletterTable.Arn
-                - !Sub "${NewsletterTable.Arn}/index/GSI1"
-                - !Sub "${NewsletterTable.Arn}/index/StripeCustomerIndex"
-            - Effect: Allow
-              Action:
-                - cognito-idp:AdminAddUserToGroup
-                - cognito-idp:AdminRemoveUserFromGroup
-                - cognito-idp:ListUsersInGroup
-              Resource: !GetAtt NewsletterUserPool.Arn
-            - Effect: Allow
-              Action:
-                - ssm:GetParameter
-              Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${StripeWebhookSecret}"
-      Environment:
-        Variables:
-          TABLE_NAME: !Ref NewsletterTable
-          USER_POOL_ID: !Ref NewsletterUserPool
-          STRIPE_WEBHOOK_SECRET_PARAM: !Ref StripeWebhookSecret
-      Events:
-        WebhookApi:
-          Type: Api
-          Properties:
-            RestApiId: !Ref NewsletterApi
-            Path: /stripe/webhook
-            Method: POST
-            Auth:
-              Authorizer: NONE
+      Name: !Sub "${AWS::StackName}-stripe-subscription-events"
+      Description: "Route Stripe subscription events to subscription handler"
+      EventPattern:
+        source: ["stripe"]
+        detail-type:
+          - "customer.subscription.created"
+          - "customer.subscription.updated"
+          - "customer.subscription.deleted"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt StripeSubscriptionEventsFunction.Arn
+          Id: "StripeSubscriptionTarget"
+          RetryPolicy:
+            MaximumRetryAttempts: 3
+          DeadLetterConfig:
+            Arn: !GetAtt StripeEventDLQ.Arn
 
+  StripePaymentEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${AWS::StackName}-stripe-payment-events"
+      Description: "Route Stripe payment events to payment handler"
+      EventPattern:
+        source: ["stripe"]
+        detail-type:
+          - "invoice.payment_succeeded"
+          - "invoice.payment_failed"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt StripePaymentEventsFunction.Arn
+          Id: "StripePaymentTarget"
+          RetryPolicy:
+            MaximumRetryAttempts: 3
+          DeadLetterConfig:
+            Arn: !GetAtt StripeEventDLQ.Arn
+
+  # EventBridge Permissions for Lambda Functions
+  StripeSubscriptionEventRulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref StripeSubscriptionEventsFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt StripeSubscriptionEventRule.Arn
+
+  StripePaymentEventRulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref StripePaymentEventsFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt StripePaymentEventRule.Arn
+
+  # Stripe Billing Functions
   CreateCheckoutSessionFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2346,11 +2351,9 @@ Resources:
         CreateCheckoutApi:
           Type: Api
           Properties:
-            RestApiId: !Ref NewsletterApi
+            RestApiId: !Ref DashboardApi
             Path: /billing/checkout-session
             Method: POST
-            Auth:
-              Authorizer: !Ref NewsletterApiAuthorizer
 
   CreateCustomerPortalSessionFunction:
     Type: AWS::Serverless::Function
@@ -2384,11 +2387,9 @@ Resources:
         CreateCustomerPortalApi:
           Type: Api
           Properties:
-            RestApiId: !Ref NewsletterApi
+            RestApiId: !Ref DashboardApi
             Path: /billing/customer-portal
             Method: POST
-            Auth:
-              Authorizer: !Ref NewsletterApiAuthorizer
 
   GetSubscriptionStatusFunction:
     Type: AWS::Serverless::Function
@@ -2417,11 +2418,423 @@ Resources:
         GetSubscriptionStatusApi:
           Type: Api
           Properties:
-            RestApiId: !Ref NewsletterApi
+            RestApiId: !Ref DashboardApi
             Path: /billing/subscription-status
             Method: GET
-            Auth:
-              Authorizer: !Ref NewsletterApiAuthorizer
+
+  # Simplified DLQ Processor - Logs messages and sends alerts only
+  ProcessDLQMessagesFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - billing/process-dlq-messages.mjs
+    Properties:
+      Handler: billing/process-dlq-messages.handler
+      Description: "Simplified DLQ processor for logging failed events and sending alerts"
+      Timeout: 60 # Simple logging operations only
+      MemorySize: 512 # Lightweight processing
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - sqs:ReceiveMessage
+                - sqs:DeleteMessage
+                - sqs:GetQueueAttributes
+              Resource: !GetAtt StripeEventDLQ.Arn
+            - Effect: Allow
+              Action:
+                - cloudwatch:PutMetricData
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref EventBridgeCriticalAlertsTopic
+      Environment:
+        Variables:
+          DLQ_URL: !Ref StripeEventDLQ
+          ALERT_TOPIC_ARN: !Ref EventBridgeCriticalAlertsTopic
+
+  # Dead Letter Queue for failed Stripe events
+  StripeEventDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${AWS::StackName}-stripe-events-dlq"
+      MessageRetentionPeriod: 1209600 # 14 days
+      VisibilityTimeout: 300 # 5 minutes
+      ReceiveMessageWaitTimeSeconds: 20 # Long polling
+      KmsMasterKeyId: alias/aws/sqs # Server-side encryption
+
+  StripeEventDLQAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-dlq-messages-require-action"
+      AlarmDescription: "CRITICAL: Failed Stripe events in DLQ require manual investigation"
+      MetricName: ApproximateNumberOfVisibleMessages
+      Namespace: AWS/SQS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt StripeEventDLQ.QueueName
+      AlarmActions:
+        - !Ref EventBridgeCriticalAlertsTopic
+      TreatMissingData: notBreaching
+
+  EventBridgeHighErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-high-error-rate"
+      AlarmDescription: "CRITICAL: EventBridge billing system has high error rate (>5% over 1 hour)"
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref EventBridgeCriticalAlertsTopic
+
+  EventBridgeProcessingDelayAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-processing-delays"
+      AlarmDescription: "WARNING: EventBridge processing is slow (>30s average over 15 minutes)"
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Statistic: Average
+      Period: 900
+      EvaluationPeriods: 1
+      Threshold: 30000 # 30 seconds
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref EventBridgeCriticalAlertsTopic
+
+  EventBridgeCriticalAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${AWS::StackName}-billing-critical-alerts"
+      DisplayName: "Billing System - Critical Alerts"
+      KmsMasterKeyId: alias/aws/sns
+
+  EventBridgeNoEventsProcessedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-no-events-24h"
+      AlarmDescription: "CRITICAL: No billing events processed in 24 hours - Stripe integration may be broken"
+      MetricName: Invocations
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 86400 # 24 hours
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref StripeSubscriptionEventsFunction
+      AlarmActions:
+        - !Ref EventBridgeCriticalAlertsTopic
+      TreatMissingData: breaching
+
+  EventBridgeMonitoringDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${AWS::StackName}-eventbridge-billing"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/Lambda", "Invocations", "FunctionName", "${StripeSubscriptionEventsFunction}", { "stat": "Sum" } ],
+                  [ ".", "Errors", ".", ".", { "stat": "Sum" } ],
+                  [ ".", "Duration", ".", ".", { "stat": "Average" } ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "Subscription Events (Hourly)",
+                "period": 3600,
+                "yAxis": {
+                  "left": {
+                    "min": 0
+                  }
+                }
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/Lambda", "Invocations", "FunctionName", "${StripePaymentEventsFunction}", { "stat": "Sum" } ],
+                  [ ".", "Errors", ".", ".", { "stat": "Sum" } ],
+                  [ ".", "Duration", ".", ".", { "stat": "Average" } ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "Payment Events (Hourly)",
+                "period": 3600,
+                "yAxis": {
+                  "left": {
+                    "min": 0
+                  }
+                }
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/SQS", "ApproximateNumberOfVisibleMessages", "QueueName", "${StripeEventDLQ.QueueName}" ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "DLQ Messages (Requires Action)",
+                "period": 300,
+                "annotations": {
+                  "horizontal": [
+                    {
+                      "label": "Alert Threshold",
+                      "value": 5
+                    }
+                  ]
+                },
+                "yAxis": {
+                  "left": {
+                    "min": 0
+                  }
+                }
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/Lambda", "Errors", "FunctionName", "${StripeSubscriptionEventsFunction}", { "stat": "Sum" } ],
+                  [ ".", ".", ".", "${StripePaymentEventsFunction}", { "stat": "Sum" } ]
+                ],
+                "view": "timeSeries",
+                "stacked": true,
+                "region": "${AWS::Region}",
+                "title": "Error Rate (Per Hour)",
+                "period": 3600,
+                "yAxis": {
+                  "left": {
+                    "min": 0
+                  }
+                }
+              }
+            }
+          ]
+        }
+
+  StripeEventHandlerFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - billing/stripe-event-handler.mjs
+    Properties:
+      Handler: billing/stripe-event-handler.handler
+      Timeout: 60
+      MemorySize: 1024
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt StripeEventDLQ.Arn
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+                - dynamodb:TransactWriteItems
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
+                - !Sub "${NewsletterTable.Arn}/index/StripeCustomerIndex"
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminAddUserToGroup
+                - cognito-idp:AdminRemoveUserFromGroup
+                - cognito-idp:ListUsersInGroup
+              Resource: !GetAtt NewsletterUserPool.Arn
+            - Effect: Allow
+              Action:
+                - sqs:SendMessage
+              Resource: !GetAtt StripeEventDLQ.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          USER_POOL_ID: !Ref NewsletterUserPool
+      Events:
+        StripeSubscriptionEvents:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: default
+            Pattern:
+              source: ["aws.partner/stripe.com"]
+              detail-type: ["Stripe Event"]
+              detail:
+                type:
+                  - "customer.subscription.created"
+                  - "customer.subscription.updated"
+                  - "customer.subscription.deleted"
+                  - "invoice.payment_succeeded"
+                  - "invoice.payment_failed"
+            RetryPolicy:
+              MaximumRetryAttempts: 3
+            DeadLetterConfig:
+              Arn: !GetAtt StripeEventDLQ.Arn
+
+  # New EventBridge-specific Stripe Event Handlers
+  StripeSubscriptionEventsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - billing/stripe-subscription-events.mjs
+    Properties:
+      Handler: billing/stripe-subscription-events.handler
+      Timeout: 30
+      MemorySize: 512
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
+                - !Sub "${NewsletterTable.Arn}/index/StripeCustomerIndex"
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminAddUserToGroup
+                - cognito-idp:AdminRemoveUserFromGroup
+                - cognito-idp:ListUsersInGroup
+              Resource: !GetAtt NewsletterUserPool.Arn
+            - Effect: Allow
+              Action:
+                - cloudwatch:PutMetricData
+              Resource: "*"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          USER_POOL_ID: !Ref NewsletterUserPool
+
+  StripePaymentEventsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - billing/stripe-payment-events.mjs
+    Properties:
+      Handler: billing/stripe-payment-events.handler
+      Timeout: 30
+      MemorySize: 512
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
+                - !Sub "${NewsletterTable.Arn}/index/StripeCustomerIndex"
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:SendTemplatedEmail
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - cloudwatch:PutMetricData
+              Resource: "*"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          SES_CONFIGURATION_SET: !Ref ConfigurationSet
+
+  EventBridgeDLQProcessorFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - billing/dlq-processor.mjs
+    Properties:
+      Handler: billing/dlq-processor.handler
+      Timeout: 60
+      MemorySize: 256
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - cloudwatch:PutMetricData
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref EventBridgeCriticalAlertsTopic
+      Environment:
+        Variables:
+          CRITICAL_ALERTS_TOPIC_ARN: !Ref EventBridgeCriticalAlertsTopic
+      Events:
+        DLQMessages:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt StripeEventDLQ.Arn
+            BatchSize: 5
+            MaximumBatchingWindowInSeconds: 30
 
   # Sender Email Management Functions
   GetSendersFunction:
@@ -2775,6 +3188,48 @@ Resources:
             Pattern:
               source: ["newsletter-service"]
               detail-type: ["Check Sender Status"]
+
+  SharpLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: sharp-layer
+      Description: Sharp library for image processing
+      ContentUri: functions/layers/sharp-layer.zip
+      CompatibleRuntimes:
+        - nodejs20.x
+        - nodejs22.x
+
+  CreateHeroImageFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - issue-processing/create-hero-image.mjs
+    Properties:
+      Handler: issue-processing/create-hero-image.handler
+      Layers:
+        - !Ref SharpLayer
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:PutObjectAcl
+                - s3:GetObject
+                - s3:GetObjectAttributes
+              Resource: !Sub "${HostingBucket.Arn}/*"
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          HOSTING_BUCKET_NAME: !Ref HostingBucket
+          TABLE_NAME: !Ref NewsletterTable
 
 Outputs:
   NewsletterApiUrl:

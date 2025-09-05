@@ -13,6 +13,7 @@ import {
   UserIcon,
   KeyIcon,
   EnvelopeIcon,
+  CreditCardIcon,
   Bars3Icon,
   XMarkIcon
 } from '@heroicons/react/24/outline';
@@ -26,13 +27,21 @@ export const MobileNavigation: React.FC = () => {
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
-  const navigation = [
+  const baseNavigation = [
     { name: 'Dashboard', href: '/dashboard', icon: ChartBarIcon, preloadKey: 'dashboard' },
     { name: 'Brand', href: '/brand', icon: BuildingOfficeIcon, preloadKey: 'brand' },
     { name: 'Profile', href: '/profile', icon: UserIcon, preloadKey: 'profile' },
     { name: 'Sender Emails', href: '/senders', icon: EnvelopeIcon, preloadKey: 'senders' },
     { name: 'API Keys', href: '/api-keys', icon: KeyIcon, preloadKey: 'api-keys' },
   ];
+
+  // Add billing navigation for admin users only
+  const navigation = user?.isAdmin || user?.isTenantAdmin
+    ? [
+        ...baseNavigation,
+        { name: 'Billing', href: '/billing', icon: CreditCardIcon, preloadKey: 'billing' },
+      ]
+    : baseNavigation;
 
   const toggleMenu = () => setIsOpen(!isOpen);
   const closeMenu = () => {

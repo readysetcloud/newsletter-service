@@ -60,9 +60,9 @@ export async function getSubscriptionRecord(tenantId) {
 }
 
 /**
- * Updates subscription status and related fields
+ * Updates subscription status and related fields with idempotency support
  */
-export async function updateSubscriptionStatus(tenantId, updates) {
+export async function updateSubscriptionStatus(tenantId, updates, options = {}) {
   if (!tenantId) {
     throw new Error('Tenant ID is required');
   }
@@ -77,10 +77,24 @@ export async function updateSubscriptionStatus(tenantId, updates) {
 
   updates.updatedAt = new Date().toISOString();
 
+  // Add idempotency key if provided
+  if (options.idempotencyKey) {
+    updates.lastEventId = options.idempotencyKey;
+  }
+
   for (const [key, value] of Object.entries(updates)) {
     updateExpressions.push(`#${key} = :${key}`);
     expressionAttributeNames[`#${key}`] = key;
     expressionAttributeValues[`:${key}`] = value;
+  }
+
+  // Build condition expression
+  let conditionExpression = 'attribute_exists(pk) AND attribute_exists(sk)';
+
+  // Add idempotency check if key provided
+  if (options.idempotencyKey) {
+    conditionExpression += ' AND (attribute_not_exists(lastEventId) OR lastEventId <> :idempotencyKey)';
+    expressionAttributeValues[':idempotencyKey'] = options.idempotencyKey;
   }
 
   try {
@@ -93,7 +107,7 @@ export async function updateSubscriptionStatus(tenantId, updates) {
       UpdateExpression: `SET ${updateExpressions.join(', ')}`,
       ExpressionAttributeNames: expressionAttributeNames,
       ExpressionAttributeValues: marshall(expressionAttributeValues),
-      ConditionExpression: 'attribute_exists(pk) AND attribute_exists(sk)',
+      ConditionExpression: conditionExpression,
       ReturnValues: 'ALL_NEW'
     });
 
@@ -101,10 +115,26 @@ export async function updateSubscriptionStatus(tenantId, updates) {
     return result.Attributes ? unmarshall(result.Attributes) : null;
   } catch (error) {
     if (error.name === 'ConditionalCheckFailedException') {
+      if (options.idempotencyKey) {
+        // Check if this is due to idempotency (event already processed)
+        const existing = await getSubscriptionRecord(tenantId);
+        if (existing && existing.lastEventId === options.idempotencyKey) {
+          console.log(`Event ${options.idempotencyKey} already processed for tenant ${tenantId}, skipping`);
+          return existing;
+        }
+      }
       throw new Error(`Subscription record not found for tenant: ${tenantId}`);
     }
     throw new Error(`Failed to update subscription status: ${error.message}`);
   }
+}
+
+/**
+ * Atomically updates subscription with event tracking
+ */
+export async function atomicSubscriptionUpdate(tenantId, subscriptionUpdates, eventId = null) {
+  const options = eventId ? { idempotencyKey: eventId } : {};
+  return await updateSubscriptionStatus(tenantId, subscriptionUpdates, options);
 }
 /**
  * Deletes a subscription record

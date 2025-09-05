@@ -121,6 +121,116 @@ const METRIC_CONFIGS = {
         metricName: 'APIKeyCreated',
         unit: 'Count',
         value: 1
+    },
+
+    // Billing/Subscription metrics
+    'subscription.created': {
+        namespace: 'Newsletter/Billing',
+        metricName: 'SubscriptionCreated',
+        unit: 'Count',
+        value: 1
+    },
+    'subscription.updated': {
+        namespace: 'Newsletter/Billing',
+        metricName: 'SubscriptionUpdated',
+        unit: 'Count',
+        value: 1
+    },
+    'subscription.deleted': {
+        namespace: 'Newsletter/Billing',
+        metricName: 'SubscriptionDeleted',
+        unit: 'Count',
+        value: 1
+    },
+    'subscription.failed': {
+        namespace: 'Newsletter/Billing',
+        metricName: 'SubscriptionProcessingFailed',
+        unit: 'Count',
+        value: 1
+    },
+    'payment.succeeded': {
+        namespace: 'Newsletter/Billing',
+        metricName: 'PaymentSucceeded',
+        unit: 'Count',
+        value: 1
+    },
+    'payment.failed': {
+        namespace: 'Newsletter/Billing',
+        metricName: 'PaymentFailed',
+        unit: 'Count',
+        value: 1
+    },
+
+    // EventBridge-specific metrics
+    'eventbridge.event.received': {
+        namespace: 'Newsletter/EventBridge',
+        metricName: 'EventsReceived',
+        unit: 'Count',
+        value: 1
+    },
+    'eventbridge.event.processed': {
+        namespace: 'Newsletter/EventBridge',
+        metricName: 'EventsProcessedSuccessfully',
+        unit: 'Count',
+        value: 1
+    },
+    'eventbridge.event.failed': {
+        namespace: 'Newsletter/EventBridge',
+        metricName: 'EventProcessingFailures',
+        unit: 'Count',
+        value: 1
+    },
+    'eventbridge.event.retried': {
+        namespace: 'Newsletter/EventBridge',
+        metricName: 'EventsRetried',
+        unit: 'Count',
+        value: 1
+    },
+    'eventbridge.event.dlq': {
+        namespace: 'Newsletter/EventBridge',
+        metricName: 'EventsSentToDLQ',
+        unit: 'Count',
+        value: 1
+    },
+    'eventbridge.processing.duration': {
+        namespace: 'Newsletter/EventBridge',
+        metricName: 'ProcessingDuration',
+        unit: 'Milliseconds'
+    },
+    'eventbridge.processing.latency': {
+        namespace: 'Newsletter/EventBridge',
+        metricName: 'ProcessingLatency',
+        unit: 'Milliseconds'
+    },
+    'eventbridge.subscription.processed': {
+        namespace: 'Newsletter/EventBridge/Business',
+        metricName: 'SubscriptionEventsProcessed',
+        unit: 'Count',
+        value: 1
+    },
+    'eventbridge.payment.processed': {
+        namespace: 'Newsletter/EventBridge/Business',
+        metricName: 'PaymentEventsProcessed',
+        unit: 'Count',
+        value: 1
+    },
+    'eventbridge.error.tenant_not_found': {
+        namespace: 'Newsletter/EventBridge/Errors',
+        metricName: 'TenantNotFoundErrors',
+        unit: 'Count',
+        value: 1
+    },
+    'eventbridge.error.invalid_data': {
+        namespace: 'Newsletter/EventBridge/Errors',
+        metricName: 'InvalidDataErrors',
+        unit: 'Count',
+        value: 1
+    },
+    'eventbridge.error.processing_timeout': {
+        namespace: 'Newsletter/EventBridge/Errors',
+        metricName: 'ProcessingTimeoutErrors',
+        unit: 'Count',
+        value: 1
     }
 };
 

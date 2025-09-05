@@ -4,3 +4,4 @@ export * from './profileService';
 export * from './apiKeyService';
 export * from './dashboardService';
 export * from './notificationService';
+export * from './billingService';

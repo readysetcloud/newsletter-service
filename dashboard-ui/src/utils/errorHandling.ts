@@ -1,297 +1,520 @@
-/**
- * Error handling utilities for API responses and user-friendly error messages
- */
+import type { AxiosError } from 'axios';
 
+/**
+ * Error types for different contexts
+ */
+export type ErrorContext =
+  | 'template'
+  | 'snippet'
+  | 'preview'
+  | 'export'
+  | 'import'
+  | 'validation'
+  | 'network'
+  | 'auth'
+  | 'permission'
+  | 'brand'
+  | 'profile'
+  | 'sender'
+  | 'apikey'
+  | 'upload';
+
+/**
+ * Structured error information
+ */
 export interface ErrorInfo {
   message: string;
-  type: 'network' | 'authentication' | 'authorization' | 'validation' | 'server' | 'unknown';
   code?: string;
-  retryable: boolean;
-  userFriendly: string;
+  details?: string[];
+  suggestions?: string[];
+  retryable?: boolean;
+  severity?: 'info' | 'warning' | 'error' | 'critical';
 }
 
 /**
- * Parse and categorize errors from API respons
+ * Validation error structure
  */
-export function parseApiError(error: any): ErrorInfo {
+export interface ValidationError {
+  field: string;
+  message: string;
+  code?: string;
+  value?: any;
+}
+
+/**
+ * API error response structure
+ */
+export interface ApiErrorResponse {
+  message: string;
+  code?: string;
+  type?: 'network' | 'authentication' | 'authorization' | 'validation' | 'server';
+  retryable?: boolean;
+  userFriendly?: string;
+  errors?: Array<{
+    message: string;
+    line?: number;
+    column?: number;
+    type?: string;
+    severity?: string;
+    code?: string;
+  }>;
+  details?: Record<string, any>;
+}
+
+/**
+ * Get user-friendly error message based on error and context
+ */
+export const getUserFriendlyErrorMessage = (
+  error: any,
+  context: ErrorContext = 'template'
+): string => {
   // Handle network errors
-  if (error?.name === 'TypeError' || error?.message?.includes('fetch')) {
-    return {
-      message: error.message || 'Network error',
-      type: 'network',
-      retryable: true,
-      userFriendly: 'Unable to connect to the server. Please check your internet connection and try again.',
-    };
+  if (error?.code === 'NETWORK_ERROR' || error?.message?.includes('Network Error')) {
+    return 'Unable to connect to the server. Please check your internet connection and try again.';
   }
 
   // Handle timeout errors
-  if (error?.name === 'AbortError' || error?.message?.includes('timeout')) {
-    return {
-      message: error.message || 'Request timeout',
-      type: 'network',
-      retryable: true,
-      userFriendly: 'The request took too long to complete. Please try again.',
-    };
+  if (error?.code === 'ECONNABORTED' || error?.message?.includes('timeout')) {
+    return 'The request timed out. Please try again.';
   }
 
-  // Handle authentication errors
-  if (error?.message?.includes('Authentication required') || error?.message?.includes('401')) {
-    return {
-      message: error.message,
-      type: 'authentication',
-      retryable: false,
-      userFriendly: 'Your session has expired. Please sign in again.',
-    };
-  }
+  // Handle axios errors
+  if (error?.isAxiosError) {
+    const axiosError = error as AxiosError<ApiErrorResponse>;
 
-  // Handle authorization errors
-  if (error?.message?.includes('Access denied') || error?.message?.includes('403')) {
-    return {
-      message: error.message,
-      type: 'authorization',
-      retryable: false,
-      userFriendly: 'You do not have permission to perform this action.',
-    };
+    // Handle specific HTTP status codes
+    switch (axiosError.response?.status) {
+      case 400:
+        return getContextualErrorMessage(axiosError.response.data, context, 'Invalid request');
+      case 401:
+        return 'Your session has expired. Please sign in again.';
+      case 403:
+        return `You don't have permission to perform this action.`;
+      case 404:
+        return getNotFoundMessage(context);
+      case 409:
+        return getConflictMessage(context);
+      case 413:
+        return 'The file or content is too large. Please reduce the size and try again.';
+      case 422:
+        return getValidationErrorMessage(axiosError.response.data, context);
+      case 429:
+        return 'Too many requests. Please wait a moment and try again.';
+      case 500:
+        return 'A server error occurred. Please try again later.';
+      case 502:
+      case 503:
+      case 504:
+        return 'The service is temporarily unavailable. Please try again later.';
+      default:
+        return getContextualErrorMessage(axiosError.response?.data, context);
+    }
   }
 
   // Handle validation errors
-  if (error?.message?.includes('validation') || error?.message?.includes('400')) {
-    return {
-      message: error.message,
-      type: 'validation',
-      retryable: false,
-      userFriendly: 'Please check your input and try again.',
-    };
+  if (error?.name === 'ValidationError' || error?.errors) {
+    return getValidationErrorMessage(error, context);
   }
 
-  // Handle server errors
-  if (error?.message?.includes('500') || error?.message?.includes('Server error')) {
-    return {
-      message: error.message,
-      type: 'server',
-      retryable: true,
-      userFriendly: 'Something went wrong on our end. Please try again in a few moments.',
-    };
-  }
-
-  // Handle resource not found
-  if (error?.message?.includes('404') || error?.message?.includes('not found')) {
-    return {
-      message: error.message,
-      type: 'unknown',
-      retryable: false,
-      userFriendly: 'The requested resource was not found.',
-    };
-  }
-
-  // Default unknown error
-  return {
-    message: error?.message || 'An unexpected error occurred',
-    type: 'unknown',
-    retryable: false,
-    userFriendly: 'Something unexpected happened. Please try again or contact support if the problem persists.',
-  };
-}
-
-/**
- * Get user-friendly error message based on error type and context
- */
-export function getUserFriendlyErrorMessage(error: any, context?: string): string {
-  const errorInfo = parseApiError(error);
-
-  if (context) {
-    switch (context) {
-      case 'profile':
-        return errorInfo.type === 'validation'
-          ? 'Please check your profile information and try again.'
-          : `Failed to update profile: ${errorInfo.userFriendly}`;
-
-      case 'brand':
-        return errorInfo.type === 'validation'
-          ? 'Please check your brand information and try again.'
-          : `Failed to update brand: ${errorInfo.userFriendly}`;
-
-      case 'apikey':
-        return errorInfo.type === 'validation'
-          ? 'Please check your API key details and try again.'
-          : `API key operation failed: ${errorInfo.userFriendly}`;
-
-      case 'dashboard':
-        return `Failed to load dashboard data: ${errorInfo.userFriendly}`;
-
-      case 'upload':
-        return errorInfo.type === 'network'
-          ? 'Upload failed due to connection issues. Please try again.'
-          : `Upload failed: ${errorInfo.userFriendly}`;
-
-      case 'sender':
-        return getSenderErrorMessage(error, errorInfo);
-
-      default:
-        return errorInfo.userFriendly;
+  // Handle template-specific errors
+  if (context === 'template' || context === 'snippet') {
+    if (error?.message?.includes('Template validation failed')) {
+      return 'The template contains syntax errors. Please check the highlighted issues and try again.';
+    }
+    if (error?.message?.includes('Snippet validation failed')) {
+      return 'The snippet contains syntax errors. Please check the highlighted issues and try again.';
     }
   }
 
-  return errorInfo.userFriendly;
-}
-
-/**
- * Get sender-specific error messages
- */
-function getSenderErrorMessage(error: any, errorInfo: ErrorInfo): string {
-  // Handle specific sender error codes
-  if (error?.errorCode) {
-    switch (error.errorCode) {
-      case 'INVALID_EMAIL':
-        return 'Please enter a valid email address (e.g., newsletter@yourdomain.com)';
-      case 'INVALID_DOMAIN':
-        return 'Please enter a valid domain name (e.g., yourdomain.com)';
-      case 'EMAIL_ALREADY_EXISTS':
-        return 'This email address is already configured. Please use a different email or update the existing one.';
-      case 'DOMAIN_ALREADY_EXISTS':
-        return 'This domain is already being verified. Please wait for verification to complete or use a different domain.';
-      case 'SENDER_LIMIT_EXCEEDED':
-        return 'You\'ve reached the maximum number of sender emails for your plan. Upgrade to add more senders.';
-      case 'DNS_VERIFICATION_NOT_ALLOWED':
-        return 'Domain verification is not available on your current plan. Upgrade to Creator tier or higher to use this feature.';
-      case 'MAILBOX_VERIFICATION_NOT_ALLOWED':
-        return 'Email verification is not available on your current plan. Please contact support.';
-      case 'SENDER_NOT_FOUND':
-        return 'The sender email was not found. It may have been deleted or you may not have permission to access it.';
-      case 'DOMAIN_NOT_FOUND':
-        return 'Domain verification not found. Please initiate domain verification first.';
-      case 'SES_IDENTITY_CREATION_FAILED':
-        return 'Failed to set up email verification with our email service. Please try again or contact support if the issue persists.';
-      case 'SES_IDENTITY_DELETION_FAILED':
-        return 'The sender has been removed from your account, but cleanup of the email service may have failed. This won\'t affect your ability to add new senders.';
-      case 'SES_VERIFICATION_FAILED':
-        return 'Email verification failed. Please check your email for the verification link or try resending the verification email.';
-      case 'SES_QUOTA_EXCEEDED':
-        return 'Email service quota exceeded. Please wait a few minutes before trying again.';
-      case 'DNS_RECORD_GENERATION_FAILED':
-        return 'Failed to generate DNS verification records. Please try again or contact support.';
-      case 'DNS_PROPAGATION_TIMEOUT':
-        return 'DNS verification is taking longer than expected. Please check that your DNS records are correctly configured.';
-      case 'TOO_MANY_REQUESTS':
-        return 'Too many requests. Please wait a moment before trying again.';
-      case 'VERIFICATION_ATTEMPTS_EXCEEDED':
-        return 'Too many verification attempts. Please wait 15 minutes before trying again.';
-      default:
-        break;
+  // Handle preview errors
+  if (context === 'preview') {
+    if (error?.message?.includes('rendering failed')) {
+      return 'Unable to render the preview. Please check your template syntax and try again.';
     }
   }
 
-  // Handle by error type for sender context
-  switch (errorInfo.type) {
-    case 'validation':
-      return 'Please check your sender email information and try again.';
-    case 'authorization':
-      return 'You don\'t have permission to manage sender emails. Please check your account permissions.';
-    case 'network':
-      return 'Unable to connect to the email service. Please check your internet connection and try again.';
-    case 'server':
-      return 'Our email service is temporarily unavailable. Please try again in a few moments.';
+  // Handle import/export errors
+  if (context === 'export') {
+    return 'Failed to export templates. Please try again or contact support if the problem persists.';
+  }
+  if (context === 'import') {
+    return 'Failed to import templates. Please check the file format and try again.';
+  }
+
+  // Default fallback
+  return error?.message || getDefaultErrorMessage(context);
+};
+
+/**
+ * Get contextual error message from API response
+ */
+const getContextualErrorMessage = (
+  data: ApiErrorResponse | undefined,
+  context: ErrorContext,
+  fallback?: string
+): string => {
+  if (data?.message) {
+    return data.message;
+  }
+
+  if (data?.errors && data.errors.length > 0) {
+    const firstError = data.errors[0];
+    return firstError.message || fallback || getDefaultErrorMessage(context);
+  }
+
+  return fallback || getDefaultErrorMessage(context);
+};
+
+/**
+ * Get not found message based on context
+ */
+const getNotFoundMessage = (context: ErrorContext): string => {
+  switch (context) {
+    case 'template':
+      return 'Template not found. It may have been deleted or you may not have access to it.';
+    case 'snippet':
+      return 'Snippet not found. It may have been deleted or you may not have access to it.';
     default:
-      return `Sender operation failed: ${errorInfo.userFriendly}`;
+      return 'The requested resource was not found.';
   }
-}
+};
 
 /**
- * Determine if an error should trigger a retry
+ * Get conflict message based on context
  */
-export function shouldRetryError(error: any): boolean {
-  const errorInfo = parseApiError(error);
-  return errorInfo.retryable;
-}
-
-/**
- * Get retry delay based on attempt number (exponential backoff)
- */
-export function getRetryDelay(attemptNumber: number, baseDelay: number = 1000): number {
-  return Math.min(baseDelay * Math.pow(2, attemptNumber - 1), 30000); // Max 30 seconds
-}
-
-/**
- * Format error for logging (includes more technical details)
- */
-export function formatErrorForLogging(error: any, context?: string): string {
-  const timestamp = new Date().toISOString();
-  const contextStr = context ? `[${context}] ` : '';
-
-  if (error instanceof Error) {
-    return `${timestamp} ${contextStr}${error.name}: ${error.message}\nStack: ${error.stack}`;
+const getConflictMessage = (context: ErrorContext): string => {
+  switch (context) {
+    case 'template':
+      return 'A template with this name already exists. Please choose a different name.';
+    case 'snippet':
+      return 'A snippet with this name already exists. Please choose a different name.';
+    default:
+      return 'A conflict occurred. The resource may have been modified by another user.';
   }
-
-  return `${timestamp} ${contextStr}Error: ${JSON.stringify(error, null, 2)}`;
-}
+};
 
 /**
- * Error boundary helper for React components
+ * Get validation error message
  */
-export function handleComponentError(error: Error, errorInfo: any): void {
-  console.error('Component Error:', formatErrorForLogging(error, 'Component'));
-  console.error('Error Info:', errorInfo);
+const getValidationErrorMessage = (
+  data: any,
+  context: ErrorContext
+): string => {
+  if (data?.errors && Array.isArray(data.errors)) {
+    const errorCount = data.errors.length;
+    const firstError = data.errors[0];
 
-  // In production, you might want to send this to an error reporting service
-  if (process.env.NODE_ENV === 'production') {
-    // Example: sendToErrorReporting(error, errorInfo);
-  }
-}
-
-/**
- * Validation error helpers
- */
-export function extractValidationErrors(error: any): Record<string, string> {
-  const errors: Record<string, string> = {};
-
-  if (error?.details && typeof error.details === 'object') {
-    Object.entries(error.details).forEach(([field, message]) => {
-      errors[field] = typeof message === 'string' ? message : 'Invalid value';
-    });
+    if (errorCount === 1) {
+      return firstError.message || `Validation failed for ${context}`;
+    } else {
+      return `${errorCount} validation errors found. Please check the highlighted issues.`;
+    }
   }
 
-  return errors;
-}
+  return `Validation failed for ${context}. Please check your input and try again.`;
+};
 
 /**
- * Create a standardized error response
+ * Get default error message based on context
  */
-export function createErrorResponse(message: string, code?: string): { success: false; error: string; code?: string } {
-  return {
-    success: false,
-    error: message,
-    ...(code && { code }),
-  };
-}
+const getDefaultErrorMessage = (context: ErrorContext): string => {
+  switch (context) {
+    case 'template':
+      return 'An error occurred while processing the template. Please try again.';
+    case 'snippet':
+      return 'An error occurred while processing the snippet. Please try again.';
+    case 'preview':
+      return 'An error occurred while generating the preview. Please try again.';
+    case 'export':
+      return 'An error occurred while exporting. Please try again.';
+    case 'import':
+      return 'An error occurred while importing. Please try again.';
+    case 'validation':
+      return 'Validation failed. Please check your input and try again.';
+    case 'network':
+      return 'A network error occurred. Please check your connection and try again.';
+    case 'auth':
+      return 'Authentication failed. Please sign in again.';
+    case 'permission':
+      return 'You do not have permission to perform this action.';
+    default:
+      return 'An unexpected error occurred. Please try again.';
+  }
+};
 
 /**
- * Toast notification helpers for different error types
+ * Extract detailed error information from error object
  */
-export function getErrorToastConfig(error: any, context?: string) {
-  const errorInfo = parseApiError(error);
-
-  return {
-    title: getErrorTitle(errorInfo.type),
+export const getDetailedErrorInfo = (error: any, context: ErrorContext): ErrorInfo => {
+  const baseInfo: ErrorInfo = {
     message: getUserFriendlyErrorMessage(error, context),
-    type: 'error' as const,
-    duration: errorInfo.retryable ? 5000 : 8000, // Show retryable errors for less time
-    action: errorInfo.retryable ? { label: 'Retry', onClick: () => {} } : undefined,
+    severity: 'error',
+    retryable: false
   };
-}
 
-function getErrorTitle(errorType: ErrorInfo['type']): string {
-  switch (errorType) {
-    case 'network':
-      return 'Connection Error';
-    case 'authentication':
-      return 'Authentication Required';
-    case 'authorization':
-      return 'Access Denied';
-    case 'validation':
-      return 'Invalid Input';
-    case 'server':
-      return 'Server Error';
-    default:
-      return 'Error';
+  // Handle axios errors
+  if (error?.isAxiosError) {
+    const axiosError = error as AxiosError<ApiErrorResponse>;
+    const status = axiosError.response?.status;
+    const data = axiosError.response?.data;
+
+    baseInfo.code = data?.code || `HTTP_${status}`;
+    baseInfo.retryable = isRetryableError(status);
+    baseInfo.severity = getErrorSeverity(status);
+
+    // Extract detailed errors
+    if (data?.errors && Array.isArray(data.errors)) {
+      baseInfo.details = data.errors.map(err =>
+        err.line ? `Line ${err.line}: ${err.message}` : err.message
+      );
+    }
+
+    // Add suggestions based on error type
+    baseInfo.suggestions = getErrorSuggestions(status, context, data);
   }
-}
+
+  // Handle validation errors
+  if (error?.name === 'ValidationError' || error?.errors) {
+    baseInfo.code = 'VALIDATION_ERROR';
+    baseInfo.severity = 'warning';
+    baseInfo.retryable = true;
+
+    if (error.errors && Array.isArray(error.errors)) {
+      baseInfo.details = error.errors.map((err: any) => err.message);
+    }
+
+    baseInfo.suggestions = [
+      'Check the highlighted fields for errors',
+      'Ensure all required fields are filled',
+      'Verify that the input format is correct'
+    ];
+  }
+
+  return baseInfo;
+};
+
+/**
+ * Check if error is retryable based on status code
+ */
+const isRetryableError = (status?: number): boolean => {
+  if (!status) return false;
+
+  // Retryable errors: timeout, server errors, rate limiting
+  return [408, 429, 500, 502, 503, 504].includes(status);
+};
+
+/**
+ * Get error severity based on status code
+ */
+const getErrorSeverity = (status?: number): ErrorInfo['severity'] => {
+  if (!status) return 'error';
+
+  if (status >= 500) return 'critical';
+  if (status >= 400) return 'error';
+  if (status >= 300) return 'warning';
+  return 'info';
+};
+
+/**
+ * Get error suggestions based on status and context
+ */
+const getErrorSuggestions = (
+  status?: number,
+  context?: ErrorContext,
+  data?: ApiErrorResponse
+): string[] => {
+  const suggestions: string[] = [];
+
+  switch (status) {
+    case 400:
+      suggestions.push('Check your input for errors');
+      suggestions.push('Ensure all required fields are provided');
+      break;
+    case 401:
+      suggestions.push('Sign in again to refresh your session');
+      suggestions.push('Check that your account has the necessary permissions');
+      break;
+    case 403:
+      suggestions.push('Contact your administrator for access');
+      suggestions.push('Verify that you\'re using the correct account');
+      break;
+    case 404:
+      suggestions.push('Check that the resource still exists');
+      suggestions.push('Verify the URL or ID is correct');
+      break;
+    case 409:
+      suggestions.push('Try using a different name');
+      suggestions.push('Refresh the page to see the latest changes');
+      break;
+    case 413:
+      suggestions.push('Reduce the file size or content length');
+      suggestions.push('Break large templates into smaller pieces');
+      break;
+    case 429:
+      suggestions.push('Wait a moment before trying again');
+      suggestions.push('Reduce the frequency of requests');
+      break;
+    case 500:
+    case 502:
+    case 503:
+    case 504:
+      suggestions.push('Try again in a few minutes');
+      suggestions.push('Contact support if the problem persists');
+      break;
+  }
+
+  // Add context-specific suggestions
+  if (context === 'template' || context === 'snippet') {
+    suggestions.push('Check the syntax highlighting for errors');
+    suggestions.push('Validate your Handlebars syntax');
+  }
+
+  if (context === 'preview') {
+    suggestions.push('Ensure all required data is provided');
+    suggestions.push('Check that referenced snippets exist');
+  }
+
+  return suggestions;
+};
+
+/**
+ * Format validation errors for display
+ */
+export const formatValidationErrors = (errors: ValidationError[]): Record<string, string> => {
+  const formatted: Record<string, string> = {};
+
+  errors.forEach(error => {
+    formatted[error.field] = error.message;
+  });
+
+  return formatted;
+};
+
+/**
+ * Check if error indicates a network issue
+ */
+export const isNetworkError = (error: any): boolean => {
+  return (
+    error?.code === 'NETWORK_ERROR' ||
+    error?.message?.includes('Network Error') ||
+    error?.code === 'ECONNABORTED' ||
+    !error?.response
+  );
+};
+
+/**
+ * Check if error indicates an authentication issue
+ */
+export const isAuthError = (error: any): boolean => {
+  return (
+    error?.response?.status === 401 ||
+    error?.response?.status === 403 ||
+    error?.code === 'AUTH_ERROR'
+  );
+};
+
+/**
+ * Check if error indicates a validation issue
+ */
+export const isValidationError = (error: any): boolean => {
+  return (
+    error?.response?.status === 400 ||
+    error?.response?.status === 422 ||
+    error?.name === 'ValidationError' ||
+    error?.code === 'VALIDATION_ERROR'
+  );
+};
+
+/**
+ * Create a standardized error object
+ */
+export const createError = (
+  message: string,
+  code?: string,
+  details?: any
+): Error & { code?: string; details?: any } => {
+  const error = new Error(message) as Error & { code?: string; details?: any };
+  if (code) error.code = code;
+  if (details) error.details = details;
+  return error;
+};
+
+/**
+ * Check if an error should be retried
+ */
+export const shouldRetryError = (error: any): boolean => {
+  // Network errors should be retried
+  if (isNetworkError(error)) {
+    return true;
+  }
+
+  // Check HTTP status codes
+  const status = error?.response?.status;
+  return isRetryableError(status);
+};
+
+/**
+ * Calculate retry delay with exponential backoff
+ */
+export const getRetryDelay = (attempt: number, baseDelay: number = 1000): number => {
+  // Exponential backoff with jitter
+  const exponentialDelay = baseDelay * Math.pow(2, attempt - 1);
+  const jitter = Math.random() * 0.1 * exponentialDelay; // Add up to 10% jitter
+  return Math.min(exponentialDelay + jitter, 30000); // Cap at 30 seconds
+};
+
+/**
+ * Parse API error response
+ */
+export const parseApiError = (error: any): ApiErrorResponse => {
+  if (error?.response?.data) {
+    return error.response.data;
+  }
+
+  if (error?.message) {
+    return {
+      message: error.message,
+      code: error.code
+    };
+  }
+
+  return {
+    message: 'An unexpected error occurred',
+    code: 'UNKNOWN_ERROR'
+  };
+};
+
+/**
+ * Retry function with exponential backoff
+ */
+export const retryWithBackoff = async <T>(
+  fn: () => Promise<T>,
+  maxRetries: number = 3,
+  baseDelay: number = 1000
+): Promise<T> => {
+  let lastError: any;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+
+      // Don't retry on non-retryable errors
+      if (!shouldRetryError(error)) {
+        throw error;
+      }
+
+      // Don't retry on the last attempt
+      if (attempt === maxRetries) {
+        break;
+      }
+
+      // Wait with exponential backoff
+      const delay = getRetryDelay(attempt + 1, baseDelay);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+
+  throw lastError;
+};

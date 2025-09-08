@@ -20,6 +20,7 @@ export const getUserContext = (event) => {
     const role = authContext.role || 'user';
     const isAdmin = authContext.isAdmin === 'true';
     const isTenantAdmin = authContext.isTenantAdmin === 'true';
+    const userTier = authContext.userTier || 'free-tier';
 
     if (!userId || !email) {
       throw new Error('Missing required user information in authorization context');
@@ -32,7 +33,8 @@ export const getUserContext = (event) => {
       tenantId,
       role,
       isAdmin,
-      isTenantAdmin
+      isTenantAdmin,
+      userTier
     };
   } catch (error) {
     console.error('Error extracting user context:', error);

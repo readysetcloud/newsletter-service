@@ -57,6 +57,19 @@ const handleJwtAuth = async (token, event) => {
   const verifiedToken = await verifier.verify(token);
   const userInfo = await getUserAttributes(token);
   const tenantId = userInfo?.['custom:tenant_id'] || null;
+
+  // Extract user tier from Cognito groups
+  const cognitoGroups = verifiedToken['cognito:groups'] || [];
+  let userTier = 'free-tier'; // Default to free tier
+
+  if (cognitoGroups.includes('pro-tier')) {
+    userTier = 'pro-tier';
+  } else if (cognitoGroups.includes('creator-tier')) {
+    userTier = 'creator-tier';
+  } else if (cognitoGroups.includes('free-tier')) {
+    userTier = 'free-tier';
+  }
+
   const apiArn = getApiArnPattern(event.methodArn);
   const policy = generatePolicy(userInfo.sub ?? verifiedToken.sub, 'Allow', apiArn, {
     userId: userInfo.sub ?? verifiedToken.sub,
@@ -65,6 +78,7 @@ const handleJwtAuth = async (token, event) => {
     lastName: userInfo.family_name,
     ...userInfo.zoneinfo && { timezone: userInfo.zoneinfo },
     tenantId,
+    userTier,
     authType: 'jwt',
   });
 

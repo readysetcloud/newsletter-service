@@ -36,6 +36,8 @@ tags:
   - name: API Keys
   - name: Profile
   - name: Senders
+  - name: Templates
+  - name: Snippets
 
 paths:
   /dashboard:
@@ -1195,6 +1197,380 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
+  /templates:
+    get:
+      summary: List templates
+      tags:
+        - Templates
+      responses:
+        200:
+          description: List of templates
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  templates:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Template"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ListTemplatesFunction.Arn}/invocations
+    post:
+      summary: Create template
+      tags:
+        - Templates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTemplateRequest"
+      responses:
+        201:
+          description: Template created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Template"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CreateTemplateFunction.Arn}/invocations
+
+  /templates/{templateId}:
+    parameters:
+      - name: templateId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Template identifier
+    get:
+      summary: Get template
+      tags:
+        - Templates
+      responses:
+        200:
+          description: Template details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Template"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetTemplateFunction.Arn}/invocations
+    put:
+      summary: Update template
+      tags:
+        - Templates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTemplateRequest"
+      responses:
+        200:
+          description: Template updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Template"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UpdateTemplateFunction.Arn}/invocations
+    delete:
+      summary: Delete template
+      tags:
+        - Templates
+      responses:
+        200:
+          description: Template deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Template deleted successfully
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DeleteTemplateFunction.Arn}/invocations
+
+  /templates/{templateId}/preview:
+    parameters:
+      - name: templateId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Template identifier
+    post:
+      summary: Preview template
+      tags:
+        - Templates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PreviewTemplateRequest"
+      responses:
+        200:
+          description: Template preview generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewResponse"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PreviewTemplateFunction.Arn}/invocations
+
+  /snippets:
+    get:
+      summary: List snippets
+      tags:
+        - Snippets
+      responses:
+        200:
+          description: List of snippets
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  snippets:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Snippet"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ListSnippetsFunction.Arn}/invocations
+    post:
+      summary: Create snippet
+      tags:
+        - Snippets
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSnippetRequest"
+      responses:
+        201:
+          description: Snippet created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snippet"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CreateSnippetFunction.Arn}/invocations
+
+  /snippets/{snippetId}:
+    parameters:
+      - name: snippetId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Snippet identifier
+    get:
+      summary: Get snippet
+      tags:
+        - Snippets
+      responses:
+        200:
+          description: Snippet details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snippet"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetSnippetFunction.Arn}/invocations
+    put:
+      summary: Update snippet
+      tags:
+        - Snippets
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSnippetRequest"
+      responses:
+        200:
+          description: Snippet updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snippet"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UpdateSnippetFunction.Arn}/invocations
+    delete:
+      summary: Delete snippet
+      tags:
+        - Snippets
+      responses:
+        200:
+          description: Snippet deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Snippet deleted successfully
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DeleteSnippetFunction.Arn}/invocations
+
+  /snippets/{snippetId}/preview:
+    parameters:
+      - name: snippetId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Snippet identifier
+    post:
+      summary: Preview snippet
+      tags:
+        - Snippets
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PreviewSnippetRequest"
+      responses:
+        200:
+          description: Snippet preview generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewResponse"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PreviewSnippetFunction.Arn}/invocations
+
 components:
   parameters:
     Tenant:
@@ -1444,3 +1820,305 @@ components:
         domain:
           type: string
           description: Domain name to verify
+
+    Template:
+      type: object
+      required:
+        - id
+        - tenantId
+        - name
+        - type
+        - s3Key
+        - s3VersionId
+        - createdAt
+        - updatedAt
+        - version
+        - isActive
+      properties:
+        id:
+          type: string
+          description: Unique template identifier
+        tenantId:
+          type: string
+          description: Tenant identifier
+        name:
+          type: string
+          description: Template name
+        description:
+          type: string
+          description: Template description
+        type:
+          type: string
+          enum: [template]
+          description: Item type
+        s3Key:
+          type: string
+          description: S3 object key for template content
+        s3VersionId:
+          type: string
+          description: Current S3 version ID
+        category:
+          type: string
+          description: Template category
+        tags:
+          type: array
+          items:
+            type: string
+          description: Template tags
+        snippets:
+          type: array
+          items:
+            type: string
+          description: Used snippet IDs
+        isVisualMode:
+          type: boolean
+          description: Whether template uses visual builder mode
+        visualConfig:
+          type: object
+          description: Visual builder configuration
+        createdAt:
+          type: string
+          format: date-time
+          description: Creation timestamp
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last update timestamp
+        createdBy:
+          type: string
+          description: User who created the template
+        apiKeyId:
+          type: string
+          description: API key used to create template
+        version:
+          type: integer
+          description: Template version number
+        isActive:
+          type: boolean
+          description: Whether template is active
+
+    Snippet:
+      type: object
+      required:
+        - id
+        - tenantId
+        - name
+        - type
+        - s3Key
+        - s3VersionId
+        - createdAt
+        - updatedAt
+        - version
+        - isActive
+      properties:
+        id:
+          type: string
+          description: Unique snippet identifier
+        tenantId:
+          type: string
+          description: Tenant identifier
+        name:
+          type: string
+          description: Snippet name
+        description:
+          type: string
+          description: Snippet description
+        type:
+          type: string
+          enum: [snippet]
+          description: Item type
+        s3Key:
+          type: string
+          description: S3 object key for snippet content
+        s3VersionId:
+          type: string
+          description: Current S3 version ID
+        parameters:
+          type: array
+          items:
+            $ref: "#/components/schemas/SnippetParameter"
+          description: Snippet parameters
+        createdAt:
+          type: string
+          format: date-time
+          description: Creation timestamp
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last update timestamp
+        createdBy:
+          type: string
+          description: User who created the snippet
+        apiKeyId:
+          type: string
+          description: API key used to create snippet
+        version:
+          type: integer
+          description: Snippet version number
+        isActive:
+          type: boolean
+          description: Whether snippet is active
+
+    SnippetParameter:
+      type: object
+      required:
+        - name
+        - type
+        - required
+      properties:
+        name:
+          type: string
+          description: Parameter name
+        type:
+          type: string
+          enum: [string, number, boolean]
+          description: Parameter type
+        required:
+          type: boolean
+          description: Whether parameter is required
+        defaultValue:
+          description: Default parameter value
+        description:
+          type: string
+          description: Parameter description
+
+    CreateTemplateRequest:
+      type: object
+      required:
+        - name
+        - content
+      properties:
+        name:
+          type: string
+          description: Template name
+        description:
+          type: string
+          description: Template description
+        content:
+          type: string
+          description: Template handlebars content
+        category:
+          type: string
+          description: Template category
+        tags:
+          type: array
+          items:
+            type: string
+          description: Template tags
+        isVisualMode:
+          type: boolean
+          description: Whether template uses visual builder mode
+        visualConfig:
+          type: object
+          description: Visual builder configuration
+
+    UpdateTemplateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Template name
+        description:
+          type: string
+          description: Template description
+        content:
+          type: string
+          description: Template handlebars content
+        category:
+          type: string
+          description: Template category
+        tags:
+          type: array
+          items:
+            type: string
+          description: Template tags
+        isVisualMode:
+          type: boolean
+          description: Whether template uses visual builder mode
+        visualConfig:
+          type: object
+          description: Visual builder configuration
+
+    CreateSnippetRequest:
+      type: object
+      required:
+        - name
+        - content
+        - parameters
+      properties:
+        name:
+          type: string
+          description: Snippet name
+        description:
+          type: string
+          description: Snippet description
+        content:
+          type: string
+          description: Snippet handlebars content
+        parameters:
+          type: array
+          items:
+            $ref: "#/components/schemas/SnippetParameter"
+          description: Snippet parameters
+
+    UpdateSnippetRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Snippet name
+        description:
+          type: string
+          description: Snippet description
+        content:
+          type: string
+          description: Snippet handlebars content
+        parameters:
+          type: array
+          items:
+            $ref: "#/components/schemas/SnippetParameter"
+          description: Snippet parameters
+
+    PreviewTemplateRequest:
+      type: object
+      properties:
+        testData:
+          type: object
+          description: Test data for template rendering
+        sendTestEmail:
+          type: boolean
+          description: Whether to send test email
+        testEmailAddress:
+          type: string
+          format: email
+          description: Email address for test email
+
+    PreviewSnippetRequest:
+      type: object
+      required:
+        - parameters
+      properties:
+        parameters:
+          type: object
+          description: Parameter values for snippet rendering
+
+    PreviewResponse:
+      type: object
+      required:
+        - html
+        - isValid
+      properties:
+        html:
+          type: string
+          description: Rendered HTML content
+        isValid:
+          type: boolean
+          description: Whether rendering was successful
+        errors:
+          type: array
+          items:
+            type: string
+          description: Rendering errors if any
+        testEmailSent:
+          type: boolean
+          description: Whether test email was sent

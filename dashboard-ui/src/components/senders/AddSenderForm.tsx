@@ -452,12 +452,7 @@ export const AddSenderForm: React.FC<AddSenderFormProps> = ({
             disabled={isSubmitting || !selectedVerificationType}
             isLoading={isSubmitting}
           >
-            <InlineLoading
-              isLoading={isSubmitting}
-              loadingText="Adding..."
-            >
-              {retryCount > 0 ? 'Try Again' : 'Add Sender Email'}
-            </InlineLoading>
+            {isSubmitting ? 'Adding...' : (retryCount > 0 ? 'Try Again' : 'Add Sender Email')}
           </Button>
         </div>
       </form>

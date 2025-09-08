@@ -349,6 +349,58 @@ Resources:
       VersioningConfiguration:
         Status: Enabled
 
+  TemplatesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  TemplatesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 90
+          - Id: DeleteIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+
   HostingBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -3231,6 +3283,1059 @@ Resources:
           HOSTING_BUCKET_NAME: !Ref HostingBucket
           TABLE_NAME: !Ref NewsletterTable
 
+  # Template Management Functions
+  ListTemplatesFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/list-templates.mjs
+    Properties:
+      Handler: templates/list-templates.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource:
+                - !GetAtt TemplatesTable.Arn
+                - !Sub "${TemplatesTable.Arn}/index/GSI1"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /templates
+            Method: GET
+
+  GetTemplateFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/get-template.mjs
+    Properties:
+      Handler: templates/get-template.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource: !GetAtt TemplatesTable.Arn
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:GetObjectVersion
+              Resource: !Sub "${TemplatesBucket.Arn}/*"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /templates/{templateId}
+            Method: GET
+
+  CreateTemplateFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/create-template.mjs
+    Properties:
+      Handler: templates/create-template.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+              Resource: !GetAtt TemplatesTable.Arn
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource: !Sub "${TemplatesBucket.Arn}/*"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /templates
+            Method: POST
+
+  UpdateTemplateFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/update-template.mjs
+    Properties:
+      Handler: templates/update-template.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt TemplatesTable.Arn
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource: !Sub "${TemplatesBucket.Arn}/*"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /templates/{templateId}
+            Method: PUT
+
+  DeleteTemplateFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/delete-template.mjs
+    Properties:
+      Handler: templates/delete-template.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:DeleteItem
+              Resource: !GetAtt TemplatesTable.Arn
+            - Effect: Allow
+              Action:
+                - s3:DeleteObject
+              Resource: !Sub "${TemplatesBucket.Arn}/*"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /templates/{templateId}
+            Method: DELETE
+
+  PreviewTemplateFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/preview-template.mjs
+    Properties:
+      Handler: templates/preview-template.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt TemplatesTable.Arn
+                - !Sub "${TemplatesTable.Arn}/index/GSI1"
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub "${TemplatesBucket.Arn}/*"
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+              Resource: "*"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+          CONFIGURATION_SET: !Ref ConfigurationSet
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /templates/{templateId}/preview
+            Method: POST
+
+  ListSnippetsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/list-snippets.mjs
+    Properties:
+      Handler: templates/list-snippets.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource:
+                - !GetAtt TemplatesTable.Arn
+                - !Sub "${TemplatesTable.Arn}/index/GSI1"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /snippets
+            Method: GET
+
+  GetSnippetFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/get-snippet.mjs
+    Properties:
+      Handler: templates/get-snippet.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource: !GetAtt TemplatesTable.Arn
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub "${TemplatesBucket.Arn}/*"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /snippets/{snippetId}
+            Method: GET
+
+  CreateSnippetFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/create-snippet.mjs
+    Properties:
+      Handler: templates/create-snippet.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+              Resource: !GetAtt TemplatesTable.Arn
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource: !Sub "${TemplatesBucket.Arn}/*"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /snippets
+            Method: POST
+
+  UpdateSnippetFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/update-snippet.mjs
+    Properties:
+      Handler: templates/update-snippet.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt TemplatesTable.Arn
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource: !Sub "${TemplatesBucket.Arn}/*"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /snippets/{snippetId}
+            Method: PUT
+
+  DeleteSnippetFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/delete-snippet.mjs
+    Properties:
+      Handler: templates/delete-snippet.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:DeleteItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt TemplatesTable.Arn
+                - !Sub "${TemplatesTable.Arn}/index/GSI1"
+            - Effect: Allow
+              Action:
+                - s3:DeleteObject
+              Resource: !Sub "${TemplatesBucket.Arn}/*"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /snippets/{snippetId}
+            Method: DELETE
+
+  PreviewSnippetFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/preview-snippet.mjs
+    Properties:
+      Handler: templates/preview-snippet.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource: !GetAtt TemplatesTable.Arn
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub "${TemplatesBucket.Arn}/*"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /snippets/{snippetId}/preview
+            Method: POST
+
+  # Template Version Management Functions
+  GetTemplateVersionsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/get-template-versions.mjs
+    Properties:
+      Handler: templates/get-template-versions.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:ListObjectVersions
+              Resource: !Sub "${TemplatesBucket.Arn}/*"
+      Environment:
+        Variables:
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /templates/{templateId}/versions
+            Method: GET
+
+  GetTemplateVersionFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/get-template-version.mjs
+    Properties:
+      Handler: templates/get-template-version.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:GetObjectVersion
+              Resource: !Sub "${TemplatesBucket.Arn}/*"
+      Environment:
+        Variables:
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /templates/{templateId}/versions/{versionId}
+            Method: GET
+
+  RestoreTemplateVersionFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/restore-template-version.mjs
+    Properties:
+      Handler: templates/restore-template-version.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !GetAtt TemplatesTable.Arn
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:GetObjectVersion
+                - s3:PutObject
+              Resource: !Sub "${TemplatesBucket.Arn}/*"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /templates/{templateId}/versions/{versionId}/restore
+            Method: POST
+
+  # Template Import/Export Functions
+  ExportTemplatesFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/export-templates.mjs
+    Properties:
+      Handler: templates/export-templates.handler
+      Timeout: 60
+      MemorySize: 2048
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource:
+                - !GetAtt TemplatesTable.Arn
+                - !Sub "${TemplatesTable.Arn}/index/*"
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:GetObjectVersion
+              Resource: !Sub "${TemplatesBucket.Arn}/*"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /templates/export
+            Method: POST
+
+  ImportTemplatesFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/import-templates.mjs
+    Properties:
+      Handler: templates/import-templates.handler
+      Timeout: 300
+      MemorySize: 2048
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt TemplatesTable.Arn
+                - !Sub "${TemplatesTable.Arn}/index/*"
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource: !Sub "${TemplatesBucket.Arn}/*"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /templates/import
+            Method: POST
+
+  # Template Management Functions
+  ListTemplatesFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/list-templates.mjs
+    Properties:
+      Handler: templates/list-templates.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource:
+                - !Sub "${TemplatesTable}/index/GSI1"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+      Events:
+        ListTemplates:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /templates
+            Method: GET
+
+  GetTemplateFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/get-template.mjs
+    Properties:
+      Handler: templates/get-template.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource: !GetAtt TemplatesTable.Arn
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub "${TemplatesBucket}/*"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+      Events:
+        GetTemplate:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /templates/{id}
+            Method: GET
+
+  CreateTemplateFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/create-template.mjs
+    Properties:
+      Handler: templates/create-template.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+              Resource: !GetAtt TemplatesTable.Arn
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource: !Sub "${TemplatesBucket}/*"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+      Events:
+        CreateTemplate:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /templates
+            Method: POST
+
+  UpdateTemplateFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/update-template.mjs
+    Properties:
+      Handler: templates/update-template.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:Query
+              Resource: !GetAtt TemplatesTable.Arn
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:GetObject
+              Resource: !Sub "${TemplatesBucket}/*"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+      Events:
+        UpdateTemplate:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /templates/{id}
+            Method: PUT
+
+  DeleteTemplateFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/delete-template.mjs
+    Properties:
+      Handler: templates/delete-template.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:Query
+              Resource: !GetAtt TemplatesTable.Arn
+            - Effect: Allow
+              Action:
+                - s3:DeleteObject
+              Resource: !Sub "${TemplatesBucket}/*"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+      Events:
+        DeleteTemplate:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /templates/{id}
+            Method: DELETE
+
+  PreviewTemplateFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/preview-template.mjs
+    Properties:
+      Handler: templates/preview-template.handler
+      Timeout: 30
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource:
+                - !GetAtt TemplatesTable.Arn
+                - !Sub "${TemplatesTable}/index/GSI1"
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub "${TemplatesBucket}/*"
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+              Resource: "*"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+      Events:
+        PreviewTemplate:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /templates/{id}/preview
+            Method: POST
+        PreviewTemplateContent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /templates/preview
+            Method: POST
+
+  # Snippet Management Functions
+  ListSnippetsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/list-snippets.mjs
+    Properties:
+      Handler: templates/list-snippets.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource:
+                - !Sub "${TemplatesTable}/index/GSI1"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+      Events:
+        ListSnippets:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /snippets
+            Method: GET
+
+  GetSnippetFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/get-snippet.mjs
+    Properties:
+      Handler: templates/get-snippet.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource: !GetAtt TemplatesTable.Arn
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub "${TemplatesBucket}/*"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+      Events:
+        GetSnippet:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /snippets/{id}
+            Method: GET
+
+  CreateSnippetFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/create-snippet.mjs
+    Properties:
+      Handler: templates/create-snippet.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+              Resource: !GetAtt TemplatesTable.Arn
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource: !Sub "${TemplatesBucket}/*"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+      Events:
+        CreateSnippet:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /snippets
+            Method: POST
+
+  UpdateSnippetFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/update-snippet.mjs
+    Properties:
+      Handler: templates/update-snippet.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:Query
+              Resource: !GetAtt TemplatesTable.Arn
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:GetObject
+              Resource: !Sub "${TemplatesBucket}/*"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+      Events:
+        UpdateSnippet:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /snippets/{id}
+            Method: PUT
+
+  DeleteSnippetFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/delete-snippet.mjs
+    Properties:
+      Handler: templates/delete-snippet.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt TemplatesTable.Arn
+                - !Sub "${TemplatesTable}/index/GSI1"
+            - Effect: Allow
+              Action:
+                - s3:DeleteObject
+              Resource: !Sub "${TemplatesBucket}/*"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+ents:
+        DeleteSnippet:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /snippets/{id}
+            Method: DELETE
+
+  PreviewSnippetFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/preview-snippet.mjs
+    Properties:
+      Handler: templates/preview-snippet.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource: !GetAtt TemplatesTable.Arn
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub "${TemplatesBucket}/*"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+          TEMPLATES_BUCKET_NAME: !Ref TemplatesBucket
+      Events:
+        PreviewSnippet:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /snippets/{id}/preview
+            Method: POST
+        PreviewSnippetContent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /snippets/preview
+            Method: POST
+
+  GetQuotaStatusFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - templates/get-quota-status.mjs
+    Properties:
+      Handler: templates/get-quota-status.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource:
+                - !Sub "${TemplatesTable}/index/GSI1"
+      Environment:
+        Variables:
+          TEMPLATES_TABLE_NAME: !Ref TemplatesTable
+      Events:
+        GetQuotaStatus:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /templates/quota
+            Method: GET
+
 Outputs:
   NewsletterApiUrl:
     Description: "API Gateway endpoint URL for Newsletter service"
@@ -3259,6 +4364,14 @@ Outputs:
   HostingBucketName:
     Description: "S3 bucket name for hosting static content"
     Value: !Ref HostingBucket
+
+  TemplatesTableName:
+    Description: "DynamoDB table name for template storage"
+    Value: !Ref TemplatesTable
+
+  TemplatesBucketName:
+    Description: "S3 bucket name for template file storage"
+    Value: !Ref TemplatesBucket
 
   StripeConnectionArn:
     Description: "EventBridge connection ARN for Stripe API integration"

@@ -67,7 +67,7 @@ export function ErrorNotificationManager({
     if (errorInfo.type === 'network' || errorInfo.retryable) {
       showWarning(
         'Connection Issue',
-        errorInfo.userFriendly,
+        errorInfo.userFriendly || errorInfo.message,
         undefined
       );
 
@@ -81,7 +81,7 @@ export function ErrorNotificationManager({
     } else {
       showError(
         'Application Error',
-        errorInfo.userFriendly,
+        errorInfo.userFriendly || errorInfo.message,
         undefined
       );
     }
@@ -113,13 +113,13 @@ export function ErrorNotificationManager({
     if (errorInfo.type === 'authentication' || errorInfo.type === 'authorization') {
       showError(
         'Authentication Error',
-        errorInfo.userFriendly,
+        errorInfo.userFriendly || errorInfo.message,
         '/auth/signin'
       );
     } else if (errorInfo.type === 'network' && errorInfo.retryable) {
       showWarning(
         'Network Error',
-        errorInfo.userFriendly,
+        errorInfo.userFriendly || errorInfo.message,
         undefined
       );
 

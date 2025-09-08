@@ -289,7 +289,7 @@ export const SenderEmailList: React.FC<SenderEmailListProps> = ({
   };
 
   if (isLoading) {
-    return <SkeletonLoader count={3} />;
+    return <SkeletonLoader />;
   }
 
   if (senders.length === 0) {
@@ -478,18 +478,7 @@ export const SenderEmailList: React.FC<SenderEmailListProps> = ({
           {(sender.verificationStatus === 'pending' || sender.verificationStatus === 'failed' || sender.verificationStatus === 'verification_timed_out') && (
             <div className="mt-4">
               <VerificationProgress
-                type={sender.verificationType === 'domain' ? 'domain' : 'email'}
-                status={sender.verificationStatus}
-                email={sender.verificationType === 'mailbox' ? sender.email : undefined}
-                domain={sender.verificationType === 'domain' ? sender.domain : undefined}
-                estimatedTime={
-                  sender.verificationStatus === 'verification_timed_out'
-                    ? 'Verification expired after 24 hours. Click refresh to check current status.'
-                    : sender.verificationType === 'mailbox'
-                    ? 'Verification usually completes within a few minutes'
-                    : 'DNS verification can take up to 72 hours'
-                }
-                onRetry={(sender.verificationStatus === 'failed' || sender.verificationStatus === 'verification_timed_out') ? () => handleRetryVerification(sender) : undefined}
+                progress={sender.verificationStatus === 'pending' ? 50 : 0}
               />
             </div>
           )}

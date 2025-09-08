@@ -664,7 +664,7 @@ export function SenderEmailSetupPage() {
                     <h4 className="text-sm font-medium text-gray-900 mb-3">
                       Verification Progress
                     </h4>
-                    <ProgressIndicator steps={state.verificationProgress} />
+                    <ProgressIndicator progress={50} />
                   </div>
                 </div>
               )}
@@ -690,14 +690,6 @@ export function SenderEmailSetupPage() {
                   <EmptyState
                     title="No sender emails configured"
                     description="Add your first sender email to start sending newsletters from your own address."
-                    icon={<EnvelopeIcon className="w-12 h-12 text-gray-400" />}
-                    action={
-                      senderService.canAddSender(state.tierLimits) ? {
-                        label: "Add Sender Email",
-                        onClick: () => setState(prev => ({ ...prev, showAddForm: true })),
-                        isLoading: state.operationInProgress.type === 'create'
-                      } : undefined
-                    }
                   />
                 ) : (
                   <SenderEmailList

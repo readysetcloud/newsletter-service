@@ -13,3 +13,6 @@ export * from './notifications';
 
 // Re-export billing components
 export * from './billing';
+
+// Re-export template components
+export * from './templates';

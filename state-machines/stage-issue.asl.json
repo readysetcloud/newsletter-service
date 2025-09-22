@@ -343,8 +343,18 @@
                   }
                 },
                 {
-                  "StartAt": "Schedule List Cleanup",
+                  "StartAt": "Format List Cleanup Input",
                   "States": {
+                    "Format List Cleanup Input": {
+                      "Type": "Pass",
+                      "Parameters": {
+                        "tenantId.$": "$$.Execution.Input.tenant",
+                        "currentIssue.$": "States.Format('{}#{}', $$.Execution.Input.tenant.id, $$.Execution.Input.issueId)",
+                        "previousIssue.$": "States.Format('{}#{}', $$.Execution.Input.tenant.id, States.MathAdd($$.Execution.Input.issueId, -1))"
+                      },
+                      "ResultPath": "$.cleanup",
+                      "Next": "Schedule List Cleanup"
+                    },
                     "Schedule List Cleanup": {
                       "Type": "Task",
                       "End": true,
@@ -364,11 +374,7 @@
                               {
                                 "Source": "newsletter-service",
                                 "DetailType": "Clean Bounced Subscribers",
-                                "Detail": {
-                                  "tenantId.$": "$$.Execution.Input.tenant",
-                                  "currentIssue.$": "States.Format('{}#{}', $$.Execution.Input.tenant, $$.Execution.Input.issueId)",
-                                  "previousIssue.$": "States.Format('{}#{}', $$.Execution.Input.tenant, States.MathAdd($$.Execution.Input.issueId, -1))"
-                                }
+                                "Detail.$": "States.JsonToString($.cleanup)"
                               }
                             ]
                           }

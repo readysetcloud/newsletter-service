@@ -1445,6 +1445,7 @@ Resources:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
           ORIGIN: !Ref Origin
+          EMAIL_ENCRYPTION_KEY: !Ref EncryptionKey
       Events:
         FromApi:
           Type: Api

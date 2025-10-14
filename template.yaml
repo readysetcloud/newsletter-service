@@ -1441,6 +1441,9 @@ Resources:
                 - dynamodb:UpdateItem
                 - dynamodb:GetItem
               Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable

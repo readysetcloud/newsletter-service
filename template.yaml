@@ -1383,6 +1383,7 @@ Resources:
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
+          MODEL_ID: amazon.nova-pro-v1:0
 
   VoteFunction:
     Type: AWS::Serverless::Function

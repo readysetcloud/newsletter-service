@@ -34,7 +34,7 @@ export const handler = async (state) => {
     },
     ...(sponsor && { sponsor }),
     content: {},
-    ...state.votingOptions && { votingOptions: state.votingOptions }
+    ...state.votingOptions?.length && { votingOptions: state.votingOptions }
   };
 
   const tipOfTheWeekIndex = sections.findIndex(ps => ps.header.toLowerCase().includes('tip of the week'));

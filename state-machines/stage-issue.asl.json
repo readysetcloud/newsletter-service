@@ -517,7 +517,7 @@
               },
               "subject.$": "States.Format('[Scheduled] Newsletter Issue {}', $$.Execution.Input.issueId)",
               "html": "<p>The newsletter was successfully scheduled for sending. Good luck!</p>",
-              "tenantId.$": "$.Execution.Input.tenant.id"
+              "tenantId.$": "$$.Execution.Input.tenant.id"
             },
             "DetailType": "Send Email v2",
             "Source": "newsletter-service"

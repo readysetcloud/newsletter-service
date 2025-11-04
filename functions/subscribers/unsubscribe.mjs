@@ -1,7 +1,7 @@
 import { SESv2Client, DeleteContactCommand } from "@aws-sdk/client-sesv2";
 import { DynamoDBClient, UpdateItemCommand, PutItemCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
-import { g, decrypt } from "../utils/helpers.mjs";
+import { getTenant, decrypt } from "../utils/helpers.mjs";
 import { publishSubscriberEvent, EVENT_TYPES } from "../utils/event-publisher.mjs";
 
 const ses = new SESv2Client();
@@ -11,7 +11,6 @@ export const handler = async (event) => {
   let emailAddress = null;
   let tenantId = null;
   let success = false;
-  let errorMessage = null;
 
   try {
     tenantId = event.pathParameters.tenant;

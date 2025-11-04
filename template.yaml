@@ -1441,6 +1441,7 @@ Resources:
               Action:
                 - dynamodb:UpdateItem
                 - dynamodb:GetItem
+                - dynamodb:PutItem
               Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
               Action: events:PutEvents
@@ -1459,6 +1460,41 @@ Resources:
             Method: GET
             Auth:
               Authorizer: NONE
+
+  MonthlyUnsubscribeCleanupFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - subscribers/monthly-unsubscribe-cleanup.mjs
+    Properties:
+      Handler: subscribers/monthly-unsubscribe-cleanup.handler
+      Timeout: 900  # 15 minutes for processing all tenants
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Scan
+                - dynamodb:Query
+                - dynamodb:DeleteItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action: ses:ListContacts
+              Resource: "*"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+      Events:
+        MonthlySchedule:
+          Type: Schedule
+          Properties:
+            Schedule: cron(0 6 1 * ? *)  # Run at 6 AM UTC on the 1st of every month
+            Description: Monthly cleanup of stale unsubscribe records
+            Enabled: true
 
   BuildReportDataFunction:
     Type: AWS::Serverless::Function

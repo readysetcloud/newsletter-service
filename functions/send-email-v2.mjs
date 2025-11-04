@@ -112,6 +112,46 @@ const updateSenderMetrics = async (tenantId, senderId, emailCount) => {
   }
 };
 
+/**
+ * Filter out recently unsubscribed emails to handle SES propagation delays
+ * @param {string} tenantId - Tenant identifier
+ * @param {string[]} emailAddresses - List of email addresses to filter
+ * @returns {Promise<string[]>} Filtered list excluding recently unsubscribed emails
+ */
+const filterRecentlyUnsubscribed = async (tenantId, emailAddresses) => {
+  try {
+    const result = await ddb.send(new QueryCommand({
+      TableName: process.env.TABLE_NAME,
+      KeyConditionExpression: 'pk = :pk',
+      ExpressionAttributeValues: marshall({
+        ':pk': `${tenantId}#recent-unsubscribes`
+      })
+    }));
+
+    if (!result.Items || result.Items.length === 0) {
+      return emailAddresses; // No recent unsubscribes
+    }
+
+    // Extract recently unsubscribed emails
+    const recentlyUnsubscribed = new Set();
+    for (const item of result.Items) {
+      const record = unmarshall(item);
+      if (record.email) {
+        recentlyUnsubscribed.add(record.email.toLowerCase());
+      }
+    }
+
+    // Filter out recently unsubscribed emails
+    return emailAddresses.filter(email =>
+      !recentlyUnsubscribed.has(email.toLowerCase())
+    );
+  } catch (error) {
+    console.error('Error filtering recently unsubscribed emails:', error);
+    // If filtering fails, return original list to avoid blocking email sends
+    return emailAddresses;
+  }
+};
+
 export const handler = async (event) => {
   try {
 
@@ -209,6 +249,14 @@ export const handler = async (event) => {
       if (emailAddresses.length === 0) {
         throw new Error(`No contacts found in list: ${to.list}`);
       }
+
+      // Filter out recently unsubscribed emails (30-day buffer for safety)
+      const filteredAddresses = await filterRecentlyUnsubscribed(tenantId, emailAddresses);
+      const excludedCount = emailAddresses.length - filteredAddresses.length;
+      if (excludedCount > 0) {
+        console.log(`Excluded ${excludedCount} recently unsubscribed emails from send`);
+      }
+      emailAddresses = filteredAddresses;
     }
 
     console.log(`Sending to ${emailAddresses.length} recipients with TPS limit ${tpsLimit} from ${senderEmail}`);

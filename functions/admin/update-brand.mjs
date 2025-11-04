@@ -162,7 +162,9 @@ const createTenantWithBrandData = async (tenantId, userId, brandData) => {
     createdAt: now,
     updatedAt: now,
     status: 'pending',
-    subscribers: 0
+    subscribers: 0,
+    GSI1PK: 'tenant',
+    GSI1SK: tenantId
   };
 
   if (brandData.website) tenantItem.website = brandData.website;

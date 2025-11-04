@@ -108,16 +108,48 @@ export const encrypt = (email) => {
 };
 
 export const decrypt = (encrypted) => {
-  const key = getKey();
-  const [ivB64, dataB64, authTagB64] = encrypted.split(':');
-  const iv = Buffer.from(ivB64, 'base64');
-  const authTag = Buffer.from(authTagB64, 'base64');
-  const decipher = crypto.createDecipheriv(algorithm, key, iv);
-  decipher.setAuthTag(authTag);
+  try {
+    if (!encrypted || typeof encrypted !== 'string') {
+      throw new Error('Invalid encrypted data: must be a non-empty string');
+    }
 
-  let decrypted = decipher.update(dataB64, 'base64', 'utf8');
-  decrypted += decipher.final('utf8');
-  return decrypted;
+    const parts = encrypted.split(':');
+    if (parts.length !== 3) {
+      throw new Error('Invalid encrypted data format: expected 3 parts separated by colons');
+    }
+
+    const [ivB64, dataB64, authTagB64] = parts;
+
+    if (!ivB64 || !dataB64 || !authTagB64) {
+      throw new Error('Invalid encrypted data: missing required parts');
+    }
+
+    const key = getKey();
+    let iv, authTag;
+
+    try {
+      iv = Buffer.from(ivB64, 'base64');
+      authTag = Buffer.from(authTagB64, 'base64');
+    } catch (bufferError) {
+      throw new Error('Invalid encrypted data: malformed base64 encoding');
+    }
+
+    const decipher = crypto.createDecipheriv(algorithm, key, iv);
+    decipher.setAuthTag(authTag);
+
+    let decrypted;
+    try {
+      decrypted = decipher.update(dataB64, 'base64', 'utf8');
+      decrypted += decipher.final('utf8');
+    } catch (decipherError) {
+      throw new Error('Failed to decrypt data: invalid key, corrupted data, or authentication failure');
+    }
+
+    return decrypted;
+  } catch (error) {
+    // Re-throw with more context for debugging
+    throw new Error(`Decryption failed: ${error.message}`);
+  }
 };
 
 export const sendWithRetry = async (sendFn, maxRetries = MAX_RETRIES) => {

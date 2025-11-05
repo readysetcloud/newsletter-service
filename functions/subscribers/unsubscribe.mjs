@@ -1,10 +1,8 @@
-import { SESv2Client, DeleteContactCommand } from "@aws-sdk/client-sesv2";
-import { DynamoDBClient, UpdateItemCommand, PutItemCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
+import { DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
-import { getTenant, decrypt } from "../utils/helpers.mjs";
-import { publishSubscriberEvent, EVENT_TYPES } from "../utils/event-publisher.mjs";
+import { decrypt } from "../utils/helpers.mjs";
+import { unsubscribeUser } from "../utils/subscriber.mjs";
 
-const ses = new SESv2Client();
 const ddb = new DynamoDBClient();
 
 export const handler = async (event) => {
@@ -17,11 +15,6 @@ export const handler = async (event) => {
 
     if (!tenantId) {
       throw new Error('Missing tenant parameter');
-    }
-
-    const tenant = await getTenant(tenantId);
-    if (!tenant) {
-      throw new Error(`Tenant ${tenantId} not found`);
     }
 
     const email = event.queryStringParameters?.email;
@@ -41,64 +34,7 @@ export const handler = async (event) => {
       throw new Error('Invalid or expired unsubscribe link');
     }
 
-    // Store recent unsubscribe FIRST to prevent immediate re-sending
-    await storeRecentUnsubscribe(tenantId, emailAddress);
-
-    // Try to remove from SES contact list (may fail if already removed)
-    let sesRemovalSuccess = false;
-    try {
-      await ses.send(new DeleteContactCommand({
-        ContactListName: tenant.list,
-        EmailAddress: emailAddress
-      }));
-      sesRemovalSuccess = true;
-    } catch (sesError) {
-      if (sesError.name === 'NotFoundException') {
-        console.log(`Email ${emailAddress} was already removed from SES list ${tenant.list}`);
-        sesRemovalSuccess = true; // Treat as success since email is already gone
-      } else {
-        console.error('SES removal failed:', sesError);
-        // Don't throw - we still want to protect against future sends
-      }
-    }
-
-    // Update subscriber count only if SES removal was successful or email was already gone
-    if (sesRemovalSuccess) {
-      try {
-        await updateSubscriberCount(tenantId);
-      } catch (countError) {
-        console.error('Failed to update subscriber count:', countError);
-        // Don't throw - the main goal (preventing future emails) is achieved
-      }
-    }
-
-    // Publish subscriber removed event (we've at least protected against future sends)
-    try {
-      await publishSubscriberEvent(
-        tenantId,
-        null, // No specific user ID for public unsubscribes
-        EVENT_TYPES.SUBSCRIBER_REMOVED,
-        {
-          email: emailAddress,
-          subscriberCount: Math.max(0, tenant.subscribers - 1), // New count after removal
-          removedAt: new Date().toISOString(),
-          reason: 'unsubscribe',
-          sesRemovalSuccess
-        }
-      );
-    } catch (eventError) {
-      console.error('Failed to publish subscriber event:', eventError);
-      // Don't throw - the main unsubscribe protection is in place
-    }
-
-    success = true; // Success means we've protected against future emails
-
-    console.log('Unsubscribe completed:', {
-      tenantId,
-      emailAddress,
-      sesRemovalSuccess,
-      recentUnsubscribeStored: true
-    });
+    success = await unsubscribeUser(tenantId, emailAddress);
   } catch (err) {
     console.error('Unsubscribe error:', {
       error: err.message,
@@ -116,49 +52,6 @@ export const handler = async (event) => {
     },
     body: success ? await getSuccessPage(tenantId) : await getErrorPage(tenantId)
   };
-};
-
-const updateSubscriberCount = async (tenantId) => {
-  await ddb.send(new UpdateItemCommand({
-    TableName: process.env.TABLE_NAME,
-    Key: marshall({
-      pk: tenantId,
-      sk: 'tenant'
-    }),
-    UpdateExpression: 'SET #subscribers = #subscribers + :val',
-    ExpressionAttributeNames: {
-      '#subscribers': 'subscribers'
-    },
-    ExpressionAttributeValues: {
-      ':val': { N: '-1' }
-    }
-  }));
-};
-
-/**
- * Store recent unsubscribe to prevent immediate re-sending due to SES propagation delays
- * @param {string} tenantId - Tenant identifier
- * @param {string} emailAddress - Email address that unsubscribed
- */
-const storeRecentUnsubscribe = async (tenantId, emailAddress) => {
-  try {
-    const now = new Date();
-    const ttl = Math.floor((now.getTime() + (30 * 24 * 60 * 60 * 1000)) / 1000); // 30 days TTL
-
-    await ddb.send(new PutItemCommand({
-      TableName: process.env.TABLE_NAME,
-      Item: marshall({
-        pk: `${tenantId}#recent-unsubscribes`,
-        sk: emailAddress.toLowerCase(),
-        email: emailAddress,
-        unsubscribedAt: now.toISOString(),
-        ttl: ttl
-      })
-    }));
-  } catch (error) {
-    console.error('Error storing recent unsubscribe:', error);
-    // Don't throw error as this shouldn't fail the unsubscribe process
-  }
 };
 
 /**

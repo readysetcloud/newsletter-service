@@ -1,9 +1,7 @@
 import { CloudWatchLogsClient, StartQueryCommand, GetQueryResultsCommand } from "@aws-sdk/client-cloudwatch-logs";
-import { DynamoDBClient, PutItemCommand } from "@aws-sdk/client-dynamodb";
-import { marshall } from "@aws-sdk/util-dynamodb";
+import { unsubscribeUser } from "../utils/subscriber.mjs";
 
 const cloudWatchLogs = new CloudWatchLogsClient();
-const ddb = new DynamoDBClient();
 
 export const handler = async (event = {}) => {
   try {
@@ -307,16 +305,20 @@ const processTenantUnsubscribes = async (tenantId, events) => {
 
 const processIndividualUnsubscribe = async (tenantId, event) => {
   try {
-    // Just store the recent unsubscribe record for tracking
-    await storeRecentUnsubscribe(tenantId, event.email);
+    // Store the recent unsubscribe record for tracking
+    const success = await unsubscribeUser(tenantId, event.email);
 
-    return {
-      type: 'successful',
-      email: event.email,
-      tenantId,
-      correlationId: event.correlationId,
-      removedAt: new Date().toISOString()
-    };
+    if (success) {
+      return {
+        type: 'successful',
+        email: event.email,
+        tenantId,
+        correlationId: event.correlationId,
+        removedAt: new Date().toISOString()
+      };
+    } else {
+      throw new Error('Unsubscribe failed');
+    }
 
   } catch (error) {
     throw new Error(`Processing failed: ${error.message}`);
@@ -325,40 +327,7 @@ const processIndividualUnsubscribe = async (tenantId, event) => {
 
 
 
-/**
- * Store recent unsubscribe record to prevent re-processing
- * @param {string} tenantId - Tenant identifier
- * @param {string} email - Email address
- * @throws {Error} If storing recent unsubscribe record fails
- */
-const storeRecentUnsubscribe = async (tenantId, email) => {
-  try {
-    const now = new Date();
-    const ttl = Math.floor((now.getTime() + (30 * 24 * 60 * 60 * 1000)) / 1000); // 30 days TTL
 
-    await ddb.send(new PutItemCommand({
-      TableName: process.env.TABLE_NAME,
-      Item: marshall({
-        pk: `${tenantId}#recent-unsubscribes`,
-        sk: email,
-        email,
-        unsubscribedAt: now.toISOString(),
-        processedBy: 'unsubscribe-log-processor',
-        ttl
-      }),
-      // Prevent overwriting existing recent unsubscribe records
-      ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)'
-    }));
-
-  } catch (error) {
-    if (error.name === 'ConditionalCheckFailedException') {
-      // Record already exists, which is fine - just log it
-      console.warn(`Recent unsubscribe record already exists for ${tenantId}:${email}`);
-      return;
-    }
-    throw new Error(`Failed to store recent unsubscribe record: ${error.message}`);
-  }
-};
 
 
 

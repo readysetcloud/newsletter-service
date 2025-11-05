@@ -1478,12 +1478,14 @@ Resources:
           Statement:
             - Effect: Allow
               Action:
-                - dynamodb:Scan
                 - dynamodb:Query
                 - dynamodb:DeleteItem
+                - dynamodb:GetItem
               Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
-              Action: ses:ListContacts
+              Action:
+                - ses:ListContacts
+                - ses:DeleteContact
               Resource: "*"
       Environment:
         Variables:
@@ -3305,11 +3307,54 @@ Resources:
             - Effect: Allow
               Action:
                 - dynamodb:PutItem
+                - dynamodb:GetItem
               Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action: ses:DeleteContact
+              Resource: "*"
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
           UNSUBSCRIBE_LOG_GROUP_NAME: !Sub "/aws/lambda/${UnsubscribeFunction}"
+
+  AutoUnsubscribeComplaintFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - subscribers/auto-unsubscribe-complaint.mjs
+    Properties:
+      Handler: subscribers/auto-unsubscribe-complaint.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: ses:DeleteContact
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+      Events:
+        ComplaintEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - aws.ses
+              detail-type:
+                - Email Complaint Received
 
 Outputs:
   NewsletterApiUrl:

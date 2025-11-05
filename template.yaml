@@ -3278,6 +3278,39 @@ Resources:
           HOSTING_BUCKET_NAME: !Ref HostingBucket
           TABLE_NAME: !Ref NewsletterTable
 
+  UnsubscribeLogProcessorFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - admin/unsubscribe-log-processor.mjs
+    Properties:
+      Handler: admin/unsubscribe-log-processor.handler
+      Timeout: 300
+      MemorySize: 1024
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:StartQuery
+                - logs:GetQueryResults
+                - logs:DescribeLogGroups
+              Resource:
+                - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*UnsubscribeFunction*"
+                - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*UnsubscribeFunction*:*"
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          UNSUBSCRIBE_LOG_GROUP_NAME: !Sub "/aws/lambda/${UnsubscribeFunction}"
+
 Outputs:
   NewsletterApiUrl:
     Description: "API Gateway endpoint URL for Newsletter service"

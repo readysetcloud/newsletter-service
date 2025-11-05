@@ -70,7 +70,7 @@ const createTimeRange = () => {
 const queryUnsubscribeLogs = async (logGroupName, startTime, endTime) => {
   const query = `
     fields @timestamp, @message
-    | filter @message like /EventBridge event processing start: Subscriber Removed/
+    | filter @message like /tenantId/ and @message like /emailAddress/
     | sort @timestamp desc
     | limit 10000
   `;
@@ -158,19 +158,27 @@ const parseUnsubscribeEvents = (logEvents) => {
       const timestampField = logEvent.find(field => field.field === '@timestamp');
       const timestamp = timestampField ? timestampField.value : null;
 
-      // Parse JSON log entry
-      const logEntry = JSON.parse(messageField.value);
+      const message = messageField.value;
 
-      // Validate log entry structure
-      if (!logEntry.eventData || !logEntry.eventData.data || !logEntry.eventData.data.email) {
+      // Look for the JSON part in the message
+      const jsonStartIndex = message.indexOf('{');
+      if (jsonStartIndex === -1) {
         continue;
       }
 
-      const email = logEntry.eventData.data.email.toLowerCase();
-      const tenantId = logEntry.tenantId || logEntry.eventData.tenantId;
-      const correlationId = logEntry.correlationId;
+      // Extract and parse the JSON part
+      const jsonPart = message.substring(jsonStartIndex);
+      const logData = JSON.parse(jsonPart);
 
-      if (!email || !tenantId) {
+      // Validate log data structure
+      if (!logData.emailAddress || !logData.tenantId) {
+        continue;
+      }
+
+      const email = logData.emailAddress.toLowerCase();
+      const tenantId = logData.tenantId;
+
+      if (!isValidEmail(email)) {
         continue;
       }
 
@@ -181,17 +189,11 @@ const parseUnsubscribeEvents = (logEvents) => {
       }
       seenEmails.add(emailKey);
 
-      if (!isValidEmail(email)) {
-        continue;
-      }
-
       unsubscribeEvents.push({
         email,
         tenantId,
         timestamp,
-        correlationId,
-        originalSubscriberCount: logEntry.eventData.data.subscriberCount,
-        sesRemovalSuccess: logEntry.eventData.data.sesRemovalSuccess
+        sesRemovalSuccess: logData.sesRemoved
       });
 
     } catch (parseError) {
@@ -264,8 +266,7 @@ const processTenantUnsubscribes = async (tenantId, events) => {
           type: 'failed',
           email: event.email,
           tenantId,
-          error: error.message,
-          correlationId: event.correlationId
+          error: error.message
         };
       }
     });
@@ -313,7 +314,6 @@ const processIndividualUnsubscribe = async (tenantId, event) => {
         type: 'successful',
         email: event.email,
         tenantId,
-        correlationId: event.correlationId,
         removedAt: new Date().toISOString()
       };
     } else {

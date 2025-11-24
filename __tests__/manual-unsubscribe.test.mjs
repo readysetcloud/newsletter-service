@@ -2,18 +2,25 @@ import { jest, describe, test, expect, beforeEach } from '@jest/globals';
 
 let handler;
 let unsubscribeUser;
+let getTenant;
 
 async function loadIsolated() {
   await jest.isolateModulesAsync(async () => {
     unsubscribeUser = jest.fn();
+    getTenant = jest.fn();
+
     jest.unstable_mockModule('../functions/utils/subscriber.mjs', () => ({
       unsubscribeUser,
+    }));
+
+    jest.unstable_mockModule('../functions/utils/helpers.mjs', () => ({
+      getTenant,
     }));
 
     ({ handler } = await import('../functions/subscribers/manual-unsubscribe.mjs'));
   });
 
-  return { handler, unsubscribeUser };
+  return { handler, unsubscribeUser, getTenant };
 }
 
 describe('manual-unsubscribe handler', () => {
@@ -21,6 +28,12 @@ describe('manual-unsubscribe handler', () => {
     jest.resetModules();
     process.env.TABLE_NAME = 'test-table';
     await loadIsolated();
+
+    getTenant.mockResolvedValue({
+      pk: 'test-tenant',
+      brandName: 'Test Brand',
+      createdBy: 'admin@example.com'
+    });
   });
 
   test('valid email submission returns success JSON', async () => {
@@ -134,7 +147,7 @@ describe('manual-unsubscribe handler', () => {
     );
   });
 
-  test('unsubscribeUser failure returns error JSON', async () => {
+  test('unsubscribeUser failure returns success for privacy', async () => {
     unsubscribeUser.mockResolvedValue(false);
 
     const event = {
@@ -152,10 +165,10 @@ describe('manual-unsubscribe handler', () => {
 
     const result = await handler(event);
 
-    expect(result.statusCode).toBe(500);
+    expect(result.statusCode).toBe(200);
     expect(result.headers['Content-Type']).toBe('application/json');
     const body = JSON.parse(result.body);
-    expect(body.message).toBe('Failed to unsubscribe. Please try again.');
+    expect(body.message).toBe('Successfully unsubscribed');
     expect(unsubscribeUser).toHaveBeenCalledWith(
       'test-tenant',
       'test@example.com',
@@ -214,7 +227,7 @@ describe('manual-unsubscribe handler', () => {
     );
   });
 
-  test('exception during processing returns error JSON', async () => {
+  test('exception during processing returns success for privacy', async () => {
     unsubscribeUser.mockRejectedValue(new Error('Unexpected error'));
 
     const event = {
@@ -232,10 +245,10 @@ describe('manual-unsubscribe handler', () => {
 
     const result = await handler(event);
 
-    expect(result.statusCode).toBe(500);
+    expect(result.statusCode).toBe(200);
     expect(result.headers['Content-Type']).toBe('application/json');
     const body = JSON.parse(result.body);
-    expect(body.message).toBe('An error occurred. Please try again.');
+    expect(body.message).toBe('Successfully unsubscribed');
   });
 
   test('extracts IP from X-Forwarded-For header when available', async () => {

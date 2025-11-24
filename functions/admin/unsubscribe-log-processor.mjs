@@ -307,7 +307,7 @@ const processTenantUnsubscribes = async (tenantId, events) => {
 const processIndividualUnsubscribe = async (tenantId, event) => {
   try {
     // Store the recent unsubscribe record for tracking
-    const success = await unsubscribeUser(tenantId, event.email);
+    const success = await unsubscribeUser(tenantId, event.email, 'log-processor');
 
     if (success) {
       return {

@@ -1,9 +1,14 @@
+import Handlebars from 'handlebars';
+import unsubscribeTemplate from '../../templates/unsubscribe-success.hbs';
 import { DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
+import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
-import { decrypt } from "../utils/helpers.mjs";
+import { decrypt, getTenant } from "../utils/helpers.mjs";
 import { unsubscribeUser } from "../utils/subscriber.mjs";
 
 const ddb = new DynamoDBClient();
+const eventBridge = new EventBridgeClient();
+const unsubscribeHtml = Handlebars.compile(unsubscribeTemplate);
 
 export const handler = async (event) => {
   let emailAddress = null;
@@ -34,7 +39,22 @@ export const handler = async (event) => {
       throw new Error('Invalid or expired unsubscribe link');
     }
 
-    success = await unsubscribeUser(tenantId, emailAddress);
+    const ipAddress = event.requestContext?.identity?.sourceIp ||
+                      event.headers?.['X-Forwarded-For']?.split(',')[0]?.trim() ||
+                      'unknown';
+
+    const userAgent = event.headers?.['User-Agent'] || event.headers?.['user-agent'] || 'unknown';
+
+    const metadata = {
+      ipAddress,
+      userAgent
+    };
+
+    success = await unsubscribeUser(tenantId, emailAddress, 'encrypted-link', metadata);
+
+    if (!success) {
+      await notifyAdminOfFailure(tenantId, emailAddress, 'encrypted-link', metadata);
+    }
   } catch (err) {
     console.error('Unsubscribe error:', {
       error: err.message,
@@ -42,7 +62,14 @@ export const handler = async (event) => {
       emailAddress: emailAddress ? '[REDACTED]' : null,
       stack: err.stack
     });
-    errorMessage = err.message;
+
+    if (tenantId && emailAddress) {
+      try {
+        await notifyAdminOfFailure(tenantId, emailAddress, 'encrypted-link', { error: err.message });
+      } catch (notifyErr) {
+        console.error('Failed to notify admin of unsubscribe failure:', notifyErr);
+      }
+    }
   }
 
   return {
@@ -50,8 +77,55 @@ export const handler = async (event) => {
     headers: {
       'Content-Type': 'text/html'
     },
-    body: success ? await getSuccessPage(tenantId) : await getErrorPage(tenantId)
+    body: await getUnsubscribePage(tenantId, success, emailAddress)
   };
+};
+
+const notifyAdminOfFailure = async (tenantId, emailAddress, method, metadata = {}) => {
+  try {
+    const tenant = await getTenant(tenantId);
+    if (!tenant?.createdBy) {
+      console.error('No admin email found for tenant:', { tenantId });
+      return;
+    }
+
+    const subject = `[Alert] Unsubscribe Request Failed - ${tenant.brandName || tenantId}`;
+    const html = `
+      <h2>Unsubscribe Request Failed</h2>
+      <p>An unsubscribe request could not be processed for your newsletter.</p>
+
+      <h3>Details:</h3>
+      <ul>
+        <li><strong>Email:</strong> ${emailAddress}</li>
+        <li><strong>Method:</strong> ${method}</li>
+        <li><strong>Time:</strong> ${new Date().toISOString()}</li>
+        ${metadata.error ? `<li><strong>Error:</strong> ${metadata.error}</li>` : ''}
+        ${metadata.ipAddress ? `<li><strong>IP Address:</strong> ${metadata.ipAddress}</li>` : ''}
+        ${metadata.userAgent ? `<li><strong>User Agent:</strong> ${metadata.userAgent}</li>` : ''}
+      </ul>
+
+      <p>The user was shown a success message for privacy and UX reasons, but the unsubscribe did not complete successfully.</p>
+      <p>Please manually verify and remove this email address from your contact list if needed.</p>
+    `;
+
+    await eventBridge.send(new PutEventsCommand({
+      Entries: [{
+        Source: 'newsletter-service',
+        DetailType: 'Send Email v2',
+        Detail: JSON.stringify({
+          tenantId,
+          to: { email: tenant.createdBy },
+          subject,
+          html
+        })
+      }]
+    }));
+
+    console.log('Admin notified of unsubscribe failure:', { tenantId, adminEmail: tenant.createdBy });
+  } catch (err) {
+    console.error('Failed to notify admin:', err);
+    throw err;
+  }
 };
 
 /**
@@ -71,176 +145,28 @@ const getUnsubscribeTemplate = async (tenantId) => {
       return unmarshall(result.Item);
     }
 
-    // Return default template if none exists
-    return getDefaultTemplate();
+    return {};
   } catch (error) {
     console.error('Error fetching unsubscribe template:', error);
-    return getDefaultTemplate();
+    return {};
   }
 };
 
 /**
- * Generate success page HTML using tenant template
+ * Generate unsubscribe page HTML using tenant template
+ * Always shows the form for security/UX - users can always unsubscribe manually
  */
-const getSuccessPage = async (tenantId) => {
+const getUnsubscribePage = async (tenantId, wasSuccessful, emailAddress) => {
   const template = await getUnsubscribeTemplate(tenantId);
-  return template.success || getDefaultTemplate().successHtml;
-};
 
-/**
- * Generate error page HTML using tenant template
- */
-const getErrorPage = async (tenantId) => {
-  const template = await getUnsubscribeTemplate(tenantId);
-  return template.error || getDefaultTemplate().errorHtml;
-};
+  // Use custom template if tenant has one, otherwise use default
+  if (template.success) {
+    return template.success;
+  }
 
-/**
- * Default generic template (fallback for any tenant)
- */
-const getDefaultTemplate = () => {
-  return {
-    successHtml: `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Unsubscribed</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            max-width: 600px;
-            margin: 0 auto;
-            padding: 2rem;
-            background-color: #f8f9fa;
-        }
-        .container {
-            background: white;
-            padding: 2rem;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            text-align: center;
-        }
-        .success-icon {
-            font-size: 4rem;
-            color: #28a745;
-            margin-bottom: 1rem;
-        }
-        h1 {
-            color: #2c3e50;
-            margin-bottom: 1rem;
-        }
-        .lead {
-            font-size: 1.1rem;
-            color: #6c757d;
-            margin-bottom: 1.5rem;
-        }
-        .btn {
-            display: inline-block;
-            padding: 0.75rem 1.5rem;
-            margin: 0.5rem;
-            text-decoration: none;
-            border-radius: 4px;
-            font-weight: 500;
-            transition: all 0.2s;
-        }
-        .btn-secondary {
-            background-color: #6c757d;
-            color: white;
-        }
-        .btn-secondary:hover {
-            background-color: #545b62;
-            color: white;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="success-icon">✓</div>
-        <h1>Successfully Unsubscribed</h1>
-        <p class="lead">Your email has been removed from our mailing list.</p>
-        <p>You will no longer receive newsletter emails from us.</p>
-        <div style="margin-top: 2rem;">
-            <a href="#" class="btn btn-secondary" onclick="history.back(); return false;">Go Back</a>
-        </div>
-    </div>
-</body>
-</html>`,
-    errorHtml: `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Unsubscribe Error</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            max-width: 600px;
-            margin: 0 auto;
-            padding: 2rem;
-            background-color: #f8f9fa;
-        }
-        .container {
-            background: white;
-            padding: 2rem;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            text-align: center;
-        }
-        .error-icon {
-            font-size: 4rem;
-            color: #dc3545;
-            margin-bottom: 1rem;
-        }
-        h1 {
-            color: #2c3e50;
-            margin-bottom: 1rem;
-        }
-        .lead {
-            font-size: 1.1rem;
-            color: #6c757d;
-            margin-bottom: 1.5rem;
-        }
-        .btn {
-            display: inline-block;
-            padding: 0.75rem 1.5rem;
-            margin: 0.5rem;
-            text-decoration: none;
-            border-radius: 4px;
-            font-weight: 500;
-            transition: all 0.2s;
-        }
-        .btn-secondary {
-            background-color: #6c757d;
-            color: white;
-        }
-        .btn-secondary:hover {
-            background-color: #545b62;
-            color: white;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="error-icon">⚠</div>
-        <h1>Unsubscribe Error</h1>
-        <p class="lead">We encountered an issue processing your unsubscribe request.</p>
-        <p>This is usually caused by an invalid, expired, or corrupted unsubscribe link.</p>
-        <p><strong>What you can do:</strong></p>
-        <ul style="text-align: left; display: inline-block;">
-            <li>Try clicking the unsubscribe link directly from your email</li>
-            <li>Make sure you're using the complete link (it may have wrapped to multiple lines)</li>
-            <li>Contact us directly if the problem persists</li>
-        </ul>
-        <div style="margin-top: 2rem;">
-            <a href="#" class="btn btn-secondary" onclick="history.back(); return false;">Go Back</a>
-        </div>
-    </div>
-</body>
-</html>`
-  };
+  return unsubscribeHtml({
+    tenantId,
+    wasSuccessful,
+    emailAddress: emailAddress || ''
+  });
 };

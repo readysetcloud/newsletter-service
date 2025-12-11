@@ -19,7 +19,8 @@ import { TextArea } from '@/components/ui/TextArea';
 import { Select } from '@/components/ui/Select';
 import { Loading } from '@/components/ui/Loading';
 import { ErrorDisplay } from '@/components/ui/ErrorDisplay';
-import { CodeEditor } from './CodeEditor';
+import { SimpleCodeEditor } from './SimpleCodeEditor';
+import { SnippetHelpContent, SnippetQuickTips } from './SnippetHelpContent';
 import { templateService } from '@/services/templateService';
 import { useDebounce } from '@/hooks/useDebounce';
 import { cn } from '@/utils/cn';
@@ -460,32 +461,36 @@ export const SnippetBuilder: React.FC<SnippetBuilderProps> = ({
           )}
 
           {/* Action Buttons */}
-          <Button
-            variant="outline"
-            onClick={handlePreview}
-            disabled={previewing || !formData.content}
-            className="flex items-center"
-          >
-            {previewing ? (
-              <Loading size="sm" className="mr-2" />
-            ) : (
-              <EyeIcon className="w-4 h-4 mr-2" />
-            )}
-            {previewing ? 'Previewing...' : 'Preview'}
-          </Button>
+          <SnippetQuickTips.PreviewButton>
+            <Button
+              variant="outline"
+              onClick={handlePreview}
+              disabled={previewing || !formData.content}
+              className="flex items-center"
+            >
+              {previewing ? (
+                <Loading size="sm" className="mr-2" />
+              ) : (
+                <EyeIcon className="w-4 h-4 mr-2" />
+              )}
+              {previewing ? 'Previewing...' : 'Preview'}
+            </Button>
+          </SnippetQuickTips.PreviewButton>
 
-          <Button
-            onClick={handleSave}
-            disabled={saving || hasErrors || !formData.name || !formData.content}
-            className="flex items-center"
-          >
-            {saving ? (
-              <Loading size="sm" className="mr-2" />
-            ) : (
-              <CloudArrowUpIcon className="w-4 h-4 mr-2" />
-            )}
-            {saving ? 'Saving...' : snippet ? 'Update Snippet' : 'Create Snippet'}
-          </Button>
+          <SnippetQuickTips.SaveButton>
+            <Button
+              onClick={handleSave}
+              disabled={saving || hasErrors || !formData.name || !formData.content}
+              className="flex items-center"
+            >
+              {saving ? (
+                <Loading size="sm" className="mr-2" />
+              ) : (
+                <CloudArrowUpIcon className="w-4 h-4 mr-2" />
+              )}
+              {saving ? 'Saving...' : snippet ? 'Update Snippet' : 'Create Snippet'}
+            </Button>
+          </SnippetQuickTips.SaveButton>
         </div>
       </div>
 
@@ -498,6 +503,14 @@ export const SnippetBuilder: React.FC<SnippetBuilderProps> = ({
           onDismiss={() => setError(null)}
         />
       )}
+
+      {/* Help Content */}
+      <div className="mb-6">
+        <SnippetHelpContent
+          context="builder"
+          isFirstTime={!snippet}
+        />
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Snippet Settings */}
@@ -547,18 +560,26 @@ export const SnippetBuilder: React.FC<SnippetBuilderProps> = ({
                   <CodeBracketIcon className="w-5 h-5 mr-2" />
                   Parameters
                 </CardTitle>
-                <Button size="sm" onClick={addParameter} className="flex items-center">
-                  <PlusIcon className="w-4 h-4 mr-1" />
-                  Add
-                </Button>
+                <SnippetQuickTips.AddParameter>
+                  <Button size="sm" onClick={addParameter} className="flex items-center">
+                    <PlusIcon className="w-4 h-4 mr-1" />
+                    Add
+                  </Button>
+                </SnippetQuickTips.AddParameter>
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
               {parameterFormData.length === 0 ? (
-                <div className="text-center py-6 text-slate-500">
-                  <CodeBracketIcon className="w-8 h-8 mx-auto mb-2 text-slate-400" />
-                  <p className="text-sm">No parameters defined</p>
-                  <p className="text-xs mt-1">Add parameters to make your snippet configurable</p>
+                <div className="space-y-4">
+                  <div className="text-center py-6 text-slate-500">
+                    <CodeBracketIcon className="w-8 h-8 mx-auto mb-2 text-slate-400" />
+                    <p className="text-sm">No parameters defined</p>
+                    <p className="text-xs mt-1">Add parameters to make your snippet configurable</p>
+                  </div>
+                  <SnippetHelpContent
+                    context="parameters"
+                    parameterCount={0}
+                  />
                 </div>
               ) : (
                 parameterFormData.map((param) => (
@@ -704,14 +725,13 @@ export const SnippetBuilder: React.FC<SnippetBuilderProps> = ({
               <CardTitle>Snippet Content</CardTitle>
             </CardHeader>
             <CardContent>
-              <CodeEditor
+              <SimpleCodeEditor
                 value={formData.content}
                 onChange={(value) => handleFieldChange('content', value)}
                 language="handlebars"
                 height="400px"
                 onValidationChange={handleValidationChange}
                 placeholder="Enter your snippet content using handlebars syntax..."
-                showMinimap={false}
               />
             </CardContent>
           </Card>

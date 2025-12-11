@@ -17,6 +17,9 @@ export type { TextAreaProps } from './TextArea';
 export { Select } from './Select';
 export type { SelectProps, SelectOption } from './Select';
 
+export { Checkbox } from './Checkbox';
+export type { CheckboxProps } from './Checkbox';
+
 // Layout Components
 export {
   Card,
@@ -79,3 +82,12 @@ export type { Toast, ToastProviderProps } from './Toast';
 // Utility Components
 export { Container } from './Container';
 export type { ContainerProps } from './Container';
+
+export { Badge } from './Badge';
+export type { BadgeConfig, BadgeProps } from './Badge';
+
+export { Tooltip } from './Tooltip';
+export type { TooltipProps } from './Tooltip';
+
+export { StatusIndicator } from './StatusIndicator';
+export type { StatusIndicatorProps, StatusDetails } from './StatusIndicator';

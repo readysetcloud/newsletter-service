@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AppHeader } from '@/components/layout/AppHeader';
 import { Loading } from '@/components/ui/Loading';
 import { ErrorDisplay, NetworkError } from '@/components/ui/ErrorDisplay';
 import { LoadingOverlay, ProgressIndicator, EmptyState, LoadingSpinner } from '@/components/ui/LoadingStates';
@@ -428,33 +427,23 @@ export function SenderEmailSetupPage() {
 
   if (state.isLoading && state.senders.length === 0) {
     return (
-      <div className="min-h-screen bg-gray-50">
-        <AppHeader />
-        <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-          <div className="px-4 py-6 sm:px-0">
-            <LoadingOverlay
-              isLoading={true}
-              message="Loading sender email configuration..."
-            >
-              <div className="space-y-6">
-                <div className="h-20 bg-gray-200 rounded-lg animate-pulse"></div>
-                <div className="h-32 bg-gray-200 rounded-lg animate-pulse"></div>
-                <div className="h-64 bg-gray-200 rounded-lg animate-pulse"></div>
-              </div>
-            </LoadingOverlay>
+      <div className="max-w-7xl mx-auto">
+        <LoadingOverlay
+          isLoading={true}
+          message="Loading sender email configuration..."
+        >
+          <div className="space-y-6">
+            <div className="h-20 bg-gray-200 rounded-lg animate-pulse"></div>
+            <div className="h-32 bg-gray-200 rounded-lg animate-pulse"></div>
+            <div className="h-64 bg-gray-200 rounded-lg animate-pulse"></div>
           </div>
-        </main>
+        </LoadingOverlay>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <AppHeader />
-
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-        <div className="px-4 py-6 sm:px-0">
+    <div className="max-w-7xl mx-auto">
           {state.error && state.senders.length === 0 ? (
             <div className="space-y-6">
               {/* Page Header */}
@@ -784,8 +773,6 @@ export function SenderEmailSetupPage() {
               )}
             </>
           )}
-        </div>
-      </main>
     </div>
   );
 }

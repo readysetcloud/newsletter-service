@@ -4,9 +4,10 @@ import { randomUUID } from 'crypto';
 import { formatResponse, formatAuthError } from '../utils/helpers.mjs';
 import { getUserContext } from '../auth/get-user-context.mjs';
 import { uploadTemplate, generateTemplateKey } from './utils/s3-storage.mjs';
-import { validateTemplate } from './utils/template-engine.mjs';
+import { validateTemplate, extractUsedSnippets } from './utils/template-engine.mjs';
 import { templateCache } from './utils/template-cache.mjs';
 import { quotaManager } from './utils/quota-manager.mjs';
+import { validateTemplateName } from './utils/name-validation.mjs';
 
 const ddb = new DynamoDBClient();
 
@@ -19,7 +20,6 @@ export const handler = async (event) => {
       return formatAuthError('Tenant access required');
     }
 
-    // Parse request body
     const body = JSON.parse(event.body || '{}');
     const {
       name,
@@ -31,12 +31,22 @@ export const handler = async (event) => {
       visualConfig
     } = body;
 
-    // Validate required fields
-    if (!name || !content) {
-      return formatResponse(400, 'Template name and content are required');
+    if (!content) {
+      return formatResponse(400, 'Template content is required');
     }
 
-    // Check quota before proceeding
+    const nameValidation = await validateTemplateName(tenantId, name);
+    if (!nameValidation.isValid) {
+      const statusCode = nameValidation.code === 'NAME_EXISTS' ? 409 : 400;
+      return formatResponse(statusCode, {
+        error: nameValidation.error,
+        code: nameValidation.code,
+        suggestions: nameValidation.suggestions || []
+      });
+    }
+
+    const validatedName = nameValidation.normalizedName;
+
     try {
       await quotaManager.enforceQuota(tenantId, userTier || 'free-tier', 'template');
     } catch (quotaError) {
@@ -46,7 +56,6 @@ export const handler = async (event) => {
       throw quotaError;
     }
 
-    // Validate template content
     const validation = validateTemplate(content);
     if (!validation.isValid) {
       return formatResponse(400, {
@@ -58,31 +67,31 @@ export const handler = async (event) => {
       });
     }
 
-    // Generate template ID and metadata
+    // Extract used snippets from template content
+    const snippets = extractUsedSnippets(content);
+
     const templateId = randomUUID();
     const now = new Date().toISOString();
     const s3Key = generateTemplateKey(tenantId, templateId);
 
-    // Upload template content to S3
     const uploadResult = await uploadTemplate(s3Key, content, {
       templateId,
       tenantId,
-      name,
+      name: validatedName,
       category: category || 'general'
     });
 
-    // Create template metadata in DynamoDB
     const templateItem = {
       PK: `${tenantId}#${templateId}`,
       SK: 'template',
       GSI1PK: tenantId,
       GSI1SK: `template#${now}`,
       id: templateId,
-      name,
+      name: validatedName,
       description: description || '',
       category: category || 'general',
       tags: tags || [],
-      snippets: [], // Will be populated when snippets are used
+      snippets,
       isVisualMode,
       visualConfig: visualConfig || null,
       s3Key,
@@ -100,20 +109,18 @@ export const handler = async (event) => {
       ConditionExpression: 'attribute_not_exists(PK)'
     }));
 
-    // Cache the template metadata
     await templateCache.cacheTemplateMetadata(tenantId, templateId, templateItem);
 
-    // Invalidate template list cache
     await templateCache.invalidateTemplateListCache(tenantId);
 
     // Prepare response
     const response = {
       id: templateId,
-      name,
+      name: validatedName,
       description: description || '',
       category: category || 'general',
       tags: tags || [],
-      snippets: [],
+      snippets,
       isVisualMode,
       visualConfig: visualConfig || null,
       version: 1,

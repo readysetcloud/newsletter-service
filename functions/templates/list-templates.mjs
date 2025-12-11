@@ -3,19 +3,15 @@ import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { formatResponse, formatAuthError } from '../utils/helpers.mjs';
 import { getUserContext } from '../auth/get-user-context.mjs';
 import { templateCache } from './utils/template-cache.mjs';
-import { performanceMonitor } from './utils/performance-monitor.mjs';
 
 const ddb = new DynamoDBClient();
 
 export const handler = async (event) => {
-  const timerId = performanceMonitor.startTimer('list_templates');
-
   try {
     const userContext = getUserContext(event);
     const { tenantId } = userContext;
 
     if (!tenantId) {
-      performanceMonitor.endTimer(timerId, { success: false, error: 'No tenant ID' });
       return formatAuthError('Tenant access required');
     }
 
@@ -26,16 +22,11 @@ export const handler = async (event) => {
     const search = queryParams.search;
     const lastEvaluatedKey = queryParams.cursor ? JSON.parse(decodeURIComponent(queryParams.cursor)) : null;
 
-    // Create cache key for this query (only for first page without cursor)
+    // Check cache for first page only
     const cacheFilters = { limit, category, search };
-    let cachedResult = null;
-
     if (!lastEvaluatedKey) {
-      cachedResult = await templateCache.getCachedTemplateList(tenantId, cacheFilters);
+      const cachedResult = await templateCache.getCachedTemplateList(tenantId, cacheFilters);
       if (cachedResult) {
-        performanceMonitor.logCacheMetric('template_list', true, { tenantId, filters: cacheFilters });
-        performanceMonitor.endTimer(timerId, { success: true, fromCache: true, count: cachedResult.length });
-        console.log('Returning cached template list');
         return formatResponse(200, {
           templates: cachedResult,
           pagination: {
@@ -46,21 +37,19 @@ export const handler = async (event) => {
           }
         });
       }
-      performanceMonitor.logCacheMetric('template_list', false, { tenantId, filters: cacheFilters });
     }
 
-    // Build optimized query parameters
+    // Build DynamoDB query
     const queryInput = {
       TableName: process.env.TEMPLATES_TABLE_NAME,
       IndexName: 'GSI1',
-      KeyConditionExpression: 'GSI1PK = :tenantId AND begins_with(SK, :templatePrefix)',
+      KeyConditionExpression: 'GSI1PK = :tenantId AND begins_with(GSI1SK, :templatePrefix)',
       ExpressionAttributeValues: marshall({
         ':tenantId': tenantId,
         ':templatePrefix': 'template'
       }),
       Limit: limit,
-      ScanIndexForward: false, // Most recent first
-      // Only return necessary attributes for list view
+      ScanIndexForward: false,
       ProjectionExpression: 'id, #name, description, category, tags, snippets, isVisualMode, version, createdAt, updatedAt, createdBy, isActive',
       ExpressionAttributeNames: {
         '#name': 'name'
@@ -71,7 +60,7 @@ export const handler = async (event) => {
       queryInput.ExclusiveStartKey = marshall(lastEvaluatedKey);
     }
 
-    // Add filter expressions if needed
+    // Add filters
     const filterExpressions = [];
     const filterValues = {};
 
@@ -90,19 +79,7 @@ export const handler = async (event) => {
       Object.assign(queryInput.ExpressionAttributeValues, marshall(filterValues));
     }
 
-    const ddbTimerId = performanceMonitor.startTimer('dynamodb_query_templates', { tenantId });
     const result = await ddb.send(new QueryCommand(queryInput));
-    const ddbDuration = performanceMonitor.endTimer(ddbTimerId, { success: true }).duration;
-
-    // Log DynamoDB performance
-    performanceMonitor.logDynamoDBMetric(
-      process.env.TEMPLATES_TABLE_NAME,
-      'Query',
-      result.Items?.length || 0,
-      result.ConsumedCapacity?.CapacityUnits || 0,
-      ddbDuration,
-      { tenantId, indexName: 'GSI1' }
-    );
 
     const templates = result.Items ? result.Items.map(item => {
       const template = unmarshall(item);
@@ -122,12 +99,12 @@ export const handler = async (event) => {
       };
     }) : [];
 
-    // Cache the result if it's the first page and not too large
+    // Cache first page results
     if (!lastEvaluatedKey && templates.length <= 100) {
       await templateCache.cacheTemplateList(tenantId, cacheFilters, templates);
     }
 
-    const response = {
+    return formatResponse(200, {
       templates,
       pagination: {
         hasMore: !!result.LastEvaluatedKey,
@@ -135,19 +112,9 @@ export const handler = async (event) => {
         total: templates.length,
         fromCache: false
       }
-    };
-
-    performanceMonitor.endTimer(timerId, {
-      success: true,
-      fromCache: false,
-      count: templates.length,
-      hasMore: !!result.LastEvaluatedKey
     });
 
-    return formatResponse(200, response);
-
   } catch (error) {
-    performanceMonitor.endTimer(timerId, { success: false, error: error.message });
     console.error('List templates error:', error);
 
     if (error.message === 'Invalid authorization context') {

@@ -33,21 +33,21 @@ jest.unstable_mockModule('@aws-sdk/client-eventbridge', () => ({
 }));
 
 // Mock auth functions
-jest.unstable_mockModule('../functions/auth/jwt-verifier.mjs', () => ({
+jest.unstable_mockModule('../../functions/auth/jwt-verifier.mjs', () => ({
   verifyJWT: jest.fn()
 }));
 
-jest.unstable_mockModule('../functions/auth/validate-api-key.mjs', () => ({
+jest.unstable_mockModule('../../functions/auth/validate-api-key.mjs', () => ({
   validateApiKey: jest.fn()
 }));
 
 // Import handlers after mocks
-const { handler: listTemplatesHandler } = await import('../functions/templates/list-templates.mjs');
-const { handler: getTemplateHandler } = await import('../functions/templates/get-template.mjs');
-const { handler: createTemplateHandler } = await import('../functions/templates/create-template.mjs');
-const { handler: updateTemplateHandler } = await import('../functions/templates/update-template.mjs');
-const { handler: deleteTemplateHandler } = await import('../functions/templates/delete-template.mjs');
-const { handler: previewTemplateHandler } = await import('../functions/templates/preview-template.mjs');
+const { handler: listTemplatesHandler } = await import('../../functions/templates/list-templates.mjs');
+const { handler: getTemplateHandler } = await import('../../functions/templates/get-template.mjs');
+const { handler: createTemplateHandler } = await import('../../functions/templates/create-template.mjs');
+const { handler: updateTemplateHandler } = await import('../../functions/templates/update-template.mjs');
+const { handler: deleteTemplateHandler } = await import('../../functions/templates/delete-template.mjs');
+const { handler: previewTemplateHandler } = await import('../../functions/templates/preview-template.mjs');
 
 const { handler: listSnippetsHandler } = await import('../functions/templates/list-snippets.mjs');
 const { handler: getSntHandler } = await import('../functions/templates/get-snippet.mjs');
@@ -531,8 +531,8 @@ describe('Template API Endpoints Integration Tests', () => {
 
           // Mock SES send
           const mockSesSend = jest.fn().mockResolvedValue({});
-          jest.doMock('@aws-sdk/client-ses', () => ({
-            SESClient: jest.fn(() => ({ send: mockSesSend })),
+          jest.doMock('@aws-sdk/client-sesv2', () => ({
+            SESv2Client: jest.fn(() => ({ send: mockSesSend })),
             SendEmailCommand: jest.fn((params) => params)
           }));
 

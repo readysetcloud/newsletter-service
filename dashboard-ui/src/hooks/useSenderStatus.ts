@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { senderService } from '@/services/senderService';
+import { useNotifications } from '@/contexts/NotificationContext';
 import type { SenderEmail, TierLimits } from '@/types';
 
-interface SenderStatus {
+export interface SenderStatus {
   senders: SenderEmail[];
   tierLimits: TierLimits | null;
   hasUnverified: boolean;
@@ -21,6 +22,7 @@ interface SenderStatus {
  * Hook to fetch and track sender email status for navigation indicators
  */
 export const useSenderStatus = (refreshInterval: number = 30000) => {
+  const { notifications } = useNotifications();
   const [status, setStatus] = useState<SenderStatus>({
     senders: [],
     tierLimits: null,
@@ -36,7 +38,7 @@ export const useSenderStatus = (refreshInterval: number = 30000) => {
     error: null,
   });
 
-  const fetchSenderStatus = async () => {
+  const fetchSenderStatus = useCallback(async () => {
     try {
       const response = await senderService.getSenders();
 
@@ -76,7 +78,7 @@ export const useSenderStatus = (refreshInterval: number = 30000) => {
         error: error instanceof Error ? error.message : 'Unknown error occurred',
       }));
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchSenderStatus();
@@ -87,7 +89,28 @@ export const useSenderStatus = (refreshInterval: number = 30000) => {
     return () => {
       clearInterval(interval);
     };
-  }, [refreshInterval]);
+  }, [fetchSenderStatus, refreshInterval]);
+
+  // Listen for sender-related notifications and trigger immediate refresh
+  useEffect(() => {
+    const senderNotifications = notifications.filter(notification =>
+      notification.title.toLowerCase().includes('sender') ||
+      notification.message.toLowerCase().includes('sender') ||
+      notification.message.toLowerCase().includes('verification')
+    );
+
+    // If we have new sender notifications, refresh status
+    if (senderNotifications.length > 0) {
+      const latestNotification = senderNotifications[0];
+      const notificationTime = new Date(latestNotification.timestamp).getTime();
+      const now = Date.now();
+
+      // Only refresh if notification is recent (within last 5 minutes)
+      if (now - notificationTime < 5 * 60 * 1000) {
+        fetchSenderStatus();
+      }
+    }
+  }, [notifications, fetchSenderStatus]);
 
   return {
     ...status,

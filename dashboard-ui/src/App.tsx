@@ -1,12 +1,13 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from '@/contexts/AuthContext';
 import { NotificationProvider as NotificationContextProvider } from '@/contexts/NotificationContext';
-import { NotificationProvider } from '@/components/notifications/NotificationProvider';
+import { NotificationProvider } from '@/components/ui/Notifications';
 import { ToastProvider } from '@/components/ui/Toast';
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
 import { OnboardingGuard } from '@/components/auth/OnboardingGuard';
 import { ErrorBoundary, RouteErrorBoundary } from '@/components/error';
 import { PageLoader } from '@/components/ui/LazyLoader';
+import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { VerifySenderPage } from '@/pages/verify-sender/VerifySenderPage';
 import {
   LazyLoginPage,
@@ -17,6 +18,9 @@ import {
   LazyApiKeysPage,
   LazySenderEmailSetupPage,
   LazyBillingPage,
+  LazyTemplatesPage,
+  LazyTemplateBuilderPage,
+  LazySnippetsPage,
   preloadCriticalRoutes
 } from '@/utils/lazyImports';
 import { BrandOnboardingPage, ProfileOnboardingPage, SenderOnboardingPage } from '@/pages/onboarding';
@@ -106,16 +110,64 @@ function App() {
                     }
                   />
 
-                  {/* Protected Routes with Onboarding Guard */}
+                  {/* Protected Routes with Onboarding Guard and Sidebar Layout */}
                   <Route
                     path="/dashboard"
                     element={
                       <RouteErrorBoundary routeName="Dashboard">
                         <ProtectedRoute>
                           <OnboardingGuard>
+                            <DashboardLayout>
+                              <PageLoader>
+                                <LazyDashboardPage />
+                              </PageLoader>
+                            </DashboardLayout>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/templates"
+                    element={
+                      <RouteErrorBoundary routeName="Templates">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <DashboardLayout>
+                              <PageLoader>
+                                <LazyTemplatesPage />
+                              </PageLoader>
+                            </DashboardLayout>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/templates/:templateId"
+                    element={
+                      <RouteErrorBoundary routeName="Template Builder">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
                             <PageLoader>
-                              <LazyDashboardPage />
+                              <LazyTemplateBuilderPage />
                             </PageLoader>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/snippets"
+                    element={
+                      <RouteErrorBoundary routeName="Snippets">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <DashboardLayout>
+                              <PageLoader>
+                                <LazySnippetsPage />
+                              </PageLoader>
+                            </DashboardLayout>
                           </OnboardingGuard>
                         </ProtectedRoute>
                       </RouteErrorBoundary>
@@ -127,9 +179,11 @@ function App() {
                       <RouteErrorBoundary routeName="Brand">
                         <ProtectedRoute>
                           <OnboardingGuard allowOnboarding>
-                            <PageLoader>
-                              <LazyBrandPage />
-                            </PageLoader>
+                            <DashboardLayout>
+                              <PageLoader>
+                                <LazyBrandPage />
+                              </PageLoader>
+                            </DashboardLayout>
                           </OnboardingGuard>
                         </ProtectedRoute>
                       </RouteErrorBoundary>
@@ -141,9 +195,11 @@ function App() {
                       <RouteErrorBoundary routeName="Profile">
                         <ProtectedRoute>
                           <OnboardingGuard allowOnboarding>
-                            <PageLoader>
-                              <LazyProfilePage />
-                            </PageLoader>
+                            <DashboardLayout>
+                              <PageLoader>
+                                <LazyProfilePage />
+                              </PageLoader>
+                            </DashboardLayout>
                           </OnboardingGuard>
                         </ProtectedRoute>
                       </RouteErrorBoundary>
@@ -155,9 +211,11 @@ function App() {
                       <RouteErrorBoundary routeName="API Keys">
                         <ProtectedRoute>
                           <OnboardingGuard>
-                            <PageLoader>
-                              <LazyApiKeysPage />
-                            </PageLoader>
+                            <DashboardLayout>
+                              <PageLoader>
+                                <LazyApiKeysPage />
+                              </PageLoader>
+                            </DashboardLayout>
                           </OnboardingGuard>
                         </ProtectedRoute>
                       </RouteErrorBoundary>
@@ -169,9 +227,11 @@ function App() {
                       <RouteErrorBoundary routeName="Sender Email Setup">
                         <ProtectedRoute>
                           <OnboardingGuard>
-                            <PageLoader>
-                              <LazySenderEmailSetupPage />
-                            </PageLoader>
+                            <DashboardLayout>
+                              <PageLoader>
+                                <LazySenderEmailSetupPage />
+                              </PageLoader>
+                            </DashboardLayout>
                           </OnboardingGuard>
                         </ProtectedRoute>
                       </RouteErrorBoundary>
@@ -183,9 +243,11 @@ function App() {
                       <RouteErrorBoundary routeName="Billing">
                         <ProtectedRoute>
                           <OnboardingGuard>
-                            <PageLoader>
-                              <LazyBillingPage />
-                            </PageLoader>
+                            <DashboardLayout>
+                              <PageLoader>
+                                <LazyBillingPage />
+                              </PageLoader>
+                            </DashboardLayout>
                           </OnboardingGuard>
                         </ProtectedRoute>
                       </RouteErrorBoundary>

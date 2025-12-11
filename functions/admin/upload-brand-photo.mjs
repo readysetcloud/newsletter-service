@@ -40,13 +40,13 @@ export const handler = async (event) => {
 };
 
 /**
- * Generates a presigned URL for uploading a brand logo
+ * Generates a presigned URL for uploading a brand photo
  * @param {string} tenantId - Tenant ID
  * @param {Object} body - Request body with fileName and contentType
  * @returns {Object} Response with presigned URL
  */
 const generateUploadUrl = async (tenantId, body) => {
-  const { fileName, contentType } = body;
+  const { fileName, contentType, isLogo = false } = body;
 
   // Validate required fields
   if (!fileName || typeof fileName !== 'string' || fileName.trim().length === 0) {
@@ -80,7 +80,10 @@ const generateUploadUrl = async (tenantId, body) => {
   // Generate unique file name to prevent conflicts
   const timestamp = Date.now();
   const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9.-]/g, '_');
-  const key = `brand-logos/${tenantId}/${timestamp}-${sanitizedFileName}`;
+
+  // Use different folder structure for logos vs general brand photos
+  const folder = isLogo ? 'brand-logos' : 'brand-photos';
+  const key = `${folder}/${tenantId}/${timestamp}-${sanitizedFileName}`;
 
   // Create presigned URL for upload
   const command = new PutObjectCommand({
@@ -88,10 +91,11 @@ const generateUploadUrl = async (tenantId, body) => {
     Key: key,
     ContentType: contentType,
     ACL: 'public-read', // Make the uploaded file publicly readable
-    ContentLengthRange: [1, 2 * 1024 * 1024], // 1 byte to 2MB
+    ContentLengthRange: [1, 5 * 1024 * 1024], // 1 byte to 5MB (increased for brand photos)
     Metadata: {
       tenantId: tenantId,
-      uploadedAt: new Date().toISOString()
+      uploadedAt: new Date().toISOString(),
+      isLogo: isLogo.toString()
     }
   });
 
@@ -103,19 +107,20 @@ const generateUploadUrl = async (tenantId, body) => {
     uploadUrl: presignedUrl,
     key: key,
     expiresIn: 300,
-    maxSize: 2 * 1024 * 1024, // 2MB in bytes
-    publicUrl: `https://${process.env.HOSTING_BUCKET_NAME}.s3.amazonaws.com/${key}`
+    maxSize: 5 * 1024 * 1024, // 5MB in bytes
+    publicUrl: `https://${process.env.HOSTING_BUCKET_NAME}.s3.amazonaws.com/${key}`,
+    isLogo
   });
 };
 
 /**
- * Confirms the upload and updates the tenant record with the logo information
+ * Confirms the upload and optionally updates the tenant record with logo information
  * @param {string} tenantId - Tenant ID
- * @param {Object} body - Request body with key and other logo details
+ * @param {Object} body - Request body with key and other photo details
  * @returns {Object} Response confirming the update
  */
 const confirmUpload = async (tenantId, body) => {
-  const { key, fileName } = body;
+  const { key, fileName, isLogo = false } = body;
 
   // Validate required fields
   if (!key || typeof key !== 'string' || key.trim().length === 0) {
@@ -123,8 +128,9 @@ const confirmUpload = async (tenantId, body) => {
   }
 
   // Verify the key belongs to this tenant (security check)
-  if (!key.startsWith(`brand-logos/${tenantId}/`)) {
-    return formatResponse(403, 'Invalid logo key for this tenant');
+  const validPrefixes = [`brand-logos/${tenantId}/`, `brand-photos/${tenantId}/`];
+  if (!validPrefixes.some(prefix => key.startsWith(prefix))) {
+    return formatResponse(403, 'Invalid photo key for this tenant');
   }
 
   // Check if the file actually exists in S3
@@ -140,28 +146,29 @@ const confirmUpload = async (tenantId, body) => {
     throw error; // Re-throw other S3 errors
   }
 
-  // Update tenant record with logo information
   const publicUrl = `https://${process.env.HOSTING_BUCKET_NAME}.s3.amazonaws.com/${key}`;
 
-  await ddb.send(new UpdateItemCommand({
-    TableName: process.env.TABLE_NAME,
-    Key: marshall({
-      pk: tenantId,
-      sk: 'tenant'
-    }),
-    UpdateExpression: 'SET brandPhoto = :photo, brandPhotoKey = :key, updatedAt = :updatedAt',
-    ExpressionAttributeValues: marshall({
-      ':photo': publicUrl,
-      ':key': key,
-      ':updatedAt': new Date().toISOString()
-    })
-  }));
-
-  // For onboarding users, we just return the URL - it will be saved when they complete the brand setup
+  // Only update tenant record if this is a logo upload
+  if (isLogo) {
+    await ddb.send(new UpdateItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({
+        pk: tenantId,
+        sk: 'tenant'
+      }),
+      UpdateExpression: 'SET brandPhoto = :photo, brandPhotoKey = :key, updatedAt = :updatedAt',
+      ExpressionAttributeValues: marshall({
+        ':photo': publicUrl,
+        ':key': key,
+        ':updatedAt': new Date().toISOString()
+      })
+    }));
+  }
 
   return formatResponse(200, {
-    message: 'Brand logo updated successfully',
+    message: isLogo ? 'Brand logo updated successfully' : 'Brand photo uploaded successfully',
     photoUrl: publicUrl,
-    key: key
+    key: key,
+    isLogo
   });
 };

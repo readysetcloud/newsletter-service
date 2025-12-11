@@ -2,7 +2,7 @@ import React from 'react';
 import { cn } from '../../utils/cn';
 
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'secondary' | 'outline' | 'ghost' | 'destructive';
+  variant?: 'primary' | 'secondary' | 'outline' | 'ghost' | 'destructive' | 'default';
   size?: 'sm' | 'md' | 'lg';
   isLoading?: boolean;
   children: React.ReactNode;
@@ -13,7 +13,8 @@ const buttonVariants = {
   secondary: 'bg-slate-600 text-white hover:bg-slate-700 focus:ring-slate-500',
   outline: 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 focus:ring-slate-500',
   ghost: 'text-slate-700 hover:bg-slate-100 focus:ring-slate-500',
-  destructive: 'bg-red-600 text-white hover:bg-red-700 focus:ring-red-500'
+  destructive: 'bg-red-600 text-white hover:bg-red-700 focus:ring-red-500',
+  default: 'bg-slate-100 text-slate-900 hover:bg-slate-200 focus:ring-slate-500'
 };
 
 const buttonSizes = {
@@ -22,7 +23,7 @@ const buttonSizes = {
   lg: 'px-6 py-3 text-base min-h-[48px]'
 };
 
-export const Button: React.FC<ButtonProps> = ({
+export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(({
   variant = 'primary',
   size = 'md',
   isLoading = false,
@@ -30,9 +31,10 @@ export const Button: React.FC<ButtonProps> = ({
   className,
   children,
   ...props
-}) => {
+}, ref) => {
   return (
     <button
+      ref={ref}
       className={cn(
         'inline-flex items-center justify-center rounded-md font-medium transition-colors',
         'focus:outline-none focus:ring-2 focus:ring-offset-2',
@@ -70,4 +72,6 @@ export const Button: React.FC<ButtonProps> = ({
       {children}
     </button>
   );
-};
+});
+
+Button.displayName = 'Button';

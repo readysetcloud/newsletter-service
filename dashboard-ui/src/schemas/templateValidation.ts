@@ -37,20 +37,6 @@ export const createTemplateSchema = z.object({
     .string()
     .min(1, 'Template content is required')
     .max(1000000, 'Template content must be less than 1MB'),
-  category: z
-    .string()
-    .max(50, 'Category must be less than 50 characters')
-    .optional(),
-  tags: z
-    .array(
-      z.string()
-        .min(1, 'Tag cannot be empty')
-        .max(30, 'Each tag must be less than 30 characters')
-        .regex(/^[a-zA-Z0-9\-_]+$/, 'Tags can only contain letters, numbers, hyphens, and underscores')
-    )
-    .max(10, 'Maximum 10 tags allowed')
-    .optional()
-    .default([]),
   isVisualMode: z.boolean().optional().default(false),
   visualConfig: z.any().optional()
 });
@@ -130,8 +116,6 @@ export const previewSnippetSchema = z.object({
  */
 export const templateFiltersSchema = z.object({
   search: z.string().max(100, 'Search term must be less than 100 characters').optional(),
-  category: z.string().max(50, 'Category must be less than 50 characters').optional(),
-  tags: z.array(z.string().max(30, 'Tag must be less than 30 characters')).optional(),
   createdBy: z.string().max(100, 'Created by must be less than 100 characters').optional(),
   dateRange: z.object({
     start: z.string().datetime('Invalid start date'),

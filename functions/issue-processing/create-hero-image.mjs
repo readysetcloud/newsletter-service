@@ -1,6 +1,9 @@
 import { S3Client, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import sharp from "sharp";
 import crypto from "crypto";
+import opentype from 'opentype.js';
+
+import InterRegularOTF from './fonts/Inter-Regular.otf';
 
 const s3 = new S3Client();
 
@@ -11,40 +14,79 @@ const DEFAULT_PRIMARY = "#0b1223";
 const DEFAULT_SECONDARY = "#1f2a44";
 const DEFAULT_TITLE_COLOR = "#ffffff";
 const DEFAULT_META_COLOR = "#e6e8ef";
-const DEFAULT_TITLE_FONT_FAMILY = "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif";
-const DEFAULT_TEXT_FONT_FAMILY = "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif";
 
 const TEMPLATES = [
+  // 1) Classic Center — logo TL, headline centered, subtitle close, issue BR
   {
-    name: "logoTopLeft_titleCenter_issueTopRight",
-    logo: { x: PADDING, y: PADDING, maxW: 280, maxH: 120 },
-    issue: { x: WIDTH - PADDING - 260, y: PADDING + 8, align: "right", width: 260 },
-    title: { x: PADDING, y: HEIGHT * 0.36, width: WIDTH - PADDING * 2, align: "center", maxLines: 3 },
-    tagline: { x: PADDING, y: HEIGHT * 0.36 + 220, width: WIDTH - PADDING * 2, align: "center", maxLines: 2 }
+    name: "logoTopLeft_titleCenter_issueBottomRight",
+    logo: { x: PADDING, y: PADDING, maxW: 260, maxH: 110 },
+    title: { x: PADDING, y: Math.round(HEIGHT * 0.38), width: WIDTH - PADDING * 2, align: "center", maxLines: 2 },
+    tagline: { x: PADDING, y: Math.round(HEIGHT * 0.38) + 88, width: WIDTH - PADDING * 2, align: "center", maxLines: 2 },
+    issue: { x: WIDTH - PADDING - 260, y: HEIGHT - PADDING - 40, align: "right", width: 260 }
   },
+
+  // 2) Editorial Left Rail — logo BL, headline left, tidy subtitle, issue TR
   {
-    name: "logoBottomLeft_titleLeft_issueTopLeft",
-    logo: { x: PADDING, y: HEIGHT - 140, maxW: 300, maxH: 120 },
+    name: "logoBottomLeft_titleLeft_issueTopRight",
+    logo: { x: PADDING, y: HEIGHT - 130, maxW: 280, maxH: 110 },
+    title: { x: PADDING, y: Math.round(HEIGHT * 0.26), width: Math.round(WIDTH * 0.62), align: "left", maxLines: 3 },
+    tagline: { x: PADDING, y: Math.round(HEIGHT * 0.26) + 84, width: Math.round(WIDTH * 0.62), align: "left", maxLines: 2 },
+    issue: { x: WIDTH - PADDING - 240, y: PADDING + 8, align: "right", width: 240 }
+  },
+
+  // 3) Right Emphasis — logo TC, headline right, subtitle close, issue BL
+  {
+    name: "logoTopCenter_titleRight_issueBottomLeft",
+    logo: { x: Math.round(WIDTH / 2) - 160, y: PADDING, maxW: 320, maxH: 110 },
+    title: { x: Math.round(WIDTH * 0.38), y: Math.round(HEIGHT * 0.40), width: Math.round(WIDTH * 0.54) - PADDING, align: "right", maxLines: 3 },
+    tagline: { x: Math.round(WIDTH * 0.38), y: Math.round(HEIGHT * 0.40) + 80, width: Math.round(WIDTH * 0.54) - PADDING, align: "right", maxLines: 2 },
+    issue: { x: PADDING, y: HEIGHT - PADDING - 40, align: "left", width: 280 }
+  },
+
+  // 4) Strong Left Hero — logo TR, headline left wider, issue BR
+  {
+    name: "logoTopRight_titleLeft_issueBottomRight",
+    logo: { x: WIDTH - PADDING - 240, y: PADDING, maxW: 240, maxH: 100 },
+    title: { x: PADDING, y: Math.round(HEIGHT * 0.34), width: Math.round(WIDTH * 0.70), align: "left", maxLines: 3 },
+    tagline: { x: PADDING, y: Math.round(HEIGHT * 0.34) + 84, width: Math.round(WIDTH * 0.70), align: "left", maxLines: 2 },
+    issue: { x: WIDTH - PADDING - 240, y: HEIGHT - PADDING - 40, align: "right", width: 240 }
+  },
+
+  // 5) Lower Third — logo TL, headline lower third, subtitle just below, issue TR
+  {
+    name: "logoTopLeft_titleLowerThird_issueTopRight",
+    logo: { x: PADDING, y: PADDING, maxW: 260, maxH: 110 },
+    title: { x: PADDING, y: Math.round(HEIGHT * 0.54), width: WIDTH - PADDING * 2, align: "center", maxLines: 2 },
+    tagline: { x: PADDING, y: Math.round(HEIGHT * 0.54) + 76, width: WIDTH - PADDING * 2, align: "center", maxLines: 2 },
+    issue: { x: WIDTH - PADDING - 220, y: PADDING + 8, align: "right", width: 220 }
+  },
+
+  // 6) Diagonal Balance — issue TL, headline left mid, logo BR as counterweight
+  {
+    name: "issueTopLeft_titleLeft_logoBottomRight",
     issue: { x: PADDING, y: PADDING + 8, align: "left", width: 260 },
-    title: { x: PADDING, y: HEIGHT * 0.28, width: WIDTH * 0.62, align: "left", maxLines: 3 },
-    tagline: { x: PADDING, y: HEIGHT * 0.28 + 200, width: WIDTH * 0.62, align: "left", maxLines: 2 }
-  },
-  {
-    name: "logoTopCenter_titleBottomRight_issueBottomLeft",
-    logo: { x: WIDTH / 2 - 160, y: PADDING, maxW: 320, maxH: 120 },
-    issue: { x: PADDING, y: HEIGHT - 80, align: "left", width: 320 },
-    title: { x: WIDTH * 0.38, y: HEIGHT * 0.52, width: WIDTH * 0.54 - PADDING, align: "right", maxLines: 3 },
-    tagline: { x: WIDTH * 0.38, y: HEIGHT * 0.52 + 200, width: WIDTH * 0.54 - PADDING, align: "right", maxLines: 2 }
-  },
-  {
-    name: "logoTopRight_titleLeft_issueTopRight",
-    logo: { x: WIDTH - PADDING - 260, y: PADDING, maxW: 260, maxH: 110 },
-    issue: { x: WIDTH - PADDING - 260, y: PADDING + 120, align: "right", width: 260 },
-    title: { x: PADDING, y: HEIGHT * 0.34, width: WIDTH * 0.64, align: "left", maxLines: 3 },
-    tagline: { x: PADDING, y: HEIGHT * 0.34 + 200, width: WIDTH * 0.64, align: "left", maxLines: 2 }
+    title: { x: PADDING, y: Math.round(HEIGHT * 0.36), width: Math.round(WIDTH * 0.64), align: "left", maxLines: 3 },
+    tagline: { x: PADDING, y: Math.round(HEIGHT * 0.36) + 84, width: Math.round(WIDTH * 0.64), align: "left", maxLines: 2 },
+    logo: { x: WIDTH - PADDING - 280, y: HEIGHT - 140, maxW: 280, maxH: 120 }
   }
 ];
 
+const toArrayBuffer = (data) => {
+  if (typeof data === "string") {
+    const comma = data.indexOf(",");
+    const base64 = comma >= 0 ? data.slice(comma + 1) : data; // be tolerant
+    const buf = Buffer.from(base64, "base64");
+    return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+  }
+  if (data instanceof Uint8Array) {
+    return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+  }
+  if (data instanceof ArrayBuffer) return data;
+
+  throw new Error("Unsupported font import payload. Ensure .otf=dataurl in esbuild loader.");
+};
+
+const DEFAULT_FONT = opentype.parse(toArrayBuffer(InterRegularOTF));
 
 const bufFromStream = async (stream) =>
   new Promise((res, rej) => {
@@ -55,13 +97,10 @@ const bufFromStream = async (stream) =>
   });
 
 const seeded = (seed) => {
-  // Deterministic PRNG in [0,1)
   const h = crypto.createHash("sha256").update(String(seed)).digest();
   let x = h.readUInt32BE(0) / 0xffffffff;
   return () => {
-    // xorshift-ish
     x ^= x << 13; x ^= x >> 17; x ^= x << 5;
-    // ensure number space
     x = (x >>> 0) / 0xffffffff;
     return x;
   };
@@ -73,7 +112,6 @@ const pickTemplate = (tenantId, issueNumber) => {
   return TEMPLATES[n];
 };
 
-// Slight jitter (±12px) to avoid looking static while staying clean
 const jitterRect = (rect, rng) => {
   const j = 12;
   return {
@@ -95,48 +133,69 @@ const gradientSvg = ({ c1, c2, width, height }) => `
 </svg>
 `;
 
-const textBlockSvg = ({
-  x, y, width, color, fontFamily, fontWeight = 700, fontSize = 64, lineHeight = 1.2,
-  text, align = "left", maxLines = 3
-}) => {
-  const safe = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  // CSS clamps lines to avoid overflow
+function wrapByWidth(font, text, fontSize, maxWidth) {
+  const words = String(text || "").trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const lines = [];
+  let line = "";
+  for (const w of words) {
+    const test = line ? line + " " + w : w;
+    const width = font.getAdvanceWidth(test, fontSize, { kerning: true });
+    if (width <= maxWidth) line = test;
+    else { if (line) lines.push(line); line = w; }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+function makeTextPathsSvg({
+  font = DEFAULT_FONT,
+  text,
+  width,
+  align = "left",
+  fontSize = 64,
+  lineHeight = 1.2,
+  color = "#fff",
+  stroke = "rgba(0,0,0,0.25)",
+  strokeWidth = 1.5,
+  maxLines = 3
+}) {
+  let lines = wrapByWidth(font, text, fontSize, width);
+  if (lines.length > maxLines) {
+    lines = lines.slice(0, maxLines);
+    // add ellipsis to last line if truncated
+    let last = lines[lines.length - 1];
+    while (font.getAdvanceWidth(last + "…", fontSize, { kerning: true }) > width && last.length > 1) {
+      last = last.slice(0, -1);
+    }
+    lines[lines.length - 1] = last + "…";
+  }
+
+  const step = Math.round(fontSize * lineHeight);
+  const height = Math.ceil(lines.length * step) + 8;
+
+  const pathEls = lines.map((ln, i) => {
+    const lnWidth = font.getAdvanceWidth(ln, fontSize, { kerning: true });
+    let x = 0;
+    if (align === "center") x = Math.floor((width - lnWidth) / 2);
+    else if (align === "right") x = Math.floor(width - lnWidth);
+    const y = i * step + fontSize; // baseline
+    const p = font.getPath(ln, x, y, fontSize, { kerning: true });
+    return `<path d="${p.toPathData(2)}"/>`;
+  }).join("\n");
+
   return `
-<svg width="${width}" height="${Math.ceil(fontSize * lineHeight * maxLines) + 8}" xmlns="http://www.w3.org/2000/svg">
-  <foreignObject x="0" y="0" width="100%" height="100%">
-    <div xmlns="http://www.w3.org/1999/xhtml"
-         style="
-           color:${color};
-           font-family:${fontFamily};
-           font-weight:${fontWeight};
-           font-size:${fontSize}px;
-           line-height:${lineHeight};
-           display:-webkit-box;
-           -webkit-line-clamp:${maxLines};
-           -webkit-box-orient:vertical;
-           overflow:hidden;
-           text-align:${align};
-           letter-spacing:0.2px;
-           ">
-      ${safe(text)}
-    </div>
-  </foreignObject>
-</svg>
-`;
-};
+<svg width="${Math.floor(width)}" height="${height}" viewBox="0 0 ${Math.floor(width)} ${height}" xmlns="http://www.w3.org/2000/svg">
+  <g fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}" style="paint-order: stroke fill">
+    ${pathEls}
+  </g>
+</svg>`;
+}
 
-const metaTextSvg = ({
-  width, text, color, fontFamily, align = "left", fontSize = 28, weight = 600, maxLines = 2
-}) => textBlockSvg({
-  x: 0, y: 0, width, color, fontFamily, fontWeight: weight, fontSize, lineHeight: 1.25, text, align, maxLines
-});
-
-// Get dominant color from the logo for auto-branding if no color provided
 const dominantFromLogo = async (logoBuf) => {
   try {
     const stats = await sharp(logoBuf).stats();
     const { r, g, b } = stats.dominant;
-    // Build a calm gradient from dominant to a darker sibling
     const base = `#${[r, g, b].map(v => v.toString(16).padStart(2, "0")).join("")}`;
     const darker = `#${[r, g, b].map(v => Math.max(0, Math.round(v * 0.6)).toString(16).padStart(2, "0")).join("")}`;
     return { c1: darker, c2: base };
@@ -145,35 +204,6 @@ const dominantFromLogo = async (logoBuf) => {
   }
 };
 
-// Optionally embed custom fonts in SVG via @font-face (pass data: URLs)
-const fontFaceCss = (titleFontDataUrl, textFontDataUrl) => `
-  ${titleFontDataUrl ? `
-  @font-face { font-family: 'TenantTitle'; src: url(${titleFontDataUrl}) format('woff2'); font-weight: 400 800; font-style: normal; font-display: swap; }` : ``}
-  ${textFontDataUrl ? `
-  @font-face { font-family: 'TenantText'; src: url(${textFontDataUrl}) format('woff2'); font-weight: 400 700; font-style: normal; font-display: swap; }` : ``}
-`;
-
-const dataUrl = (buf, mime = "font/woff2") => `data:${mime};base64,${buf.toString("base64")}`;
-
-/**
- * Event shape (example):
- * {
- *   tenantId: "acme",
- *   issueNumber: 42,
- *   title: "How We Shipped Zero-Downtime",
- *   tagline: "Practical patterns for resilient systems",
- *   logoBucket: "brand-assets",
- *   logoKey: "acme/logo.png",
- *   // optional tenant branding:
- *   primaryColor: "#123456",
- *   secondaryColor: "#0e2433",
- *   titleFont: { bucket: "brand-assets", key: "acme/fonts/Title.woff2", mime: "font/woff2" },
- *   textFont: { bucket: "brand-assets", key: "acme/fonts/Text.woff2", mime: "font/woff2" },
- *   // output:
- *   outBucket: "newsletter-images",
- *   outKey: "acme/issues/42/hero.png"
- * }
- */
 export const handler = async (event) => {
   try {
     const {
@@ -181,35 +211,21 @@ export const handler = async (event) => {
       issueNumber,
       title,
       tagline,
-      logoBucket,
       logoKey,
       primaryColor,
       secondaryColor,
-      titleFont,
-      textFont,
-      outBucket,
       outKey
     } = event;
 
-    if (!tenantId || issueNumber == null || !logoBucket || !logoKey || !outBucket || !outKey) {
-      return { ok: false, error: "Missing required fields: tenantId, issueNumber, logoBucket, logoKey, outBucket, outKey" };
+    if (!tenantId || issueNumber == null || !logoKey || !outKey) {
+      return { ok: false, error: "Missing required fields: tenantId, issueNumber, logoKey, outKey" };
     }
 
-    const logoObj = await s3.send(new GetObjectCommand({ Bucket: logoBucket, Key: logoKey }));
+    // --- Load logo from S3 ---
+    const logoObj = await s3.send(new GetObjectCommand({ Bucket: process.env.HOSTING_BUCKET_NAME, Key: logoKey }));
     const logoBuf = await bufFromStream(logoObj.Body);
 
-    let titleFontUrl = null, textFontUrl = null;
-    if (titleFont?.bucket && titleFont?.key) {
-      const f = await s3.send(new GetObjectCommand({ Bucket: titleFont.bucket, Key: titleFont.key }));
-      const fBuf = await bufFromStream(f.Body);
-      titleFontUrl = dataUrl(fBuf, titleFont.mime || "font/woff2");
-    }
-    if (textFont?.bucket && textFont?.key) {
-      const f = await s3.send(new GetObjectCommand({ Bucket: textFont.bucket, Key: textFont.key }));
-      const fBuf = await bufFromStream(f.Body);
-      textFontUrl = dataUrl(fBuf, textFont.mime || "font/woff2");
-    }
-
+    // --- Determine layout & colors ---
     const rng = seeded(`${tenantId}:${issueNumber}`);
     const template = pickTemplate(tenantId, issueNumber);
 
@@ -218,9 +234,9 @@ export const handler = async (event) => {
       : await dominantFromLogo(logoBuf);
 
     const bg = Buffer.from(gradientSvg({ c1: grad.c1 || DEFAULT_PRIMARY, c2: grad.c2 || DEFAULT_SECONDARY, width: WIDTH, height: HEIGHT }));
-
     let img = await sharp(bg).png().resize(WIDTH, HEIGHT, { fit: "cover" }).toBuffer();
 
+    // --- Resize logo ---
     const logoMeta = await sharp(logoBuf).metadata();
     const scale = Math.min(
       (template.logo.maxW || 300) / (logoMeta.width || 1),
@@ -237,80 +253,68 @@ export const handler = async (event) => {
       .png()
       .toBuffer();
 
-    const titleFontFamily = titleFontUrl ? "'TenantTitle', " + DEFAULT_TITLE_FONT_FAMILY : DEFAULT_TITLE_FONT_FAMILY;
-    const textFontFamily = textFontUrl ? "'TenantText', " + DEFAULT_TEXT_FONT_FAMILY : DEFAULT_TEXT_FONT_FAMILY;
 
-    const cssEmbedSvg = `
-<svg width="1" height="1" xmlns="http://www.w3.org/2000/svg">
-  <style>
-    ${fontFaceCss(titleFontUrl, textFontUrl)}
-  </style>
-</svg>`.trim();
-
-    const titleBlock = (title && title.trim().length > 0) ? Buffer.from(
-      textBlockSvg({
-        x: 0,
-        y: 0,
+    const titleSvg = (title && title.trim())
+      ? makeTextPathsSvg({
+        text: title,
         width: Math.floor(template.title.width),
-        color: DEFAULT_TITLE_COLOR,
-        fontFamily: titleFontFamily,
-        fontWeight: 800,
+        align: template.title.align,
         fontSize: 72,
         lineHeight: 1.1,
-        text: title,
-        align: template.title.align,
-        maxLines: template.title.maxLines
-      })
-    ) : null;
+        maxLines: template.title.maxLines,
+        color: DEFAULT_TITLE_COLOR,
+        strokeWidth: 1.5
+      }) : null;
 
-    const taglineBlock = (tagline && tagline.trim().length > 0) ? Buffer.from(
-      metaTextSvg({
-        width: Math.floor(template.tagline.width),
+    const taglineSvg = (tagline && tagline.trim())
+      ? makeTextPathsSvg({
         text: tagline,
-        color: DEFAULT_META_COLOR,
-        fontFamily: textFontFamily,
+        width: Math.floor(template.tagline.width),
         align: template.tagline.align,
         fontSize: 34,
-        weight: 600,
-        maxLines: template.tagline.maxLines
-      })
-    ) : null;
-
-    const issueStr = `Issue #${issueNumber}`;
-    const issueBlock = Buffer.from(
-      metaTextSvg({
-        width: Math.floor(template.issue.width),
-        text: issueStr,
+        lineHeight: 1.25,
+        maxLines: template.tagline.maxLines,
         color: DEFAULT_META_COLOR,
-        fontFamily: textFontFamily,
-        align: template.issue.align,
-        fontSize: 30,
-        weight: 700,
-        maxLines: 1
-      })
-    );
+        strokeWidth: 1
+      }) : null;
 
+    const issueSvg = makeTextPathsSvg({
+      text: `Issue #${issueNumber}`,
+      width: Math.floor(template.issue.width),
+      align: template.issue.align,
+      fontSize: 30,
+      lineHeight: 1.25,
+      maxLines: 1,
+      color: DEFAULT_META_COLOR,
+      strokeWidth: 1
+    });
+
+    const titlePng = titleSvg ? await sharp(Buffer.from(titleSvg)).png().toBuffer() : null;
+    const taglinePng = taglineSvg ? await sharp(Buffer.from(taglineSvg)).png().toBuffer() : null;
+    const issuePng = await sharp(Buffer.from(issueSvg)).png().toBuffer();
+
+    // --- Positions (with jitter) ---
     const logoPos = jitterRect(template.logo, rng);
-    const titlePos = titleBlock ? jitterRect(template.title, rng) : null;
-    const taglinePos = taglineBlock ? jitterRect(template.tagline, rng) : null;
+    const titlePos = titlePng ? jitterRect(template.title, rng) : null;
+    const taglinePos = taglinePng ? jitterRect(template.tagline, rng) : null;
     const issuePos = jitterRect(template.issue, rng);
 
+    // --- Composite ---
     const composites = [
-      { input: Buffer.from(cssEmbedSvg), left: 0, top: 0 },
       { input: logoResized, left: Math.max(0, Math.min(WIDTH - 1, logoPos.x)), top: Math.max(0, Math.min(HEIGHT - 1, logoPos.y)) },
-      { input: issueBlock, left: Math.max(0, Math.min(WIDTH - Math.floor(template.issue.width), issuePos.x)), top: Math.max(0, Math.min(HEIGHT - 40, issuePos.y)) },
+      { input: issuePng, left: Math.max(0, Math.min(WIDTH - Math.floor(template.issue.width), issuePos.x)), top: Math.max(0, Math.min(HEIGHT - 40, issuePos.y)) },
     ];
-    if (titleBlock) {
-      composites.push({ input: titleBlock, left: Math.max(0, Math.min(WIDTH - Math.floor(template.title.width), titlePos.x)), top: Math.max(0, Math.min(HEIGHT - 240, titlePos.y)) });
+    if (titlePng) {
+      composites.push({ input: titlePng, left: Math.max(0, Math.min(WIDTH - Math.floor(template.title.width), titlePos.x)), top: Math.max(0, Math.min(HEIGHT - 240, titlePos.y)) });
     }
-    if (taglineBlock) {
-      composites.push({ input: taglineBlock, left: Math.max(0, Math.min(WIDTH - Math.floor(template.tagline.width), taglinePos.x)), top: Math.max(0, Math.min(HEIGHT - 120, taglinePos.y)) });
+    if (taglinePng) {
+      composites.push({ input: taglinePng, left: Math.max(0, Math.min(WIDTH - Math.floor(template.tagline.width), taglinePos.x)), top: Math.max(0, Math.min(HEIGHT - 120, taglinePos.y)) });
     }
 
     const finalBuf = await sharp(img).composite(composites).png().toBuffer();
 
     await s3.send(new PutObjectCommand({
-      Bucket: outBucket,
+      Bucket: process.env.HOSTING_BUCKET_NAME,
       Key: outKey,
       Body: finalBuf,
       ContentType: "image/png",
@@ -319,10 +323,10 @@ export const handler = async (event) => {
 
     return {
       success: true,
-      url: `https://${outBucket}.s3.amazonaws.com/${encodeURIComponent(outKey)}`
+      url: `https://${process.env.HOSTING_BUCKET_NAME}.s3.amazonaws.com/${encodeURIComponent(outKey)}`
     };
   } catch (err) {
     console.error(err);
-    return { success: false };
+    return { success: false, error: String(err?.message || err) };
   }
 };

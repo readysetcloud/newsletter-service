@@ -6,3 +6,25 @@ export * from './useNotifications';
 export * from './useOnboardingStatus';
 export * from './useRealTimeValidation';
 export * from './useResponsive';
+export * from './useSenderStatus';
+export * from './useNavigationState';
+export * from './useNavigationConfig';
+export * from './useSnippets';
+export * from './useSnippetPreview';
+export * from './useKeyboardShortcuts';
+export * from './useKeyboardNavigation';
+export * from './useFocusManagement';
+export * from './useSnippetValidation';
+export * from './useNetworkErrorHandler';
+export * from './useSnippetRollback';
+export * from './useVariableAutocomplete';
+export * from './useControlFlow';
+export * from './useVariableValidation';
+export * from './useCustomVariables';
+export * from './useVariableDefinitionsWithFallback';
+export * from './useVisualBuilderErrorHandler';
+
+// Optimized performance hooks
+export * from './useOptimizedVariableSearch';
+export * from './useOptimizedVariableFilter';
+export * from './useMemoizedVariableDefinitions';

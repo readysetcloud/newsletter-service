@@ -8,6 +8,7 @@ export interface ModalProps {
   size?: 'sm' | 'md' | 'lg' | 'xl';
   closeOnOverlayClick?: boolean;
   closeOnEscape?: boolean;
+  title?: string;
 }
 
 export interface ModalHeaderProps {
@@ -39,7 +40,8 @@ export const Modal: React.FC<ModalProps> = ({
   children,
   size = 'md',
   closeOnOverlayClick = true,
-  closeOnEscape = true
+  closeOnEscape = true,
+  title
 }) => {
   useEffect(() => {
     if (!closeOnEscape) return;
@@ -79,6 +81,11 @@ export const Modal: React.FC<ModalProps> = ({
         )}
         onClick={(e) => e.stopPropagation()}
       >
+        {title && (
+          <ModalHeader onClose={onClose}>
+            <ModalTitle>{title}</ModalTitle>
+          </ModalHeader>
+        )}
         {children}
       </div>
     </div>

@@ -53,13 +53,14 @@ class MomentoClientUtil {
    * @param {string} authToken - Momento auth token for scoped access
    * @returns {CacheClient} Momento cache client instance
    */
-  getCacheClient(authToken) {
+  getCacheClient(authToken, defaultTtlSeconds) {
     if (!authToken) {
       throw new Error('Auth token required for cache client');
     }
 
     return new CacheClient({
-      credentialProvider: CredentialProvider.fromString(authToken)
+      credentialProvider: CredentialProvider.fromString(authToken),
+      defaultTtlSeconds
     });
   }
 

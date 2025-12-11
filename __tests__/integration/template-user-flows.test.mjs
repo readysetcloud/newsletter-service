@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals
 // Mock AWS SDK instances
 const mockDdbSend = jest.fn();
 const mockS3Send = jest.fn();
-const mockEventBridgeSt.fn();
+const mockEventBridgeSend = jest.fn();
 
 jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
   DynamoDBClient: jest.fn(() => ({ send: mockDdbSend })),
@@ -32,28 +32,28 @@ jest.unstable_mockModule('@aws-sdk/client-eventbridge', () => ({
   PutEventsCommand: jest.fn((params) => params)
 }));
 
-jest.unstable_mockModule('@aws-sdk/client-ses', () => ({
-  SESClient: jest.fn(() => ({ send: jest.fn() })),
+jest.unstable_mockModule('@aws-sdk/client-sesv2', () => ({
+  SESv2Client: jest.fn(() => ({ send: jest.fn() })),
   SendEmailCommand: jest.fn((params) => params)
 }));
 
 // Mock auth functions
-jest.unstable_mockModule('../functions/auth/jwt-verifier.mjs', () => ({
+jest.unstable_mockModule('../../functions/auth/jwt-verifier.mjs', () => ({
   verifyJWT: jest.fn()
 }));
 
 // Import handlers after mocks
-const { handler: createTemplateHandler } = await import('../functions/templates/create-template.mjs');
-const { handler: getTemplateHandler } = await import('../functions/templates/get-template.mjs');
-const { handler: updateTemplateHandler } = await import('../functions/templates/update-template.mjs');
-const { handler: deleteTemplateHandler } = await import('../functions/templates/delete-template.mjs');
-const { handler: previewTemplateHandler } = await import('../functions/templates/preview-template.mjs');
+const { handler: createTemplateHandler } = await import('../../functions/templates/create-template.mjs');
+const { handler: getTemplateHandler } = await import('../../functions/templates/get-template.mjs');
+const { handler: updateTemplateHandler } = await import('../../functions/templates/update-template.mjs');
+const { handler: deleteTemplateHandler } = await import('../../functions/templates/delete-template.mjs');
+const { handler: previewTemplateHandler } = await import('../../functions/templates/preview-template.mjs');
 
-const { handler: createSnippetHandler } = await import('../functions/templates/create-snippet.mjs');
-const { handler: getSnippetHandler } = await import('../functions/templates/get-snippet.mjs');
-const { handler: updateSnippetHandler } = await import('../functions/templates/update-snippet.mjs');
-const { handler: deleteSnippetHandler } = await import('../functions/templates/delete-snippet.mjs');
-const { handler: previewSnippetHandler } = await import('../functions/templates/preview-snippet.mjs');
+const { handler: createSnippetHandler } = await import('../../functions/templates/create-snippet.mjs');
+const { handler: getSnippetHandler } = await import('../../functions/templates/get-snippet.mjs');
+const { handler: updateSnippetHandler } = await import('../../functions/templates/update-snippet.mjs');
+const { handler: deleteSnippetHandler } = await import('../../functions/templates/delete-snippet.mjs');
+const { handler: previewSnippetHandler } = await import('../../functions/templates/preview-snippet.mjs');
 
 describe('Template System End-to-End User Flows', () => {
   beforeEach(() => {

@@ -1,3 +1,8 @@
+/* Import custom styles first - @import must come before all other CSS */
+@import './styles/animations.css';
+@import './styles/drop-zones.css';
+@import './styles/accessibility.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -96,6 +101,341 @@
 
   .card-footer {
     @apply px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-xl;
+  }
+
+  /* Sidebar Components */
+  .sidebar {
+    @apply bg-white border-r border-gray-200 shadow-sm flex flex-col transition-all duration-300 ease-in-out;
+  }
+
+  .sidebar-expanded {
+    @apply w-64;
+  }
+
+  .sidebar-collapsed {
+    @apply w-16;
+  }
+
+  .sidebar-mobile {
+    @apply fixed inset-y-0 left-0 z-50 w-64 transform transition-transform duration-300 ease-in-out;
+  }
+
+  .sidebar-mobile-hidden {
+    @apply -translate-x-full;
+  }
+
+  .sidebar-mobile-visible {
+    @apply translate-x-0;
+  }
+
+  .sidebar-backdrop {
+    @apply fixed inset-0 bg-black bg-opacity-25 z-40 transition-opacity duration-300 ease-in-out;
+  }
+
+  /* Navigation Items */
+  .nav-item {
+    @apply relative flex items-center rounded-lg text-sm font-medium transition-all duration-200 ease-in-out;
+    @apply focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 focus:ring-offset-white;
+    @apply min-h-[44px] touch-manipulation; /* Mobile touch target */
+  }
+
+  .nav-item-expanded {
+    @apply px-3 py-2;
+  }
+
+  .nav-item-collapsed {
+    @apply p-2 justify-center;
+  }
+
+  /* Navigation Item States */
+  .nav-item-default {
+    @apply text-gray-600 hover:text-gray-900 hover:bg-gray-50;
+  }
+
+  .nav-item-active {
+    @apply bg-primary-50 text-primary-700 border-r-2 border-primary-700;
+    @apply shadow-sm;
+  }
+
+  .nav-item-active:hover {
+    @apply bg-primary-100 text-primary-800;
+  }
+
+  /* Focus states with enhanced visibility */
+  .nav-item:focus-visible {
+    @apply ring-2 ring-primary-500 ring-offset-2 ring-offset-white;
+    @apply outline-none;
+  }
+
+  /* High contrast mode support */
+  @media (prefers-contrast: high) {
+    .nav-item-active {
+      @apply border-r-4 border-primary-800;
+    }
+
+    .nav-item:focus-visible {
+      @apply ring-4 ring-primary-600;
+    }
+  }
+
+  /* Navigation Group Headers */
+  .nav-group-header {
+    @apply px-3 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3;
+    @apply select-none; /* Prevent text selection */
+  }
+
+  .nav-group-header-spacing {
+    @apply pt-6 first:pt-0; /* Add spacing between groups, except first */
+  }
+
+  /* Navigation Icons */
+  .nav-icon {
+    @apply flex-shrink-0 transition-colors duration-200;
+  }
+
+  .nav-icon-expanded {
+    @apply h-5 w-5 mr-3;
+  }
+
+  .nav-icon-collapsed {
+    @apply h-6 w-6;
+  }
+
+  /* Sidebar Header */
+  .sidebar-header {
+    @apply flex items-center justify-between p-4 border-b border-gray-200 bg-white;
+    @apply min-h-[72px]; /* Consistent header height */
+  }
+
+  .sidebar-header-collapsed {
+    @apply px-2;
+  }
+
+  .sidebar-title {
+    @apply text-lg font-semibold text-gray-900 truncate;
+  }
+
+  .sidebar-subtitle {
+    @apply text-xs text-gray-500 truncate;
+  }
+
+  /* Sidebar Footer */
+  .sidebar-footer {
+    @apply border-t border-gray-200 p-4 bg-white;
+  }
+
+  .sidebar-footer-collapsed {
+    @apply px-2;
+  }
+
+  /* User Role Badge */
+  .user-role-badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+    @apply bg-primary-100 text-primary-800 border border-primary-200;
+  }
+
+  /* Sidebar Toggle Button */
+  .sidebar-toggle {
+    @apply inline-flex items-center justify-center rounded-md transition-colors duration-200;
+    @apply text-gray-400 hover:text-gray-500 hover:bg-gray-100;
+    @apply focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2;
+    @apply min-h-[44px] min-w-[44px] touch-manipulation; /* Mobile touch target */
+  }
+
+  .sidebar-toggle-desktop {
+    @apply p-1.5;
+  }
+
+  .sidebar-toggle-mobile {
+    @apply p-2 bg-white shadow-md;
+  }
+
+  /* Navigation List Styling */
+  .nav-list {
+    @apply space-y-1;
+  }
+
+  .nav-group {
+    @apply space-y-6;
+  }
+
+  /* Badge positioning for collapsed state */
+  .nav-item-badge-collapsed {
+    @apply absolute -top-1 -right-1;
+  }
+
+  /* Smooth transitions for responsive changes */
+  .sidebar-responsive-transition {
+    @apply transition-all duration-300 ease-in-out;
+  }
+
+  /* Mobile-specific enhancements */
+  @media (max-width: 768px) {
+    .sidebar-mobile {
+      @apply safe-top safe-bottom; /* Handle notch areas */
+    }
+
+    .nav-item {
+      @apply min-h-[48px]; /* Larger touch targets on mobile */
+    }
+
+    .sidebar-toggle-mobile {
+      @apply min-h-[48px] min-w-[48px];
+    }
+  }
+
+  /* Animation classes for enhanced UX */
+  .sidebar-slide-in {
+    animation: slideInFromLeft 0.3s ease-out;
+  }
+
+  .sidebar-slide-out {
+    animation: slideOutToLeft 0.3s ease-in;
+  }
+
+  .nav-item-pulse {
+    animation: pulse 0.5s ease-in-out;
+  }
+
+  @keyframes slideInFromLeft {
+    from {
+      transform: translateX(-100%);
+      opacity: 0;
+    }
+    to {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }
+
+  @keyframes slideOutToLeft {
+    from {
+      transform: translateX(0);
+      opacity: 1;
+    }
+    to {
+      transform: translateX(-100%);
+      opacity: 0;
+    }
+  }
+
+  /* Enhanced focus indicators for better accessibility */
+  .nav-item:focus-within {
+    @apply ring-2 ring-primary-500 ring-offset-2 ring-offset-white;
+  }
+
+  /* Loading states */
+  .nav-item-loading {
+    @apply opacity-50 pointer-events-none;
+  }
+
+  .nav-item-loading::after {
+    content: '';
+    @apply absolute inset-0 bg-gray-100 animate-pulse rounded-lg;
+  }
+
+  /* Enhanced hover states with subtle animations */
+  .nav-item:hover .nav-icon {
+    @apply scale-105 transition-transform duration-200;
+  }
+
+  .nav-item-active:hover .nav-icon {
+    @apply scale-100; /* Reset scale for active items */
+  }
+
+  /* Badge enhancements */
+  .nav-badge-pulse {
+    animation: badgePulse 2s infinite;
+  }
+
+  @keyframes badgePulse {
+    0%, 100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.8;
+      transform: scale(1.05);
+    }
+  }
+
+  /* Tooltip positioning improvements */
+  .nav-tooltip {
+    @apply z-50 px-2 py-1 text-xs text-white bg-gray-900 rounded shadow-lg;
+    @apply pointer-events-none whitespace-nowrap max-w-xs;
+  }
+
+  /* Responsive typography adjustments */
+  @media (max-width: 640px) {
+    .sidebar-title {
+      @apply text-base; /* Smaller title on mobile */
+    }
+
+    .nav-group-header {
+      @apply text-xs; /* Maintain readability on small screens */
+    }
+  }
+
+  /* Print styles */
+  @media print {
+    .sidebar,
+    .sidebar-mobile,
+    .sidebar-backdrop,
+    .sidebar-toggle {
+      @apply hidden;
+    }
+  }
+
+  /* Reduced motion support */
+  @media (prefers-reduced-motion: reduce) {
+    .sidebar,
+    .sidebar-mobile,
+    .sidebar-backdrop,
+    .nav-item,
+    .sidebar-toggle,
+    .sidebar-slide-in,
+    .sidebar-slide-out,
+    .nav-item-pulse,
+    .nav-badge-pulse {
+      @apply transition-none;
+      animation: none;
+    }
+
+    .nav-item:hover .nav-icon {
+      @apply scale-100 transition-none;
+    }
+  }
+
+  /* Dark mode support (if needed in future) */
+  @media (prefers-color-scheme: dark) {
+    .sidebar {
+      @apply bg-gray-900 border-gray-700;
+    }
+
+    .nav-item-default {
+      @apply text-gray-300 hover:text-white hover:bg-gray-800;
+    }
+
+    .nav-item-active {
+      @apply bg-primary-900 text-primary-100 border-primary-400;
+    }
+
+    .nav-group-header {
+      @apply text-gray-400;
+    }
+
+    .sidebar-header,
+    .sidebar-footer {
+      @apply bg-gray-900 border-gray-700;
+    }
+
+    .sidebar-title {
+      @apply text-white;
+    }
+
+    .sidebar-subtitle {
+      @apply text-gray-400;
+    }
   }
 }
 

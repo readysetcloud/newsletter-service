@@ -28,7 +28,8 @@ describe('Get User Context', () => {
         tenantId: 'tenant-456',
         role: 'user',
         isAdmin: false,
-        isTenantAdmin: false
+        isTenantAdmin: false,
+        userTier: 'free-tier'
       });
     });
 
@@ -56,7 +57,8 @@ describe('Get User Context', () => {
         tenantId: 'null',
         role: 'admin',
         isAdmin: true,
-        isTenantAdmin: false
+        isTenantAdmin: false,
+        userTier: 'free-tier'
       });
     });
 
@@ -86,7 +88,8 @@ describe('Get User Context', () => {
         tenantId: 'tenant-abc',
         role: 'api_user',
         isAdmin: false,
-        isTenantAdmin: false
+        isTenantAdmin: false,
+        userTier: 'free-tier'
       });
     });
 
@@ -132,7 +135,8 @@ describe('Get User Context', () => {
         tenantId: null,
         role: 'user', // Function defaults to 'user' when role is undefined
         isAdmin: false,
-        isTenantAdmin: false
+        isTenantAdmin: false,
+        userTier: 'free-tier'
       });
     });
 
@@ -160,7 +164,8 @@ describe('Get User Context', () => {
         tenantId: 'tenant-456',
         role: 'user',
         isAdmin: false,
-        isTenantAdmin: false
+        isTenantAdmin: false,
+        userTier: 'free-tier'
       });
     });
 
@@ -228,7 +233,8 @@ describe('Get User Context', () => {
         tenantId: 'tenant-456',
         role: 'admin',
         isAdmin: true,
-        isTenantAdmin: true
+        isTenantAdmin: true,
+        userTier: 'free-tier'
       });
     });
   });

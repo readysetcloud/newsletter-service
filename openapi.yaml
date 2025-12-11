@@ -358,6 +358,261 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
+  /brand/photos:
+    get:
+      summary: List brand photos
+      description: Lists all brand photos for the authenticated tenant with optional search and pagination
+      tags:
+        - Brand Photos
+      parameters:
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 100
+          description: Search term to filter photos by filename
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+          description: Maximum number of photos to return
+        - name: continuationToken
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Token for pagination to get next set of results
+      responses:
+        200:
+          description: Brand photos retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  photos:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        key:
+                          type: string
+                          description: S3 key of the photo
+                        fileName:
+                          type: string
+                          description: Current filename in S3
+                        originalName:
+                          type: string
+                          description: Original filename without timestamp
+                        publicUrl:
+                          type: string
+                          description: Public URL to access the photo
+                        size:
+                          type: number
+                          description: File size in bytes
+                        lastModified:
+                          type: string
+                          format: date-time
+                          description: Last modified timestamp
+                  hasMore:
+                    type: boolean
+                    description: Whether there are more photos available
+                  nextContinuationToken:
+                    type: string
+                    description: Token for next page of results
+                  totalCount:
+                    type: number
+                    description: Total number of photos in current result set
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ListBrandPhotosFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
+    post:
+      summary: Generate presigned URL for brand photo upload
+      description: Generates a presigned URL for uploading a brand photo to S3 (general photos, not logo)
+      tags:
+        - Brand Photos
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - fileName
+                - contentType
+              properties:
+                fileName:
+                  type: string
+                  maxLength: 255
+                  description: Name of the file to upload
+                contentType:
+                  type: string
+                  enum:
+                    [
+                      "image/jpeg",
+                      "image/jpg",
+                      "image/png",
+                      "image/gif",
+                      "image/webp",
+                    ]
+                  description: MIME type of the image file
+                isLogo:
+                  type: boolean
+                  default: false
+                  description: Whether this is a logo upload (false for general brand photos)
+              additionalProperties: false
+      responses:
+        200:
+          description: Presigned URL generated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uploadUrl:
+                    type: string
+                    description: Presigned URL for uploading the file
+                  key:
+                    type: string
+                    description: S3 key where the file will be stored
+                  expiresIn:
+                    type: number
+                    description: URL expiration time in seconds
+                  maxSize:
+                    type: number
+                    description: Maximum file size in bytes (5MB)
+                  publicUrl:
+                    type: string
+                    description: Public URL where the file will be accessible
+                  isLogo:
+                    type: boolean
+                    description: Whether this is a logo upload
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-request-validator: Validate All
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UploadBrandPhotosFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
+    put:
+      summary: Confirm brand photo upload
+      description: Confirms that a brand photo has been successfully uploaded
+      tags:
+        - Brand Photos
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - key
+              properties:
+                key:
+                  type: string
+                  description: S3 key of the uploaded file
+                fileName:
+                  type: string
+                  description: Original file name
+                isLogo:
+                  type: boolean
+                  default: false
+                  description: Whether this is a logo upload
+              additionalProperties: false
+      responses:
+        200:
+          description: Brand photo confirmed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  photoUrl:
+                    type: string
+                    description: Public URL of the uploaded photo
+                  key:
+                    type: string
+                    description: S3 key of the uploaded file
+                  isLogo:
+                    type: boolean
+                    description: Whether this is a logo upload
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-request-validator: Validate All
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UploadBrandPhotosFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
+  /brand/photos/{key}:
+    delete:
+      summary: Delete brand photo
+      description: Deletes a brand photo from S3 storage
+      tags:
+        - Brand Photos
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+          description: S3 key of the photo to delete (URL encoded)
+      responses:
+        200:
+          description: Brand photo deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  key:
+                    type: string
+                    description: S3 key of the deleted photo
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DeleteBrandPhotoFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
   /brand/validate:
     get:
       summary: Validate brand ID

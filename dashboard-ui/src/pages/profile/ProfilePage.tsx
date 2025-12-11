@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-import { AppHeader } from '@/components/layout/AppHeader';
 import { Loading } from '@/components/ui/Loading';
 import { useToast } from '@/components/ui/Toast';
 import { PersonalInfoForm } from '@/components/forms/PersonalInfoForm';
@@ -161,19 +160,14 @@ export function ProfilePage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="flex items-center justify-center min-h-96">
         <Loading size="lg" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <AppHeader />
-
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-        <div className="px-4 py-6 sm:px-0">
+    <div className="max-w-7xl mx-auto">
           {error ? (
             <div className="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
               <h2 className="text-lg font-semibold text-red-800 mb-2">Error Loading Profile</h2>
@@ -225,10 +219,6 @@ export function ProfilePage() {
               </div>
             </>
           )}
-        </div>
-      </main>
-
-
     </div>
   );
 }

@@ -5,8 +5,6 @@ export interface Template {
   name: string;
   description?: string;
   type: 'template';
-  category?: string;
-  tags?: string[];
   snippets?: string[]; // Used snippets
   isVisualMode?: boolean;
   visualConfig?: any;
@@ -41,10 +39,17 @@ export interface Snippet {
 
 export interface SnippetParameter {
   name: string;
-  type: 'string' | 'number' | 'boolean';
+  type: 'string' | 'number' | 'boolean' | 'select' | 'textarea' | 'url';
   required: boolean;
   defaultValue?: any;
   description?: string;
+  options?: string[]; // For select type
+  validation?: {
+    min?: number;
+    max?: number;
+    pattern?: string;
+    message?: string;
+  };
 }
 
 // Request/Response Types
@@ -52,8 +57,6 @@ export interface CreateTemplateRequest {
   name: string;
   description?: string;
   content: string;
-  category?: string;
-  tags?: string[];
   isVisualMode?: boolean;
   visualConfig?: any;
 }
@@ -62,8 +65,6 @@ export interface UpdateTemplateRequest {
   name?: string;
   description?: string;
   content?: string;
-  category?: string;
-  tags?: string[];
   isVisualMode?: boolean;
   visualConfig?: any;
 }
@@ -96,6 +97,8 @@ export interface PreviewTemplateRequest {
   testData?: Record<string, any>;
   sendTestEmail?: boolean;
   testEmailAddress?: string;
+  emailCompatible?: boolean;
+  clientId?: string;
 }
 
 export interface PreviewSnippetRequest {
@@ -106,13 +109,22 @@ export interface PreviewResponse {
   html: string;
   success: boolean;
   error?: string;
+  emailWarnings?: EmailWarning[];
+  emailCompatible?: boolean;
+  clientId?: string;
+}
+
+export interface EmailWarning {
+  type: 'compatibility' | 'accessibility';
+  severity: 'error' | 'warning' | 'info';
+  message: string;
+  count: number;
+  examples?: string[];
 }
 
 // Filter and Search Types
 export interface TemplateFilters {
   search?: string;
-  category?: string;
-  tags?: string[];
   createdBy?: string;
   dateRange?: {
     start: string;

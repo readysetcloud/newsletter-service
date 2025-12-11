@@ -543,9 +543,7 @@ export const templateValidationRules = {
     validationRules.maxLength(500, 'Description must be less than 500 characters')
   ],
 
-  category: [
-    validationRules.maxLength(50, 'Category must be less than 50 characters')
-  ],
+
 
   parameterName: [
     validationRules.required('Parameter name is required'),

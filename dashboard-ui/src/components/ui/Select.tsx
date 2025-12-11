@@ -11,12 +11,13 @@ export interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElemen
   label?: string;
   error?: string;
   helperText?: string;
-  options: SelectOption[];
+  options?: SelectOption[];
   placeholder?: string;
+  children?: React.ReactNode;
 }
 
 export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
-  ({ label, error, helperText, options, placeholder, className, id, ...props }, ref) => {
+  ({ label, error, helperText, options, placeholder, className, id, children, ...props }, ref) => {
     const hasError = !!error;
     const selectId = id || `select-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -47,11 +48,11 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
                 {placeholder}
               </option>
             )}
-            {options.map((option) => (
+            {options ? options.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>
-            ))}
+            )) : children}
           </select>
           <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
             <ChevronDownIcon className="h-5 w-5 text-slate-400" />

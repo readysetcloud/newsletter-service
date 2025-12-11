@@ -1,714 +1,1759 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect, forwardRef, useImperativeHandle, useMemo } from 'react';
 import {
-  EyeIcon,
-  CodeBracketIcon,
-  PaintBrushIcon,
   DocumentTextIcon,
-  TagIcon,
-  FolderIcon,
-  ExclamationTriangleIcon,
-  CheckCircleIcon,
-  ArrowLeftIcon,
-  CloudArrowUpIcon,
-  ClockIcon
+  PaintBrushIcon,
+  PlusIcon,
+  TrashIcon,
+  ArrowUpIcon,
+  ArrowDownIcon,
+  EyeIcon,
+  BeakerIcon,
+  Bars3Icon,
+  CodeBracketIcon,
+  ExclamationTriangleIcon
 } from '@heroicons/react/24/outline';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
+import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { TextArea } from '@/components/ui/TextArea';
 import { Select } from '@/components/ui/Select';
-import { Loading } from '@/components/ui/Loading';
-import { ErrorDisplay } from '@/components/ui/ErrorDisplay';
-import { CodeEditor } from './CodeEditor';
-import { VisualBuilder } from './VisualBuilder';
-import type { VisualConfig } from '@/utils/templateConverter';
-import { templateService } from '@/services/templateService';
-import { useDebounce } from '@/hooks/useDebounce';
 import { cn } from '@/utils/cn';
-import { useNotifications } from '@/components/ui/Notifications';
-import { FormValidationProvider, useFormValidation, ValidatedField, templateValidationRules } from '@/components/ui/FormValidation';
-import { TemplateErrorBoundary } from '@/components/ui/ErrorBoundary';
-import { FormLoadingOverlay, AutoSaveIndicator } from '@/components/ui/LoadingStates';
-import { getUserFriendlyErrorMessage, getDetailedErrorInfo } from '@/utils/errorHandling';
-import { safeValidate, createTemplateSchema, updateTemplateSchema } from '@/schemas/templateValidation';
-import {
-  visualConfigToHandlebars,
-  handlebarsToVisualConfig,
-  createEmptyVisualConfig,
-  validateVisualConfig
-} from '@/utils/templateConverter';
-import type {
-  Template,
-  Snippet,
-  CreateTemplateRequest,
-  UpdateTemplateRequest
-} from '@/types/template';
+import { EnhancedImageComponent } from './EnhancedImageComponent';
+import { DropZoneComponent } from './DropZoneComponent';
+import { EnhancedDropZones } from './EnhancedDropZones';
+import { SimpleCodeEditor } from './SimpleCodeEditor';
+import { InputWithVariables } from './InputWithVariables';
+import { ComponentPalette } from './ComponentPalette';
+import { EmailCompatibleRenderer } from './EmailCompatibleRenderer';
 
-interface ValidationError {
-  line: number;
-  column: number;
-  message: string;
-  severity: 'error' | 'warning' | 'info';
+import { useTemplateNotifications } from '@/components/ui/Notifications';
+import { useUnsavedChanges } from '@/hooks/useUnsavedChanges';
+import { templateService } from '@/services/templateService';
+import { TemplateHelpContent, TemplateQuickTips } from './TemplateHelpContent';
+import type { Template, Snippet } from '@/types/template';
+
+interface Component {
+  id: string;
+  type: 'heading' | 'text' | 'image' | 'button' | 'divider';
+  properties: Record<string, any>;
 }
 
 interface TemplateBuilderProps {
   template?: Template;
   onSave?: (template: Template) => void;
-  onCancel?: () => void;
   onPreview?: (template: Template) => void;
+  onCancel?: () => void;
   className?: string;
+  autoSave?: boolean;
+  autoSaveInterval?: number;
+
 }
 
-type BuilderMode = 'visual' | 'code';
-
-interface TemplateFormData {
-  name: string;
-  description: string;
-  content: string;
-  category: string;
-  tags: string[];
-  isVisualMode: boolean;
-  visualConfig?: any;
+export interface TemplateBuilderRef {
+  // Reserved for future functionality
 }
 
-const TemplateBuilderContent: React.FC<TemplateBuilderProps> = ({
+const COMPONENTS = [
+  { type: 'heading', label: 'Heading', icon: DocumentTextIcon },
+  { type: 'text', label: 'Text', icon: DocumentTextIcon },
+  { type: 'image', label: 'Image', icon: PaintBrushIcon },
+  { type: 'button', label: 'Button', icon: PlusIcon },
+  { type: 'divider', label: 'Divider', icon: PaintBrushIcon }
+];
+
+const DEFAULT_PROPS = {
+  heading: { text: 'Heading', level: 'h2', align: 'left' },
+  text: { content: 'Text content...', align: 'left' },
+  image: { src: '', alt: '', width: '100%' },
+  button: { text: 'Button', url: '', color: '#007bff' },
+  divider: { style: 'solid', color: '#ccc' }
+};
+
+const TEST_DATA = `{
+  "newsletter": {
+    "title": "Weekly Newsletter",
+    "issue": 42
+  },
+  "articles": [
+    {
+      "title": "Sample Article",
+      "url": "https://example.com"
+    }
+  ],
+  "subscriber": {
+    "name": "John Doe",
+    "email": "john@example.com"
+  }
+}`;
+
+export const TemplateBuilder = forwardRef<TemplateBuilderRef, TemplateBuilderProps>(({
   template,
   onSave,
-  onCancel,
   onPreview,
-  className
-}) => {
-  const notifications = useNotifications();
-  const formValidation = useFormValidation();
-  const [mode, setMode] = useState<BuilderMode>('code');
-  const [formData, setFormData] = useState<TemplateFormData>({
-    name: '',
-    description: '',
-    content: '',
-    category: '',
-    tags: [],
-    isVisualMode: false
-  });
+  onCancel,
+  className,
+  autoSave = false,
+  autoSaveInterval = 30000 // 30 seconds
+}, ref) => {
+  const [tab, setTab] = useState<'build' | 'test' | 'email-preview'>('build');
+  const [editMode, setEditMode] = useState<'visual' | 'code'>('visual');
+  const [components, setComponents] = useState<Component[]>(
+    template?.visualConfig?.components || []
+  );
+  const [handlebarsContent, setHandlebarsContent] = useState<string>(
+    template?.content || ''
+  );
+  const [selected, setSelected] = useState<string | null>(null);
+  const [componentEditMode, setComponentEditMode] = useState<'visual' | 'code'>('visual');
+  const [componentCodeContent, setComponentCodeContent] = useState<string>('');
+  const [componentCodeErrors, setComponentCodeErrors] = useState<any[]>([]);
+  const [testData, setTestData] = useState(TEST_DATA);
+  const [draggedComponent, setDraggedComponent] = useState<string | null>(null);
+  const [draggedComponentId, setDraggedComponentId] = useState<string | null>(null);
+  const [dropZoneIndex, setDropZoneIndex] = useState<number | null>(null);
+  const [isDraggingFromCanvas, setIsDraggingFromCanvas] = useState(false);
 
-  const [snippets, setSnippets] = useState<Snippet[]>([]);
-  const [categories, setCategories] = useState<string[]>([]);
-  const [availableTags, setAvailableTags] = useState<string[]>([]);
-  const [validationErrors, setValidationErrors] = useState<ValidationError[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Resizable panel state
+  const [propertiesPanelWidth, setPropertiesPanelWidth] = useState(320); // 320px = w-80
+  const [codeEditorHeight, setCodeEditorHeight] = useState(300);
+  const [mainEditorHeight, setMainEditorHeight] = useState(500);
+  const [isResizingPanel, setIsResizingPanel] = useState(false);
+  const [isResizingEditor, setIsResizingEditor] = useState(false);
+  const [isResizingMainEditor, setIsResizingMainEditor] = useState(false);
+
+
+
+  // Save state management
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const [templateName, setTemplateName] = useState(template?.name || '');
+  const [templateDescription, setTemplateDescription] = useState(template?.description || '');
+  const [lastAutoSaved, setLastAutoSaved] = useState<Date | null>(null);
 
-  const [newTag, setNewTag] = useState('');
-  const [showTagInput, setShowTagInput] = useState(false);
-
-  const debouncedContent = useDebounce(formData.content, 500);
+  const notifications = useTemplateNotifications();
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout>();
+  const localStorageTimeoutRef = useRef<NodeJS.Timeout>();
 
-  // Initialize form data
-  useEffect(() => {
-    if (template) {
-      let visualConfig = template.visualConfig;
+  // Local storage key for work in progress
+  const getLocalStorageKey = useCallback(() => {
+    return template?.id ? `template-wip-${template.id}` : 'template-wip-new';
+  }, [template?.id]);
 
-      // If template has visual mode enabled but no visual config, try to parse from content
-      if (template.isVisualMode && !visualConfig && template.content) {
-        visualConfig = handlebarsToVisualConfig(template.content, snippets);
-      }
+  // Save to local storage
+  const saveToLocalStorage = useCallback(() => {
+    try {
+      const wipData = {
+        templateName,
+        templateDescription,
+        components,
+        handlebarsContent,
+        editMode,
+        componentEditMode,
+        propertiesPanelWidth,
+        codeEditorHeight,
+        mainEditorHeight,
+        testData,
+        timestamp: new Date().toISOString(),
+        templateId: template?.id || null
+      };
 
-      setFormData({
-        name: template.name,
-        description: template.description || '',
-        content: template.content || '',
-        category: template.category || '',
-        tags: template.tags || [],
-        isVisualMode: template.isVisualMode || false,
-        visualConfig: visualConfig
-      });
-      setMode(template.isVisualMode ? 'visual' : 'code');
-      setLastSaved(new Date(template.updatedAt));
+      localStorage.setItem(getLocalStorageKey(), JSON.stringify(wipData));
+      setLastAutoSaved(new Date());
+      console.log('Template auto-saved');
+    } catch (error) {
+      console.warn('Failed to auto-save template:', error);
     }
-  }, [template, snippets]);
+  }, [
+    templateName,
+    templateDescription,
+    components,
+    handlebarsContent,
+    editMode,
+    componentEditMode,
+    propertiesPanelWidth,
+    codeEditorHeight,
+    mainEditorHeight,
+    testData,
+    template?.id,
+    getLocalStorageKey
+  ]);
 
-  // Load metadata
-  useEffect(() => {
-    const loadMetadata = async () => {
-      setLoading(true);
-      try {
-        const [snippetsResponse, categoriesResponse, tagsResponse] = await Promise.all([
-          templateService.getSnippets(),
-          templateService.getTemplateCategories(),
-          templateService.getTemplateTags()
-        ]);
+  // Load from local storage
+  const loadFromLocalStorage = useCallback(() => {
+    try {
+      const saved = localStorage.getItem(getLocalStorageKey());
+      if (saved) {
+        const wipData = JSON.parse(saved);
 
-        if (snippetsResponse.success && snippetsResponse.data) {
-          setSnippets(snippetsResponse.data.snippets);
+        // Only restore if it's newer than 24 hours and not for an existing template that's been saved
+        const savedTime = new Date(wipData.timestamp);
+        const hoursSinceLastSave = (Date.now() - savedTime.getTime()) / (1000 * 60 * 60);
+
+        if (hoursSinceLastSave < 24) {
+          // Ask user if they want to restore
+          const shouldRestore = window.confirm(
+            `Found unsaved work from ${savedTime.toLocaleString()}. Would you like to restore it?`
+          );
+
+          if (shouldRestore) {
+            setTemplateName(wipData.templateName || '');
+            setTemplateDescription(wipData.templateDescription || '');
+            setComponents(wipData.components || []);
+            setHandlebarsContent(wipData.handlebarsContent || '');
+            setEditMode(wipData.editMode || 'visual');
+            setComponentEditMode(wipData.componentEditMode || 'visual');
+            setPropertiesPanelWidth(wipData.propertiesPanelWidth || 320);
+            setCodeEditorHeight(wipData.codeEditorHeight || 300);
+            setMainEditorHeight(wipData.mainEditorHeight || 500);
+            setTestData(wipData.testData || TEST_DATA);
+            setLastAutoSaved(savedTime);
+
+            return true;
+          }
         }
-
-        setCategories(categoriesResponse);
-        setAvailableTags(tagsResponse);
-      } catch (error) {
-        console.error('Error loading metadata:', error);
-        setError('Failed to load template metadata');
-      } finally {
-        setLoading(false);
       }
-    };
-
-    loadMetadata();
-  }, []);
-
-  // Track unsaved changes
-  useEffect(() => {
-    if (template) {
-      const hasChanges = (
-        formData.name !== template.name ||
-        formData.description !== (template.description || '') ||
-        formData.content !== (template.content || '') ||
-        formData.category !== (template.category || '') ||
-        JSON.stringify(formData.tags) !== JSON.stringify(template.tags || []) ||
-        formData.isVisualMode !== (template.isVisualMode || false)
-      );
-      setHasUnsavedChanges(hasChanges);
-    } else {
-      const hasContent = formData.name || formData.description || formData.content;
-      setHasUnsavedChanges(!!hasContent);
+    } catch (error) {
+      console.warn('Failed to restore template:', error);
     }
-  }, [formData, template]);
+    return false;
+  }, [getLocalStorageKey, notifications]);
 
-  // Auto-save functionality
-  useEffect(() => {
-    if (hasUnsavedChanges && template && debouncedContent) {
+  // Clear local storage when template is saved
+  const clearLocalStorage = useCallback(() => {
+    try {
+      localStorage.removeItem(getLocalStorageKey());
+      setLastAutoSaved(null);
+      console.log('Cleared auto-saved template');
+    } catch (error) {
+      console.warn('Failed to clear auto-saved template:', error);
+    }
+  }, [getLocalStorageKey]);
+
+  // Handle unsaved changes navigation warning
+  const { navigateWithConfirmation } = useUnsavedChanges({
+    hasUnsavedChanges,
+    message: 'You have unsaved template changes. Are you sure you want to leave?',
+    onNavigateAway: () => {
+      // Save to localStorage before leaving
+      saveToLocalStorage();
+
+      // Clear any pending auto-save
       if (autoSaveTimeoutRef.current) {
         clearTimeout(autoSaveTimeoutRef.current);
       }
-
-      autoSaveTimeoutRef.current = setTimeout(() => {
-        handleAutoSave();
-      }, 2000);
+      if (localStorageTimeoutRef.current) {
+        clearTimeout(localStorageTimeoutRef.current);
+      }
     }
+  });
+
+  // Load from localStorage on mount and save on unmount
+  useEffect(() => {
+    if (!template) {
+      // Only try to restore for new templates
+      loadFromLocalStorage();
+    }
+
+    // Save to localStorage when component unmounts
+    return () => {
+      if (hasUnsavedChanges) {
+        saveToLocalStorage();
+      }
+    };
+  }, []); // Only run on mount/unmount
+
+  const dragImageRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLDivElement>(null);
+
+  const generateId = () => `comp_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+
+  // Sync handlebars content when switching from visual to code mode
+  useEffect(() => {
+    if (editMode === 'code' && components.length > 0) {
+      const generatedContent = components.map(c => componentToHandlebars(c)).join('\n\n');
+      setHandlebarsContent(generatedContent);
+    }
+  }, [editMode, components, componentToHandlebars]);
+
+  // Track unsaved changes
+  useEffect(() => {
+    if (!template) {
+      // New template - has changes if there's any content
+      const hasContent = templateName || templateDescription || components.length > 0 || handlebarsContent;
+      setHasUnsavedChanges(!!hasContent);
+    } else {
+      // Existing template - compare with original
+      const hasChanges = (
+        templateName !== (template.name || '') ||
+        templateDescription !== (template.description || '') ||
+        JSON.stringify(components) !== JSON.stringify(template.visualConfig?.components || []) ||
+        handlebarsContent !== (template.content || '')
+      );
+      setHasUnsavedChanges(hasChanges);
+    }
+  }, [templateName, templateDescription, components, handlebarsContent, template]);
+
+  // Auto-save functionality
+  useEffect(() => {
+    if (!autoSave || !hasUnsavedChanges || !template) return;
+
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current);
+    }
+
+    autoSaveTimeoutRef.current = setTimeout(() => {
+      handleAutoSave();
+    }, autoSaveInterval);
 
     return () => {
       if (autoSaveTimeoutRef.current) {
         clearTimeout(autoSaveTimeoutRef.current);
       }
     };
-  }, [debouncedContent, hasUnsavedChanges, template]);
+  }, [hasUnsavedChanges, autoSave, autoSaveInterval, template]);
 
-  // Handle auto-save
-  const handleAutoSave = useCallback(async () => {
-    if (!template || !hasUnsavedChanges) return;
+  // Auto-save to localStorage (more frequent than server auto-save)
+  useEffect(() => {
+    if (!hasUnsavedChanges) return;
 
-    try {
-      const updateData: UpdateTemplateRequest = {
-        name: formData.name,
-        description: formData.description,
-        content: formData.content,
-        category: formData.category,
-        tags: formData.tags,
-        isVisualMode: formData.isVisualMode,
-        visualConfig: formData.visualConfig
-      };
-
-      await templateService.updateTemplateWithRetry(template.id, updateData);
-      setLastSaved(new Date());
-      setHasUnsavedChanges(false);
-    } catch (error) {
-      console.error('Auto-save failed:', error);
+    if (localStorageTimeoutRef.current) {
+      clearTimeout(localStorageTimeoutRef.current);
     }
-  }, [template, formData, hasUnsavedChanges]);
 
-  // Handle form field changes
-  const handleFieldChange = useCallback((field: keyof TemplateFormData, value: any) => {
-    setFormData(prev => ({
-      ...prev,
-      [field]: value
-    }));
+    // Save to localStorage every 5 seconds when there are changes
+    localStorageTimeoutRef.current = setTimeout(() => {
+      saveToLocalStorage();
+    }, 5000);
+
+    return () => {
+      if (localStorageTimeoutRef.current) {
+        clearTimeout(localStorageTimeoutRef.current);
+      }
+    };
+  }, [hasUnsavedChanges, saveToLocalStorage]);
+
+
+
+  const addComponent = useCallback((type: Component['type'], insertIndex?: number) => {
+    const component: Component = {
+      id: generateId(),
+      type,
+      properties: { ...DEFAULT_PROPS[type] }
+    };
+
+    setComponents(prev => {
+      if (insertIndex !== undefined) {
+        const newComponents = [...prev];
+        newComponents.splice(insertIndex, 0, component);
+        return newComponents;
+      }
+      return [...prev, component];
+    });
+    setSelected(component.id);
   }, []);
 
-  // Handle mode toggle
-  const handleModeToggle = useCallback((newMode: BuilderMode) => {
-    if (newMode === 'visual' && !formData.visualConfig) {
-      // Initialize visual config if switching to visual mode for the first time
-      const visualConfig = formData.content
-        ? handlebarsToVisualConfig(formData.content, snippets)
-        : createEmptyVisualConfig();
-
-      handleFieldChange('visualConfig', visualConfig);
-    } else if (newMode === 'code' && formData.visualConfig) {
-      // Convert visual config to handlebars when switching to code mode
-      const handlebarsContent = visualConfigToHandlebars(formData.visualConfig, snippets);
-      handleFieldChange('content', handlebarsContent);
-    }
-
-    setMode(newMode);
-    handleFieldChange('isVisualMode', newMode === 'visual');
-  }, [handleFieldChange, formData.content, formData.visualConfig, snippets]);
-
-  // Handle validation changes
-  const handleValidationChange = useCallback((errors: ValidationError[]) => {
-    setValidationErrors(errors);
+  const removeComponent = useCallback((id: string) => {
+    setComponents(prev => prev.filter(c => c.id !== id));
+    setSelected(null);
   }, []);
 
-  // Handle visual config changes
-  const handleVisualConfigChange = useCallback((visualConfig: VisualConfig) => {
-    handleFieldChange('visualConfig', visualConfig);
+  const moveComponent = useCallback((id: string, direction: 'up' | 'down') => {
+    setComponents(prev => {
+      const index = prev.findIndex(c => c.id === id);
+      if (index === -1) return prev;
 
-    // Also update the handlebars content
-    const handlebarsContent = visualConfigToHandlebars(visualConfig, snippets);
-    handleFieldChange('content', handlebarsContent);
+      const newIndex = direction === 'up' ? index - 1 : index + 1;
+      if (newIndex < 0 || newIndex >= prev.length) return prev;
 
-    // Validate visual config
-    const validation = validateVisualConfig(visualConfig);
-    if (!validation.isValid) {
-      const visualErrors: ValidationError[] = validation.errors.map((error, index) => ({
-        line: index + 1,
-        column: 1,
-        message: error,
-        severity: 'error' as const
-      }));
-      setValidationErrors(visualErrors);
-    } else {
-      setValidationErrors([]);
+      const newComponents = [...prev];
+      [newComponents[index], newComponents[newIndex]] = [newComponents[newIndex], newComponents[index]];
+      return newComponents;
+    });
+  }, []);
+
+  const moveComponentToIndex = useCallback((componentId: string, targetIndex: number) => {
+    setComponents(prev => {
+      const sourceIndex = prev.findIndex(c => c.id === componentId);
+      if (sourceIndex === -1 || sourceIndex === targetIndex) return prev;
+
+      const newComponents = [...prev];
+      const [movedComponent] = newComponents.splice(sourceIndex, 1);
+
+      // Adjust target index if moving from before to after
+      const adjustedIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+      newComponents.splice(adjustedIndex, 0, movedComponent);
+
+      return newComponents;
+    });
+  }, []);
+
+  const updateProperty = useCallback((id: string, prop: string, value: any) => {
+    setComponents(prev => prev.map(c =>
+      c.id === id ? { ...c, properties: { ...c.properties, [prop]: value } } : c
+    ));
+  }, []);
+
+  // Convert component to email-compatible handlebars code
+  const componentToHandlebars = useCallback((component: Component): string => {
+    switch (component.type) {
+      case 'heading':
+        const fontSizeMap = {
+          h1: '24px',
+          h2: '20px',
+          h3: '18px',
+          h4: '16px',
+          h5: '14px',
+          h6: '12px'
+        } as const;
+        const fontSize = fontSizeMap[component.properties.level as keyof typeof fontSizeMap] || '20px';
+
+        return `<table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin: 16px 0 8px 0;">
+  <tr>
+    <td style="font-family: Arial, sans-serif; font-size: ${fontSize}; font-weight: bold; color: ${component.properties.color || '#000000'}; text-align: ${component.properties.align}; line-height: 1.2;">
+      ${component.properties.text}
+    </td>
+  </tr>
+</table>`;
+
+      case 'text':
+        return `<table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin: 8px 0;">
+  <tr>
+    <td style="font-family: Arial, sans-serif; font-size: ${component.properties.fontSize || '14px'}; color: ${component.properties.color || '#000000'}; text-align: ${component.properties.align}; line-height: 1.4; padding: 8px 0;">
+      ${component.properties.content}
+    </td>
+  </tr>
+</table>`;
+
+      case 'image':
+        return `<table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin: 16px 0;">
+  <tr>
+    <td align="${component.properties.align || 'center'}">
+      <img src="${component.properties.src}" alt="${component.properties.alt}" style="display: block; max-width: ${component.properties.width || '100%'}; height: auto; border: 0;" />
+    </td>
+  </tr>
+</table>`;
+
+      case 'button':
+        return `<table cellpadding="0" cellspacing="0" border="0" style="margin: 16px auto;">
+  <tr>
+    <td style="background-color: ${component.properties.color || '#007bff'}; border-radius: 4px; padding: 12px 24px; text-align: center;">
+      <a href="${component.properties.url}" style="color: ${component.properties.textColor || '#ffffff'}; text-decoration: none; font-weight: bold; display: inline-block; font-family: Arial, sans-serif;">
+        ${component.properties.text}
+      </a>
+    </td>
+  </tr>
+</table>`;
+
+      case 'divider':
+        return `<table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin: 16px 0;">
+  <tr>
+    <td style="border-top: ${component.properties.height || '1px'} ${component.properties.style || 'solid'} ${component.properties.color || '#cccccc'}; font-size: 0; line-height: 0;">&nbsp;</td>
+  </tr>
+</table>`;
+
+      default:
+        return '';
     }
-  }, [handleFieldChange, snippets]);
+  }, []);
 
-  // Handle tag management
-  const handleAddTag = useCallback(() => {
-    if (newTag.trim() && !formData.tags.includes(newTag.trim())) {
-      handleFieldChange('tags', [...formData.tags, newTag.trim()]);
-      setNewTag('');
-      setShowTagInput(false);
-    }
-  }, [newTag, formData.tags, handleFieldChange]);
-
-  const handleRemoveTag = useCallback((tagToRemove: string) => {
-    handleFieldChange('tags', formData.tags.filter(tag => tag !== tagToRemove));
-  }, [formData.tags, handleFieldChange]);
-
-  const handleTagKeyPress = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      handleAddTag();
-    } else if (e.key === 'Escape') {
-      setNewTag('');
-      setShowTagInput(false);
-    }
-  }, [handleAddTag]);
-
-  // Handle save with enhanced validation and error handling
-  const handleSave = useCallback(async () => {
-    if (validationErrors.some(e => e.severity === 'error')) {
-      notifications.error('Validation Error', 'Please fix validation errors before saving');
-      return;
-    }
-
-    // Validate form data using Zod schema
-    const schema = template ? updateTemplateSchema : createTemplateSchema;
-    const validation = safeValidate(schema, formData);
-
-    if (!validation.success) {
-      const firstError = Object.values(validation.errors)[0];
-      notifications.error('Validation Error', firstError);
-      return;
-    }
-
-    setSaving(true);
-    setError(null);
+  // Parse handlebars code back to component properties
+  const handlebarsToComponent = useCallback((code: string, componentType: Component['type']): Partial<Component['properties']> => {
+    const properties: Record<string, any> = {};
 
     try {
-      if (template) {
-        // Update existing template
-        const updateData: UpdateTemplateRequest = validation.data;
-        const response = await templateService.updateTemplateWithRetry(template.id, updateData);
+      switch (componentType) {
+        case 'heading': {
+          const levelMatch = code.match(/<(h[1-6])/i);
+          const textMatch = code.match(/>([^<]+)</);
+          const alignMatch = code.match(/text-align:\s*([^;"]+)/);
 
-        if (response.success && response.data) {
-          setLastSaved(new Date());
-          setHasUnsavedChanges(false);
-          notifications.success('Template Updated', `${formData.name} has been updated successfully.`);
-          onSave?.(response.data);
-        } else {
-          const errorInfo = getDetailedErrorInfo(response, 'template');
-          setError(errorInfo.message);
-          notifications.error('Update Failed', errorInfo.message, {
-            actions: errorInfo.retryable ? [{
-              label: 'Retry',
-              onClick: handleSave
-            }] : undefined
-          });
+          if (levelMatch) properties.level = levelMatch[1].toLowerCase();
+          if (textMatch) properties.text = textMatch[1].trim();
+          if (alignMatch) properties.align = alignMatch[1].trim();
+          break;
         }
-      } else {
-        // Create new template
-        const createData: CreateTemplateRequest = {
-          name: validation.data.name!,
-          content: validation.data.content!,
-          description: validation.data.description,
-          category: validation.data.category,
-          tags: validation.data.tags,
-          isVisualMode: validation.data.isVisualMode,
-          visualConfig: validation.data.visualConfig
-        };
-        const response = await templateService.createTemplateWithRetry(createData);
+        case 'text': {
+          const contentMatch = code.match(/<p[^>]*>([^<]+)<\/p>/);
+          const alignMatch = code.match(/text-align:\s*([^;"]+)/);
 
-        if (response.success && response.data) {
-          setLastSaved(new Date());
-          setHasUnsavedChanges(false);
-          notifications.success('Template Created', `${formData.name} has been created successfully.`);
-          onSave?.(response.data);
-        } else {
-          const errorInfo = getDetailedErrorInfo(response, 'template');
-          setError(errorInfo.message);
-          notifications.error('Creation Failed', errorInfo.message, {
-            actions: errorInfo.retryable ? [{
-              label: 'Retry',
-              onClick: handleSave
-            }] : undefined
-          });
+          if (contentMatch) properties.content = contentMatch[1].trim();
+          if (alignMatch) properties.align = alignMatch[1].trim();
+          break;
+        }
+        case 'image': {
+          const srcMatch = code.match(/src="([^"]+)"/);
+          const altMatch = code.match(/alt="([^"]+)"/);
+          const widthMatch = code.match(/width:\s*([^;"]+)/);
+
+          if (srcMatch) properties.src = srcMatch[1];
+          if (altMatch) properties.alt = altMatch[1];
+          if (widthMatch) properties.width = widthMatch[1].trim();
+          break;
+        }
+        case 'button': {
+          const textMatch = code.match(/<a[^>]*>([^<]+)<\/a>/);
+          const urlMatch = code.match(/href="([^"]+)"/);
+          const colorMatch = code.match(/background-color:\s*([^;"]+)/);
+
+          if (textMatch) properties.text = textMatch[1].trim();
+          if (urlMatch) properties.url = urlMatch[1];
+          if (colorMatch) properties.color = colorMatch[1].trim();
+          break;
+        }
+        case 'divider': {
+          const styleMatch = code.match(/border:\s*[^;]*\s+(solid|dashed|dotted)/);
+          const colorMatch = code.match(/border:\s*[^;]*\s+([^;"]+)/);
+
+          if (styleMatch) properties.style = styleMatch[1];
+          if (colorMatch) properties.color = colorMatch[1].trim();
+          break;
         }
       }
     } catch (error) {
-      const errorMessage = getUserFriendlyErrorMessage(error, 'template');
-      setError(errorMessage);
-      notifications.error('Save Failed', errorMessage);
+      console.warn('Failed to parse handlebars code:', error);
+    }
+
+    return properties;
+  }, []);
+
+  // Update component from handlebars code
+  const updateComponentFromCode = useCallback((id: string, code: string) => {
+    setComponents(prev => prev.map(c => {
+      if (c.id === id) {
+        const parsedProperties = handlebarsToComponent(code, c.type);
+        return {
+          ...c,
+          properties: { ...c.properties, ...parsedProperties }
+        };
+      }
+      return c;
+    }));
+  }, [handlebarsToComponent]);
+
+  const generateTemplate = useCallback((): Template => {
+    let content: string;
+    let isVisualMode: boolean;
+    let visualConfig: any;
+
+    if (editMode === 'visual') {
+      content = components.map(c => componentToHandlebars(c)).join('\n\n');
+      isVisualMode = true;
+      visualConfig = { components };
+    } else {
+      content = handlebarsContent;
+      isVisualMode = false;
+      visualConfig = template?.visualConfig || null;
+    }
+
+    return {
+      id: template?.id || '',
+      tenantId: template?.tenantId || '',
+      name: templateName || 'New Template',
+      description: templateDescription || '',
+      type: 'template' as const,
+      content,
+      isVisualMode,
+      visualConfig,
+      snippets: template?.snippets || [],
+      s3Key: template?.s3Key || '',
+      s3VersionId: template?.s3VersionId || '',
+      version: template?.version || 1,
+      createdAt: template?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      createdBy: template?.createdBy || '',
+      isActive: template?.isActive ?? true
+    };
+  }, [components, handlebarsContent, editMode, template, templateName, templateDescription, componentToHandlebars]);
+
+  // Enhanced Drag and Drop Handlers
+  const handlePaletteDragStart = (e: React.DragEvent, componentType: string) => {
+    e.dataTransfer.setData('application/component-type', componentType);
+    e.dataTransfer.effectAllowed = 'copy';
+    setDraggedComponent(componentType);
+    setIsDraggingFromCanvas(false);
+
+    // Create custom drag image
+    if (dragImageRef.current) {
+      const dragImage = dragImageRef.current.cloneNode(true) as HTMLElement;
+      dragImage.style.position = 'absolute';
+      dragImage.style.top = '-1000px';
+      dragImage.style.left = '-1000px';
+      dragImage.style.opacity = '0.8';
+      dragImage.style.transform = 'rotate(2deg)';
+      document.body.appendChild(dragImage);
+      e.dataTransfer.setDragImage(dragImage, 50, 25);
+      setTimeout(() => document.body.removeChild(dragImage), 0);
+    }
+  };
+
+  const handleCanvasComponentDragStart = (e: React.DragEvent, componentId: string) => {
+    e.dataTransfer.setData('application/component-id', componentId);
+    e.dataTransfer.effectAllowed = 'move';
+    setDraggedComponentId(componentId);
+    setIsDraggingFromCanvas(true);
+
+    // Add visual feedback to the dragged component
+    const target = e.target as HTMLElement;
+    target.style.opacity = '0.5';
+  };
+
+  const handleCanvasComponentDragEnd = (e: React.DragEvent) => {
+    const target = e.target as HTMLElement;
+    target.style.opacity = '1';
+    setDraggedComponentId(null);
+    setIsDraggingFromCanvas(false);
+    setDropZoneIndex(null);
+  };
+
+  const handleComponentClick = (e: React.MouseEvent, componentType: Component['type']) => {
+    // Only add component if we're not in the middle of a drag operation
+    if (!draggedComponent) {
+      addComponent(componentType);
+    }
+  };
+
+  const handleDropZoneDrop = useCallback((e: DragEvent, index: number) => {
+    e.preventDefault();
+
+    const componentType = e.dataTransfer?.getData('application/component-type');
+    const componentId = e.dataTransfer?.getData('application/component-id');
+
+    if (componentType && COMPONENTS.find(c => c.type === componentType)) {
+      // Adding new component from palette
+      addComponent(componentType as Component['type'], index);
+    } else if (componentId && isDraggingFromCanvas) {
+      // Moving existing component
+      moveComponentToIndex(componentId, index);
+    }
+
+    setDraggedComponent(null);
+    setDraggedComponentId(null);
+    setDropZoneIndex(null);
+    setIsDraggingFromCanvas(false);
+  }, [addComponent, moveComponentToIndex, isDraggingFromCanvas]);
+
+  const handleDropZoneDragOver = useCallback((e: DragEvent, index: number) => {
+    e.preventDefault();
+    setDropZoneIndex(index);
+
+    if (isDraggingFromCanvas) {
+      e.dataTransfer!.dropEffect = 'move';
+    } else {
+      e.dataTransfer!.dropEffect = 'copy';
+    }
+  }, [isDraggingFromCanvas]);
+
+
+
+  // Auto-save handler
+  const handleAutoSave = useCallback(async () => {
+    if (!template || !hasUnsavedChanges || isSaving) return;
+
+    try {
+      setIsSaving(true);
+      const updatedTemplate = generateTemplate();
+
+      const response = await templateService.updateTemplateWithRetry(template.id, {
+        name: updatedTemplate.name,
+        description: updatedTemplate.description,
+        content: updatedTemplate.content,
+        isVisualMode: updatedTemplate.isVisualMode,
+        visualConfig: updatedTemplate.visualConfig
+      });
+
+      if (response.success && response.data) {
+        setLastSaved(new Date());
+        setHasUnsavedChanges(false);
+        notifications.autoSaved();
+      }
+    } catch (error) {
+      console.error('Auto-save failed:', error);
+      // Don't show error notification for auto-save failures to avoid spam
     } finally {
-      setSaving(false);
+      setIsSaving(false);
     }
-  }, [template, formData, validationErrors, onSave, notifications]);
+  }, [template, hasUnsavedChanges, isSaving, generateTemplate, notifications]);
 
-  // Handle preview
-  const handlePreview = useCallback(() => {
+  // Real-time preview update effect
+  useEffect(() => {
+    // Trigger preview update when components change
     if (onPreview) {
-      const previewTemplate: Template = {
-        ...(template || {} as Template),
-        name: formData.name,
-        description: formData.description,
-        content: formData.content,
-        category: formData.category,
-        tags: formData.tags,
-        isVisualMode: formData.isVisualMode,
-        visualConfig: formData.visualConfig
-      };
-      onPreview(previewTemplate);
+      const template = generateTemplate();
+      // Debounce the preview update to avoid excessive re-renders
+      const timeoutId = setTimeout(() => {
+        // Only update if we're in build mode and have components
+        if (tab === 'build' && components.length > 0) {
+          // Could emit a preview update event here
+        }
+      }, 300);
+
+      return () => clearTimeout(timeoutId);
     }
-  }, [template, formData, onPreview]);
+  }, [components, tab, onPreview, generateTemplate]);
 
-  // Validation summary
-  const getValidationSummary = useCallback(() => {
-    const errors = validationErrors.filter(e => e.severity === 'error').length;
-    const warnings = validationErrors.filter(e => e.severity === 'warning').length;
-    return { errors, warnings, hasErrors: errors > 0 };
-  }, [validationErrors]);
+  const handleSave = useCallback(async () => {
+    if (!templateName.trim()) {
+      notifications.validationError('Template name is required');
+      return;
+    }
 
-  const { errors, warnings, hasErrors } = getValidationSummary();
+    if (isSaving) return;
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loading size="lg" />
-      </div>
-    );
+    try {
+      setIsSaving(true);
+      const updatedTemplate = generateTemplate();
+
+      let response;
+      if (template?.id) {
+        // Update existing template
+        response = await templateService.updateTemplateWithRetry(template.id, {
+          name: updatedTemplate.name,
+          description: updatedTemplate.description,
+          content: updatedTemplate.content,
+          isVisualMode: updatedTemplate.isVisualMode,
+          visualConfig: updatedTemplate.visualConfig
+        });
+      } else {
+        // Create new template
+        response = await templateService.createTemplateWithRetry({
+          name: updatedTemplate.name,
+          description: updatedTemplate.description,
+          content: updatedTemplate.content || '',
+          isVisualMode: updatedTemplate.isVisualMode,
+          visualConfig: updatedTemplate.visualConfig
+        });
+      }
+
+      if (response.success && response.data) {
+        setLastSaved(new Date());
+        setHasUnsavedChanges(false);
+
+        // Clear localStorage since template is now saved
+        clearLocalStorage();
+
+        notifications.templateSaved(updatedTemplate.name);
+
+        // Call the parent onSave callback if provided
+        if (onSave) {
+          onSave(response.data);
+        }
+      } else {
+        throw new Error(response.error || 'Failed to save template');
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to save template';
+      notifications.templateError(templateName || 'Template', errorMessage);
+    } finally {
+      setIsSaving(false);
+    }
+  }, [templateName, isSaving, generateTemplate, template, notifications, onSave]);
+
+  const handlePreview = () => {
+    if (onPreview) {
+      onPreview(generateTemplate());
+    }
+  };
+
+
+
+  // Resize handlers
+  const handlePanelResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizingPanel(true);
+  }, []);
+
+  const handleEditorResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizingEditor(true);
+  }, []);
+
+  const handleMainEditorResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizingMainEditor(true);
+  }, []);
+
+  // Mouse move handler for resizing
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isResizingPanel) {
+        const newWidth = window.innerWidth - e.clientX;
+        setPropertiesPanelWidth(Math.max(280, Math.min(600, newWidth))); // Min 280px, max 600px
+      }
+      if (isResizingEditor) {
+        // Calculate relative to the code editor container
+        const editorContainer = document.querySelector('.code-editor-container');
+        if (editorContainer) {
+          const rect = editorContainer.getBoundingClientRect();
+          const newHeight = e.clientY - rect.top;
+          setCodeEditorHeight(Math.max(200, Math.min(800, newHeight))); // Min 200px, max 800px
+        }
+      }
+      if (isResizingMainEditor) {
+        // Calculate relative to the main editor container
+        const mainEditorContainer = document.querySelector('.main-editor-container');
+        if (mainEditorContainer) {
+          const rect = mainEditorContainer.getBoundingClientRect();
+          const newHeight = e.clientY - rect.top;
+          setMainEditorHeight(Math.max(300, Math.min(1000, newHeight))); // Min 300px, max 1000px
+        }
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsResizingPanel(false);
+      setIsResizingEditor(false);
+      setIsResizingMainEditor(false);
+    };
+
+    if (isResizingPanel || isResizingEditor || isResizingMainEditor) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = isResizingPanel ? 'ew-resize' : 'ns-resize';
+      document.body.style.userSelect = 'none';
+
+      return () => {
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      };
+    }
+  }, [isResizingPanel, isResizingEditor, isResizingMainEditor]);
+
+
+
+  // Render template with test data using proper Handlebars compilation
+  const renderWithData = (html: string, data: any) => {
+    if (!data) return html;
+
+    try {
+      // For now, we'll use a more sophisticated regex-based approach
+      // that handles basic Handlebars helpers until we can add the full Handlebars library
+
+      let rendered = html;
+
+      // Handle {{#each}} loops
+      rendered = rendered.replace(/\{\{#each\s+([^}]+)\}\}([\s\S]*?)\{\{\/each\}\}/g, (match, arrayPath, content) => {
+        const keys = arrayPath.trim().split('.');
+        let array = data;
+        for (const key of keys) {
+          if (array && typeof array === 'object' && key in array) {
+            array = array[key];
+          } else {
+            return match; // Return original if path not found
+          }
+        }
+
+        if (Array.isArray(array)) {
+          return array.map((item, index) => {
+            let itemContent = content;
+            // Replace {{this}} with current item
+            itemContent = itemContent.replace(/\{\{this\}\}/g, String(item));
+            // Replace {{@index}} with current index
+            itemContent = itemContent.replace(/\{\{@index\}\}/g, String(index));
+            // Replace {{@first}} with boolean
+            itemContent = itemContent.replace(/\{\{@first\}\}/g, index === 0 ? 'true' : '');
+            // Replace {{@last}} with boolean
+            itemContent = itemContent.replace(/\{\{@last\}\}/g, index === array.length - 1 ? 'true' : '');
+
+            // Handle object properties if item is an object
+            if (typeof item === 'object' && item !== null) {
+              itemContent = itemContent.replace(/\{\{([^}@#/]+)\}\}/g, (propMatch: string, propPath: string) => {
+                const propKeys = propPath.trim().split('.');
+                let propValue = item;
+                for (const propKey of propKeys) {
+                  if (propValue && typeof propValue === 'object' && propKey in propValue) {
+                    propValue = propValue[propKey];
+                  } else {
+                    return propMatch;
+                  }
+                }
+                return String(propValue);
+              });
+            }
+
+            return itemContent;
+          }).join('');
+        }
+
+        return match;
+      });
+
+      // Handle {{#if}} conditions (basic implementation)
+      rendered = rendered.replace(/\{\{#if\s+([^}]+)\}\}([\s\S]*?)(?:\{\{else\}\}([\s\S]*?))?\{\{\/if\}\}/g, (match, condition, ifContent, elseContent = '') => {
+        const keys = condition.trim().split('.');
+        let value = data;
+        for (const key of keys) {
+          if (value && typeof value === 'object' && key in value) {
+            value = value[key];
+          } else {
+            value = null;
+            break;
+          }
+        }
+
+        // Truthy check
+        const isTruthy = value && value !== '' && value !== 0 && value !== false;
+        return isTruthy ? ifContent : elseContent;
+      });
+
+      // Handle simple variable substitution
+      rendered = rendered.replace(/\{\{([^}#/@]+)\}\}/g, (match, path) => {
+        const keys = path.trim().split('.');
+        let value = data;
+        for (const key of keys) {
+          if (value && typeof value === 'object' && key in value) {
+            value = value[key];
+          } else {
+            return match;
+          }
+        }
+        return String(value);
+      });
+
+      return rendered;
+    } catch (error) {
+      console.warn('Error rendering template:', error);
+      return html; // Return original on error
+    }
+  };
+
+  const selectedComponent = selected ? components.find(c => c.id === selected) : null;
+
+  // Update component code content when selection changes
+  useEffect(() => {
+    if (selectedComponent) {
+      const code = componentToHandlebars(selectedComponent);
+      setComponentCodeContent(code);
+      setComponentEditMode('visual'); // Reset to visual mode when selecting a new component
+    } else {
+      setComponentCodeContent('');
+    }
+  }, [selected]); // Only depend on selected component ID, not the component object or componentToHandlebars
+
+  // Sync code content when switching from visual to code mode
+  const handleComponentEditModeChange = useCallback((mode: 'visual' | 'code') => {
+    if (selectedComponent) {
+      if (mode === 'code' && componentEditMode === 'visual') {
+        // Switching to code mode - update code content from current properties
+        const code = componentToHandlebars(selectedComponent);
+        setComponentCodeContent(code);
+      } else if (mode === 'visual' && componentEditMode === 'code') {
+        // Switching to visual mode - ensure properties are up to date from code
+        if (componentCodeContent.trim()) {
+          updateComponentFromCode(selectedComponent.id, componentCodeContent);
+        }
+      }
+    }
+    setComponentEditMode(mode);
+  }, [selectedComponent, componentEditMode, componentCodeContent, componentToHandlebars, updateComponentFromCode]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Toggle between visual and code modes (Ctrl+E)
+      if (selectedComponent && event.ctrlKey && event.key === 'e') {
+        event.preventDefault();
+        const newMode = componentEditMode === 'visual' ? 'code' : 'visual';
+        handleComponentEditModeChange(newMode);
+      }
+
+      // Manual save to localStorage (Ctrl+Shift+S)
+      if (event.ctrlKey && event.shiftKey && event.key === 'S') {
+        event.preventDefault();
+        saveToLocalStorage();
+        notifications.success('Work saved');
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [selectedComponent, componentEditMode, handleComponentEditModeChange, saveToLocalStorage, notifications]);
+
+  let parsedTestData = null;
+  let testError = null;
+  try {
+    parsedTestData = JSON.parse(testData);
+  } catch (e) {
+    testError = e instanceof Error ? e.message : 'Invalid JSON';
   }
 
+  const renderedHtml = useMemo(() => {
+    if (!parsedTestData) return null;
+
+    let templateContent = '';
+    if (editMode === 'visual') {
+      // In visual mode, generate HTML from components
+      templateContent = generateTemplate().content || '';
+    } else {
+      // In code mode, use the handlebars content directly
+      templateContent = handlebarsContent;
+    }
+
+    return renderWithData(templateContent, parsedTestData);
+  }, [parsedTestData, editMode, generateTemplate, handlebarsContent]);
+
+  // Expose functionality via ref
+  useImperativeHandle(ref, () => ({
+    // Reserved for future functionality
+  }), []);
+
   return (
-    <FormLoadingOverlay
-      isLoading={saving}
-      message={template ? 'Updating template...' : 'Creating template...'}
-      className={cn('space-y-6', className)}
-    >
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-4">
-          {onCancel && (
-            <Button variant="ghost" onClick={onCancel} className="flex items-center">
-              <ArrowLeftIcon className="w-4 h-4 mr-2" />
-              Back
-            </Button>
-          )}
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900">
-              {template ? 'Edit Template' : 'Create Template'}
-            </h1>
-            <div className="flex items-center space-x-4 text-sm text-slate-600 mt-1">
-              <AutoSaveIndicator
-                isSaving={saving}
-                lastSaved={lastSaved || undefined}
+    <div className={cn("flex h-full bg-gray-50", className)}>
+      {/* Sidebar */}
+      <ComponentPalette
+        tab={tab}
+        onTabChange={setTab}
+        editMode={editMode}
+        onEditModeChange={setEditMode}
+        testData={testData}
+        onTestDataChange={setTestData}
+        testError={testError}
+        onComponentDragStart={handlePaletteDragStart}
+        onComponentDragEnd={() => setDraggedComponent(null)}
+        onComponentClick={handleComponentClick}
+        onPreview={handlePreview}
+        onSave={handleSave}
+        draggedComponent={draggedComponent}
+        templateName={templateName}
+        onTemplateNameChange={setTemplateName}
+        templateDescription={templateDescription}
+        onTemplateDescriptionChange={setTemplateDescription}
+        hasUnsavedChanges={hasUnsavedChanges}
+        isSaving={isSaving}
+        lastSaved={lastSaved}
+        lastAutoSaved={lastAutoSaved}
+      />
+
+      {/* Canvas */}
+      <div className="flex-1 flex">
+        {/* Canvas Area */}
+        <div
+          ref={canvasRef}
+          className={cn("flex-1 p-6 overflow-y-auto transition-colors",
+            (draggedComponent || draggedComponentId) && "bg-blue-50")}
+        >
+          <div className="max-w-2xl mx-auto">
+            {tab === 'build' ? (
+              <>
+                {editMode === 'visual' ? (
+                  <>
+                    <h2 className="text-xl font-semibold mb-4">Canvas</h2>
+
+                    {/* Help Content for Visual Builder */}
+                    <div className="mb-6">
+                      <TemplateHelpContent
+                        context="visual"
+                        isFirstTime={components.length === 0}
+                      />
+                    </div>
+
+                    {/* Empty state when no components and not dragging */}
+                    {components.length === 0 && !draggedComponent && !draggedComponentId && (
+                      <div className="text-center py-12">
+                        <DocumentTextIcon className="w-16 h-16 mx-auto text-gray-400 mb-4" />
+                        <h3 className="text-lg font-medium text-gray-900 mb-2">Start Building Your Template</h3>
+                        <p className="text-gray-600 mb-4">
+                          Drag components from the left sidebar to begin creating your template.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Component List with Drag and Drop */}
+                    {components.length > 0 ? (
+                      <div className="space-y-2">
+                        {/* Drop zone before first component */}
+                        {(draggedComponent || draggedComponentId) && (
+                          <DropZoneComponent
+                            index={0}
+                            isActive={dropZoneIndex === 0}
+                            isHovered={false}
+                            onDrop={handleDropZoneDrop}
+                            onDragOver={handleDropZoneDragOver}
+                            size="small"
+                            showLabel={dropZoneIndex === 0}
+                            className="my-2"
+                          />
+                        )}
+
+                        {components.map((component, index) => (
+                          <React.Fragment key={component.id}>
+
+                            {/* Draggable Component */}
+                            <Card
+                              className={cn(
+                                'p-4 cursor-pointer transition-all group',
+                                selected === component.id && 'ring-2 ring-blue-500',
+                                draggedComponentId === component.id && 'opacity-50 transform rotate-1',
+                                'hover:shadow-md'
+                              )}
+                              draggable
+                              onDragStart={(e) => handleCanvasComponentDragStart(e, component.id)}
+                              onDragEnd={handleCanvasComponentDragEnd}
+                              onClick={() => setSelected(component.id)}
+                            >
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center space-x-2">
+                                  <Bars3Icon className="w-4 h-4 text-gray-400 cursor-grab active:cursor-grabbing" />
+                                  <span className="text-sm font-medium text-gray-600">
+                                    {COMPONENTS.find(c => c.type === component.type)?.label}
+                                  </span>
+                                </div>
+                                <div className="flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={(e) => { e.stopPropagation(); moveComponent(component.id, 'up'); }}
+                                    disabled={index === 0}
+                                    title="Move up"
+                                  >
+                                    <ArrowUpIcon className="w-3 h-3" />
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={(e) => { e.stopPropagation(); moveComponent(component.id, 'down'); }}
+                                    disabled={index === components.length - 1}
+                                    title="Move down"
+                                  >
+                                    <ArrowDownIcon className="w-3 h-3" />
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={(e) => { e.stopPropagation(); removeComponent(component.id); }}
+                                    title="Delete component"
+                                  >
+                                    <TrashIcon className="w-3 h-3" />
+                                  </Button>
+                                </div>
+                              </div>
+
+                              <div className="bg-gray-50 p-3 rounded pointer-events-none">
+                                {component.type === 'heading' && (
+                                  React.createElement(component.properties.level,
+                                    { style: { textAlign: component.properties.align } },
+                                    component.properties.text)
+                                )}
+                                {component.type === 'text' && (
+                                  <p style={{ textAlign: component.properties.align }}>{component.properties.content}</p>
+                                )}
+                                {component.type === 'image' && (
+                                  component.properties.src ? (
+                                    <img src={component.properties.src} alt={component.properties.alt} className="max-w-full" />
+                                  ) : (
+                                    <div className="bg-gray-200 p-4 text-center text-gray-500">Image</div>
+                                  )
+                                )}
+                                {component.type === 'button' && (
+                                  <span className="inline-block px-4 py-2 rounded text-white" style={{ backgroundColor: component.properties.color }}>
+                                    {component.properties.text}
+                                  </span>
+                                )}
+                                {component.type === 'divider' && (
+                                  <hr style={{ border: `1px ${component.properties.style} ${component.properties.color}` }} />
+                                )}
+                              </div>
+                            </Card>
+
+                            {/* Drop zone after each component */}
+                            {(draggedComponent || draggedComponentId) && (
+                              <DropZoneComponent
+                                index={index + 1}
+                                isActive={dropZoneIndex === index + 1}
+                                isHovered={false}
+                                onDrop={handleDropZoneDrop}
+                                onDragOver={handleDropZoneDragOver}
+                                size={index === components.length - 1 ? "medium" : "small"}
+                                showLabel={dropZoneIndex === index + 1}
+                                className="my-2"
+                              />
+                            )}
+                          </React.Fragment>
+                        ))}
+                      </div>
+                    ) : (
+                      /* Empty state with drop zone when dragging */
+                      (draggedComponent || draggedComponentId) && (
+                        <DropZoneComponent
+                          index={0}
+                          isActive={dropZoneIndex === 0}
+                          isHovered={false}
+                          onDrop={handleDropZoneDrop}
+                          onDragOver={handleDropZoneDragOver}
+                          size="large"
+                          showLabel={true}
+                          className="my-8"
+                        />
+                      )
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <h2 className="text-xl font-semibold mb-4">Handlebars Editor</h2>
+
+                    {/* Help Content for Code Editor */}
+                    <div className="mb-6">
+                      <TemplateHelpContent context="code" />
+                    </div>
+
+                    <Card className="p-0 overflow-hidden">
+                      <div className="main-editor-container relative">
+                        <SimpleCodeEditor
+                          value={handlebarsContent}
+                          onChange={setHandlebarsContent}
+                          language="handlebars"
+                          height={`${mainEditorHeight}px`}
+                          testData={testData}
+                          placeholder="Enter your Handlebars template here..."
+                          theme="light"
+                        />
+                        {/* Resize handle for main editor */}
+                        <div
+                          className="absolute bottom-0 left-0 right-0 h-2 cursor-ns-resize hover:bg-blue-500 hover:bg-opacity-20 transition-colors flex items-center justify-center"
+                          onMouseDown={handleMainEditorResizeStart}
+                          title="Drag to resize editor"
+                        >
+                          <div className="w-8 h-0.5 bg-gray-400 rounded"></div>
+                        </div>
+                      </div>
+                    </Card>
+                  </>
+                )}
+              </>
+            ) : tab === 'test' ? (
+              <>
+                <h2 className="text-xl font-semibold mb-4">Preview</h2>
+
+                {/* Help Content for Preview */}
+                <div className="mb-6">
+                  <TemplateHelpContent context="preview" />
+                </div>
+
+                {testError ? (
+                  <Card className="p-8 text-center">
+                    <p className="text-red-600">Fix JSON syntax to see preview</p>
+                  </Card>
+                ) : (
+                  <Card className="p-6">
+                    <div
+                      className="prose prose-sm max-w-none prose-headings:text-gray-900 prose-p:text-gray-700 prose-a:text-blue-600 prose-a:no-underline hover:prose-a:underline prose-strong:text-gray-900"
+                      dangerouslySetInnerHTML={{ __html: renderedHtml || '' }}
+                    />
+                  </Card>
+                )}
+              </>
+            ) : tab === 'email-preview' ? (
+              <EmailCompatibleRenderer
+                components={components}
+                showWarnings={true}
+                showClientPreviews={true}
+                className="space-y-4"
               />
-              {hasUnsavedChanges && (
-                <span className="text-amber-600">Unsaved changes</span>
-              )}
-            </div>
+            ) : null}
           </div>
         </div>
 
-        <div className="flex items-center space-x-3">
-          {/* Validation Status */}
-          {validationErrors.length > 0 && (
-            <div className="flex items-center space-x-2 text-sm">
-              {hasErrors ? (
-                <div className="flex items-center text-red-600">
-                  <ExclamationTriangleIcon className="w-4 h-4 mr-1" />
-                  {errors} error{errors !== 1 ? 's' : ''}
-                </div>
-              ) : (
-                <div className="flex items-center text-green-600">
-                  <CheckCircleIcon className="w-4 h-4 mr-1" />
-                  No errors
-                </div>
-              )}
-              {warnings > 0 && (
-                <div className="flex items-center text-amber-600">
-                  <ExclamationTriangleIcon className="w-4 h-4 mr-1" />
-                  {warnings} warning{warnings !== 1 ? 's' : ''}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Action Buttons */}
-          {onPreview && (
-            <Button variant="outline" onClick={handlePreview} className="flex items-center">
-              <EyeIcon className="w-4 h-4 mr-2" />
-              Preview
-            </Button>
-          )}
-
-          <Button
-            onClick={handleSave}
-            disabled={saving || hasErrors || !formData.name || !formData.content}
-            className="flex items-center"
+        {/* Properties Panel */}
+        {selectedComponent && (
+          <div
+            className="bg-white border-l p-4 overflow-y-auto relative"
+            style={{ width: propertiesPanelWidth }}
           >
-            {saving ? (
-              <Loading size="sm" className="mr-2" />
-            ) : (
-              <CloudArrowUpIcon className="w-4 h-4 mr-2" />
-            )}
-            {saving ? 'Saving...' : template ? 'Update Template' : 'Create Template'}
-          </Button>
-        </div>
-      </div>
+            {/* Resize handle for properties panel */}
+            <div
+              className="absolute left-0 top-0 w-2 h-full cursor-ew-resize hover:bg-blue-500 transition-colors z-10 group"
+              onMouseDown={handlePanelResizeStart}
+              title="Drag to resize properties panel"
+            >
+              <div className="w-0.5 h-8 bg-gray-300 group-hover:bg-blue-500 transition-colors absolute left-0.5 top-1/2 transform -translate-y-1/2"></div>
+            </div>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold">Properties</h3>
+              <div className="flex bg-gray-100 rounded-lg p-1" title="Toggle with Ctrl+E">
+                <Button
+                  size="sm"
+                  variant={componentEditMode === 'visual' ? 'default' : 'ghost'}
+                  onClick={() => handleComponentEditModeChange('visual')}
+                  className="px-3 py-1 text-xs"
+                >
+                  <PaintBrushIcon className="w-3 h-3 mr-1" />
+                  Visual
+                </Button>
+                <Button
+                  size="sm"
+                  variant={componentEditMode === 'code' ? 'default' : 'ghost'}
+                  onClick={() => handleComponentEditModeChange('code')}
+                  className="px-3 py-1 text-xs"
+                >
+                  <CodeBracketIcon className="w-3 h-3 mr-1" />
+                  Code
+                </Button>
+              </div>
+            </div>
 
-      {/* Error Display */}
-      {error && (
-        <ErrorDisplay
-          title="Save Error"
-          message={error}
-          severity="error"
-          onDismiss={() => setError(null)}
-        />
-      )}
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Template Settings */}
-        <div className="lg:col-span-1 space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center">
-                <DocumentTextIcon className="w-5 h-5 mr-2" />
-                Template Settings
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {/* Name */}
-              <ValidatedField
-                name="name"
-                value={formData.name}
-                rules={templateValidationRules.templateName}
-                validateOnChange={true}
-                validateOnBlur={true}
-              >
-                {({ hasError, hasWarning, isValidating, onBlur, onChange }) => (
+            {componentEditMode === 'visual' ? (
+              <div className="space-y-4">
+              {selectedComponent.type === 'heading' && (
+                <>
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">
-                      Template Name *
-                    </label>
-                    <Input
-                      value={formData.name}
-                      onChange={(e) => {
-                        handleFieldChange('name', e.target.value);
-                        onChange(e.target.value);
-                      }}
-                      onBlur={onBlur}
-                      placeholder="Enter template name..."
-                      maxLength={100}
-                      className={cn(
-                        hasError && 'border-red-300 focus:border-red-500 focus:ring-red-500',
-                        hasWarning && 'border-yellow-300 focus:border-yellow-500 focus:ring-yellow-500'
-                      )}
+                    <label className="block text-sm font-medium mb-1">Text</label>
+                    <InputWithVariables
+                      value={selectedComponent.properties.text}
+                      onChange={(e) => updateProperty(selectedComponent.id, 'text', e.target.value)}
+                      placeholder="Enter heading text..."
+                      testData={testData}
                     />
                   </div>
-                )}
-              </ValidatedField>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Level</label>
+                    <Select
+                      value={selectedComponent.properties.level}
+                      onChange={(value) => updateProperty(selectedComponent.id, 'level', value)}
+                      options={[
+                        { value: 'h1', label: 'H1' },
+                        { value: 'h2', label: 'H2' },
+                        { value: 'h3', label: 'H3' },
+                        { value: 'h4', label: 'H4' }
+                      ]}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Alignment</label>
+                    <Select
+                      value={selectedComponent.properties.align}
+                      onChange={(value) => updateProperty(selectedComponent.id, 'align', value)}
+                      options={[
+                        { value: 'left', label: 'Left' },
+                        { value: 'center', label: 'Center' },
+                        { value: 'right', label: 'Right' }
+                      ]}
+                    />
+                  </div>
+                </>
+              )}
 
-              {/* Description */}
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">
-                  Description
-                </label>
-                <TextArea
-                  value={formData.description}
-                  onChange={(e) => handleFieldChange('description', e.target.value)}
-                  placeholder="Describe your template..."
-                  rows={3}
-                  maxLength={500}
+              {selectedComponent.type === 'text' && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Content</label>
+                    <InputWithVariables
+                      value={selectedComponent.properties.content}
+                      onChange={(e) => updateProperty(selectedComponent.id, 'content', e.target.value)}
+                      placeholder="Enter text content..."
+                      testData={testData}
+                      multiline={true}
+                      rows={4}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Alignment</label>
+                    <Select
+                      value={selectedComponent.properties.align}
+                      onChange={(value) => updateProperty(selectedComponent.id, 'align', value)}
+                      options={[
+                        { value: 'left', label: 'Left' },
+                        { value: 'center', label: 'Center' },
+                        { value: 'right', label: 'Right' }
+                      ]}
+                    />
+                  </div>
+                </>
+              )}
+
+              {selectedComponent.type === 'image' && (
+                <EnhancedImageComponent
+                  src={selectedComponent.properties.src}
+                  alt={selectedComponent.properties.alt}
+                  width={selectedComponent.properties.width}
+                  onSrcChange={(src) => updateProperty(selectedComponent.id, 'src', src)}
+                  onAltChange={(alt) => updateProperty(selectedComponent.id, 'alt', alt)}
+                  onWidthChange={(width) => updateProperty(selectedComponent.id, 'width', width)}
                 />
+              )}
+
+              {selectedComponent.type === 'button' && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Text</label>
+                    <InputWithVariables
+                      value={selectedComponent.properties.text}
+                      onChange={(e) => updateProperty(selectedComponent.id, 'text', e.target.value)}
+                      placeholder="Enter button text..."
+                      testData={testData}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">URL</label>
+                    <Input
+                      value={selectedComponent.properties.url}
+                      onChange={(e) => updateProperty(selectedComponent.id, 'url', e.target.value)}
+                      placeholder="https://example.com"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Color</label>
+                    <Input
+                      type="color"
+                      value={selectedComponent.properties.color}
+                      onChange={(e) => updateProperty(selectedComponent.id, 'color', e.target.value)}
+                    />
+                  </div>
+                </>
+              )}
+
+              {selectedComponent.type === 'divider' && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Style</label>
+                    <Select
+                      value={selectedComponent.properties.style}
+                      onChange={(value) => updateProperty(selectedComponent.id, 'style', value)}
+                      options={[
+                        { value: 'solid', label: 'Solid' },
+                        { value: 'dashed', label: 'Dashed' },
+                        { value: 'dotted', label: 'Dotted' }
+                      ]}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Color</label>
+                    <Input
+                      type="color"
+                      value={selectedComponent.properties.color}
+                      onChange={(e) => updateProperty(selectedComponent.id, 'color', e.target.value)}
+                    />
+                  </div>
+                </>
+              )}
               </div>
-
-              {/* Category */}
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">
-                  <FolderIcon className="w-4 h-4 inline mr-1" />
-                  Category
-                </label>
-                <Select
-                  value={formData.category}
-                  onChange={(e) => handleFieldChange('category', e.target.value)}
-                  options={[
-                    { value: '', label: 'Select category...' },
-                    ...categories.map(cat => ({ value: cat, label: cat })),
-                    { value: '__new__', label: 'Create new category...' }
-                  ]}
-                />
-              </div>
-
-              {/* Tags */}
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">
-                  <TagIcon className="w-4 h-4 inline mr-1" />
-                  Tags
-                </label>
-
-                {/* Selected Tags */}
-                {formData.tags.length > 0 && (
-                  <div className="flex flex-wrap gap-2 mb-2">
-                    {formData.tags.map(tag => (
-                      <span
-                        key={tag}
-                        className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800"
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-2">
+                    Component Code ({COMPONENTS.find(c => c.type === selectedComponent.type)?.label})
+                  </label>
+                  <Card className="p-0 overflow-hidden">
+                    <div className="code-editor-container relative">
+                      <SimpleCodeEditor
+                        value={componentCodeContent}
+                        onChange={(newCode) => {
+                          setComponentCodeContent(newCode);
+                          updateComponentFromCode(selectedComponent.id, newCode);
+                        }}
+                        language="handlebars"
+                        height={`${codeEditorHeight}px`}
+                        testData={testData}
+                        onValidationChange={setComponentCodeErrors}
+                        placeholder={`Enter handlebars code for ${selectedComponent.type} component...`}
+                        theme="light"
+                      />
+                      {/* Resize handle for code editor */}
+                      <div
+                        className="absolute bottom-0 left-0 right-0 h-2 cursor-ns-resize hover:bg-blue-500 hover:bg-opacity-20 transition-colors flex items-center justify-center"
+                        onMouseDown={handleEditorResizeStart}
+                        title="Drag to resize code editor"
                       >
-                        {tag}
-                        <button
-                          onClick={() => handleRemoveTag(tag)}
-                          className="ml-1 hover:text-blue-600"
-                        >
-                          ×
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
+                        <div className="w-8 h-0.5 bg-gray-400 rounded"></div>
+                      </div>
+                    </div>
+                  </Card>
+                  {componentCodeErrors.length > 0 ? (
+                    <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-xs">
+                      <div className="flex items-center text-red-600 mb-1">
+                        <ExclamationTriangleIcon className="w-3 h-3 mr-1" />
+                        <span className="font-medium">
+                          {componentCodeErrors.filter(e => e.severity === 'error').length} error(s),
+                          {componentCodeErrors.filter(e => e.severity === 'warning').length} warning(s)
+                        </span>
+                      </div>
+                      {componentCodeErrors.slice(0, 3).map((error, index) => (
+                        <div key={index} className="text-red-600">
+                          Line {error.line}: {error.message}
+                        </div>
+                      ))}
+                      {componentCodeErrors.length > 3 && (
+                        <div className="text-red-500">
+                          ... and {componentCodeErrors.length - 3} more
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-gray-500 mt-2">
+                      Edit the handlebars code directly. Changes will be reflected in the visual properties.
+                    </p>
+                  )}
+                </div>
 
-                {/* Add Tag */}
-                {showTagInput ? (
-                  <div className="flex space-x-2">
-                    <Input
-                      value={newTag}
-                      onChange={(e) => setNewTag(e.target.value)}
-                      onKeyDown={handleTagKeyPress}
-                      placeholder="Enter tag name..."
-                      className="flex-1"
-                      maxLength={30}
-                    />
-                    <Button size="sm" onClick={handleAddTag} disabled={!newTag.trim()}>
-                      Add
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setShowTagInput(false);
-                        setNewTag('');
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                  </div>
-                ) : (
+                <div className="border-t pt-4">
+                  <h4 className="text-sm font-medium mb-2">Live Preview</h4>
+                  <Card className="p-3 bg-gray-50 min-h-[60px] flex items-center justify-center">
+                    {componentCodeErrors.filter(e => e.severity === 'error').length > 0 ? (
+                      <div className="text-red-500 text-sm flex items-center">
+                        <ExclamationTriangleIcon className="w-4 h-4 mr-2" />
+                        Fix errors to see preview
+                      </div>
+                    ) : componentCodeContent.trim() ? (
+                      <div
+                        dangerouslySetInnerHTML={{
+                          __html: parsedTestData ? renderWithData(componentCodeContent, parsedTestData) : componentCodeContent
+                        }}
+                        className="w-full"
+                      />
+                    ) : (
+                      <div className="text-gray-400 text-sm">
+                        Enter code to see preview
+                      </div>
+                    )}
+                  </Card>
+                  {parsedTestData && componentCodeContent.trim() && (
+                    <p className="text-xs text-gray-500 mt-1">
+                      Preview with test data - variables are resolved
+                    </p>
+                  )}
+                </div>
+
+                <div className="border-t pt-4 space-y-2">
                   <Button
-                    variant="outline"
                     size="sm"
-                    onClick={() => setShowTagInput(true)}
+                    variant="outline"
+                    onClick={() => {
+                      const defaultCode = componentToHandlebars(selectedComponent);
+                      setComponentCodeContent(defaultCode);
+                      updateComponentFromCode(selectedComponent.id, defaultCode);
+                    }}
                     className="w-full"
                   >
-                    Add Tag
+                    Reset to Default
                   </Button>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
 
-        {/* Template Editor */}
-        <div className="lg:col-span-2">
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle>Template Content</CardTitle>
-
-                {/* Mode Toggle */}
-                <div className="flex items-center bg-slate-100 rounded-lg p-1">
-                  <button
-                    onClick={() => handleModeToggle('code')}
-                    className={cn(
-                      'flex items-center px-3 py-1 rounded-md text-sm font-medium transition-colors',
-                      mode === 'code'
-                        ? 'bg-white text-slate-900 shadow-sm'
-                        : 'text-slate-600 hover:text-slate-900'
-                    )}
-                  >
-                    <CodeBracketIcon className="w-4 h-4 mr-2" />
-                    Code Editor
-                  </button>
-                  <button
-                    onClick={() => handleModeToggle('visual')}
-                    className={cn(
-                      'flex items-center px-3 py-1 rounded-md text-sm font-medium transition-colors',
-                      mode === 'visual'
-                        ? 'bg-white text-slate-900 shadow-sm'
-                        : 'text-slate-600 hover:text-slate-900'
-                    )}
-                  >
-                    <PaintBrushIcon className="w-4 h-4 mr-2" />
-                    Visual Builder
-                  </button>
+                  <details className="text-xs">
+                    <summary className="cursor-pointer text-gray-600 hover:text-gray-800">
+                      Show code template for {selectedComponent.type}
+                    </summary>
+                    <div className="mt-2 p-2 bg-gray-100 rounded font-mono text-xs overflow-x-auto">
+                      <pre>{componentToHandlebars({
+                        ...selectedComponent,
+                        properties: {
+                          ...DEFAULT_PROPS[selectedComponent.type],
+                          ...Object.fromEntries(
+                            Object.keys(selectedComponent.properties).map(key => [
+                              key,
+                              `{{${key}}}`
+                            ])
+                          )
+                        }
+                      })}</pre>
+                    </div>
+                  </details>
                 </div>
               </div>
-            </CardHeader>
-            <CardContent>
-              {mode === 'code' ? (
-                <CodeEditor
-                  value={formData.content}
-                  onChange={(value) => handleFieldChange('content', value)}
-                  language="handlebars"
-                  height="500px"
-                  snippets={snippets}
-                  onValidationChange={handleValidationChange}
-                  placeholder="Start typing your handlebars template..."
-                  showMinimap={true}
-                />
-              ) : (
-                <div className="h-[500px] border border-slate-200 rounded-lg overflow-hidden">
-                  <VisualBuilder
-                    config={formData.visualConfig || createEmptyVisualConfig()}
-                    onChange={handleVisualConfigChange}
-                    snippets={snippets}
-                  />
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+            )}
+          </div>
+        )}
       </div>
-    </FormLoadingOverlay>
-  );
-};
 
-// Main component with error boundary and validation provider
-export const TemplateBuilder: React.FC<TemplateBuilderProps> = (props) => {
-  return (
-    <TemplateErrorBoundary templateName={props.template?.name}>
-      <FormValidationProvider>
-        <TemplateBuilderContent {...props} />
-      </FormValidationProvider>
-    </TemplateErrorBoundary>
+      {/* Enhanced Drag and Drop Styles */}
+      <style>{`
+        /* Template Preview Styles */
+        .prose h1, .prose h2, .prose h3, .prose h4, .prose h5, .prose h6 {
+          font-weight: 600;
+          margin-top: 1.5em;
+          margin-bottom: 0.5em;
+          line-height: 1.2;
+        }
+
+        .prose h1 { font-size: 2em; color: #1f2937; }
+        .prose h2 { font-size: 1.5em; color: #1f2937; }
+        .prose h3 { font-size: 1.25em; color: #1f2937; }
+        .prose h4 { font-size: 1.125em; color: #1f2937; }
+        .prose h5 { font-size: 1em; color: #1f2937; }
+        .prose h6 { font-size: 0.875em; color: #1f2937; }
+
+        .prose p {
+          margin-top: 1em;
+          margin-bottom: 1em;
+          color: #374151;
+          line-height: 1.6;
+        }
+
+        .prose a {
+          color: #2563eb;
+          text-decoration: none;
+        }
+
+        .prose a:hover {
+          text-decoration: underline;
+        }
+
+        .prose strong {
+          font-weight: 600;
+          color: #1f2937;
+        }
+
+        .prose em {
+          font-style: italic;
+        }
+
+        .prose ul, .prose ol {
+          margin-top: 1em;
+          margin-bottom: 1em;
+          padding-left: 1.5em;
+        }
+
+        .prose li {
+          margin-top: 0.5em;
+          margin-bottom: 0.5em;
+        }
+
+        .prose img {
+          max-width: 100%;
+          height: auto;
+          margin: 1em 0;
+        }
+
+        .prose hr {
+          margin: 2em 0;
+          border: none;
+          border-top: 1px solid #e5e7eb;
+        }
+
+        /* Drop zone transitions and animations */
+        .drop-zone-transition {
+          transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .drop-zone-glow {
+          box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5), 0 0 20px rgba(59, 130, 246, 0.3);
+        }
+
+        .drop-zone-pulse {
+          animation: drop-zone-pulse 1.5s ease-in-out infinite;
+        }
+
+        .drop-zone-hover {
+          transform: translateY(-1px);
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        .drop-zone-focus {
+          outline: 2px solid #3b82f6;
+          outline-offset: 2px;
+        }
+
+        .drop-zone-height-transition {
+          transition: height 0.3s ease, min-height 0.3s ease;
+        }
+
+        .drop-zone-shimmer {
+          background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.1), transparent);
+          background-size: 200% 100%;
+          animation: shimmer 2s ease-in-out infinite;
+        }
+
+        .drop-zone-scale-in {
+          animation: scale-in 0.3s ease-out;
+        }
+
+        .drop-indicator-bounce {
+          animation: bounce-gentle 0.6s ease-in-out;
+        }
+
+        .enhanced-drop-zone-item {
+          transition: all 0.2s ease;
+        }
+
+        .enhanced-drop-zones-container.drop-zones-dragging .enhanced-drop-zone-item {
+          opacity: 1;
+          visibility: visible;
+        }
+
+        .drop-zone-mobile {
+          min-height: 120px;
+        }
+
+        @media (min-width: 768px) {
+          .drop-zone-mobile {
+            min-height: 200px;
+          }
+        }
+
+        /* Component drag animations */
+        .cursor-grab {
+          cursor: grab;
+        }
+
+        .cursor-grabbing {
+          cursor: grabbing;
+        }
+
+        /* Keyframe animations */
+        @keyframes drop-zone-pulse {
+          0%, 100% {
+            transform: scale(1);
+            opacity: 1;
+          }
+          50% {
+            transform: scale(1.02);
+            opacity: 0.8;
+          }
+        }
+
+        @keyframes shimmer {
+          0% {
+            background-position: -200% 0;
+          }
+          100% {
+            background-position: 200% 0;
+          }
+        }
+
+        @keyframes scale-in {
+          0% {
+            transform: scale(0.95);
+            opacity: 0;
+          }
+          100% {
+            transform: scale(1);
+            opacity: 1;
+          }
+        }
+
+        @keyframes bounce-gentle {
+          0%, 100% {
+            transform: translateY(0);
+          }
+          50% {
+            transform: translateY(-4px);
+          }
+        }
+
+        /* Accessibility: Respect reduced motion preference */
+        @media (prefers-reduced-motion: reduce) {
+          .drop-zone-transition,
+          .enhanced-drop-zone-item,
+          .drop-zone-pulse,
+          .drop-indicator-bounce,
+          .drop-zone-scale-in {
+            animation: none !important;
+            transition: none !important;
+          }
+
+          .drop-zone-hover {
+            transform: none;
+          }
+        }
+
+        /* High contrast mode support */
+        @media (prefers-contrast: high) {
+          .drop-zone-glow {
+            box-shadow: 0 0 0 3px currentColor;
+          }
+        }
+      `}</style>
+    </div>
   );
-};
+});
+
+TemplateBuilder.displayName = 'TemplateBuilder';

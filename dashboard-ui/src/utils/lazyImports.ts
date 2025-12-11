@@ -65,6 +65,30 @@ export const LazyBillingPage = lazy(() =>
     })
 );
 
+export const LazyTemplatesPage = lazy(() =>
+  import('@/pages/templates').then(module => ({ default: module.TemplatesPage }))
+    .catch(error => {
+      console.error('Failed to load TemplatesPage:', error);
+      throw error;
+    })
+);
+
+export const LazyTemplateBuilderPage = lazy(() =>
+  import('@/pages/templates').then(module => ({ default: module.TemplateBuilderPage }))
+    .catch(error => {
+      console.error('Failed to load TemplateBuilderPage:', error);
+      throw error;
+    })
+);
+
+export const LazySnippetsPage = lazy(() =>
+  import('@/pages/snippets').then(module => ({ default: module.SnippetsPage }))
+    .catch(error => {
+      console.error('Failed to load SnippetsPage:', error);
+      throw error;
+    })
+);
+
 // Preload critical routes
 export const preloadCriticalRoutes = () => {
   // Preload dashboard since it's the default route
@@ -101,6 +125,12 @@ export const preloadRoute = (routeName: string) => {
       break;
     case 'billing':
       import('@/pages/billing');
+      break;
+    case 'templates':
+      import('@/pages/templates');
+      break;
+    case 'snippets':
+      import('@/pages/snippets');
       break;
     case 'login':
       import('@/pages/auth/LoginPage');

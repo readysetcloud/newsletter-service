@@ -41,6 +41,7 @@ export default defineConfig(({ command, mode }) => {
             'aws-vendor': ['aws-amplify'],
             'chart-vendor': ['recharts'],
             'momento-vendor': ['@gomomento/sdk-web'],
+            'monaco-vendor': ['monaco-editor', '@monaco-editor/react'],
           },
           chunkFileNames: (chunkInfo) => {
             const facadeModuleId = chunkInfo.facadeModuleId
@@ -80,7 +81,12 @@ export default defineConfig(({ command, mode }) => {
         'zod',
         'clsx',
         'tailwind-merge',
+        'monaco-editor',
       ],
+    },
+    // Monaco Editor configuration
+    worker: {
+      format: 'es',
     },
     // Environment variables
     define: {

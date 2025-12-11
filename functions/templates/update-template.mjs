@@ -4,6 +4,8 @@ import { formatResponse, formatAuthError } from '../utils/helpers.mjs';
 import { getUserContext } from '../auth/get-user-context.mjs';
 import { uploadTemplate } from './utils/s3-storage.mjs';
 import { validateTemplate, extractUsedSnippets } from './utils/template-engine.mjs';
+import { templateCache } from './utils/template-cache.mjs';
+import { validateTemplateName } from './utils/name-validation.mjs';
 
 const ddb = new DynamoDBClient();
 
@@ -45,10 +47,12 @@ export const handler = async (event) => {
       return formatResponse(404, 'Template not found');
     }
 
-    consttingTemplate = unmarshall(existingResult.Item);
+    const existingTemplate = unmarshall(existingResult.Item);
 
-    // Verify tenant access
-    if (existingTemplate.tenantId !== tenantId) {
+    // Verify tenant
+    console.log(tenantId);
+    console.log(JSON.stringify(existingTemplate))
+    if (existingTemplate.GSI1PK !== tenantId) {
       return formatAuthError('Access denied');
     }
 
@@ -59,9 +63,27 @@ export const handler = async (event) => {
 
     // Build update expression for changed fields
     if (name !== undefined) {
-      updateExpressions.push('#name = :name');
-      expressionAttributeNames['#name'] = 'name';
-      expressionAttributeValues[':name'] = name;
+      // Validate template name if it's being changed
+      if (name !== existingTemplate.name) {
+        const nameValidation = await validateTemplateName(tenantId, name, templateId);
+        if (!nameValidation.isValid) {
+          const statusCode = nameValidation.code === 'NAME_EXISTS' ? 409 : 400;
+          return formatResponse(statusCode, {
+            error: nameValidation.error,
+            code: nameValidation.code,
+            suggestions: nameValidation.suggestions || []
+          });
+        }
+
+        updateExpressions.push('#name = :name');
+        expressionAttributeNames['#name'] = 'name';
+        expressionAttributeValues[':name'] = nameValidation.normalizedName;
+      } else {
+        // Name unchanged, still add to update expression
+        updateExpressions.push('#name = :name');
+        expressionAttributeNames['#name'] = 'name';
+        expressionAttributeValues[':name'] = name;
+      }
     }
 
     if (description !== undefined) {
@@ -148,6 +170,12 @@ export const handler = async (event) => {
     }));
 
     const updatedTemplate = unmarshall(updateResult.Attributes);
+
+    // Update cache with new template metadata
+    await templateCache.cacheTemplateMetadata(tenantId, templateId, updatedTemplate);
+
+    // Invalidate template list cache to ensure updated template appears in lists
+    await templateCache.invalidateTemplateListCache(tenantId);
 
     const response = {
       id: updatedTemplate.id,

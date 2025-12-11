@@ -1,7 +1,6 @@
 
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
-import { AppHeader } from '@/components/layout/AppHeader';
 import { dashboardService } from '@/services/dashboardService';
 import { Loading } from '@/components/ui/Loading';
 import MetricsCard from '@/components/MetricsCard';
@@ -67,19 +66,15 @@ export function DashboardPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="flex items-center justify-center min-h-96">
         <Loading size="lg" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <AppHeader />
-
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-        <div className="px-4 py-6 sm:px-0">
+    <div className="max-w-7xl mx-auto">
+        <div className="px-0">
           {/* Dashboard Controls */}
           <div className="mb-6 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
             <div className="min-w-0">
@@ -395,7 +390,6 @@ export function DashboardPage() {
             </div>
           )}
         </div>
-      </main>
     </div>
   );
 }

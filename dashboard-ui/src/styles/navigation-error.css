@@ -1,0 +1,199 @@
+/* Navigation Error Handling Styles */
+
+.navigation-error-boundary {
+  @apply min-h-screen bg-gray-50;
+}
+
+.fallback-navigation {
+  @apply bg-white border-r border-gray-200 shadow-sm;
+  min-height: 100vh;
+  width: 256px;
+}
+
+.fallback-navigation .nav-item {
+  @apply flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors duration-150;
+}
+
+.fallback-navigation .nav-item:hover {
+  @apply bg-gray-100 text-gray-900;
+}
+
+.fallback-navigation .nav-item.active {
+  @apply bg-blue-100 text-blue-900;
+  border-right: 3px solid theme('colors.blue.600');
+}
+
+.fallback-navigation .nav-item:focus {
+  @apply outline-none ring-2 ring-blue-500 ring-offset-2;
+}
+
+/* Mobile fallback navigation */
+.fallback-navigation-mobile {
+  @apply fixed inset-y-0 left-0 w-80 bg-white shadow-xl z-50 flex flex-col;
+  transform: translateX(-100%);
+  transition: transform 0.3s ease-in-out;
+}
+
+.fallback-navigation-mobile.open {
+  transform: translateX(0);
+}
+
+.fallback-navigation-mobile .nav-item {
+  @apply flex items-center space-x-3 px-3 py-2 text-sm font-medium rounded-md transition-colors;
+}
+
+.fallback-navigation-mobile .nav-item:hover {
+  @apply bg-gray-100 text-gray-900;
+}
+
+.fallback-navigation-mobile .nav-item.active {
+  @apply bg-blue-100 text-blue-900;
+  border-right: 2px solid theme('colors.blue.600');
+}
+
+/* Error message styling */
+.navigation-error-message {
+  @apply p-4 bg-amber-50 border-b border-amber-200;
+}
+
+.navigation-error-message p {
+  @apply text-sm text-amber-800 mb-2;
+}
+
+.navigation-error-message button {
+  @apply text-sm text-amber-900 underline hover:no-underline;
+  @apply focus:outline-none focus:ring-2 focus:ring-amber-500 rounded px-1;
+}
+
+/* Error icon styling */
+.navigation-error-icon {
+  @apply h-5 w-5 text-amber-500 flex-shrink-0;
+}
+
+/* Responsive error handling */
+.responsive-error-fallback {
+  @apply fixed top-4 left-4 z-40;
+}
+
+.responsive-error-fallback button {
+  @apply bg-white shadow-md rounded-md p-2 text-gray-600;
+  @apply hover:text-gray-900 hover:bg-gray-50;
+  @apply focus:outline-none focus:ring-2 focus:ring-blue-500;
+}
+
+/* Safe icon error states */
+.safe-icon-error {
+  @apply text-gray-400;
+}
+
+.safe-icon-loading {
+  @apply animate-pulse text-gray-300;
+}
+
+/* Fallback navigation header */
+.fallback-navigation-header {
+  @apply flex items-center justify-between p-4 border-b border-gray-200;
+}
+
+.fallback-navigation-title {
+  @apply flex items-center space-x-2;
+}
+
+.fallback-navigation-title h2 {
+  @apply text-lg font-semibold text-gray-900;
+}
+
+/* Fallback navigation footer */
+.fallback-navigation-footer {
+  @apply p-4 border-t border-gray-200;
+}
+
+.fallback-navigation-footer .user-info {
+  @apply text-sm text-gray-500 mb-3;
+}
+
+/* Mobile overlay */
+.navigation-mobile-overlay {
+  @apply fixed inset-0 bg-black bg-opacity-50 z-40;
+}
+
+/* Error recovery button */
+.error-recovery-button {
+  @apply inline-flex items-center px-3 py-2 border border-transparent text-sm;
+  @apply leading-4 font-medium rounded-md text-amber-700 bg-amber-100;
+  @apply hover:bg-amber-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-500;
+  @apply transition-colors duration-150;
+}
+
+/* Navigation error states */
+.navigation-error-state {
+  @apply flex items-center justify-center min-h-screen bg-gray-50;
+}
+
+.navigation-error-content {
+  @apply max-w-md w-full mx-auto p-6 bg-white rounded-lg shadow-lg;
+}
+
+.navigation-error-content h3 {
+  @apply text-lg font-medium text-gray-900 mb-2;
+}
+
+.navigation-error-content p {
+  @apply text-sm text-gray-600 mb-4;
+}
+
+/* Accessibility improvements for error states */
+.navigation-error-boundary [role="alert"] {
+  @apply sr-only;
+}
+
+.navigation-error-boundary:focus-within [role="alert"] {
+  @apply not-sr-only absolute top-4 left-4 bg-red-600 text-white px-4 py-2 rounded z-50;
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  .fallback-navigation {
+    @apply border-2 border-gray-800;
+  }
+
+  .fallback-navigation .nav-item:hover {
+    @apply bg-gray-200 text-black;
+  }
+
+  .fallback-navigation .nav-item.active {
+    @apply bg-blue-200 text-black border-r-4 border-blue-800;
+  }
+
+  .navigation-error-message {
+    @apply bg-yellow-100 border-2 border-yellow-600;
+  }
+
+  .navigation-error-message p {
+    @apply text-yellow-900;
+  }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  .fallback-navigation-mobile {
+    transition: none;
+  }
+
+  .fallback-navigation .nav-item {
+    transition: none;
+  }
+
+  .error-recovery-button {
+    transition: none;
+  }
+}
+
+/* Print styles */
+@media print {
+  .navigation-error-boundary,
+  .fallback-navigation,
+  .navigation-mobile-overlay {
+    @apply hidden;
+  }
+}

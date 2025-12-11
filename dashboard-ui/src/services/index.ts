@@ -6,3 +6,5 @@ export * from './dashboardService';
 export * from './notificationService';
 export * from './billingService';
 export * from './templateService';
+export * from './snippetPreviewService';
+export * from './variableService';

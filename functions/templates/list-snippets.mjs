@@ -45,17 +45,21 @@ export const handler = async (event) => {
     const queryInput = {
       TableName: process.env.TEMPLATES_TABLE_NAME,
       IndexName: 'GSI1',
-      KeyConditionExpression: 'GSI1PK = :tenantId AND begins_with(SK, :snippetPrefix)',
+      KeyConditionExpression: '#GSI1PK = :tenantId AND begins_with(#GSI1SK, :snippetPrefix)',
       ExpressionAttributeValues: marshall({
         ':tenantId': tenantId,
         ':snippetPrefix': 'snippet'
       }),
       Limit: limit,
-      ScanIndexForward: false, // Most recent first
-      // Only return necessary attributes for list view
-      ProjectionExpression: 'id, #name, description, parameters, version, createdAt, updatedAt, createdBy, isActive',
+      ScanIndexForward: false,
+      ProjectionExpression: '#id, #name, #description, #parameters, version, createdAt, updatedAt, createdBy, isActive',
       ExpressionAttributeNames: {
-        '#name': 'name'
+        '#id': 'id',
+        '#description': 'description',
+        '#parameters': 'parameters',
+        '#name': 'name',
+        '#GSI1PK': 'GSI1PK',
+        '#GSI1SK': 'GSI1SK'
       }
     };
 
@@ -63,7 +67,6 @@ export const handler = async (event) => {
       queryInput.ExclusiveStartKey = marshall(lastEvaluatedKey);
     }
 
-    // Add search filter if provided
     if (search) {
       queryInput.FilterExpression = '(contains(#name, :search) OR contains(description, :search))';
       Object.assign(queryInput.ExpressionAttributeValues, marshall({

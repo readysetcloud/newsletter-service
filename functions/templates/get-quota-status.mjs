@@ -14,13 +14,7 @@ export const handler = async (event) => {
     // Get comprehensive quota status
     const quotaStatus = await quotaManager.getQuotaStatus(tenantId, userTier || 'free-tier');
 
-    // Get upgrade suggestions if needed
-    const upgradeSuggestions = await quotaManager.getUpgradeSuggestions(tenantId, userTier || 'free-tier');
-
-    const response = {
-      ...quotaStatus,
-      upgrades: upgradeSuggestions
-    };
+    const response = quotaStatus;
 
     return formatResponse(200, response);
 

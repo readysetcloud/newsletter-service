@@ -44,8 +44,6 @@ class TemplateService {
     const searchParams = new URLSearchParams();
 
     if (filters.search) searchParams.set('search', filters.search);
-    if (filters.category) searchParams.set('category', filters.category);
-    if (filters.tags?.length) searchParams.set('tags', filters.tags.join(','));
     if (filters.createdBy) searchParams.set('createdBy', filters.createdBy);
     if (filters.dateRange) {
       searchParams.set('startDate', filters.dateRange.start);
@@ -95,17 +93,6 @@ class TemplateService {
 
   async deleteTemplateWithRetry(id: string): Promise<ApiResponse<void>> {
     return retryWithBackoff(() => this.deleteTemplate(id));
-  }
-
-  // Template metadata operations
-  async getTemplateCategories(): Promise<string[]> {
-    const response = await apiClient.get<{ categories: string[] }>(`${this.baseUrl}/categories`);
-    return response.data?.categories || [];
-  }
-
-  async getTemplateTags(): Promise<string[]> {
-    const response = await apiClient.get<{ tags: string[] }>(`${this.baseUrl}/tags`);
-    return response.data?.tags || [];
   }
 
   // Template version operations

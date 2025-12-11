@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { BrandForm } from '../../components/forms/BrandForm';
 import { BrandPreview } from '../../components/brand/BrandPreview';
-import { AppHeader } from '../../components/layout/AppHeader';
 import { BrandFormData } from '../../schemas/brandSchema';
 import { BrandInfo, UserProfile } from '../../types';
 import { profileService } from '../../services/profileService';
@@ -134,7 +133,7 @@ export const BrandPage: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="max-w-7xl mx-auto">
         <div className="animate-pulse">
           <div className="h-8 bg-slate-200 rounded w-1/4 mb-6"></div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -151,10 +150,7 @@ export const BrandPage: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <AppHeader />
-
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div className="max-w-7xl mx-auto">
       {/* Header */}
       <div className="mb-8">
         <div className="flex items-center space-x-3 mb-2">
@@ -215,7 +211,6 @@ export const BrandPage: React.FC = () => {
           />
         </div>
       </div>
-      </main>
     </div>
   );
 };

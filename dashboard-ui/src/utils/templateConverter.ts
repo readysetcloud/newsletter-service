@@ -2,7 +2,7 @@ import type { Snippet } from '@/types/template';
 
 export interface VisualComponent {
   id: string;
-  type: 'text' | 'image' | 'button' | 'snippet';
+  type: 'text' | 'image' | 'button' | 'snippet' | 'heading' | 'divider' | 'spacer';
   properties: Record<string, any>;
 }
 

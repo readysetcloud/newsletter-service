@@ -1,4 +1,4 @@
-/* Simple animations for notifications and realtime updates */
+/* Enhanced animations for visual builder and notifications */
 
 @keyframes slide-in {
   from {
@@ -7,6 +7,39 @@
   }
   to {
     transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slide-in-left {
+  from {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slide-up {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slide-down {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
     opacity: 1;
   }
 }
@@ -20,6 +53,17 @@
   }
 }
 
+@keyframes fade-in-scale {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 @keyframes pulse {
   0%, 100% {
     opacity: 1;
@@ -29,16 +73,141 @@
   }
 }
 
+@keyframes bounce-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+  70% {
+    transform: scale(0.9);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes shake {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  10%, 30%, 50%, 70%, 90% {
+    transform: translateX(-2px);
+  }
+  20%, 40%, 60%, 80% {
+    transform: translateX(2px);
+  }
+}
+
+@keyframes zoom-in {
+  from {
+    opacity: 0;
+    transform: scale(0);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes rotate-in {
+  from {
+    opacity: 0;
+    transform: rotate(-180deg) scale(0.5);
+  }
+  to {
+    opacity: 1;
+    transform: rotate(0deg) scale(1);
+  }
+}
+
+@keyframes success-checkmark {
+  0% {
+    stroke-dasharray: 0 100;
+  }
+  100% {
+    stroke-dasharray: 100 0;
+  }
+}
+
+@keyframes loading-dots {
+  0%, 80%, 100% {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .animate-slide-in {
   animation: slide-in 0.3s ease-out;
+}
+
+.animate-slide-in-left {
+  animation: slide-in-left 0.3s ease-out;
+}
+
+.animate-slide-up {
+  animation: slide-up 0.3s ease-out;
+}
+
+.animate-slide-down {
+  animation: slide-down 0.3s ease-out;
 }
 
 .animate-fade-in {
   animation: fade-in 0.2s ease-out;
 }
 
+.animate-fade-in-scale {
+  animation: fade-in-scale 0.3s ease-out;
+}
+
+.animate-bounce-in {
+  animation: bounce-in 0.5s ease-out;
+}
+
+.animate-shake {
+  animation: shake 0.5s ease-in-out;
+}
+
+.animate-zoom-in {
+  animation: zoom-in 0.3s ease-out;
+}
+
+.animate-rotate-in {
+  animation: rotate-in 0.5s ease-out;
+}
+
 .animate-pulse-slow {
   animation: pulse 2s infinite;
+}
+
+.animate-loading-dots {
+  animation: loading-dots 1.4s infinite ease-in-out;
+}
+
+/* Enhanced transition utilities */
+.transition-smooth {
+  transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.transition-bounce {
+  transition: all 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+.transition-fast {
+  transition: all 0.15s ease-out;
+}
+
+.transition-slow {
+  transition: all 0.5s ease-in-out;
 }
 
 /* Connection status indicators */
@@ -67,4 +236,199 @@
 
 .connection-indicator.error::before {
   background-color: rgba(239, 68, 68, 0.2);
+}
+
+/* Final integration animations */
+@keyframes final-integration-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes compatibility-score-fill {
+  from {
+    width: 0%;
+  }
+  to {
+    width: var(--score-width);
+  }
+}
+
+@keyframes diagnostic-pulse {
+  0%, 100% {
+    opacity: 0.6;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+}
+
+@keyframes success-celebration {
+  0% {
+    transform: scale(1) rotate(0deg);
+    opacity: 1;
+  }
+  25% {
+    transform: scale(1.1) rotate(5deg);
+  }
+  50% {
+    transform: scale(1.2) rotate(-5deg);
+  }
+  75% {
+    transform: scale(1.1) rotate(3deg);
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+    opacity: 1;
+  }
+}
+
+@keyframes error-wiggle {
+  0%, 100% {
+    transform: translateX(0) rotate(0deg);
+  }
+  10% {
+    transform: translateX(-2px) rotate(-1deg);
+  }
+  20% {
+    transform: translateX(2px) rotate(1deg);
+  }
+  30% {
+    transform: translateX(-2px) rotate(-1deg);
+  }
+  40% {
+    transform: translateX(2px) rotate(1deg);
+  }
+  50% {
+    transform: translateX(-1px) rotate(-0.5deg);
+  }
+  60% {
+    transform: translateX(1px) rotate(0.5deg);
+  }
+  70% {
+    transform: translateX(-1px) rotate(-0.5deg);
+  }
+  80% {
+    transform: translateX(1px) rotate(0.5deg);
+  }
+  90% {
+    transform: translateX(0) rotate(0deg);
+  }
+}
+
+@keyframes performance-indicator-glow {
+  0%, 100% {
+    box-shadow: 0 0 5px rgba(59, 130, 246, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(59, 130, 246, 0.6);
+  }
+}
+
+.animate-final-integration-fade-in {
+  animation: final-integration-fade-in 0.6s ease-out;
+}
+
+.animate-compatibility-score-fill {
+  animation: compatibility-score-fill 1s ease-out;
+}
+
+.animate-diagnostic-pulse {
+  animation: diagnostic-pulse 2s infinite;
+}
+
+.animate-success-celebration {
+  animation: success-celebration 0.8s ease-out;
+}
+
+.animate-error-wiggle {
+  animation: error-wiggle 0.6s ease-in-out;
+}
+
+.animate-performance-indicator-glow {
+  animation: performance-indicator-glow 2s infinite;
+}
+
+/* Enhanced visual builder specific animations */
+.visual-builder-container {
+  --transition-duration: 0.3s;
+  --transition-easing: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.visual-builder-container.performance-optimized {
+  --transition-duration: 0.15s;
+  --transition-easing: ease-out;
+}
+
+.visual-builder-container .enhanced-drop-zone-item {
+  transition: all var(--transition-duration) var(--transition-easing);
+}
+
+.visual-builder-container .variable-picker-container {
+  transition: transform var(--transition-duration) var(--transition-easing),
+              opacity var(--transition-duration) var(--transition-easing);
+}
+
+.visual-builder-container .integration-status-indicator {
+  transition: all var(--transition-duration) var(--transition-easing);
+}
+
+/* Accessibility improvements */
+@media (prefers-reduced-motion: reduce) {
+  .animate-final-integration-fade-in,
+  .animate-compatibility-score-fill,
+  .animate-diagnostic-pulse,
+  .animate-success-celebration,
+  .animate-error-wiggle,
+  .animate-performance-indicator-glow {
+    animation: none !important;
+  }
+
+  .visual-builder-container {
+    --transition-duration: 0s;
+  }
+
+  .visual-builder-container * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  .connection-indicator.connected::before {
+    background-color: rgba(0, 128, 0, 0.4);
+  }
+
+  .connection-indicator.connecting::before {
+    background-color: rgba(255, 165, 0, 0.4);
+  }
+
+  .connection-indicator.error::before {
+    background-color: rgba(255, 0, 0, 0.4);
+  }
+}
+
+/* Mobile optimizations */
+@media (max-width: 768px) {
+  .visual-builder-container .enhanced-drop-zone-item {
+    min-height: 56px;
+    touch-action: manipulation;
+  }
+
+  .visual-builder-container .variable-picker-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .animate-final-integration-fade-in {
+    animation-duration: 0.4s;
+  }
 }

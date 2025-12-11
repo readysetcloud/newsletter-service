@@ -4,7 +4,6 @@ import type { Template, TemplateFilters } from '@/types/template';
 
 interface UseInfiniteTemplatesOptions {
   limit?: number;
-  category?: string;
   search?: string;
   enabled?: boolean;
 }
@@ -24,7 +23,6 @@ export const useInfiniteTemplates = (
 ): UseInfiniteTemplatesResult => {
   const {
     limit = 20,
-    category,
     search,
     enabled = true
   } = options;
@@ -52,7 +50,6 @@ export const useInfiniteTemplates = (
     try {
       const params: any = { limit };
 
-      if (category) params.category = category;
       if (search) params.search = search;
       if (currentCursorValue && !isRefresh) params.cursor = currentCursorValue;
 
@@ -85,7 +82,7 @@ export const useInfiniteTemplates = (
       setLoading(false);
       isLoadingRef.current = false;
     }
-  }, [enabled, limit, category, search]);
+  }, [enabled, limit, search]);
 
   const loadMore = useCallback(() => {
     if (hasMore && !isLoadingRef.current && currentCursor.current) {
@@ -106,7 +103,7 @@ export const useInfiniteTemplates = (
     if (enabled) {
       refresh();
     }
-  }, [enabled, category, search, refresh]);
+  }, [enabled, search, refresh]);
 
   return {
     templates,

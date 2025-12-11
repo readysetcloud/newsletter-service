@@ -28,8 +28,7 @@ const ComponentShowcase: React.FC = () => {
   const [formData, setFormData] = useState({
     name: '',
     email: '',
-    message: '',
-    category: ''
+    message: ''
   });
   const { addToast } = useToast();
 
@@ -162,14 +161,6 @@ const ComponentShowcase: React.FC = () => {
                   error={formData.email && !formData.email.includes('@') ? 'Please enter a valid email' : undefined}
                 />
               </div>
-
-              <Select
-                label="Category"
-                options={selectOptions}
-                placeholder="Select a category"
-                value={formData.category}
-                onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-              />
 
               <TextArea
                 label="Message"

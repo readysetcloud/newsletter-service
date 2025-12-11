@@ -207,12 +207,7 @@ export const SnippetList: React.FC<SnippetListProps> = ({
     }
   }, []);
 
-  // Initial load
-  useEffect(() => {
-    loadSnippets();
-  }, [loadSnippets]);
-
-  // Apply filters when they change
+  // Initial load and apply filters when they change
   useEffect(() => {
     applyFilters();
   }, [applyFilters]);
@@ -227,22 +222,7 @@ export const SnippetList: React.FC<SnippetListProps> = ({
 
   return (
     <div className={cn('space-y-6', className)}>
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">Snippets</h1>
-          <p className="text-slate-600 mt-1">
-            Manage reusable template components and shortcodes
-          </p>
-        </div>
 
-        {onCreateSnippet && (
-          <Button onClick={onCreateSnippet} className="flex items-center">
-            <PlusIcon className="w-4 h-4 mr-2" />
-            Create Snippet
-          </Button>
-        )}
-      </div>
 
       {/* Search and Filters */}
       <Card>

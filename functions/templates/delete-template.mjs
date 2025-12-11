@@ -36,7 +36,7 @@ export const handler = async (event) => {
     const existingTemplate = unmarshall(existingResult.Item);
 
     // Verify tenant access
-    if (existingTemplate.tenantId !== tenantId) {
+    if (existingTemplate.GSI1PK !== tenantId) {
       return formatAuthError('Access denied');
     }
 

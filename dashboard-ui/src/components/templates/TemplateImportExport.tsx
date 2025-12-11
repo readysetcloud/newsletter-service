@@ -331,11 +331,7 @@ export const TemplateImportExport: React.FC<TemplateImportExportProps> = ({
                             </div>
                           )}
                         </div>
-                        {template.category && (
-                          <span className="ml-2 px-2 py-1 text-xs bg-slate-100 text-slate-600 rounded">
-                            {template.category}
-                          </span>
-                        )}
+
                       </label>
                     ))}
                   </div>

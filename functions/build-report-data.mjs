@@ -2,7 +2,6 @@ import { DynamoDBClient, PutItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 
 const ddb = new DynamoDBClient();
-// helpers
 const n = (v) => Number.isFinite(Number(v)) ? Number(v) : 0;
 const pct = (num, den) => den > 0 ? Number(((n(num) / n(den)) * 100).toFixed(2)) : 0;
 
@@ -40,29 +39,6 @@ export const handler = async (state) => {
       ? (state.issue.split('_')[1]?.split('.')[0]?.replace('-', ' ') || 'Unknown')
       : 'Unknown';
 
-    let pollResults = [];
-    let totalVotes = 0;
-    let pollEngagementRate = 0;
-
-    if (state.voteResults) {
-      const pollData = unmarshall(state.voteResults);
-      totalVotes = Array.isArray(pollData.options)
-        ? pollData.options.reduce((sum, option) => sum + n(pollData[option.id]), 0)
-        : 0;
-
-      pollResults = (pollData.options || []).map(option => {
-        const votes = n(pollData[option.id]);
-        const pctLocal = totalVotes > 0 ? Number(((votes / totalVotes) * 100).toFixed(1)) : 0;
-        return {
-          description: option.description || 'Unknown Option',
-          votes,
-          percentage: pctLocal
-        };
-      }).sort((a, b) => b.votes - a.votes);
-
-      pollEngagementRate = pct(totalVotes, uniqueOpens);
-    }
-
     const topPerformingLink = links.length
       ? links.reduce((prev, cur) => n(prev.count) > n(cur.count) ? prev : cur)
       : { link: 'N/A', count: 0 };
@@ -79,7 +55,6 @@ export const handler = async (state) => {
         bounceRate,
         growthRate: safeGrowthRate,
         subscribers,
-        totalVotes,
         delivered: deliveries,
         uniqueOpens,
         clicks: totalClicks,
@@ -91,16 +66,13 @@ export const handler = async (state) => {
       content: {
         subjectLine: state.subjectLine || 'N/A',
         linkCount: links.length,
-        topPerformingLink,
-        pollEngagement: pollEngagementRate,
-        pollResults
+        topPerformingLink
       },
       engagement: {
         openToClickRatio,
         subscriberEngagement: subscribers > 0
           ? Number((((uniqueOpens + totalClicks) / subscribers) * 100).toFixed(2))
           : 0,
-        pollParticipationRate: pollEngagementRate,
         newSubscribers,
         netGrowth
       },
@@ -108,8 +80,7 @@ export const handler = async (state) => {
         isOpenRateAboveBenchmark: openRate > 21.33,
         isCTRAboveBenchmark: clickThroughRate > 2.62,
         isBounceRateBelowBenchmark: bounceRate < 0.63,
-        isGrowthPositive: safeGrowthRate > 0,
-        hasHighPollEngagement: pollEngagementRate > 10
+        isGrowthPositive: safeGrowthRate > 0
       }
     };
 
@@ -192,36 +163,6 @@ export const handler = async (state) => {
             </table>
           </td>
         </tr>
-
-        ${pollResults.length ? `
-        <tr>
-          <td style="padding:0 20px 20px 20px;">
-            <h3 style="margin:0 0 15px 0;font-size:18px;color:#333;border-bottom:2px solid #e9ecef;padding-bottom:8px;">📊 Reader Poll Results</h3>
-            <div style="background-color:#f8f9fa;padding:20px;border:1px solid #e9ecef;border-radius:8px;">
-              <p style="margin:0 0 15px 0;font-weight:bold;">Total Votes: ${totalVotes.toLocaleString()} (${pollEngagementRate.toFixed(2)}% of openers)</p>
-              ${pollResults.map(r => `
-                <div style="margin-bottom:15px;padding-bottom:15px;border-bottom:1px solid #ddd;">
-                  <table width="100%" cellpadding="0" cellspacing="0" border="0">
-                    <tr>
-                      <td style="font-weight:bold;color:#333;padding-bottom:5px;">${r.description}</td>
-                      <td style="text-align:right;padding-bottom:5px;">
-                        <span style="font-size:18px;font-weight:bold;color:#333;">${r.votes}</span>
-                        <span style="font-size:14px;color:#666;margin-left:5px;">(${r.percentage.toFixed(1)}%)</span>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td colspan="2" style="padding-top:5px;">
-                        <div style="width:100%;height:8px;background-color:#e9ecef;border-radius:4px;overflow:hidden;">
-                          <div style="width:${r.percentage}%;height:100%;background-color:#4a90e2;border-radius:4px;"></div>
-                        </div>
-                      </td>
-                    </tr>
-                  </table>
-                </div>
-              `).join('')}
-            </div>
-          </td>
-        </tr>` : ''}
 
         ${links.length ? `
         <tr>

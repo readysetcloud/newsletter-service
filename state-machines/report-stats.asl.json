@@ -35,7 +35,7 @@
                 "TableName": "${TableName}",
                 "Key": {
                   "pk": {
-                    "S.$": "States.Format('{}#{}', $$.Execution.Input.tenant.id, $.Items[0].slug.S)"
+                    "S.$": "States.Format('{}#{}', $$.Execution.Input.tenant.id, $$.Execution.Input.issueId)"
                   },
                   "sk": {
                     "S": "stats"
@@ -146,27 +146,6 @@
               "Resource": "${DynamodbQuery}"
             }
           }
-        },
-        {
-          "StartAt": "Get Vote Results",
-          "States": {
-            "Get Vote Results": {
-              "Type": "Task",
-              "Resource": "${DynamodbGetItem}",
-              "Parameters": {
-                "TableName": "${TableName}",
-                "Key": {
-                  "pk": {
-                    "S.$": "States.Format('{}#{}', $$.Execution.Input.tenant.id, $.Items[0].slug.S)"
-                  },
-                  "sk": {
-                    "S": "votes"
-                  }
-                }
-              },
-              "End": true
-            }
-          }
         }
       ],
       "Next": "Build Email Report",
@@ -183,8 +162,7 @@
           "issue.$": "$.Items[0].pk.S",
           "subscribers.$": "$.data[2].Item.subscribers.N",
           "priorSubscribers.$": "$.data[3].Items[0].count.S",
-          "links.$": "$.data[1].links",
-          "voteResults.$": "$.data[4].Item"
+          "links.$": "$.data[1].links"
         }
       },
       "Retry": [

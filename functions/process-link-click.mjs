@@ -7,7 +7,6 @@ const ddb = new DynamoDBClient();
 const CONCURRENCY = parseInt(process.env.MAX_CONCURRENCY || "50", 10); // for bursts
 
 
-
 export const handler = async (event) => {
   let data;
   try {
@@ -41,7 +40,13 @@ export const handler = async (event) => {
       continue;
     }
 
-    console.log(msg);
+    // Log only minimal, non-PII fields
+    console.log({
+      cid: msg.cid || null,
+      uHash: msg.u ? hash(msg.u) : null,
+      src: msg.src || null,
+      ip: msg.ip ? "[redacted]" : null
+    });
     if (!msg || typeof msg !== "object") continue;
 
     const cid = msg.cid;
@@ -55,7 +60,7 @@ export const handler = async (event) => {
         pk: cid,
         sk: `link#${hash(msg.u)}`
       }),
-      UpdateExpression: "SET #by.#day = if_not_exists(#by.#day, :zero) + :one ADD totalClicks :one",
+      UpdateExpression: "SET #by.#day = if_not_exists(#by.#day, :zero) + :one ADD clicks_total :one",
       ConditionExpression: "attribute_exists(pk) AND attribute_exists(sk)",
       ExpressionAttributeNames: {
         '#by': 'byDay',
@@ -104,10 +109,11 @@ export const handler = async (event) => {
 
 const extractJsonFromMessage = (message) => {
   const jsonStart = message.indexOf('{');
-  if (jsonStart === -1) {
+  const jsonEnd = message.lastIndexOf('}');
+  if (jsonStart === -1 || jsonEnd === -1 || jsonEnd <= jsonStart) {
     return null; // No JSON found
   }
-  return message.substring(jsonStart);
+  return message.substring(jsonStart, jsonEnd + 1);
 };
 
 const decodeLogs = (event) => {

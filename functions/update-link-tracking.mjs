@@ -34,7 +34,7 @@ const initializeLinkRecord = async (tenantId, issueId, link) => {
         pk: `${tenantId}#${issueId}`,
         sk: `link#${hash(link)}`,
         url: link,
-        totalClicks: 0,
+        clicks_total: 0,
         byDay: {},
         ttl: Math.floor(Date.now() / 1000) + (LINK_EXPIRATION_DAYS * 24 * 60 * 60)
       }),

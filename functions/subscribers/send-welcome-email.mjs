@@ -52,7 +52,7 @@ export const handler = async (event) => {
     const unsubscribeUrl = `${process.env.ORIGIN}/${tenantId}/unsubscribe?email=${emailHash}`;
 
     const templateData = {
-      brandName: tenant.brandName || 'Our Newsletter',
+      brandName: tenant.name || tenant.brandName || 'Our Newsletter',
       brandLogo: tenant.brandLogo || null,
       brandColor: tenant.brandColor || null,
       brandDescription: tenant.brandDescription || null,
@@ -70,7 +70,7 @@ export const handler = async (event) => {
         Detail: JSON.stringify({
           tenantId,
           from: defaultSender.email,
-          subject: `Welcome to ${tenant.brandName || 'our newsletter'}!`,
+          subject: `Welcome to ${tenant.name || tenant.brandName || 'our newsletter'}!`,
           html,
           to: {
             email

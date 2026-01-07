@@ -93,7 +93,7 @@ const buildOwnProfile = async (userId, attributes, userResult, tenantId) => {
         const tenant = unmarshall(tenantResult.Item);
         brandData = {
           brandId: tenantId,
-          brandName: tenant.brandName || null,
+          brandName: tenant.name || tenant.brandName || null,
           website: tenant.website || null,
           industry: tenant.industry || null,
           brandDescription: tenant.brandDescription || null,
@@ -150,7 +150,7 @@ const buildPublicProfile = async (attributes) => {
         const tenant = unmarshall(tenantResult.Item);
         brandData = {
           brandId: tenantId,
-          brandName: tenant.brandName || null,
+          brandName: tenant.name || tenant.brandName || null,
           website: tenant.website || null,
           industry: tenant.industry || null,
           brandDescription: tenant.brandDescription || null,

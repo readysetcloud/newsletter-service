@@ -99,7 +99,11 @@ const updateBrandInfo = async (tenantId, brandData) => {
 
   fieldsToUpdate.forEach(field => {
     if (brandData.hasOwnProperty(field)) {
-      updateData[field] = brandData[field];
+      if (field === 'brandName') {
+        updateData.name = brandData[field];
+      } else {
+        updateData[field] = brandData[field];
+      }
     }
   });
 
@@ -157,7 +161,7 @@ const createTenantWithBrandData = async (tenantId, userId, brandData) => {
   const tenantItem = {
     pk: tenantId,
     sk: 'tenant',
-    brandName: brandData.brandName || 'Unknown',
+    name: brandData.brandName || 'Unknown',
     createdBy: userId,
     createdAt: now,
     updatedAt: now,

@@ -176,7 +176,8 @@
                 "Payload": {
                   "content.$": "$.content",
                   "isPreview.$": "$$.Execution.Input.isPreview",
-                  "votingOptions.$": "$votingOptions"
+                  "votingOptions.$": "$votingOptions",
+                  "fileName.$": "$$.Execution.Input.fileName"
                 },
                 "FunctionName": "${TransformAndCallback}"
               },

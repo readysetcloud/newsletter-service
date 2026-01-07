@@ -3,28 +3,35 @@ import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 const ddb = new DynamoDBClient();
 
 const socialMedia = ['https://twitter.com', 'https://x.com', 'https://linkedin.com', 'https://github.com', 'https://bsky.app/profile', 'https://www.twitter.com', 'https://www.x.com', 'https://www.linkedin.com', 'https://www.github.com', 'https://www.bsky.app/profile'];
+const n = (v) => Number.isFinite(Number(v)) ? Number(v) : 0;
 
 export const handler = async (state) => {
   try {
     const response = await ddb.send(new QueryCommand({
       TableName: process.env.TABLE_NAME,
-      IndexName: 'GSI1',
-      KeyConditionExpression: '#GSI1PK = :campaign',
+      KeyConditionExpression: '#pk = :campaign AND begins_with(#sk, :linkPrefix)',
       ExpressionAttributeNames: {
-        '#GSI1PK': 'GSI1PK'
+        '#pk': 'pk',
+        '#sk': 'sk'
       },
       ExpressionAttributeValues: marshall({
-        ':campaign': state.campaign
+        ':campaign': state.campaign,
+        ':linkPrefix': 'link#'
       })
     }));
 
     if (!response.Items.length) return;
 
-    const links = response.Items.map(i => unmarshall(i));
+    const links = response.Items.map(i => {
+      const item = unmarshall(i);
+      const count = n(item.clicks_total ?? item.count);
+      return {
+        link: item.url || item.link,
+        count
+      };
+    }).filter(l => l.link);
     links.sort((a, b) => {
-      const countA = a.count ? parseInt(a.count) : -Infinity;
-      const countB = b.count ? parseInt(b.count) : -Infinity;
-      return countB - countA;
+      return n(b.count) - n(a.count);
     });
 
     if (!state.returnList) {

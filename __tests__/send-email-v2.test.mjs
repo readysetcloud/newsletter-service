@@ -329,3 +329,234 @@ describe('send-email-v2', () => {
     });
   });
 });
+
+// Property-based tests
+import * as fc from 'fast-check';
+
+describe('send-email-v2 property-based tests', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env.TABLE_NAME = 'test-table';
+    process.env.CONFIGURATION_SET = 'test-config-set';
+    process.env.SES_TPS_LIMIT = '5';
+
+    // Suppress console logs during property tests
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  describe('Property 9: Sender metrics updated', () => {
+    /**
+     * Feature: welcome-newsletter, Property 9: Sender metrics updated
+     * For any successfully sent welcome email, the sender's emailsSent metric
+     * should be incremented and lastSentAt timestamp should be updated
+     * Validates: Requirements 4.4
+     */
+    test('sender metrics are updated after successful email send', () => {
+      const arbitraryEmail = fc.emailAddress();
+      const arbitraryTenantId = fc.string({ minLength: 5, maxLength: 50 }).filter(s => s.trim().length > 0);
+      const arbitrarySenderId = fc.string({ minLength: 5, maxLength: 50 }).filter(s => s.trim().length > 0);
+      const arbitrarySenderEmail = fc.emailAddress();
+      const arbitrarySubject = fc.string({ minLength: 1, maxLength: 100 });
+      const arbitraryHtml = fc.string({ minLength: 10, maxLength: 500 });
+
+      const arbitraryEmailData = fc.record({
+        tenantId: arbitraryTenantId,
+        senderId: arbitrarySenderId,
+        senderEmail: arbitrarySenderEmail,
+        recipientEmail: arbitraryEmail,
+        subject: arbitrarySubject,
+        html: arbitraryHtml,
+      });
+
+      fc.assert(
+        fc.asyncProperty(arbitraryEmailData, async (data) => {
+          jest.clearAllMocks();
+
+          // Suppress console during each iteration
+          jest.spyOn(console, 'log').mockImplementation(() => {});
+          jest.spyOn(console, 'error').mockImplementation(() => {});
+
+          // Mock sender lookup - return the sender that matches the from email
+          ddbInstance.send.mockImplementation((command) => {
+            if (command.__type === 'Query') {
+              return Promise.resolve({
+                Items: [{
+                  unmarshalled: {
+                    senderId: data.senderId,
+                    email: data.senderEmail,
+                    verificationStatus: 'verified',
+                    isDefault: false
+                  }
+                }]
+              });
+            }
+            if (command.__type === 'UpdateItem') {
+              return Promise.resolve({});
+            }
+            return Promise.resolve({});
+          });
+
+          // Mock SES send
+          sesInstance.send.mockResolvedValue({ MessageId: 'msg-123' });
+
+          const event = {
+            detail: {
+              subject: data.subject,
+              html: data.html,
+              to: { email: data.recipientEmail },
+              from: data.senderEmail,
+              tenantId: data.tenantId
+            }
+          };
+
+          await handler(event);
+
+          // Property: Metrics update should be called
+          const updateCalls = ddbInstance.send.mock.calls.filter(call => call[0].__type === 'UpdateItem');
+          expect(updateCalls.length).toBe(1);
+
+          // Property: UpdateItem call should be for metrics
+          const metricsCall = updateCalls[0][0];
+          expect(metricsCall.UpdateExpression).toBe('ADD emailsSent :count SET lastSentAt = :timestamp');
+
+          // Property: Should update the correct sender
+          const key = metricsCall.Key.marshalled;
+          expect(key.pk).toBe(data.tenantId);
+          expect(key.sk).toBe(`sender#${data.senderId}`);
+
+          // Property: Should increment by 1 (single recipient)
+          expect(metricsCall.ExpressionAttributeValues.marshalled[':count']).toBe(1);
+
+          // Property: lastSentAt should be a valid ISO timestamp
+          const timestamp = metricsCall.ExpressionAttributeValues.marshalled[':timestamp'];
+          expect(() => new Date(timestamp)).not.toThrow();
+          expect(new Date(timestamp).toISOString()).toBe(timestamp);
+        }),
+        { numRuns: 100 }
+      );
+    });
+  });
+
+  describe('Property 10: TPS rate limiting', () => {
+    /**
+     * Feature: welcome-newsletter, Property 10: TPS rate limiting
+     * For any batch of welcome emails sent, the time between consecutive email
+     * sends should be at least the configured minimum delay based on TPS limit
+     * Validates: Requirements 4.5
+     */
+    test('emails are sent with appropriate delay based on TPS limit', () => {
+      const arbitraryTenantId = fc.string({ minLength: 5, maxLength: 50 }).filter(s => s.trim().length > 0);
+      const arbitrarySenderId = fc.string({ minLength: 5, maxLength: 50 }).filter(s => s.trim().length > 0);
+      const arbitrarySenderEmail = fc.emailAddress();
+      const arbitrarySubject = fc.string({ minLength: 1, maxLength: 100 });
+      const arbitraryHtml = fc.string({ minLength: 10, maxLength: 500 });
+      const arbitraryContactList = fc.string({ minLength: 5, maxLength: 50 });
+
+      // Generate 2-5 unique recipient emails for testing batch sends
+      const arbitraryRecipients = fc.uniqueArray(fc.emailAddress(), { minLength: 2, maxLength: 5 });
+
+      const arbitraryBatchEmailData = fc.record({
+        tenantId: arbitraryTenantId,
+        senderId: arbitrarySenderId,
+        senderEmail: arbitrarySenderEmail,
+        contactList: arbitraryContactList,
+        recipients: arbitraryRecipients,
+        subject: arbitrarySubject,
+        html: arbitraryHtml,
+      });
+
+      fc.assert(
+        fc.asyncProperty(arbitraryBatchEmailData, async (data) => {
+          jest.clearAllMocks();
+
+          // Suppress console during each iteration
+          jest.spyOn(console, 'log').mockImplementation(() => {});
+          jest.spyOn(console, 'error').mockImplementation(() => {});
+
+          // Mock DynamoDB calls
+          ddbInstance.send.mockImplementation((command) => {
+            if (command.__type === 'Query') {
+              // First query is for sender lookup
+              if (command.IndexName === 'GSI1') {
+                return Promise.resolve({
+                  Items: [{
+                    unmarshalled: {
+                      senderId: data.senderId,
+                      email: data.senderEmail,
+                      verificationStatus: 'verified',
+                      isDefault: false
+                    }
+                  }]
+                });
+              }
+              // Second query is for recent unsubscribes
+              return Promise.resolve({ Items: [] });
+            }
+            if (command.__type === 'UpdateItem') {
+              return Promise.resolve({});
+            }
+            return Promise.resolve({});
+          });
+
+          // Mock SES ListContacts to return recipients
+          sesInstance.send.mockImplementation((command) => {
+            if (command.__type === 'ListContacts') {
+              return Promise.resolve({
+                Contacts: data.recipients.map(email => ({ EmailAddress: email })),
+                NextToken: undefined
+              });
+            }
+            if (command.__type === 'SendEmail') {
+              return Promise.resolve({ MessageId: `msg-${Math.random()}` });
+            }
+            return Promise.resolve({});
+          });
+
+          const event = {
+            detail: {
+              subject: data.subject,
+              html: data.html,
+              to: { list: data.contactList },
+              from: data.senderEmail,
+              tenantId: data.tenantId
+            }
+          };
+
+          const startTime = Date.now();
+          await handler(event);
+          const endTime = Date.now();
+          const totalTime = endTime - startTime;
+
+          // Property: Total time should be at least (recipients - 1) * delayMs
+          // TPS limit is 5, so delayMs = 1000/5 = 200ms
+          const tpsLimit = 5;
+          const expectedDelayMs = Math.ceil(1000 / tpsLimit);
+          const minExpectedTime = (data.recipients.length - 1) * expectedDelayMs;
+
+          // Allow generous tolerance for execution time (100ms per email for processing overhead)
+          // This accounts for mock execution time, promise resolution, and system variability
+          const tolerance = data.recipients.length * 100;
+          expect(totalTime).toBeGreaterThanOrEqual(minExpectedTime - tolerance);
+
+          // Property: All emails should be sent
+          const sendEmailCalls = sesInstance.send.mock.calls.filter(
+            call => call[0].__type === 'SendEmail'
+          );
+          expect(sendEmailCalls.length).toBe(data.recipients.length);
+
+          // Property: Each email should be sent to correct recipient
+          const sentEmails = sendEmailCalls.map(call =>
+            call[0].Destination.ToAddresses[0]
+          );
+          expect(sentEmails.sort()).toEqual(data.recipients.sort());
+        }),
+        { numRuns: 100 }
+      );
+    });
+  });
+});

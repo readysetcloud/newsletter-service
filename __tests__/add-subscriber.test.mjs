@@ -6,6 +6,7 @@ let sesInstance;
 let ddbInstance;
 let CreateContactCommand;
 let UpdateItemCommand;
+let PutItemCommand;
 let marshall;
 let publishSubscriberEvent;
 let EVENT_TYPES;
@@ -28,6 +29,7 @@ async function loadIsolated() {
     jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
       DynamoDBClient: jest.fn(() => ddbInstance),
       UpdateItemCommand: jest.fn((params) => ({ __type: 'UpdateItem', ...params })),
+      PutItemCommand: jest.fn((params) => ({ __type: 'PutItem', ...params })),
     }));
 
     // util-dynamodb
@@ -60,7 +62,7 @@ async function loadIsolated() {
     // Import AFTER mocks, inside isolation
     ({ handler } = await import('../functions/subscribers/add-subscriber.mjs'));
     ({ CreateContactCommand } = await import('@aws-sdk/client-sesv2'));
-    ({ UpdateItemCommand } = await import('@aws-sdk/client-dynamodb'));
+    ({ UpdateItemCommand, PutItemCommand } = await import('@aws-sdk/client-dynamodb'));
     ({ marshall } = await import('@aws-sdk/util-dynamodb'));
     ({ publishSubscriberEvent, EVENT_TYPES } = await import('../functions/utils/event-publisher.mjs'));
   });
@@ -71,6 +73,7 @@ async function loadIsolated() {
     ddbInstance,
     CreateContactCommand,
     UpdateItemCommand,
+    PutItemCommand,
     marshall,
     publishSubscriberEvent,
     EVENT_TYPES,
@@ -131,7 +134,7 @@ describe('add-subscriber handler (isolated)', () => {
     expect(publishSubscriberEvent).not.toHaveBeenCalled();
   });
 
-  test('adds contact, increments count, and publishes event', async () => {
+  test('adds contact, increments count, creates event record, and publishes event', async () => {
     const tenant = { id: 't1', list: 'list-1', subscribers: 5 };
     mockGetTenant.mockResolvedValue(tenant);
     sesInstance.send.mockResolvedValue({});
@@ -157,13 +160,29 @@ describe('add-subscriber handler (isolated)', () => {
     expect(sesArg.EmailAddress).toBe('test@example.com');
     expect(JSON.parse(sesArg.AttributesData)).toEqual({ firstName: 'John', lastName: 'Doe' });
 
-    // DDB increment
-    expect(marshall).toHaveBeenCalledWith({ pk: 't1', sk: 'tenant' });
-    expect(ddbInstance.send).toHaveBeenCalledTimes(1);
-    const ddbArg = ddbInstance.send.mock.calls[0][0];
-    expect(ddbArg.__type).toBe('UpdateItem');
-    expect(ddbArg.TableName).toBe('test-table');
-    expect(ddbArg.UpdateExpression).toBe('SET #subscribers = #subscribers + :val');
+    // DDB calls: UpdateItem (increment) + PutItem (event record)
+    expect(ddbInstance.send).toHaveBeenCalledTimes(2);
+
+    // First call: UpdateItem for subscriber count
+    const updateArg = ddbInstance.send.mock.calls[0][0];
+    expect(updateArg.__type).toBe('UpdateItem');
+    expect(updateArg.TableName).toBe('test-table');
+    expect(updateArg.UpdateExpression).toBe('SET #subscribers = #subscribers + :val');
+
+    // Second call: PutItem for subscriber event record
+    const putArg = ddbInstance.send.mock.calls[1][0];
+    expect(putArg.__type).toBe('PutItem');
+    expect(putArg.TableName).toBe('test-table');
+
+    // Verify the event record structure
+    const putItem = putArg.Item;
+    expect(putItem.pk).toBe('t1');
+    expect(putItem.sk).toMatch(/^subscriber#\d+#test@example\.com$/);
+    expect(putItem.GSI1PK).toBe('t1');
+    expect(putItem.GSI1SK).toMatch(/^subscriber#\d+$/);
+    expect(putItem.email).toBe('test@example.com');
+    expect(typeof putItem.addedAt).toBe('string');
+    expect(typeof putItem.ttl).toBe('number');
 
     // Event
     expect(publishSubscriberEvent).toHaveBeenCalledTimes(1);
@@ -210,5 +229,59 @@ describe('add-subscriber handler (isolated)', () => {
     expect(res && res.statusCode).toBe(500);
     expect(ddbInstance.send).not.toHaveBeenCalled();
     expect(publishSubscriberEvent).not.toHaveBeenCalled();
+  });
+});
+
+// Property-based tests
+import * as fc from 'fast-check';
+
+describe('add-subscriber property-based tests', () => {
+  beforeEach(async () => {
+    jest.resetModules();
+    process.env.TABLE_NAME = 'test-table';
+    process.env.ORIGIN = 'https://www.readysetcloud.io';
+    await loadIsolated();
+  });
+
+  // Feature: welcome-newsletter, Property 4: Duplicate subscription idempotency
+  // Validates: Requirements 1.5
+  test('Property 4: duplicate subscription does not trigger welcome email or event record', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.emailAddress(),
+        fc.string({ minLength: 1, maxLength: 50 }),
+        fc.string({ minLength: 1, maxLength: 50 }),
+        fc.nat({ max: 10000 }),
+        async (email, firstName, lastName, subscriberCount) => {
+          const tenant = { id: 'test-tenant', list: 'test-list', subscribers: subscriberCount };
+          mockGetTenant.mockResolvedValue(tenant);
+
+          // Simulate AlreadyExistsException for duplicate subscriber
+          sesInstance.send.mockRejectedValue(
+            Object.assign(new Error('Contact already exists'), { name: 'AlreadyExistsException' })
+          );
+
+          const event = {
+            pathParameters: { tenant: 'test-tenant' },
+            body: JSON.stringify({ email, firstName, lastName }),
+          };
+
+          const res = await handler(event);
+
+          // Should still return 201 (success response)
+          expect(res && res.statusCode).toBe(201);
+
+          // Should NOT call DynamoDB (no count increment, no event record)
+          expect(ddbInstance.send).not.toHaveBeenCalled();
+
+          // Should NOT publish subscriber added event
+          expect(publishSubscriberEvent).not.toHaveBeenCalled();
+
+          // Reset mocks for next iteration
+          jest.clearAllMocks();
+        }
+      ),
+      { numRuns: 100 }
+    );
   });
 });

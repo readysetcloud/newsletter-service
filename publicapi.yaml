@@ -50,6 +50,35 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
+  /{tenant}/stats/subscribers:
+    parameters:
+      - $ref: "#/components/parameters/Tenant"
+    get:
+      summary: Get subscriber statistics
+      tags:
+        - Subscription
+      responses:
+        200:
+          description: Subscriber statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriberStats"
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              description: Cache control header for CloudFront caching
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetSubscriberStatsFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
   /{tenant}/unsubscribe:
     parameters:
       - $ref: "#/components/parameters/Tenant"
@@ -196,6 +225,23 @@ components:
           type: string
         lastName:
           type: string
+
+    SubscriberStats:
+      description: Subscriber statistics for a tenant
+      type: object
+      required:
+        - totalSubscribers
+        - newThisWeek
+        - weekStartDate
+      properties:
+        totalSubscribers:
+          type: integer
+          description: Total number of active subscribers
+          example: 1250
+        newThisWeek:
+          type: integer
+          description: Number of subscribers added since the previous Sunday at 00:00:00 UTC
+          example: 42
 
   responses:
     Created:

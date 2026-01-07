@@ -1,5 +1,5 @@
 import { SESv2Client, CreateContactCommand } from '@aws-sdk/client-sesv2';
-import { DynamoDBClient, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, UpdateItemCommand, PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
 import { formatResponse, getTenant } from '../utils/helpers.mjs';
 import { publishSubscriberEvent, EVENT_TYPES } from '../utils/event-publisher.mjs';
@@ -27,7 +27,13 @@ export const handler = async (event) => {
 
     const shouldUpdateCount = await addContact(tenant.list, contact);
     if (shouldUpdateCount) {
+      const addedAt = new Date().toISOString();
+      const timestamp = Date.now();
+
       await updateSubscriberCount(tenantId);
+
+      // Create subscriber event record for stats tracking
+      await createSubscriberEventRecord(tenantId, contact.email, addedAt, timestamp);
 
       // Publish subscriber added event after successful addition
       await publishSubscriberEvent(
@@ -39,7 +45,7 @@ export const handler = async (event) => {
           firstName: contact.firstName || null,
           lastName: contact.lastName || null,
           subscriberCount: tenant.subscribers + 1, // New count after addition
-          addedAt: new Date().toISOString()
+          addedAt
         }
       );
     }
@@ -92,5 +98,22 @@ const updateSubscriberCount = async (tenantId) => {
     ExpressionAttributeValues: {
       ':val': { N: '1' }
     }
+  }));
+};
+
+const createSubscriberEventRecord = async (tenantId, email, addedAt, timestamp) => {
+  const ttl = Math.floor(Date.now() / 1000) + (90 * 24 * 60 * 60); // 90 days from now
+
+  await ddb.send(new PutItemCommand({
+    TableName: process.env.TABLE_NAME,
+    Item: marshall({
+      pk: tenantId,
+      sk: `subscriber#${timestamp}#${email}`,
+      GSI1PK: tenantId,
+      GSI1SK: `subscriber#${timestamp}`,
+      email,
+      addedAt,
+      ttl
+    })
   }));
 };

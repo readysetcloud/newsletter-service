@@ -58,14 +58,14 @@ describe('get-subscriber-stats handler', () => {
      * previous Sunday at 00:00:00 UTC
      * Validates: Requirements 3.1, 3.2
      */
-    test('returns accurate total and weekly subscriber counts for any tenant', () => {
+    test('returns accurate total and weekly subscriber counts for any tenant', async () => {
       const arbitraryStatsData = fc.record({
         tenantId: fc.uuid(),
         totalSubscribers: fc.integer({ min: 0, max: 100000 }),
         newThisWeek: fc.integer({ min: 0, max: 1000 }),
       });
 
-      fc.assert(
+      await fc.assert(
         fc.asyncProperty(arbitraryStatsData, async (data) => {
           let getTenantCalled = false;
           let queryCalled = false;
@@ -136,13 +136,13 @@ describe('get-subscriber-stats handler', () => {
      * containing totalSubscribers, newThisWeek, and weekStartDate fields
      * Validates: Requirements 3.3
      */
-    test('response contains all required fields in correct format for any tenant', () => {
+    test('response contains all required fields in correct format for any tenant', async () => {
       const arbitraryData = fc.record({
         tenantId: fc.uuid(),
         subscribers: fc.integer({ min: 0, max: 100000 }),
       });
 
-      fc.assert(
+      await fc.assert(
         fc.asyncProperty(arbitraryData, async (data) => {
           mockGetTenant.mockResolvedValue({
             pk: data.tenantId,
@@ -202,14 +202,14 @@ describe('get-subscriber-stats handler', () => {
      * window should return the same cached result without querying the database
      * Validates: Requirements 3.5
      */
-    test('multiple requests within cache window return same result without additional DB queries', () => {
+    test('multiple requests within cache window return same result without additional DB queries', async () => {
       const arbitraryData = fc.record({
         tenantId: fc.uuid(),
         totalSubscribers: fc.integer({ min: 0, max: 10000 }),
         newThisWeek: fc.integer({ min: 0, max: 100 }),
       });
 
-      fc.assert(
+      await fc.assert(
         fc.asyncProperty(arbitraryData, async (data) => {
           mockDdbSend.mockClear();
           mockGetTenant.mockClear();

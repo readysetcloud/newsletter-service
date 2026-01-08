@@ -1,4 +1,6 @@
 import { jest, describe, test, expect, beforeEach, afterEach } from '@jest/globals';
+import { fileURLToPath } from 'url';
+import { dirname, resolve } from 'path';
 import * as fc from 'fast-check';
 
 const mockDdbSend = jest.fn();
@@ -36,6 +38,14 @@ jest.unstable_mockModule('fs', () => ({
   readFileSync: jest.fn(() => '<html>{{brandName}}</html>'),
 }));
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const welcomeTemplatePath = resolve(__dirname, '../templates/welcome.hbs');
+
+jest.unstable_mockModule(welcomeTemplatePath, () => ({
+  default: '<html>{{brandName}}</html>',
+}));
+
 const { handler } = await import('../functions/subscribers/send-welcome-email.mjs');
 
 describe('send-welcome-email handler', () => {
@@ -59,7 +69,7 @@ describe('send-welcome-email handler', () => {
      * a subscriber added event that triggers a welcome email to be sent asynchronously
      * Validates: Requirements 1.1, 4.1, 4.2
      */
-    test('welcome email event is published for any valid subscriber addition event', () => {
+    test('welcome email event is published for any valid subscriber addition event', async () => {
       const arbitraryEmail = fc.emailAddress();
       const arbitraryTenantId = fc.string({ minLength: 5, maxLength: 50 }).filter(s => s.trim().length > 0);
       const arbitraryFirstName = fc.option(fc.string({ minLength: 1, maxLength: 50 }), { nil: null });
@@ -74,7 +84,7 @@ describe('send-welcome-email handler', () => {
         senderEmail: arbitrarySenderEmail,
       });
 
-      fc.assert(
+      await fc.assert(
         fc.asyncProperty(arbitrarySubscriberEvent, async (data) => {
           mockDdbSend.mockClear();
           mockEventBridgeSend.mockClear();
@@ -154,7 +164,7 @@ describe('send-welcome-email handler', () => {
      * verified sender email address
      * Validates: Requirements 1.2
      */
-    test('default verified sender email is used for all welcome emails', () => {
+    test('default verified sender email is used for all welcome emails', async () => {
       const arbitraryEmail = fc.emailAddress();
       const arbitraryTenantId = fc.string({ minLength: 5, maxLength: 50 }).filter(s => s.trim().length > 0);
       const arbitrarySenderEmail = fc.emailAddress();
@@ -165,7 +175,7 @@ describe('send-welcome-email handler', () => {
         defaultSenderEmail: arbitrarySenderEmail,
       });
 
-      fc.assert(
+      await fc.assert(
         fc.asyncProperty(arbitraryData, async (data) => {
           mockDdbSend.mockClear();
           mockEventBridgeSend.mockClear();
@@ -230,7 +240,7 @@ describe('send-welcome-email handler', () => {
      * without throwing an exception that would block the subscription process
      * Validates: Requirements 4.3
      */
-    test('errors are caught and logged without throwing exceptions', () => {
+    test('errors are caught and logged without throwing exceptions', async () => {
       const arbitraryEmail = fc.emailAddress();
       const arbitraryTenantId = fc.string({ minLength: 5, maxLength: 50 }).filter(s => s.trim().length > 0);
       const arbitraryErrorMessage = fc.string({ minLength: 1, maxLength: 100 });
@@ -242,7 +252,7 @@ describe('send-welcome-email handler', () => {
         errorType: fc.constantFrom('tenant_not_found', 'no_default_sender', 'eventbridge_failure'),
       });
 
-      fc.assert(
+      await fc.assert(
         fc.asyncProperty(arbitraryErrorScenario, async (scenario) => {
           mockDdbSend.mockClear();
           mockEventBridgeSend.mockClear();
@@ -392,7 +402,7 @@ describe('send-welcome-email handler', () => {
 
       const putEventsCall = mockEventBridgeSend.mock.calls[0][0];
       expect(putEventsCall.__type).toBe('PutEvents');
-      expect(putEventsCall.Entries[0].Source).toBe('newsletter.welcome');
+      expect(putEventsCall.Entries[0].Source).toBe('newsletter-service');
       expect(putEventsCall.Entries[0].DetailType).toBe('Send Email v2');
 
       const detail = JSON.parse(putEventsCall.Entries[0].Detail);

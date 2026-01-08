@@ -45,7 +45,8 @@ export const handler = async (event) => {
 
     const stats = {
       totalSubscribers,
-      newThisWeek
+      newThisWeek,
+      weekStartDate: weekStartDate.toISOString()
     };
 
     cache[cacheKey] = {

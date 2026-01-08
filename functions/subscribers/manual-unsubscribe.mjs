@@ -100,7 +100,7 @@ const notifyAdminOfFailure = async (tenant, emailAddress, method, metadata = {})
       return;
     }
 
-    const subject = `[Alert] Unsubscribe Request Failed - ${tenant.brandName || tenant.pk}`;
+    const subject = `[Alert] Unsubscribe Request Failed - ${tenant.name || tenant.brandName || tenant.pk}`;
     const html = `
       <h2>Unsubscribe Request Failed</h2>
       <p>An unsubscribe request could not be processed for your newsletter.</p>

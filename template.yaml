@@ -831,6 +831,7 @@ Resources:
               Action:
                 - dynamodb:GetItem
                 - dynamodb:UpdateItem
+                - dynamodb:PutItem
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
@@ -845,6 +846,77 @@ Resources:
             Method: POST
             Auth:
               Authorizer: NONE
+
+  SendWelcomeEmailFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - subscribers/send-welcome-email.mjs
+    Properties:
+      Handler: subscribers/send-welcome-email.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          ORIGIN: !Ref Origin
+          ENCRYPTION_KEY: !Ref EncryptionKey
+      Events:
+        SubscriberAddedEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - newsletter.api
+              detail-type:
+                - Subscriber Added
+
+  GetSubscriberStatsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - subscribers/get-subscriber-stats.mjs
+    Properties:
+      Handler: subscribers/get-subscriber-stats.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+      Events:
+        FromApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /{tenant}/stats/subscribers
+            Method: GET
 
   GetDashboardDataFunction:
     Type: AWS::Serverless::Function

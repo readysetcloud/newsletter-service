@@ -56,7 +56,7 @@ export const handler = async (event) => {
     console.log(`Found ${persistentFailures.length} addresses to clean up:`, persistentFailures);
 
     // Get tenant information to determine which SES contact list to use
-    const tenant = await getTenant(tenantId);
+    const tenant = await getTenant(tenantId.id);
 
     // Remove each persistent failure from SES using throttle to avoid rate limits
     let successfulRemovals = 0;
@@ -87,7 +87,7 @@ export const handler = async (event) => {
 
     // Send notification email to tenant if any subscribers were removed
     if (successfulRemovals > 0) {
-      await sendNotificationEmail(tenant, persistentFailures, successfulRemovals, subscriberCount, tenantId);
+      await sendNotificationEmail(tenant, persistentFailures, successfulRemovals, subscriberCount, tenantId.id);
     }
 
     console.log(`Successfully cleaned up ${successfulRemovals} bounced subscribers`);

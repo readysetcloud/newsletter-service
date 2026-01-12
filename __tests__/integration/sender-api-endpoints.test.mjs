@@ -30,14 +30,6 @@ jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
   unmarshall: jest.fn((obj) => obj)
 }));
 
-// Mock crypto
-jest.unstable_mockModule('crypto', () => ({
-  default: {
-    randomUUID: jest.fn(() => 'test-uuid-123')
-  },
-  randomUUID: jest.fn(() => 'test-uuid-123')
-}));
-
 // Mock Momento client
 const mockMomentoClient = {
   isAvailable: jest.fn(() => true),

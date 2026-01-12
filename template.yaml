@@ -2337,6 +2337,9 @@ Resources:
             - Effect: Allow
               Action: dynamodb:Query
               Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}/index/GSI1
+            - Effect: Allow
+              Action: dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable

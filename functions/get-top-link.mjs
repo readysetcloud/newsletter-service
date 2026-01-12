@@ -1,4 +1,4 @@
-import { DynamoDBClient, QueryCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, QueryCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 const ddb = new DynamoDBClient();
 
@@ -7,22 +7,43 @@ const n = (v) => Number.isFinite(Number(v)) ? Number(v) : 0;
 
 export const handler = async (state) => {
   try {
-    const response = await ddb.send(new QueryCommand({
-      TableName: process.env.TABLE_NAME,
-      KeyConditionExpression: '#pk = :campaign AND begins_with(#sk, :linkPrefix)',
-      ExpressionAttributeNames: {
-        '#pk': 'pk',
-        '#sk': 'sk'
-      },
-      ExpressionAttributeValues: marshall({
-        ':campaign': state.campaign,
-        ':linkPrefix': 'link#'
-      })
-    }));
+    const items = [];
+    let lastEvaluatedKey;
+    do {
+      const response = await ddb.send(new QueryCommand({
+        TableName: process.env.TABLE_NAME,
+        KeyConditionExpression: '#pk = :campaign AND begins_with(#sk, :linkPrefix)',
+        ExpressionAttributeNames: {
+          '#pk': 'pk',
+          '#sk': 'sk'
+        },
+        ExpressionAttributeValues: marshall({
+          ':campaign': state.campaign,
+          ':linkPrefix': 'link#'
+        }),
+        ...(lastEvaluatedKey ? { ExclusiveStartKey: lastEvaluatedKey } : {})
+      }));
+      if (response.Items?.length) {
+        items.push(...response.Items);
+      }
+      lastEvaluatedKey = response.LastEvaluatedKey;
+    } while (lastEvaluatedKey);
 
-    if (!response.Items.length) return;
+    if (!items.length) {
+      const totalClicks = 0;
+      await updateNewsletterStats(state.campaign, totalClicks);
+      if (state.returnList) {
+        return {
+          links: [],
+        };
+      }
+      return {
+        post: null,
+        person: null
+      };
+    }
 
-    const links = response.Items.map(i => {
+    const links = items.map(i => {
       const item = unmarshall(i);
       const count = n(item.clicks_total ?? item.count);
       return {
@@ -30,6 +51,8 @@ export const handler = async (state) => {
         count
       };
     }).filter(l => l.link);
+    const totalClicks = links.reduce((sum, link) => sum + n(link.count), 0);
+    await updateNewsletterStats(state.campaign, totalClicks);
     links.sort((a, b) => {
       return n(b.count) - n(a.count);
     });
@@ -65,4 +88,21 @@ export const handler = async (state) => {
   } catch (err) {
     console.error(err);
   }
+};
+
+const updateNewsletterStats = async (campaign, totalClicks) => {
+  await ddb.send(new UpdateItemCommand({
+    TableName: process.env.TABLE_NAME,
+    Key: marshall({
+      pk: campaign,
+      sk: 'stats'
+    }),
+    UpdateExpression: 'SET #total = :total',
+    ExpressionAttributeNames: {
+      '#total': 'clicks_total'
+    },
+    ExpressionAttributeValues: marshall({
+      ':total': totalClicks
+    })
+  }));
 };

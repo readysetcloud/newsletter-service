@@ -505,7 +505,37 @@
         }
       },
       "ResultPath": null,
-      "Next": "Notify of Success"
+      "Next": "Generate Social Copy"
+    },
+    "Generate Social Copy": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "Parameters": {
+        "FunctionName": "${GenerateSocialPost}",
+        "Payload": {
+          "content.$": "$$.Execution.Input.content",
+          "tenantId.$": "$$.Execution.Input.tenant.id",
+          "issueId.$": "$$.Execution.Input.issueId"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultPath": null,
+      "Next": "Notify of Success",
+      "Assign": {
+        "social.$": "$.Payload"
+      }
     },
     "Notify of Success": {
       "Type": "Task",
@@ -518,7 +548,7 @@
                 "email.$": "$$.Execution.Input.tenant.email"
               },
               "subject.$": "States.Format('[Scheduled] Newsletter Issue {}', $$.Execution.Input.issueId)",
-              "html": "<p>The newsletter was successfully scheduled for sending. Good luck!</p>",
+              "html.$": "States.Format('<div><p>The newsletter was successfully scheduled for sending.</p><p><b>Suggested social copy:</b><br>{}</p></div>', $social.copy)",
               "tenantId.$": "$$.Execution.Input.tenant.id"
             },
             "DetailType": "Send Email v2",

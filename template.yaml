@@ -1653,6 +1653,42 @@ Resources:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
 
+  GenerateSocialPostFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - ai/generate-social-post.mjs
+    Properties:
+      Handler: ai/generate-social-post.handler
+      Timeout: 60
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/amazon.nova-pro-v1:0
+                - !Sub arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/us.amazon.nova-pro-v1:0
+            - Effect: Allow
+              Action:
+                - bedrock:ListInferenceProfiles
+              Resource:
+                - !Sub arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/us.amazon.nova-pro-v1:0
+                - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/amazon.nova-pro-v1:0
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          MODEL_ID: us.amazon.nova-pro-v1:0
+
   GetNextIssueDateFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -1984,6 +2020,7 @@ Resources:
         SetupVotingOptions: !GetAtt SetupVotingOptionsFunction.Arn
         CleanupListRole: !GetAtt SchedulerExecutionRole.Arn
         TransformAndCallback: !GetAtt TransformAndCallbackFunction.Arn
+        GenerateSocialPost: !GetAtt GenerateSocialPostFunction.Arn
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -2001,6 +2038,7 @@ Resources:
                 - !GetAtt UpdateLinksWithTrackingDataFunction.Arn
                 - !GetAtt SetupVotingOptionsFunction.Arn
                 - !GetAtt TransformAndCallbackFunction.Arn
+                - !GetAtt GenerateSocialPostFunction.Arn
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default

@@ -21,7 +21,7 @@ export const handler = async (state) => {
     const stats = unmarshall(state.stats);
 
     const deliveries = n(stats.deliveries);
-    const uniqueOpens = n(stats.uniqueOpens);
+    const uniqueOpens = n(stats.opens);
     const bounces = n(stats.bounces);
     const unsubscribes = n(stats.unsubscribes);
     const sends = n(stats.sends);
@@ -108,6 +108,7 @@ export const handler = async (state) => {
           <td style="background-color:#4a90e2;color:#ffffff;padding:30px 20px;text-align:center;">
             <h1 style="margin:0;font-size:24px;font-weight:bold;">📊 Newsletter Issue ${name} Performance</h1>
             <p style="margin:10px 0 0 0;font-size:16px;color:#e6f2ff;">Issue analytics summary</p>
+            <p>{{LLM_INSIGHTS}}</p>
           </td>
         </tr>
 

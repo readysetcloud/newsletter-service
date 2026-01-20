@@ -57,7 +57,7 @@
               "Parameters": {
                 "FunctionName": "${GetTopLinks}",
                 "Payload": {
-                  "campaign.$": "$.Items[0].pk.S",
+                  "campaign.$": "States.Format('{}#{}', $$.Execution.Input.tenant.id, $$.Execution.Input.issueId)",
                   "returnList": true
                 }
               },

@@ -27,7 +27,7 @@ ${historicalData?.length ? `---
 Keep insights concise and actionable. This will be inserted into an html div directly, so only answer with your thought and no extra verbiage.`;
 
   const response = await bedrock.send(new ConverseCommand({
-    modelId: 'amazon.nova-pro-v1:0',
+    modelId: process.env.MODEL_ID,
     system: [{ text: 'You are an expert analyst specializing in brand growth. You take your expertise with current and past data and can find insights that optimize growth and conversions' }],
     messages: [
       {

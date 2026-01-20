@@ -1645,13 +1645,16 @@ Resources:
           Statement:
             - Effect: Allow
               Action: dynamodb:Query
-              Resource: !GetAtt NewsletterTable.Arn
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}/index/GSI1
             - Effect: Allow
               Action: bedrock:InvokeModel
-              Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-pro-v1:0
+              Resource:
+                - arn:aws:bedrock:*::foundation-model/amazon.nova-*
+                - !Sub arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/us.amazon.nova-*
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
+          MODEL_ID: us.amazon.nova-pro-v1:0
 
   GenerateSocialPostFunction:
     Type: AWS::Serverless::Function

@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;font-family:Arial,sans-serif;background-color:#f4f4f4;">
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f4f4;">
+    <tr>
+      <td align="center" style="padding:20px 0;">
+        <table width="600" cellpadding="0" cellspacing="0" border="0" style="background-color:#ffffff;max-width:600px;">
+
+          <!-- Header -->
+          <tr>
+            <td style="background-color:#4a90e2;color:#ffffff;padding:30px 20px;text-align:center;">
+              <h1 style="margin:0;font-size:24px;font-weight:bold;">📊 Newsletter Issue {{issueName}} Performance</h1>
+              <p style="margin:10px 0 0 0;font-size:16px;color:#e6f2ff;">Issue analytics summary</p>
+              {{#if insights}}
+              <div style="margin:15px 0 0 0;text-align:left;">
+                <ul style="margin:0;padding:0 0 0 20px;font-size:14px;line-height:1.6;">
+                  {{#each insights}}
+                  <li style="margin:5px 0;">{{this}}</li>
+                  {{/each}}
+                </ul>
+              </div>
+              {{/if}}
+            </td>
+          </tr>
+
+          <!-- Health Scoreboard -->
+          {{#if healthScore}}
+          <tr>
+            <td style="padding:20px;background-color:{{healthScore.color}};color:#ffffff;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="padding:0;">
+                    <h2 style="margin:0 0 10px 0;font-size:22px;font-weight:bold;">{{healthScore.status}}</h2>
+                    <p style="margin:0 0 15px 0;font-size:16px;line-height:1.4;">{{healthScore.summary}}</p>
+                    {{#if healthScore.bullets}}
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                      {{#each healthScore.bullets}}
+                      <tr>
+                        <td style="padding:4px 0;font-size:14px;line-height:1.5;">{{this}}</td>
+                      </tr>
+                      {{/each}}
+                    </table>
+                    {{/if}}
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          {{/if}}
+
+          <!-- Performance vs Benchmarks -->
+          {{#if benchmarks}}
+          <tr>
+            <td style="padding:0 20px 20px 20px;">
+              <h3 style="margin:0 0 15px 0;font-size:18px;color:#333;border-bottom:2px solid #e9ecef;padding-bottom:8px;">📊 Performance vs Benchmarks</h3>
+              <table width="100%" cellpadding="8" cellspacing="0" border="0" style="border:1px solid #ddd;">
+                <tr style="background-color:#f2f2f2;">
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;width:30%;">Metric</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;width:25%;">Current</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;width:25%;">3-Week Avg</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;width:20%;">Change</th>
+                </tr>
+                <tr>
+                  <td style="border:1px solid #ddd;padding:12px;font-weight:bold;">Open Rate</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber visual.openRate.value}}%</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber visual.openRate.benchmark}}%</td>
+                  <td style="border:1px solid #ddd;padding:12px;color:{{visual.openRate.color}};font-weight:bold;">
+                    {{visual.openRate.arrow}} {{visual.openRate.deltaSign}}{{formatNumber visual.openRate.deltaAbs}}%
+                  </td>
+                </tr>
+                <tr>
+                  <td style="border:1px solid #ddd;padding:12px;font-weight:bold;">Click Rate (CTR)</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber visual.ctr.value}}%</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber visual.ctr.benchmark}}%</td>
+                  <td style="border:1px solid #ddd;padding:12px;color:{{visual.ctr.color}};font-weight:bold;">
+                    {{visual.ctr.arrow}} {{visual.ctr.deltaSign}}{{formatNumber visual.ctr.deltaAbs}}%
+                  </td>
+                </tr>
+                <tr>
+                  <td style="border:1px solid #ddd;padding:12px;font-weight:bold;">Bounce Rate</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber visual.bounceRate.value}}%</td>
+                  <td style="border:1px solid #ddd;padding:12px;">Target: {{formatNumber benchmarks.bounceRateTarget}}%</td>
+                  <td style="border:1px solid #ddd;padding:12px;color:{{visual.bounceRate.color}};font-weight:bold;">
+                    {{visual.bounceRateStatus.text}}
+                  </td>
+                </tr>
+                <tr>
+                  <td style="border:1px solid #ddd;padding:12px;font-weight:bold;">Growth Rate</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber visual.growthRate.value}}%</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber visual.growthRate.benchmark}}%</td>
+                  <td style="border:1px solid #ddd;padding:12px;color:{{visual.growthRate.color}};font-weight:bold;">
+                    {{visual.growthRate.arrow}} {{visual.growthRate.deltaSign}}{{formatNumber visual.growthRate.deltaAbs}}%
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          {{/if}}
+
+          <!-- Last 4 Issues Trend -->
+          {{#if trends.hasData}}
+          <tr>
+            <td style="padding:0 20px 20px 20px;">
+              <h3 style="margin:0 0 15px 0;font-size:18px;color:#333;border-bottom:2px solid #e9ecef;padding-bottom:8px;">📈 Last 4 Issues Trend</h3>
+              <table width="100%" cellpadding="8" cellspacing="0" border="0" style="border:1px solid #ddd;">
+                <tr style="background-color:#f2f2f2;">
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;">Issue</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;">Date</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;">Open Rate</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;">CTR</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;">Clicks</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;">Subscribers</th>
+                </tr>
+                {{#each trends.rows}}
+                <tr>
+                  <td style="border:1px solid #ddd;padding:12px;">{{this.issueName}}</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{this.date}}</td>
+                  <td style="border:1px solid #ddd;padding:12px;{{#if this.openRate.isBest}}font-weight:bold;color:#28a745;{{/if}}">{{formatNumber this.openRate.value}}%</td>
+                  <td style="border:1px solid #ddd;padding:12px;{{#if this.ctr.isBest}}font-weight:bold;color:#28a745;{{/if}}">{{formatNumber this.ctr.value}}%</td>
+                  <td style="border:1px solid #ddd;padding:12px;{{#if this.clicks.isBest}}font-weight:bold;color:#28a745;{{/if}}">{{formatNumber this.clicks.value}}</td>
+                  <td style="border:1px solid #ddd;padding:12px;{{#if this.subscribers.isBest}}font-weight:bold;color:#28a745;{{/if}}">{{formatNumber this.subscribers.value}}</td>
+                </tr>
+                {{/each}}
+                {{#if trends.rolling3Avg}}
+                <tr style="background-color:#f8f9fa;font-weight:bold;border-top:2px solid #333;">
+                  <td colspan="2" style="border:1px solid #ddd;padding:12px;">4-Issue Average</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber trends.rolling3Avg.openRate}}%</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber trends.rolling3Avg.ctr}}%</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber trends.rolling3Avg.clicks}}</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber trends.rolling3Avg.subscribers}}</td>
+                </tr>
+                {{/if}}
+              </table>
+            </td>
+          </tr>
+          {{/if}}
+
+          <!-- List Health & Deliverability -->
+          {{#if listHealth}}
+          <tr>
+            <td style="padding:0 20px 20px 20px;">
+              <h3 style="margin:0 0 15px 0;font-size:18px;color:#333;border-bottom:2px solid #e9ecef;padding-bottom:8px;">📋 List Health & Deliverability</h3>
+              <table width="100%" cellpadding="8" cellspacing="0" border="0" style="border:1px solid #ddd;">
+                <tr style="background-color:#f2f2f2;">
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;width:40%;">Metric</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;width:30%;">Value</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;width:30%;">Status</th>
+                </tr>
+                <tr>
+                  <td style="border:1px solid #ddd;padding:12px;font-weight:bold;">Deliverability Rate</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber listHealth.deliverabilityRate}}%</td>
+                  <td style="border:1px solid #ddd;padding:12px;">
+                    <span style="color:{{#if listHealth.deliverabilityStatus.isExcellent}}#28a745{{else}}#f0ad4e{{/if}};font-weight:bold;">{{listHealth.deliverabilityStatus.text}}</span>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="border:1px solid #ddd;padding:12px;font-weight:bold;">Bounce Rate</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber currentMetrics.bounceRate}}%</td>
+                  <td style="border:1px solid #ddd;padding:12px;color:{{listHealth.color}};font-weight:bold;">
+                    {{listHealth.bounceRateStatus}}
+                  </td>
+                </tr>
+                <tr>
+                  <td style="border:1px solid #ddd;padding:12px;font-weight:bold;">Cleaned Addresses</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber currentMetrics.cleaned}} ({{formatNumber listHealth.cleanedPct}}%)</td>
+                  <td style="border:1px solid #ddd;padding:12px;">
+                    <span style="color:#28a745;font-weight:bold;">✓ Cleaned</span>
+                  </td>
+                </tr>
+              </table>
+              <div style="margin-top:15px;padding:12px;background-color:#f8f9fa;border-left:4px solid {{listHealth.color}};font-style:italic;color:#555;">
+                {{listHealth.healthSummary}}
+              </div>
+            </td>
+          </tr>
+          {{/if}}
+
+          <!-- Engagement Quality -->
+          {{#if engagementQuality}}
+          <tr>
+            <td style="padding:0 20px 20px 20px;">
+              <h3 style="margin:0 0 15px 0;font-size:18px;color:#333;border-bottom:2px solid #e9ecef;padding-bottom:8px;">⚡ Engagement Quality</h3>
+              <table width="100%" cellpadding="8" cellspacing="0" border="0" style="border:1px solid #ddd;">
+                <tr style="background-color:#f2f2f2;">
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;width:50%;">Metric</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;width:50%;">Value</th>
+                </tr>
+                <tr>
+                  <td style="border:1px solid #ddd;padding:12px;font-weight:bold;">Clicks per Opener</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber engagementQuality.clicksPerOpener}}</td>
+                </tr>
+                <tr>
+                  <td style="border:1px solid #ddd;padding:12px;font-weight:bold;">Clicks per Subscriber</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber engagementQuality.clicksPerSubscriber}}</td>
+                </tr>
+                {{#if engagementQuality.opensFirst1hPct}}
+                <tr>
+                  <td style="border:1px solid #ddd;padding:12px;font-weight:bold;">Opens in First Hour</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber engagementQuality.opensFirst1hPct}}%</td>
+                </tr>
+                <tr>
+                  <td style="border:1px solid #ddd;padding:12px;font-weight:bold;">Opens in First 6 Hours</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber engagementQuality.opensFirst6hPct}}%</td>
+                </tr>
+                {{else}}
+                <tr>
+                  <td colspan="2" style="border:1px solid #ddd;padding:12px;text-align:center;color:#666;font-style:italic;">
+                    Time-based tracking data collecting...
+                  </td>
+                </tr>
+                {{/if}}
+              </table>
+            </td>
+          </tr>
+          {{/if}}
+
+          <!-- Key Metrics -->
+          <tr>
+            <td style="padding:0 20px 20px 20px;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="padding:15px;background-color:#f8f9fa;border:1px solid #e9ecef;text-align:center;width:25%;">
+                    <div style="font-size:12px;color:#666;letter-spacing:1px;margin-bottom:5px;">Open Rate</div>
+                    <div style="font-size:24px;font-weight:bold;color:#333;">{{formatNumber currentMetrics.openRate}}%</div>
+                    {{#if wowDeltas.openRateWoW}}
+                    <div style="font-size:14px;margin-top:5px;color:{{wowDeltas.openRateWoW.color}};">
+                      {{wowDeltas.openRateWoW.arrow}} {{wowDeltas.openRateWoW.sign}}{{formatNumber wowDeltas.openRateWoW.value}}% WoW
+                    </div>
+                    {{/if}}
+                  </td>
+                  <td style="padding:15px;background-color:#f8f9fa;border:1px solid #e9ecef;text-align:center;width:25%;">
+                    <div style="font-size:12px;color:#666;letter-spacing:1px;margin-bottom:5px;">Click Rate (CTR)</div>
+                    <div style="font-size:24px;font-weight:bold;color:#333;">{{formatNumber currentMetrics.clickThroughRate}}%</div>
+                    {{#if wowDeltas.ctrWoW}}
+                    <div style="font-size:14px;margin-top:5px;color:{{wowDeltas.ctrWoW.color}};">
+                      {{wowDeltas.ctrWoW.arrow}} {{wowDeltas.ctrWoW.sign}}{{formatNumber wowDeltas.ctrWoW.value}}% WoW
+                    </div>
+                    {{/if}}
+                  </td>
+                  <td style="padding:15px;background-color:#f8f9fa;border:1px solid #e9ecef;text-align:center;width:25%;">
+                    <div style="font-size:12px;color:#666;letter-spacing:1px;margin-bottom:5px;">Click-to-Open (CTOR)</div>
+                    <div style="font-size:24px;font-weight:bold;color:#333;">{{formatNumber currentMetrics.clickToOpenRate}}%</div>
+                    <div style="font-size:11px;color:#999;margin-top:5px;">% of openers who clicked</div>
+                  </td>
+                  <td style="padding:15px;background-color:#f8f9fa;border:1px solid #e9ecef;text-align:center;width:25%;">
+                    <div style="font-size:12px;color:#666;letter-spacing:1px;margin-bottom:5px;">Growth Rate</div>
+                    <div style="font-size:24px;font-weight:bold;color:{{currentMetrics.growthRateColor}};">
+                      {{formatNumber currentMetrics.growthRate}}%
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Engagement Insights -->
+          <tr>
+            <td style="padding:0 20px 20px 20px;">
+              <h3 style="margin:0 0 15px 0;font-size:18px;color:#333;border-bottom:2px solid #e9ecef;padding-bottom:8px;">⚡ Engagement Insights</h3>
+              <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="padding:15px;background-color:#f8f9fa;border:1px solid #e9ecef;text-align:center;width:33%;">
+                    <div style="font-size:12px;color:#666;letter-spacing:1px;margin-bottom:5px;">Unique Opens</div>
+                    <div style="font-size:20px;font-weight:bold;color:#333;">{{formatNumber currentMetrics.uniqueOpens}}</div>
+                  </td>
+                  <td style="padding:15px;background-color:#f8f9fa;border:1px solid #e9ecef;text-align:center;width:33%;">
+                    <div style="font-size:12px;color:#666;letter-spacing:1px;margin-bottom:5px;">Re-opens</div>
+                    <div style="font-size:20px;font-weight:bold;color:#333;">{{formatNumber currentMetrics.reopens}}</div>
+                  </td>
+                  <td style="padding:15px;background-color:#f8f9fa;border:1px solid #e9ecef;text-align:center;width:33%;">
+                    <div style="font-size:12px;color:#666;letter-spacing:1px;margin-bottom:5px;">Avg Time to Open</div>
+                    <div style="font-size:20px;font-weight:bold;color:#333;">{{formatTimeToOpen currentMetrics.avgTimeToOpen}}</div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Engagement Velocity -->
+          <tr>
+            <td style="padding:0 20px 20px 20px;">
+              <h3 style="margin:0 0 15px 0;font-size:18px;color:#333;border-bottom:2px solid #e9ecef;padding-bottom:8px;">🚀 Engagement Velocity</h3>
+              <table width="100%" cellpadding="8" cellspacing="0" border="0" style="border:1px solid #ddd;">
+                <tr style="background-color:#f2f2f2;">
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;">Time Period</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;">Opens</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;">% of Total</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;">Visual</th>
+                </tr>
+                {{#each engagement.velocityRows}}
+                <tr>
+                  <td style="border:1px solid #ddd;padding:12px;">{{this.label}}</td>
+                  <td style="border:1px solid #ddd;padding:12px;font-weight:bold;">{{formatNumber this.value}}</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{this.percentage}}%</td>
+                  <td style="border:1px solid #ddd;padding:12px;">
+                    <div style="background-color:{{this.color}};height:20px;width:{{this.barWidth}}%;min-width:2px;"></div>
+                  </td>
+                </tr>
+                {{/each}}
+              </table>
+            </td>
+          </tr>
+
+          <!-- Time to Open Distribution -->
+          {{#if engagement.timeToOpenRows}}
+          <tr>
+            <td style="padding:0 20px 20px 20px;">
+              <h3 style="margin:0 0 15px 0;font-size:18px;color:#333;border-bottom:2px solid #e9ecef;padding-bottom:8px;">⏱️ Time to Open Distribution</h3>
+              <table width="100%" cellpadding="8" cellspacing="0" border="0" style="border:1px solid #ddd;">
+                <tr style="background-color:#f2f2f2;">
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;">Time Range</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;">Opens</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;">% of Total</th>
+                </tr>
+                {{#each engagement.timeToOpenRows}}
+                <tr>
+                  <td style="border:1px solid #ddd;padding:12px;">{{this.label}}</td>
+                  <td style="border:1px solid #ddd;padding:12px;font-weight:bold;">{{formatNumber this.value}}</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{this.percentage}}%</td>
+                </tr>
+                {{/each}}
+              </table>
+            </td>
+          </tr>
+          {{/if}}
+
+          <!-- Device and Client Breakdown -->
+          {{#if engagement.hasDeviceData}}
+          <tr>
+            <td style="padding:0 20px 20px 20px;">
+              <h3 style="margin:0 0 15px 0;font-size:18px;color:#333;border-bottom:2px solid #e9ecef;padding-bottom:8px;">📱 Device & Client Breakdown</h3>
+              <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  {{#if engagement.hasDeviceData}}
+                  <td style="width:50%;padding-right:10px;vertical-align:top;">
+                    <h4 style="margin:0 0 10px 0;font-size:14px;color:#666;">Devices</h4>
+                    <table width="100%" cellpadding="8" cellspacing="0" border="0" style="border:1px solid #ddd;">
+                      <tr style="background-color:#f2f2f2;">
+                        <th style="border:1px solid #ddd;padding:12px;text-align:left;">Device</th>
+                        <th style="border:1px solid #ddd;padding:12px;text-align:left;">Opens</th>
+                        <th style="border:1px solid #ddd;padding:12px;text-align:left;">%</th>
+                      </tr>
+                      {{#each engagement.deviceRows}}
+                      <tr>
+                        <td style="border:1px solid #ddd;padding:12px;">{{this.name}}</td>
+                        <td style="border:1px solid #ddd;padding:12px;font-weight:bold;">{{formatNumber this.value}}</td>
+                        <td style="border:1px solid #ddd;padding:12px;">{{this.percentage}}%</td>
+                      </tr>
+                      {{/each}}
+                    </table>
+                  </td>
+                  {{/if}}
+                  {{#if engagement.hasClientData}}
+                  <td style="width:50%;padding-left:10px;vertical-align:top;">
+                    <h4 style="margin:0 0 10px 0;font-size:14px;color:#666;">Email Clients</h4>
+                    <table width="100%" cellpadding="8" cellspacing="0" border="0" style="border:1px solid #ddd;">
+                      <tr style="background-color:#f2f2f2;">
+                        <th style="border:1px solid #ddd;padding:12px;text-align:left;">Client</th>
+                        <th style="border:1px solid #ddd;padding:12px;text-align:left;">Opens</th>
+                        <th style="border:1px solid #ddd;padding:12px;text-align:left;">%</th>
+                      </tr>
+                      {{#each engagement.clientRows}}
+                      <tr>
+                        <td style="border:1px solid #ddd;padding:12px;">{{this.name}}</td>
+                        <td style="border:1px solid #ddd;padding:12px;font-weight:bold;">{{formatNumber this.value}}</td>
+                        <td style="border:1px solid #ddd;padding:12px;">{{this.percentage}}%</td>
+                      </tr>
+                      {{/each}}
+                    </table>
+                  </td>
+                  {{/if}}
+                </tr>
+              </table>
+            </td>
+          </tr>
+          {{/if}}
+
+          <!-- Subscriber Growth -->
+          <tr>
+            <td style="padding:0 20px 20px 20px;">
+              <h3 style="margin:0 0 15px 0;font-size:18px;color:#333;border-bottom:2px solid #e9ecef;padding-bottom:8px;">📈 Subscriber Growth</h3>
+              <table width="100%" cellpadding="8" cellspacing="0" border="0" style="border:1px solid #ddd;">
+                <tr style="background-color:#f2f2f2;">
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;">Current</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;">Last Week</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;">New (est.)</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;">Unsubscribed</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;">Cleaned</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;">Net Change</th>
+                </tr>
+                <tr>
+                  <td style="border:1px solid #ddd;padding:12px;font-weight:bold;">
+                    {{formatNumber currentMetrics.subscribers}}
+                    {{#if wowDeltas.subscribersWoW}}
+                    <div style="font-size:12px;margin-top:3px;color:{{wowDeltas.subscribersWoW.color}};">
+                      {{wowDeltas.subscribersWoW.arrow}} {{wowDeltas.subscribersWoW.sign}}{{formatNumber wowDeltas.subscribersWoW.value}} WoW
+                    </div>
+                    {{/if}}
+                  </td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber previousMetrics.subscribers}}</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber engagement.newSubscribers}}</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber currentMetrics.unsubscribes}}</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber currentMetrics.cleaned}}</td>
+                  <td style="border:1px solid #ddd;padding:12px;color:{{engagement.netGrowthColor}};font-weight:bold;">
+                    {{engagement.netGrowthSign}}{{formatNumber engagement.netGrowth}}
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Content Performance -->
+          {{#if content.hasLinks}}
+          <tr>
+            <td style="padding:0 20px 20px 20px;">
+              <h3 style="margin:0 0 15px 0;font-size:18px;color:#333;border-bottom:2px solid #e9ecef;padding-bottom:8px;">🔗 Content Performance</h3>
+
+              <!-- Subject Line -->
+              {{#if content.hasSubjectLine}}
+              <div style="margin-bottom:15px;padding:12px;background-color:#f8f9fa;border-left:4px solid #4a90e2;">
+                <div style="font-size:12px;color:#666;letter-spacing:1px;margin-bottom:5px;">SUBJECT LINE</div>
+                <div style="font-size:16px;font-weight:bold;color:#333;">{{content.subjectLine}}</div>
+              </div>
+              {{/if}}
+
+              <!-- Click Distribution Summary -->
+              {{#if contentPerformance}}
+              <div style="margin-bottom:15px;">
+                <h4 style="margin:0 0 10px 0;font-size:14px;color:#666;">Click Distribution</h4>
+                <table width="100%" cellpadding="8" cellspacing="0" border="0" style="border:1px solid #ddd;">
+                  <tr style="background-color:#f2f2f2;">
+                    <th style="border:1px solid #ddd;padding:12px;text-align:left;width:40%;">Metric</th>
+                    <th style="border:1px solid #ddd;padding:12px;text-align:left;width:30%;">Value</th>
+                    <th style="border:1px solid #ddd;padding:12px;text-align:left;width:30%;">Interpretation</th>
+                  </tr>
+                  <tr>
+                    <td style="border:1px solid #ddd;padding:12px;font-weight:bold;">Concentration Level</td>
+                    <td style="border:1px solid #ddd;padding:12px;" colspan="2">
+                      <span style="font-weight:bold;color:#4a90e2;">{{contentPerformance.concentration}}</span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="border:1px solid #ddd;padding:12px;font-weight:bold;">Top Link Share</td>
+                    <td style="border:1px solid #ddd;padding:12px;">{{formatNumber contentPerformance.topLinkPct}}%</td>
+                    <td style="border:1px solid #ddd;padding:12px;font-size:12px;color:#666;">
+                      {{contentPerformance.interpretations.topLinkInterpretation}}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="border:1px solid #ddd;padding:12px;font-weight:bold;">Top 3 Links Share</td>
+                    <td style="border:1px solid #ddd;padding:12px;">{{formatNumber contentPerformance.top3Pct}}%</td>
+                    <td style="border:1px solid #ddd;padding:12px;font-size:12px;color:#666;">
+                      {{contentPerformance.interpretations.top3Interpretation}}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="border:1px solid #ddd;padding:12px;font-weight:bold;">Long-Tail Clicks</td>
+                    <td style="border:1px solid #ddd;padding:12px;">{{formatNumber contentPerformance.longTailPct}}%</td>
+                    <td style="border:1px solid #ddd;padding:12px;font-size:12px;color:#666;">
+                      {{contentPerformance.interpretations.longTailInterpretation}}
+                    </td>
+                  </tr>
+                </table>
+              </div>
+              {{/if}}
+
+              <!-- All Links -->
+              <div>
+                <h4 style="margin:0 0 10px 0;font-size:14px;color:#666;">Link Performance</h4>
+                <table width="100%" cellpadding="8" cellspacing="0" border="0" style="border:1px solid #ddd;">
+                  <tr style="background-color:#f2f2f2;">
+                    <th style="border:1px solid #ddd;padding:12px;text-align:left;">Link</th>
+                    <th style="border:1px solid #ddd;padding:12px;text-align:left;">Clicks</th>
+                    <th style="border:1px solid #ddd;padding:12px;text-align:left;">% of Total</th>
+                  </tr>
+                  {{#each content.links}}
+                  <tr>
+                    <td style="border:1px solid #ddd;padding:12px;word-break:break-all;">{{this.link}}</td>
+                    <td style="border:1px solid #ddd;padding:12px;font-weight:bold;">{{formatNumber this.count}}</td>
+                    <td style="border:1px solid #ddd;padding:12px;">{{this.percentage}}%</td>
+                  </tr>
+                  {{/each}}
+                </table>
+              </div>
+            </td>
+          </tr>
+          {{/if}}
+
+          <!-- Raw Metrics -->
+          <tr>
+            <td style="padding:0 20px 20px 20px;">
+              <h3 style="margin:0 0 15px 0;font-size:18px;color:#333;border-bottom:2px solid #e9ecef;padding-bottom:8px;">📋 Raw Metrics</h3>
+              <table width="100%" cellpadding="8" cellspacing="0" border="0" style="border:1px solid #ddd;">
+                <tr style="background-color:#f2f2f2;">
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;">Delivered</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;">Opens</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;">Bounces</th>
+                  <th style="border:1px solid #ddd;padding:12px;text-align:left;">Clicks</th>
+                </tr>
+                <tr>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber currentMetrics.delivered}}</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber currentMetrics.uniqueOpens}}</td>
+                  <td style="border:1px solid #ddd;padding:12px;">{{formatNumber currentMetrics.bounces}}</td>
+                  <td style="border:1px solid #ddd;padding:12px;">
+                    {{formatNumber currentMetrics.clicks}}
+                    {{#if wowDeltas.clicksWoW}}
+                    <div style="font-size:12px;margin-top:3px;color:{{wowDeltas.clicksWoW.color}};">
+                      {{wowDeltas.clicksWoW.arrow}} {{wowDeltas.clicksWoW.sign}}{{formatNumber wowDeltas.clicksWoW.value}} WoW
+                    </div>
+                    {{/if}}
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding:20px;text-align:center;border-top:1px solid #e9ecef;color:#666;font-size:14px;">
+              <p style="margin:0;">Generated on {{generatedDate}} • Ready, Set, Cloud Newsletter Analytics</p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

@@ -104,8 +104,7 @@ const setupIssueStats = async (tenant, slug) => {
     Item: marshall({
       pk: `${tenant.pk}#${slug}`,
       sk: 'stats',
-      totalOpens: 0,
-      uniqueOpens: 0,
+      opens: 0,
       bounces: 0,
       rejects: 0,
       complaints: 0,

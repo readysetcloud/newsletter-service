@@ -35,8 +35,8 @@ export const handler = async (event) => {
         stat = 'complaints';
         break;
       case 'open':
-        stat = 'opens';
-        await trackUniqueOpen(issueId, detail.mail.destination[0]);
+        const isReopen = await trackUniqueOpen(issueId, detail.mail.destination[0], detail.open);
+        stat = isReopen ? 'reopens' : 'opens';
         break;
       case 'click':
         stat = 'clicks';
@@ -74,16 +74,40 @@ export const handler = async (event) => {
   }
 };
 
-const trackUniqueOpen = async (issueId, emailAddress) => {
-  await ddb.send(new PutItemCommand({
-    TableName: process.env.TABLE_NAME,
-    Item: marshall({
-      pk: issueId,
-      sk: `opens#${emailAddress}`,
-      createdAt: new Date().toISOString(),
-      ttl: Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60)
-    })
-  }));
+const trackUniqueOpen = async (issueId, emailAddress, openEvent) => {
+  const timestamp = new Date().toISOString();
+  const item = {
+    pk: issueId,
+    sk: `opens#${emailAddress}`,
+    createdAt: timestamp,
+    ttl: Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60)
+  };
+
+  if (openEvent?.userAgent) {
+    item.userAgent = openEvent.userAgent;
+  }
+
+  if (openEvent?.ipAddress) {
+    item.ipAddress = openEvent.ipAddress;
+  }
+
+  if (openEvent?.timestamp) {
+    item.openedAt = openEvent.timestamp;
+  }
+
+  try {
+    await ddb.send(new PutItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Item: marshall(item),
+      ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)'
+    }));
+    return false;
+  } catch (err) {
+    if (err.name === 'ConditionalCheckFailedException') {
+      return true;
+    }
+    throw err;
+  }
 };
 
 const trackLinkClick = async (issueId, link, ipAddress) => {

@@ -66,7 +66,7 @@ export const converse = async (model, systemPrompt, userPrompt, toolDefs, option
             if (options?.tenantId && tool.isMultiTenant) {
               const context = {
                 tenantId: options.tenantId,
-                userId: options.userId
+                ...options.userId && { userId: options.userId }
               };
               toolResult = await tool.handler(context, toolInput);
             } else {

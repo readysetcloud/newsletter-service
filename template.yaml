@@ -1618,27 +1618,34 @@ Resources:
           - build-report-data.mjs
     Properties:
       Handler: build-report-data.handler
+      Timeout: 90
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: dynamodb:PutItem
-              Resource: !GetAtt NewsletterTable.Arn
+              Action:
+                - dynamodb:Query
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
 
-  GetInsightsFunction:
+  GenerateInsightsFunction:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
         <<: *esbuild-properties
         EntryPoints:
-          - get-insights.mjs
+          - ai/generate-insights.mjs
     Properties:
-      Handler: get-insights.handler
+      Handler: ai/generate-insights.handler
+      Timeout: 90
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -1646,6 +1653,12 @@ Resources:
             - Effect: Allow
               Action: dynamodb:Query
               Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}/index/GSI1
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
               Action: bedrock:InvokeModel
               Resource:
@@ -1655,6 +1668,25 @@ Resources:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
           MODEL_ID: us.amazon.nova-pro-v1:0
+
+  CompileReportFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - compile-report.mjs
+    Properties:
+      Handler: compile-report.handler
+      Timeout: 30
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
 
   GenerateSocialPostFunction:
     Type: AWS::Serverless::Function
@@ -1946,7 +1978,8 @@ Resources:
         LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
         GetTopLinks: !GetAtt GetTopLinkFunction.Arn
         BuildReportData: !GetAtt BuildReportDataFunction.Arn
-        GetInsights: !GetAtt GetInsightsFunction.Arn
+        GenerateInsights: !GetAtt GenerateInsightsFunction.Arn
+        CompileReport: !GetAtt CompileReportFunction.Arn
         DynamodbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
 
@@ -1967,7 +2000,8 @@ Resources:
               Resource:
                 - !GetAtt GetTopLinkFunction.Arn
                 - !GetAtt BuildReportDataFunction.Arn
-                - !GetAtt GetInsightsFunction.Arn
+                - !GetAtt GenerateInsightsFunction.Arn
+                - !GetAtt CompileReportFunction.Arn
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default

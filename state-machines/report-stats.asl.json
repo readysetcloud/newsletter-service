@@ -148,13 +148,12 @@
           }
         }
       ],
-      "Next": "Build Email Report",
+      "Next": "Build Report Data",
       "ResultPath": "$.data"
     },
-    "Build Email Report": {
+    "Build Report Data": {
       "Type": "Task",
       "Resource": "${LambdaInvoke}",
-      "OutputPath": "$.Payload",
       "Parameters": {
         "FunctionName": "${BuildReportData}",
         "Payload": {
@@ -162,7 +161,9 @@
           "issue.$": "$.Items[0].pk.S",
           "subscribers.$": "$.data[2].Item.subscribers.N",
           "priorSubscribers.$": "$.data[3].Items[0].count.S",
-          "links.$": "$.data[1].links"
+          "links.$": "$.data[1].links",
+          "sentDate.$": "$.Items[0].GSI1SK.S",
+          "subjectLine.$": "$.Items[0].subject.S"
         }
       },
       "Retry": [
@@ -178,18 +179,19 @@
           "BackoffRate": 2
         }
       ],
-      "Next": "Update With Insights"
+      "ResultPath": "$.reportData",
+      "Next": "Generate Insights"
     },
-    "Update With Insights": {
+    "Generate Insights": {
       "Type": "Task",
       "Resource": "${LambdaInvoke}",
-      "ResultPath": "$.updated",
       "Parameters": {
-        "FunctionName": "${GetInsights}",
+        "FunctionName": "${GenerateInsights}",
         "Payload": {
-          "issue.$": "$.issue",
-          "report.$": "$.html",
-          "insightData.$": "$.insightData"
+          "issueId.$": "$$.Execution.Input.issueId",
+          "tenantId.$": "$$.Execution.Input.tenant.id",
+          "insightData.$": "$.reportData.Payload.insightData",
+          "subjectLine.$": "$.Items[0].subject.S"
         }
       },
       "Retry": [
@@ -205,27 +207,37 @@
           "BackoffRate": 2
         }
       ],
-      "Next": "Send Update Email"
+      "ResultPath": "$.insights",
+      "Next": "Compile And Send Report"
     },
-    "Send Update Email": {
+    "Compile And Send Report": {
       "Type": "Task",
-      "Resource": "${EventBridgePutEvents}",
+      "Resource": "${LambdaInvoke}",
+      "OutputPath": "$.Payload",
       "Parameters": {
-        "Entries": [
-          {
-            "Detail": {
-              "subject.$": "$.subject",
-              "to": {
-                "email.$": "$$.Execution.Input.tenant.email"
-              },
-              "html.$": "$.updated.Payload.html",
-              "tenantId.$": "$$.Execution.Input.tenant.id"
-            },
-            "DetailType": "Send Email v2",
-            "Source": "newsletter-service"
-          }
-        ]
+        "FunctionName": "${CompileReport}",
+        "Payload": {
+          "insightData.$": "$.reportData.Payload.insightData",
+          "insights.$": "$.insights.Payload.insights",
+          "subject.$": "$.reportData.Payload.subject",
+          "tenantId.$": "$$.Execution.Input.tenant.id",
+          "recipientEmail.$": "$$.Execution.Input.tenant.email",
+          "issueId.$": "$$.Execution.Input.issueId"
+        }
       },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
       "End": true
     }
   }

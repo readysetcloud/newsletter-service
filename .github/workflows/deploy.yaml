@@ -38,7 +38,7 @@ jobs:
           npm ci
 
           sam --info
-          sam build --parallel
+          sam build --parallel --beta-features
 
           sam deploy \
           --stack-name newsletter-service \

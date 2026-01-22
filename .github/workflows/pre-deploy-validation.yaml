@@ -38,3 +38,23 @@ jobs:
           cargo test --manifest-path functions/auth-rust/cognito-pre-token-generation/Cargo.toml
           cargo test --manifest-path functions/auth-rust/lambda-authorizer/Cargo.toml
           cargo test --manifest-path functions/auth-rust/refresh-momento-token/Cargo.toml
+
+  rust-lint:
+    name: Rust Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Rust Format
+        run: |
+          cargo fmt --manifest-path functions/admin-rust/Cargo.toml --all -- --check
+      - name: Rust Clippy
+        run: |
+          cargo clippy --manifest-path functions/admin-rust/Cargo.toml --all-targets --all-features -- -D warnings
+          cargo clippy --manifest-path functions/auth-rust/cognito-post-confirmation/Cargo.toml --all-targets --all-features -- -D warnings
+          cargo clippy --manifest-path functions/auth-rust/cognito-pre-token-generation/Cargo.toml --all-targets --all-features -- -D warnings
+          cargo clippy --manifest-path functions/auth-rust/lambda-authorizer/Cargo.toml --all-targets --all-features -- -D warnings
+          cargo clippy --manifest-path functions/auth-rust/refresh-momento-token/Cargo.toml --all-targets --all-features -- -D warnings

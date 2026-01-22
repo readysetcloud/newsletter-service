@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = [
+    "get-profile",
+    "update-profile",
+    "manage-api-keys",
+    "check-brand-id",
+    "update-brand",
+    "upload-brand-photo",
+    "add-user-to-group",
+    "unsubscribe-log-processor",
+    "shared"
+]
+
+[workspace.dependencies]
+lambda_runtime = "0.13"
+lambda_http = "0.13"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-dynamodb = "1"
+aws-sdk-cognitoidentityprovider = "1"
+aws-sdk-s3 = "1"
+aws-sdk-cloudwatchlogs = "1"
+aws-sdk-sesv2 = "1"
+aws-sdk-eventbridge = "1"
+aws-smithy-types = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+thiserror = "1"
+chrono = { version = "0.4", features = ["serde"] }
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.22"
+hex = "0.4"
+proptest = "1"
+regex = "1"

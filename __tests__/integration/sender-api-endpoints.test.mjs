@@ -37,10 +37,6 @@ const mockMomentoClient = {
   publishNotification: jest.fn(() => Promise.resolve())
 };
 
-jest.unstable_mockModule('../../functions/utils/momento-client.mjs', () => ({
-  momentoClient: mockMomentoClient
-}));
-
 // Import handlers after mocking
 const { handler: getSendersHandler } = await import('../../functions/senders/get-senders.mjs');
 const { handler: createSenderHandler } = await import('../../functions/senders/create-sender.mjs');

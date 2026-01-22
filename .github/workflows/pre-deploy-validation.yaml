@@ -23,3 +23,18 @@ jobs:
         run: |
           npm ci
           npm run coverage
+
+  rust-tests:
+    name: Run Rust Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Rust Tests
+        run: |
+          cargo test --manifest-path functions/admin-rust/Cargo.toml
+          cargo test --manifest-path functions/auth-rust/cognito-post-confirmation/Cargo.toml
+          cargo test --manifest-path functions/auth-rust/cognito-pre-token-generation/Cargo.toml
+          cargo test --manifest-path functions/auth-rust/lambda-authorizer/Cargo.toml
+          cargo test --manifest-path functions/auth-rust/refresh-momento-token/Cargo.toml

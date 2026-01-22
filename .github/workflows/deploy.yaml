@@ -45,4 +45,4 @@ jobs:
           --resolve-s3 \
           --no-fail-on-empty-changeset \
           --capabilities CAPABILITY_IAM \
-          --parameter-overrides Environment=production EncryptionKey=${{secrets.ENCRYPTION_KEY}} MomentoCacheName=newsletter MomentoApiKey=${{secrets.MOMENTO_API_KEY}} RedirectCustomDomain=rdyset.click VerifiedFromEmail=${{vars.VERIFIED_FROM_EMAIL}}
+          --parameter-overrides Environment=production EncryptionKey=${{secrets.ENCRYPTION_KEY}} RedirectCustomDomain=rdyset.click VerifiedFromEmail=${{vars.VERIFIED_FROM_EMAIL}}

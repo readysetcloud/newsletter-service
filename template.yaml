@@ -71,9 +71,12 @@ Conditions:
   HasVerifiedFromEmail: !Not [!Equals [!Ref VerifiedFromEmail, ""]]
 
 Globals:
+  Api:
+    Cors:
+      AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+      AllowHeaders: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
+      AllowOrigin: !Sub "'${Origin}'"
   Function:
-    Runtime: nodejs22.x
-    CodeUri: functions
     Architectures:
       - arm64
     Tracing: Active
@@ -81,18 +84,10 @@ Globals:
     MemorySize: 1024
     Environment:
       Variables:
-        AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
-        SECRET_ID: "{{resolve:ssm:/readysetcloud/secrets}}"
+        TABLE_NAME: !Ref NewsletterTable
         ORIGIN: !Ref Origin
-        MOMENTO_API_KEY: !Ref MomentoApiKey
-        MOMENTO_CACHE_NAME: !Ref MomentoCacheName
-        EVENT_BUS_NAME: newsletter-events
-  Api:
-    Cors:
-      AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
-      AllowHeaders: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
-      AllowOrigin: !Sub "'${Origin}'"
-
+        RUST_LOG: info
+        RUST_BACKTRACE: "1"
 Resources:
   NewsletterUserPool:
     Type: AWS::Cognito::UserPool
@@ -708,6 +703,8 @@ Resources:
         EntryPoints:
           - add-update-tenant.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: add-update-tenant.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -721,7 +718,7 @@ Resources:
               Resource: "*"
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
       Events:
         CreationEvent:
           Type: EventBridgeRule
@@ -735,13 +732,13 @@ Resources:
   CognitoPostConfirmationFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - auth/cognito-post-confirmation.mjs
+        Binary: cognito-post-confirmation
     Properties:
-      Handler: auth/cognito-post-confirmation.handler
+      CodeUri: functions/auth-rust/cognito-post-confirmation
+      Handler: bootstrap
+      Runtime: provided.al2023
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -759,16 +756,16 @@ Resources:
   CognitoPreTokenGenerationFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - auth/cognito-pre-token-generation.mjs
+        Binary: cognito-pre-token-generation
     Properties:
-      Handler: auth/cognito-pre-token-generation.handler
-      Timeout: 10
+      CodeUri: functions/auth-rust/cognito-pre-token-generation
+      Handler: bootstrap
+      Runtime: provided.al2023
       Environment:
         Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           TTL_HOURS: 24
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -788,13 +785,13 @@ Resources:
   AddUserToGroupFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - admin/add-user-to-group.mjs
+        Binary: add-user-to-group
     Properties:
-      Handler: admin/add-user-to-group.handler
+      CodeUri: functions/admin-rust/add-user-to-group
+      Handler: bootstrap
+      Runtime: provided.al2023
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -819,6 +816,8 @@ Resources:
         EntryPoints:
           - subscribers/add-subscriber.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: subscribers/add-subscriber.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -835,8 +834,7 @@ Resources:
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
-          ORIGIN: !Ref Origin
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
       Events:
         FromApi:
           Type: Api
@@ -856,6 +854,8 @@ Resources:
         EntryPoints:
           - subscribers/send-welcome-email.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: subscribers/send-welcome-email.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -873,8 +873,7 @@ Resources:
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
-          ORIGIN: !Ref Origin
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           ENCRYPTION_KEY: !Ref EncryptionKey
       Events:
         SubscriberAddedEvent:
@@ -895,6 +894,8 @@ Resources:
         EntryPoints:
           - subscribers/get-subscriber-stats.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: subscribers/get-subscriber-stats.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -909,7 +910,7 @@ Resources:
                 - !Sub "${NewsletterTable.Arn}/index/GSI1"
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
       Events:
         FromApi:
           Type: Api
@@ -927,6 +928,8 @@ Resources:
         EntryPoints:
           - get-dashboard-data.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: get-dashboard-data.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -941,7 +944,7 @@ Resources:
                 - !Sub "${NewsletterTable.Arn}/index/GSI1"
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
       Events:
         FromApi:
           Type: Api
@@ -953,13 +956,13 @@ Resources:
   LambdaAuthorizerFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - auth/lambda-authorizer.mjs
+        Binary: lambda-authorizer
     Properties:
-      Handler: auth/lambda-authorizer.handler
+      CodeUri: functions/auth-rust/lambda-authorizer
+      Handler: bootstrap
+      Runtime: provided.al2023
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -973,42 +976,17 @@ Resources:
         Variables:
           USER_POOL_ID: !Ref NewsletterUserPool
           USER_POOL_CLIENT_ID: !Ref NewsletterUserPoolClient
-          TABLE_NAME: !Ref NewsletterTable
-
-  RefreshMomentoTokenFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - auth/refresh-momento-token.mjs
-    Properties:
-      Handler: auth/refresh-momento-token.handler
-      Policies:
-        - AWSLambdaBasicExecutionRole
-      Environment:
-        Variables:
-          MOMENTO_API_KEY: !Ref MomentoApiKey
-          MOMENTO_CACHE_NAME: !Ref MomentoCacheName
-      Events:
-        RefreshToken:
-          Type: Api
-          Properties:
-            RestApiId: !Ref DashboardApi
-            Path: /auth/refresh-momento-token
-            Method: POST
 
   GetProfileFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - admin/get-profile.mjs
+        Binary: get-profile
     Properties:
-      Handler: admin/get-profile.handler
+      CodeUri: functions/admin-rust/get-profile
+      Handler: bootstrap
+      Runtime: provided.al2023
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -1024,7 +1002,6 @@ Resources:
       Environment:
         Variables:
           USER_POOL_ID: !Ref NewsletterUserPool
-          TABLE_NAME: !Ref NewsletterTable
       Events:
         GetMyProfile:
           Type: Api
@@ -1042,13 +1019,13 @@ Resources:
   CheckBrandIdFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - admin/check-brand-id.mjs
+        Binary: check-brand-id
     Properties:
-      Handler: admin/check-brand-id.handler
+      CodeUri: functions/admin-rust/check-brand-id
+      Handler: bootstrap
+      Runtime: provided.al2023
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -1057,9 +1034,6 @@ Resources:
               Action:
                 - dynamodb:GetItem
               Resource: !GetAtt NewsletterTable.Arn
-      Environment:
-        Variables:
-          TABLE_NAME: !Ref NewsletterTable
       Events:
         FromApi:
           Type: Api
@@ -1071,13 +1045,13 @@ Resources:
   UpdateBrandFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - admin/update-brand.mjs
+        Binary: update-brand
     Properties:
-      Handler: admin/update-brand.handler
+      CodeUri: functions/admin-rust/update-brand
+      Handler: bootstrap
+      Runtime: provided.al2023
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -1100,7 +1074,6 @@ Resources:
       Environment:
         Variables:
           USER_POOL_ID: !Ref NewsletterUserPool
-          TABLE_NAME: !Ref NewsletterTable
           HOSTING_BUCKET_NAME: !Ref HostingBucket
       Events:
         FromApi:
@@ -1119,6 +1092,8 @@ Resources:
         EntryPoints:
           - utils/s3-asset-cleanup.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: utils/s3-asset-cleanup.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -1130,6 +1105,7 @@ Resources:
               Resource: !Sub "${HostingBucket.Arn}/*"
       Environment:
         Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           HOSTING_BUCKET_NAME: !Ref HostingBucket
       Events:
         S3CleanupEvent:
@@ -1150,6 +1126,8 @@ Resources:
         EntryPoints:
           - setup-email-tenant.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: setup-email-tenant.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -1167,18 +1145,18 @@ Resources:
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
 
   UpdateProfileFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - admin/update-profile.mjs
+        Binary: update-profile
     Properties:
-      Handler: admin/update-profile.handler
+      CodeUri: functions/admin-rust/update-profile
+      Handler: bootstrap
+      Runtime: provided.al2023
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -1201,13 +1179,13 @@ Resources:
   ManageApiKeysFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - admin/manage-api-keys.mjs
+        Binary: manage-api-keys
     Properties:
-      Handler: admin/manage-api-keys.handler
+      CodeUri: functions/admin-rust/manage-api-keys
+      Handler: bootstrap
+      Runtime: provided.al2023
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -1220,10 +1198,6 @@ Resources:
                 - dynamodb:GetItem
                 - dynamodb:UpdateItem
               Resource: !GetAtt NewsletterTable.Arn
-      Environment:
-        Variables:
-          TABLE_NAME: !Ref NewsletterTable
-          ORIGIN: !Ref Origin
       Events:
         CreateApiKey:
           Type: Api
@@ -1253,13 +1227,13 @@ Resources:
   UploadBrandPhotoFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - admin/upload-brand-photo.mjs
+        Binary: upload-brand-photo
     Properties:
-      Handler: admin/upload-brand-photo.handler
+      CodeUri: functions/admin-rust/upload-brand-photo
+      Handler: bootstrap
+      Runtime: provided.al2023
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -1279,8 +1253,6 @@ Resources:
       Environment:
         Variables:
           HOSTING_BUCKET_NAME: !Ref HostingBucket
-          TABLE_NAME: !Ref NewsletterTable
-          ORIGIN: !Ref Origin
       Events:
         GenerateUploadUrl:
           Type: Api
@@ -1304,6 +1276,8 @@ Resources:
         EntryPoints:
           - subscribers/import-subscriber-list.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: subscribers/import-subscriber-list.handler
       Timeout: 900
       Policies:
@@ -1322,7 +1296,7 @@ Resources:
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
 
   ExportSubscribersFunction:
     Type: AWS::Serverless::Function
@@ -1333,8 +1307,9 @@ Resources:
         EntryPoints:
           - subscribers/export-subscribers.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: subscribers/export-subscribers.handler
-      Timeout: 300
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -1350,7 +1325,7 @@ Resources:
               Resource: !Sub "${NewsletterBucket.Arn}/reports/*"
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           BUCKET: !Ref NewsletterBucket
 
   HandleEmailStatusFunction:
@@ -1362,6 +1337,8 @@ Resources:
         EntryPoints:
           - handle-email-status.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: handle-email-status.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -1374,7 +1351,7 @@ Resources:
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
       Events:
         CreationEvent:
           Type: EventBridgeRule
@@ -1400,6 +1377,8 @@ Resources:
         EntryPoints:
           - subscribers/clean-bounced-subscribers.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: subscribers/clean-bounced-subscribers.handler
       Timeout: 60
       Policies:
@@ -1421,7 +1400,7 @@ Resources:
               Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
       Events:
         CleanBouncedEvent:
           Type: EventBridgeRule
@@ -1441,6 +1420,8 @@ Resources:
         EntryPoints:
           - setup-voting-options.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: setup-voting-options.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -1454,7 +1435,7 @@ Resources:
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           MODEL_ID: amazon.nova-pro-v1:0
 
   VoteFunction:
@@ -1466,6 +1447,8 @@ Resources:
         EntryPoints:
           - vote.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: vote.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -1479,8 +1462,7 @@ Resources:
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
-          ORIGIN: !Ref Origin
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           EMAIL_ENCRYPTION_KEY: !Ref EncryptionKey
       Events:
         FromApi:
@@ -1501,6 +1483,8 @@ Resources:
         EntryPoints:
           - subscribers/unsubscribe.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: subscribers/unsubscribe.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -1520,8 +1504,7 @@ Resources:
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
-          ORIGIN: !Ref Origin
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           EMAIL_ENCRYPTION_KEY: !Ref EncryptionKey
       Events:
         FromApi:
@@ -1542,6 +1525,8 @@ Resources:
         EntryPoints:
           - subscribers/manual-unsubscribe.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: subscribers/manual-unsubscribe.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -1561,8 +1546,7 @@ Resources:
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
-          ORIGIN: !Ref Origin
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
       Events:
         FromApi:
           Type: Api
@@ -1580,8 +1564,9 @@ Resources:
         EntryPoints:
           - subscribers/monthly-unsubscribe-cleanup.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: subscribers/monthly-unsubscribe-cleanup.handler
-      Timeout: 900  # 15 minutes for processing all tenants
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -1599,7 +1584,7 @@ Resources:
               Resource: "*"
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
       Events:
         MonthlySchedule:
           Type: Schedule
@@ -1617,8 +1602,9 @@ Resources:
         EntryPoints:
           - build-report-data.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: build-report-data.handler
-      Timeout: 90
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -1633,7 +1619,7 @@ Resources:
                 - !Sub "${NewsletterTable.Arn}/index/GSI1"
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
 
   GenerateInsightsFunction:
     Type: AWS::Serverless::Function
@@ -1644,8 +1630,9 @@ Resources:
         EntryPoints:
           - ai/generate-insights.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: ai/generate-insights.handler
-      Timeout: 90
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -1666,7 +1653,7 @@ Resources:
                 - !Sub arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/us.amazon.nova-*
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           MODEL_ID: us.amazon.nova-pro-v1:0
 
   CompileReportFunction:
@@ -1678,8 +1665,9 @@ Resources:
         EntryPoints:
           - compile-report.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: compile-report.handler
-      Timeout: 30
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -1697,8 +1685,9 @@ Resources:
         EntryPoints:
           - ai/generate-social-post.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: ai/generate-social-post.handler
-      Timeout: 60
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -1721,7 +1710,7 @@ Resources:
                 - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/amazon.nova-pro-v1:0
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           MODEL_ID: us.amazon.nova-pro-v1:0
 
   GetNextIssueDateFunction:
@@ -1733,6 +1722,8 @@ Resources:
         EntryPoints:
           - get-next-issue-date.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: get-next-issue-date.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -1743,7 +1734,7 @@ Resources:
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
 
   PublishIssueFunction:
     Type: AWS::Serverless::Function
@@ -1754,6 +1745,8 @@ Resources:
         EntryPoints:
           - publish-issue.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: publish-issue.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -1769,7 +1762,7 @@ Resources:
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
 
   SendEmailV2Function:
     Type: AWS::Serverless::Function
@@ -1780,8 +1773,9 @@ Resources:
         EntryPoints:
           - send-email-v2.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: send-email-v2.handler
-      Timeout: 900
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -1805,7 +1799,7 @@ Resources:
               Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}/index/GSI1
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           SCHEDULER_ROLE_ARN: !GetAtt SchedulerExecutionRole.Arn
           EMAIL_ENCRYPTION_KEY: !Ref EncryptionKey
           CONFIGURATION_SET: !Ref ConfigurationSet
@@ -1828,6 +1822,8 @@ Resources:
         EntryPoints:
           - parse-md-to-json.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: parse-md-to-json.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -1838,7 +1834,7 @@ Resources:
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
 
   TransformAndCallbackFunction:
     Type: AWS::Serverless::Function
@@ -1849,6 +1845,8 @@ Resources:
         EntryPoints:
           - transform-and-callback.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: transform-and-callback.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -1859,6 +1857,8 @@ Resources:
               Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
       Environment:
         Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          SECRET_ID: "{{resolve:ssm:/readysetcloud/secrets}}"
           OWNER: "{{resolve:ssm:/readysetcloud/github-owner}}"
           REPO: "{{resolve:ssm:/readysetcloud/github-repo}}"
 
@@ -1871,6 +1871,8 @@ Resources:
         EntryPoints:
           - sync-repo-data.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: sync-repo-data.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -1889,7 +1891,8 @@ Resources:
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          SECRET_ID: "{{resolve:ssm:/readysetcloud/secrets}}"
           OWNER: "{{resolve:ssm:/readysetcloud/github-owner}}"
           REPO: "{{resolve:ssm:/readysetcloud/github-repo}}"
       Events:
@@ -1916,6 +1919,8 @@ Resources:
         EntryPoints:
           - import-issue-from-github.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: import-issue-from-github.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -1930,9 +1935,13 @@ Resources:
             - Effect: Allow
               Action: states:StartExecution
               Resource: !Ref StageIssueStateMachine
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          SECRET_ID: "{{resolve:ssm:/readysetcloud/secrets}}"
           STATE_MACHINE_ARN: !Ref StageIssueStateMachine
           IS_PREVIEW: !If [DeployStageResources, true, false]
       Events:
@@ -2344,6 +2353,8 @@ Resources:
         EntryPoints:
           - update-link-tracking.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: update-link-tracking.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -2354,7 +2365,7 @@ Resources:
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           REDIRECT_URL: !If
             - HasRedirectCustomDomain
             - !Sub https://${RedirectCustomDomain}/r
@@ -2369,6 +2380,8 @@ Resources:
         EntryPoints:
           - process-link-click.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: process-link-click.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -2379,7 +2392,7 @@ Resources:
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
 
   RedirectLogsSubscription:
     Type: AWS::Logs::SubscriptionFilter
@@ -2404,6 +2417,8 @@ Resources:
         EntryPoints:
           - get-top-link.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: get-top-link.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -2416,7 +2431,7 @@ Resources:
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
 
   APIGatewayCloudWatchRole:
     Type: AWS::IAM::Role
@@ -2554,7 +2569,6 @@ Resources:
       Principal: events.amazonaws.com
       SourceArn: !GetAtt StripePaymentEventRule.Arn
 
-  # Stripe Billing Functions
   CreateCheckoutSessionFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2564,8 +2578,9 @@ Resources:
         EntryPoints:
           - billing/create-checkout-session.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: billing/create-checkout-session.handler
-      Timeout: 30
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -2581,7 +2596,7 @@ Resources:
               Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${StripeApiKey}"
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           STRIPE_API_KEY_PARAM: !Ref StripeApiKey
       Events:
         CreateCheckoutApi:
@@ -2600,8 +2615,9 @@ Resources:
         EntryPoints:
           - billing/create-customer-portal-session.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: billing/create-customer-portal-session.handler
-      Timeout: 30
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -2617,7 +2633,7 @@ Resources:
               Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${StripeApiKey}"
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           STRIPE_API_KEY_PARAM: !Ref StripeApiKey
       Events:
         CreateCustomerPortalApi:
@@ -2636,8 +2652,9 @@ Resources:
         EntryPoints:
           - billing/get-subscription-status.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: billing/get-subscription-status.handler
-      Timeout: 30
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -2649,7 +2666,7 @@ Resources:
                 - !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
       Events:
         GetSubscriptionStatusApi:
           Type: Api
@@ -2658,7 +2675,6 @@ Resources:
             Path: /billing/subscription-status
             Method: GET
 
-  # Simplified DLQ Processor - Logs messages and sends alerts only
   ProcessDLQMessagesFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2668,10 +2684,10 @@ Resources:
         EntryPoints:
           - billing/process-dlq-messages.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: billing/process-dlq-messages.handler
       Description: "Simplified DLQ processor for logging failed events and sending alerts"
-      Timeout: 60 # Simple logging operations only
-      MemorySize: 512 # Lightweight processing
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -2692,6 +2708,7 @@ Resources:
               Resource: !Ref EventBridgeCriticalAlertsTopic
       Environment:
         Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           DLQ_URL: !Ref StripeEventDLQ
           ALERT_TOPIC_ARN: !Ref EventBridgeCriticalAlertsTopic
 
@@ -2902,9 +2919,9 @@ Resources:
         EntryPoints:
           - billing/stripe-event-handler.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: billing/stripe-event-handler.handler
-      Timeout: 60
-      MemorySize: 1024
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt StripeEventDLQ.Arn
@@ -2935,7 +2952,7 @@ Resources:
               Resource: !GetAtt StripeEventDLQ.Arn
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           USER_POOL_ID: !Ref NewsletterUserPool
       Events:
         StripeSubscriptionEvents:
@@ -2967,9 +2984,9 @@ Resources:
         EntryPoints:
           - billing/stripe-subscription-events.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: billing/stripe-subscription-events.handler
-      Timeout: 30
-      MemorySize: 512
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -2995,7 +3012,7 @@ Resources:
               Resource: "*"
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           USER_POOL_ID: !Ref NewsletterUserPool
 
   StripePaymentEventsFunction:
@@ -3007,9 +3024,9 @@ Resources:
         EntryPoints:
           - billing/stripe-payment-events.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: billing/stripe-payment-events.handler
-      Timeout: 30
-      MemorySize: 512
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -3034,7 +3051,7 @@ Resources:
               Resource: "*"
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           SES_CONFIGURATION_SET: !Ref ConfigurationSet
 
   EventBridgeDLQProcessorFunction:
@@ -3046,9 +3063,9 @@ Resources:
         EntryPoints:
           - billing/dlq-processor.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: billing/dlq-processor.handler
-      Timeout: 60
-      MemorySize: 256
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -3063,6 +3080,7 @@ Resources:
               Resource: !Ref EventBridgeCriticalAlertsTopic
       Environment:
         Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           CRITICAL_ALERTS_TOPIC_ARN: !Ref EventBridgeCriticalAlertsTopic
       Events:
         DLQMessages:
@@ -3072,7 +3090,6 @@ Resources:
             BatchSize: 5
             MaximumBatchingWindowInSeconds: 30
 
-  # Sender Email Management Functions
   GetSendersFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -3082,6 +3099,8 @@ Resources:
         EntryPoints:
           - senders/get-senders.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: senders/get-senders.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -3095,7 +3114,7 @@ Resources:
                 - !Sub "${NewsletterTable.Arn}/index/GSI1"
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           SES_CONFIGURATION_SET: !Ref ConfigurationSet
       Events:
         GetSenders:
@@ -3114,6 +3133,8 @@ Resources:
         EntryPoints:
           - senders/get-sender-status.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: senders/get-sender-status.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -3131,7 +3152,7 @@ Resources:
               Resource: "*"
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           SES_CONFIGURATION_SET: !Ref ConfigurationSet
       Events:
         GetSenderStatus:
@@ -3150,6 +3171,8 @@ Resources:
         EntryPoints:
           - senders/create-sender.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: senders/create-sender.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -3173,7 +3196,7 @@ Resources:
               Resource: "*"
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           SES_CONFIGURATION_SET: !Ref ConfigurationSet
           SYSTEM_FROM_EMAIL: !If
             - HasVerifiedFromEmail
@@ -3199,6 +3222,8 @@ Resources:
         EntryPoints:
           - senders/bootstrap-verification-template.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: senders/bootstrap-verification-template.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -3212,6 +3237,7 @@ Resources:
               Resource: "*"
       Environment:
         Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           SES_VERIFY_TEMPLATE_NAME: !Sub "${AWS::StackName}-sender-verification"
           SYSTEM_FROM_EMAIL: !If
             - HasVerifiedFromEmail
@@ -3234,6 +3260,8 @@ Resources:
         EntryPoints:
           - senders/update-sender.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: senders/update-sender.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -3252,7 +3280,7 @@ Resources:
                 - !Sub "${NewsletterTable.Arn}/index/GSI1"
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           SES_CONFIGURATION_SET: !Ref ConfigurationSet
       Events:
         UpdateSender:
@@ -3271,6 +3299,8 @@ Resources:
         EntryPoints:
           - senders/delete-sender.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: senders/delete-sender.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -3292,7 +3322,7 @@ Resources:
               Resource: "*"
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           SES_CONFIGURATION_SET: !Ref ConfigurationSet
           RESOURCE_ARN_PREFIX: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/"
       Events:
@@ -3312,6 +3342,8 @@ Resources:
         EntryPoints:
           - senders/verify-domain.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: senders/verify-domain.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -3331,7 +3363,7 @@ Resources:
               Resource: "*"
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           SES_CONFIGURATION_SET: !Ref ConfigurationSet
           RESOURCE_ARN_PREFIX: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/"
       Events:
@@ -3351,6 +3383,8 @@ Resources:
         EntryPoints:
           - senders/get-domain-verification.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: senders/get-domain-verification.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -3371,7 +3405,7 @@ Resources:
                 - !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           SES_CONFIGURATION_SET: !Ref ConfigurationSet
       Events:
         GetDomainVerification:
@@ -3390,8 +3424,9 @@ Resources:
         EntryPoints:
           - senders/check-sender-status-automatically.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: senders/check-sender-status-automatically.handler
-      Timeout: 60
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -3414,7 +3449,7 @@ Resources:
               Resource: "*"
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           SCHEDULER_ROLE_ARN: !GetAtt SchedulerExecutionRole.Arn
           RESOURCE_ARN_PREFIX: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/"
       Events:
@@ -3444,6 +3479,8 @@ Resources:
         EntryPoints:
           - issue-processing/create-hero-image.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: issue-processing/create-hero-image.handler
       Layers:
         - !Ref SharpLayer
@@ -3464,21 +3501,19 @@ Resources:
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           HOSTING_BUCKET_NAME: !Ref HostingBucket
-          TABLE_NAME: !Ref NewsletterTable
 
   UnsubscribeLogProcessorFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - admin/unsubscribe-log-processor.mjs
+        Binary: unsubscribe-log-processor
     Properties:
-      Handler: admin/unsubscribe-log-processor.handler
-      Timeout: 300
-      MemorySize: 1024
+      CodeUri: functions/admin-rust/unsubscribe-log-processor
+      Handler: bootstrap
+      Runtime: provided.al2023
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -3501,7 +3536,6 @@ Resources:
               Resource: "*"
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
           UNSUBSCRIBE_LOG_GROUP_NAME: !Sub "/aws/lambda/${UnsubscribeFunction}"
 
   AutoUnsubscribeComplaintFunction:
@@ -3513,6 +3547,8 @@ Resources:
         EntryPoints:
           - subscribers/auto-unsubscribe-complaint.mjs
     Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
       Handler: subscribers/auto-unsubscribe-complaint.handler
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -3532,7 +3568,7 @@ Resources:
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
       Environment:
         Variables:
-          TABLE_NAME: !Ref NewsletterTable
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
       Events:
         ComplaintEvent:
           Type: EventBridgeRule
@@ -3547,6 +3583,10 @@ Outputs:
   NewsletterApiUrl:
     Description: "API Gateway endpoint URL for Newsletter service"
     Value: !Sub "https://${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com/public"
+
+  DashboardApiUrl:
+    Description: "API Gateway endpoint URL for Newsletter Dashboard"
+    Value: !Sub "https://${DashboardApi}.execute-api.${AWS::Region}.amazonaws.com/api"
 
   UserPoolId:
     Description: "Cognito User Pool ID for admin authentication"

@@ -33,7 +33,7 @@ jobs:
           bins: cargo-lambda
           targets: aarch64-unknown-linux-gnu
       - name: Install Zig toolchain
-        uses: mlugg/setup-zig@v1
+        uses: mlugg/setup-zig@v2
         with:
           version: 0.14.0
       - name: Configure AWS
@@ -74,7 +74,7 @@ jobs:
           bins: cargo-lambda
           targets: aarch64-unknown-linux-gnu
       - name: Install Zig toolchain
-        uses: mlugg/setup-zig@v1
+        uses: mlugg/setup-zig@v2
         with:
           version: 0.14.0
       - name: Configure AWS

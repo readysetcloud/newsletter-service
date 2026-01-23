@@ -789,7 +789,7 @@ Resources:
       BuildProperties:
         Binary: add-user-to-group
     Properties:
-      CodeUri: functions/admin-rust/add-user-to-group
+      CodeUri: functions/admin/add-user-to-group
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -984,7 +984,7 @@ Resources:
       BuildProperties:
         Binary: get-profile
     Properties:
-      CodeUri: functions/admin-rust/get-profile
+      CodeUri: functions/admin/get-profile
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -1023,7 +1023,7 @@ Resources:
       BuildProperties:
         Binary: check-brand-id
     Properties:
-      CodeUri: functions/admin-rust/check-brand-id
+      CodeUri: functions/admin/check-brand-id
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -1049,7 +1049,7 @@ Resources:
       BuildProperties:
         Binary: update-brand
     Properties:
-      CodeUri: functions/admin-rust/update-brand
+      CodeUri: functions/admin/update-brand
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -1154,7 +1154,7 @@ Resources:
       BuildProperties:
         Binary: update-profile
     Properties:
-      CodeUri: functions/admin-rust/update-profile
+      CodeUri: functions/admin/update-profile
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -1183,7 +1183,7 @@ Resources:
       BuildProperties:
         Binary: manage-api-keys
     Properties:
-      CodeUri: functions/admin-rust/manage-api-keys
+      CodeUri: functions/admin/manage-api-keys
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -1231,7 +1231,7 @@ Resources:
       BuildProperties:
         Binary: upload-brand-photo
     Properties:
-      CodeUri: functions/admin-rust/upload-brand-photo
+      CodeUri: functions/admin/upload-brand-photo
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -3511,7 +3511,7 @@ Resources:
       BuildProperties:
         Binary: unsubscribe-log-processor
     Properties:
-      CodeUri: functions/admin-rust/unsubscribe-log-processor
+      CodeUri: functions/admin/unsubscribe-log-processor
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:

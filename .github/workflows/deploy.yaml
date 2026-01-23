@@ -25,6 +25,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Install Rust toolchain with Cargo Lambda
+        uses: moonrepo/setup-rust@v1
+        with:
+          bins: cargo-lambda
+      - name: Install Zig toolchain
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.14.0
       - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v5
         with:

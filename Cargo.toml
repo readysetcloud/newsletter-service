@@ -1,15 +1,19 @@
 [workspace]
 resolver = "2"
 members = [
-    "get-profile",
-    "update-profile",
-    "manage-api-keys",
-    "check-brand-id",
-    "update-brand",
-    "upload-brand-photo",
-    "add-user-to-group",
-    "unsubscribe-log-processor",
-    "shared"
+    "functions/admin/get-profile",
+    "functions/admin/update-profile",
+    "functions/admin/manage-api-keys",
+    "functions/admin/check-brand-id",
+    "functions/admin/update-brand",
+    "functions/admin/upload-brand-photo",
+    "functions/admin/add-user-to-group",
+    "functions/admin/unsubscribe-log-processor",
+    "functions/admin/shared",
+    "functions/auth-rust/cognito-post-confirmation",
+    "functions/auth-rust/cognito-pre-token-generation",
+    "functions/auth-rust/lambda-authorizer",
+    "crates/integration-tests"
 ]
 
 [workspace.dependencies]

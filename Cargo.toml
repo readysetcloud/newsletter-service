@@ -13,6 +13,9 @@ members = [
     "functions/auth-rust/cognito-post-confirmation",
     "functions/auth-rust/cognito-pre-token-generation",
     "functions/auth-rust/lambda-authorizer",
+    "functions/ai/generate-insights",
+    "functions/ai/generate-social-post",
+    "functions/ai/shared",
     "crates/integration-tests"
 ]
 
@@ -29,6 +32,7 @@ aws-sdk-s3 = "1"
 aws-sdk-cloudwatchlogs = "1"
 aws-sdk-sesv2 = "1"
 aws-sdk-eventbridge = "1"
+aws-sdk-bedrockruntime = "1"
 aws-smithy-types = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }

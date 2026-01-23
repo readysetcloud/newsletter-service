@@ -1624,15 +1624,13 @@ Resources:
   GenerateInsightsFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - ai/generate-insights.mjs
+        Binary: generate-insights
     Properties:
-      Runtime: nodejs22.x
-      CodeUri: functions
-      Handler: ai/generate-insights.handler
+      CodeUri: functions/ai/generate-insights
+      Handler: bootstrap
+      Runtime: provided.al2023
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -1653,7 +1651,6 @@ Resources:
                 - !Sub arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/us.amazon.nova-*
       Environment:
         Variables:
-          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           MODEL_ID: us.amazon.nova-pro-v1:0
 
   CompileReportFunction:
@@ -1679,15 +1676,13 @@ Resources:
   GenerateSocialPostFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - ai/generate-social-post.mjs
+        Binary: generate-social-post
     Properties:
-      Runtime: nodejs22.x
-      CodeUri: functions
-      Handler: ai/generate-social-post.handler
+      CodeUri: functions/ai/generate-social-post
+      Handler: bootstrap
+      Runtime: provided.al2023
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -1710,7 +1705,6 @@ Resources:
                 - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/amazon.nova-pro-v1:0
       Environment:
         Variables:
-          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           MODEL_ID: us.amazon.nova-pro-v1:0
 
   GetNextIssueDateFunction:

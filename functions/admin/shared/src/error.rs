@@ -1,17 +1,17 @@
-use thiserror::Error;
-use aws_sdk_dynamodb::error::SdkError;
-use aws_sdk_dynamodb::operation::get_item::GetItemError;
-use aws_sdk_dynamodb::operation::put_item::PutItemError;
-use aws_sdk_dynamodb::operation::update_item::UpdateItemError;
-use aws_sdk_dynamodb::operation::query::QueryError;
-use aws_sdk_dynamodb::operation::delete_item::DeleteItemError;
 use aws_sdk_cognitoidentityprovider::error::SdkError as CognitoSdkError;
+use aws_sdk_cognitoidentityprovider::operation::admin_add_user_to_group::AdminAddUserToGroupError;
 use aws_sdk_cognitoidentityprovider::operation::admin_get_user::AdminGetUserError;
 use aws_sdk_cognitoidentityprovider::operation::admin_update_user_attributes::AdminUpdateUserAttributesError;
-use aws_sdk_cognitoidentityprovider::operation::admin_add_user_to_group::AdminAddUserToGroupError;
+use aws_sdk_dynamodb::error::SdkError;
+use aws_sdk_dynamodb::operation::delete_item::DeleteItemError;
+use aws_sdk_dynamodb::operation::get_item::GetItemError;
+use aws_sdk_dynamodb::operation::put_item::PutItemError;
+use aws_sdk_dynamodb::operation::query::QueryError;
+use aws_sdk_dynamodb::operation::update_item::UpdateItemError;
 use aws_sdk_s3::error::SdkError as S3SdkError;
 use aws_sdk_s3::operation::head_object::HeadObjectError;
 use aws_sdk_s3::operation::put_object::PutObjectError;
+use thiserror::Error;
 
 #[derive(Error, Debug, Clone)]
 pub enum AppError {
@@ -88,7 +88,9 @@ impl<E> From<SdkError<UpdateItemError, E>> for AppError {
                 UpdateItemError::ResourceNotFoundException(_) => {
                     AppError::NotFound("Resource not found".to_string())
                 }
-                _ => AppError::AwsError(format!("DynamoDB UpdateItem error: {}", service_err.err())),
+                _ => {
+                    AppError::AwsError(format!("DynamoDB UpdateItem error: {}", service_err.err()))
+                }
             },
             _ => AppError::AwsError(format!("DynamoDB SDK error: {}", err)),
         }
@@ -119,7 +121,9 @@ impl<E> From<SdkError<DeleteItemError, E>> for AppError {
                 DeleteItemError::ResourceNotFoundException(_) => {
                     AppError::NotFound("Resource not found".to_string())
                 }
-                _ => AppError::AwsError(format!("DynamoDB DeleteItem error: {}", service_err.err())),
+                _ => {
+                    AppError::AwsError(format!("DynamoDB DeleteItem error: {}", service_err.err()))
+                }
             },
             _ => AppError::AwsError(format!("DynamoDB SDK error: {}", err)),
         }
@@ -133,7 +137,9 @@ impl<E> From<CognitoSdkError<AdminGetUserError, E>> for AppError {
                 AdminGetUserError::UserNotFoundException(_) => {
                     AppError::NotFound("User not found".to_string())
                 }
-                _ => AppError::AwsError(format!("Cognito AdminGetUser error: {}", service_err.err())),
+                _ => {
+                    AppError::AwsError(format!("Cognito AdminGetUser error: {}", service_err.err()))
+                }
             },
             _ => AppError::AwsError(format!("Cognito SDK error: {}", err)),
         }
@@ -150,7 +156,10 @@ impl<E> From<CognitoSdkError<AdminUpdateUserAttributesError, E>> for AppError {
                 AdminUpdateUserAttributesError::InvalidParameterException(_) => {
                     AppError::BadRequest("Invalid parameter".to_string())
                 }
-                _ => AppError::AwsError(format!("Cognito AdminUpdateUserAttributes error: {}", service_err.err())),
+                _ => AppError::AwsError(format!(
+                    "Cognito AdminUpdateUserAttributes error: {}",
+                    service_err.err()
+                )),
             },
             _ => AppError::AwsError(format!("Cognito SDK error: {}", err)),
         }
@@ -167,7 +176,10 @@ impl<E> From<CognitoSdkError<AdminAddUserToGroupError, E>> for AppError {
                 AdminAddUserToGroupError::ResourceNotFoundException(_) => {
                     AppError::NotFound("Group not found".to_string())
                 }
-                _ => AppError::AwsError(format!("Cognito AdminAddUserToGroup error: {}", service_err.err())),
+                _ => AppError::AwsError(format!(
+                    "Cognito AdminAddUserToGroup error: {}",
+                    service_err.err()
+                )),
             },
             _ => AppError::AwsError(format!("Cognito SDK error: {}", err)),
         }

@@ -1,9 +1,12 @@
-use lambda_http::{Response, Body};
+use crate::error::AppError;
+use lambda_http::{Body, Response};
 use serde::Serialize;
 use serde_json::json;
-use crate::error::AppError;
 
-pub fn format_response<T: Serialize>(status_code: u16, body: T) -> Result<Response<Body>, AppError> {
+pub fn format_response<T: Serialize>(
+    status_code: u16,
+    body: T,
+) -> Result<Response<Body>, AppError> {
     let body_json = serde_json::to_string(&body)
         .map_err(|e| AppError::InternalError(format!("JSON serialization failed: {}", e)))?;
 

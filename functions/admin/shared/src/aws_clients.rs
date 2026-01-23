@@ -1,5 +1,5 @@
-use aws_sdk_dynamodb::Client as DynamoDbClient;
 use aws_sdk_cognitoidentityprovider::Client as CognitoClient;
+use aws_sdk_dynamodb::Client as DynamoDbClient;
 use aws_sdk_s3::Client as S3Client;
 use tokio::sync::OnceCell;
 

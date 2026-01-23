@@ -3,8 +3,8 @@ use aws_sdk_s3::operation::head_object::HeadObjectError;
 use aws_sdk_s3::presigning::PresigningConfig;
 use aws_sdk_s3::types::ObjectCannedAcl;
 use chrono::Utc;
-use lambda_http::{run, service_fn, Body, Error, Request, Response};
 use lambda_http::http::Method;
+use lambda_http::{run, service_fn, Body, Error, Request, Response};
 use serde_json::{json, Value};
 use shared::{aws_clients, format_response, get_user_context};
 use std::collections::HashMap;
@@ -106,10 +106,7 @@ async fn generate_upload_url(
     }
 
     let file_name_lower = file_name.to_lowercase();
-    let file_extension = file_name_lower
-        .split('.')
-        .last()
-        .unwrap_or("");
+    let file_extension = file_name_lower.split('.').next_back().unwrap_or("");
 
     let valid_extensions: HashMap<&str, Vec<&str>> = HashMap::from([
         ("image/jpeg", vec!["jpg", "jpeg"]),
@@ -134,8 +131,9 @@ async fn generate_upload_url(
     let sanitized = sanitize_filename(file_name);
     let key = format!("brand-logos/{}/{}-{}", tenant_id, timestamp, sanitized);
 
-    let bucket_name = std::env::var("HOSTING_BUCKET_NAME")
-        .map_err(|err| UploadBrandPhotoError::Internal(format!("HOSTING_BUCKET_NAME not set: {}", err)))?;
+    let bucket_name = std::env::var("HOSTING_BUCKET_NAME").map_err(|err| {
+        UploadBrandPhotoError::Internal(format!("HOSTING_BUCKET_NAME not set: {}", err))
+    })?;
 
     let s3_client = aws_clients::get_s3_client().await;
     let request = s3_client
@@ -149,13 +147,14 @@ async fn generate_upload_url(
 
     let presigned = request
         .presigned(
-            PresigningConfig::expires_in(Duration::from_secs(300))
-                .map_err(|err| UploadBrandPhotoError::Internal(format!("Presign config error: {}", err)))?,
+            PresigningConfig::expires_in(Duration::from_secs(300)).map_err(|err| {
+                UploadBrandPhotoError::Internal(format!("Presign config error: {}", err))
+            })?,
         )
         .await
         .map_err(|err| UploadBrandPhotoError::Internal(format!("Presign failed: {}", err)))?;
 
-    Ok(format_response(
+    format_response(
         200,
         json!({
             "uploadUrl": presigned.uri().to_string(),
@@ -165,7 +164,7 @@ async fn generate_upload_url(
             "publicUrl": format!("https://{}.s3.amazonaws.com/{}", bucket_name, key)
         }),
     )
-    .map_err(|err| UploadBrandPhotoError::Internal(err.to_string()))?)
+    .map_err(|err| UploadBrandPhotoError::Internal(err.to_string()))
 }
 
 async fn confirm_upload(
@@ -189,8 +188,9 @@ async fn confirm_upload(
         ));
     }
 
-    let bucket_name = std::env::var("HOSTING_BUCKET_NAME")
-        .map_err(|err| UploadBrandPhotoError::Internal(format!("HOSTING_BUCKET_NAME not set: {}", err)))?;
+    let bucket_name = std::env::var("HOSTING_BUCKET_NAME").map_err(|err| {
+        UploadBrandPhotoError::Internal(format!("HOSTING_BUCKET_NAME not set: {}", err))
+    })?;
     let s3_client = aws_clients::get_s3_client().await;
 
     let head_result = s3_client
@@ -203,9 +203,7 @@ async fn confirm_upload(
     if let Err(err) = head_result {
         let is_not_found = err
             .as_service_error()
-            .map(|service_error| {
-                matches!(service_error, HeadObjectError::NotFound(_))
-            })
+            .map(|service_error| matches!(service_error, HeadObjectError::NotFound(_)))
             .unwrap_or(false);
 
         if is_not_found {
@@ -238,9 +236,11 @@ async fn confirm_upload(
         .expression_attribute_values(":updatedAt", AttributeValue::S(updated_at))
         .send()
         .await
-        .map_err(|err| UploadBrandPhotoError::Internal(format!("DynamoDB update failed: {}", err)))?;
+        .map_err(|err| {
+            UploadBrandPhotoError::Internal(format!("DynamoDB update failed: {}", err))
+        })?;
 
-    Ok(format_response(
+    format_response(
         200,
         json!({
             "message": "Brand logo updated successfully",
@@ -248,7 +248,7 @@ async fn confirm_upload(
             "key": key
         }),
     )
-    .map_err(|err| UploadBrandPhotoError::Internal(err.to_string()))?)
+    .map_err(|err| UploadBrandPhotoError::Internal(err.to_string()))
 }
 
 fn sanitize_filename(file_name: &str) -> String {
@@ -271,7 +271,10 @@ fn format_error_response(err: UploadBrandPhotoError) -> Response<Body> {
         UploadBrandPhotoError::Forbidden(message) => (403, message),
         UploadBrandPhotoError::NotFound(message) => (404, message),
         UploadBrandPhotoError::MethodNotAllowed => (405, "Method not allowed".to_string()),
-        UploadBrandPhotoError::Internal(_) => (500, "Something went wrong".to_string()),
+        UploadBrandPhotoError::Internal(message) => {
+            tracing::error!(error = %message, "Internal brand photo error");
+            (500, "Something went wrong".to_string())
+        }
     };
 
     format_response(status, json!({ "message": message }))

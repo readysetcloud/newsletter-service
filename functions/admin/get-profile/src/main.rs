@@ -1,9 +1,11 @@
+use aws_sdk_cognitoidentityprovider::types::AttributeType;
+use aws_sdk_dynamodb::types::AttributeValue;
+use aws_smithy_types::DateTime;
 use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
 use serde::Serialize;
-use shared::{get_user_context, format_response, format_error_response, AppError, aws_clients, dynamodb_utils};
-use aws_sdk_dynamodb::types::AttributeValue;
-use aws_sdk_cognitoidentityprovider::types::AttributeType;
-use aws_smithy_types::DateTime;
+use shared::{
+    aws_clients, dynamodb_utils, format_error_response, format_response, get_user_context, AppError,
+};
 use std::collections::HashMap;
 
 #[derive(Serialize)]
@@ -74,8 +76,6 @@ struct PublicProfileResponse {
 }
 
 struct TenantRecord {
-    pk: String,
-    sk: String,
     name: Option<String>,
     brand_name: Option<String>,
     website: Option<String>,
@@ -83,15 +83,12 @@ struct TenantRecord {
     brand_description: Option<String>,
     brand_logo: Option<String>,
     tags: Option<Vec<String>>,
-    created_at: String,
     updated_at: String,
 }
 
 impl TenantRecord {
     fn from_dynamodb_item(item: HashMap<String, AttributeValue>) -> Result<Self, AppError> {
         Ok(Self {
-            pk: dynamodb_utils::get_string_attr(&item, "pk")?,
-            sk: dynamodb_utils::get_string_attr(&item, "sk")?,
             name: dynamodb_utils::get_optional_string_attr(&item, "name"),
             brand_name: dynamodb_utils::get_optional_string_attr(&item, "brandName"),
             website: dynamodb_utils::get_optional_string_attr(&item, "website"),
@@ -99,7 +96,6 @@ impl TenantRecord {
             brand_description: dynamodb_utils::get_optional_string_attr(&item, "brandDescription"),
             brand_logo: dynamodb_utils::get_optional_string_attr(&item, "brandLogo"),
             tags: dynamodb_utils::get_optional_string_list_attr(&item, "tags"),
-            created_at: dynamodb_utils::get_string_attr(&item, "createdAt")?,
             updated_at: dynamodb_utils::get_string_attr(&item, "updatedAt")?,
         })
     }
@@ -143,9 +139,9 @@ impl CognitoUserAttributes {
     }
 
     fn parse_profile_links(&self) -> Option<Vec<String>> {
-        self.profile_links.as_ref().and_then(|links_str| {
-            serde_json::from_str(links_str).ok()
-        })
+        self.profile_links
+            .as_ref()
+            .and_then(|links_str| serde_json::from_str(links_str).ok())
     }
 }
 
@@ -164,7 +160,12 @@ async fn function_handler(event: Request) -> Result<Response<Body>, Error> {
     } else {
         match find_user_email_by_sub(requested_user_id.unwrap()).await {
             Some(email) => email,
-            None => return Ok(format_response(404, serde_json::json!({"message": "User not found"}))?),
+            None => {
+                return Ok(format_response(
+                    404,
+                    serde_json::json!({"message": "User not found"}),
+                )?)
+            }
         }
     };
 
@@ -179,12 +180,19 @@ async fn function_handler(event: Request) -> Result<Response<Body>, Error> {
         .send()
         .await?;
 
-    let attributes = CognitoUserAttributes::from_cognito_attributes(
-        user_result.user_attributes().to_vec()
-    );
+    let attributes =
+        CognitoUserAttributes::from_cognito_attributes(user_result.user_attributes().to_vec());
 
     let profile = if is_own_profile {
-        serde_json::to_value(build_own_profile(&user_id, &attributes, user_result.user_last_modified_date(), &tenant_id).await?)?
+        serde_json::to_value(
+            build_own_profile(
+                &user_id,
+                &attributes,
+                user_result.user_last_modified_date(),
+                &tenant_id,
+            )
+            .await?,
+        )?
     } else {
         serde_json::to_value(build_public_profile(&attributes).await?)?
     };
@@ -205,14 +213,12 @@ async fn find_user_email_by_sub(user_id: &str) -> Option<String> {
         .await
         .ok()?;
 
-    list_result.users()
-        .first()
-        .and_then(|user| {
-            user.attributes()
-                .iter()
-                .find(|attr| attr.name == "email")
-                .and_then(|attr| attr.value.clone())
-        })
+    list_result.users().first().and_then(|user| {
+        user.attributes()
+            .iter()
+            .find(|attr| attr.name == "email")
+            .and_then(|attr| attr.value.clone())
+    })
 }
 
 async fn build_own_profile(
@@ -247,7 +253,9 @@ async fn build_own_profile(
     })
 }
 
-async fn build_public_profile(attributes: &CognitoUserAttributes) -> Result<PublicProfileResponse, AppError> {
+async fn build_public_profile(
+    attributes: &CognitoUserAttributes,
+) -> Result<PublicProfileResponse, AppError> {
     let brand_data = if let Some(tid) = &attributes.tenant_id {
         fetch_brand_data(tid).await
     } else {
@@ -266,7 +274,12 @@ async fn fetch_brand_data(tenant_id: &str) -> BrandData {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = match std::env::var("TABLE_NAME") {
         Ok(name) => name,
-        Err(_) => return BrandData { brand_id: Some(tenant_id.to_string()), ..Default::default() },
+        Err(_) => {
+            return BrandData {
+                brand_id: Some(tenant_id.to_string()),
+                ..Default::default()
+            }
+        }
     };
 
     let result = ddb_client
@@ -291,13 +304,22 @@ async fn fetch_brand_data(tenant_id: &str) -> BrandData {
                         tags: tenant.tags,
                         last_updated: Some(tenant.updated_at),
                     },
-                    Err(_) => BrandData { brand_id: Some(tenant_id.to_string()), ..Default::default() },
+                    Err(_) => BrandData {
+                        brand_id: Some(tenant_id.to_string()),
+                        ..Default::default()
+                    },
                 }
             } else {
-                BrandData { brand_id: Some(tenant_id.to_string()), ..Default::default() }
+                BrandData {
+                    brand_id: Some(tenant_id.to_string()),
+                    ..Default::default()
+                }
             }
         }
-        Err(_) => BrandData { brand_id: Some(tenant_id.to_string()), ..Default::default() },
+        Err(_) => BrandData {
+            brand_id: Some(tenant_id.to_string()),
+            ..Default::default()
+        },
     }
 }
 
@@ -317,11 +339,14 @@ async fn main() -> Result<(), Error> {
                 if let Some(app_err) = e.downcast_ref::<AppError>() {
                     Ok(format_error_response(app_err))
                 } else {
-                    Ok(format_error_response(&AppError::InternalError(e.to_string())))
+                    Ok(format_error_response(&AppError::InternalError(
+                        e.to_string(),
+                    )))
                 }
             }
         }
-    })).await
+    }))
+    .await
 }
 
 #[cfg(test)]
@@ -435,7 +460,10 @@ mod tests {
         ];
 
         let parsed = CognitoUserAttributes::from_cognito_attributes(attrs);
-        assert!(parsed.tenant_id.is_none(), "tenant_id should be None when not provided");
+        assert!(
+            parsed.tenant_id.is_none(),
+            "tenant_id should be None when not provided"
+        );
     }
 
     #[test]

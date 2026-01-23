@@ -46,8 +46,6 @@ struct JwtClaims {
     client_id: Option<String>,
     #[serde(default)]
     token_use: Option<String>,
-    #[serde(default)]
-    iss: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -94,10 +92,12 @@ async fn main() -> Result<(), Error> {
         user_pool_client_id,
     };
 
-    run(service_fn(|event: LambdaEvent<ApiGatewayCustomAuthorizerRequestTypeRequest>| {
-        let state = state.clone();
-        async move { handler(event.payload, &state).await }
-    }))
+    run(service_fn(
+        |event: LambdaEvent<ApiGatewayCustomAuthorizerRequestTypeRequest>| {
+            let state = state.clone();
+            async move { handler(event.payload, &state).await }
+        },
+    ))
     .await
 }
 
@@ -119,8 +119,7 @@ async fn handle_authorization(
     event: &ApiGatewayCustomAuthorizerRequestTypeRequest,
     state: &AppState,
 ) -> Result<PolicyResponse, Error> {
-    let auth_header = get_authorization_header(event)
-        .ok_or_else(|| "No Authorization header provided")?;
+    let auth_header = get_authorization_header(event).ok_or("No Authorization header provided")?;
 
     if auth_header.starts_with("Bearer ") {
         let token = auth_header.trim_start_matches("Bearer ");
@@ -130,7 +129,9 @@ async fn handle_authorization(
     }
 }
 
-fn get_authorization_header(event: &ApiGatewayCustomAuthorizerRequestTypeRequest) -> Option<String> {
+fn get_authorization_header(
+    event: &ApiGatewayCustomAuthorizerRequestTypeRequest,
+) -> Option<String> {
     event
         .headers
         .get("authorization")
@@ -178,7 +179,7 @@ async fn handle_jwt_auth(
         .get("sub")
         .cloned()
         .or_else(|| claims.sub.clone())
-        .ok_or_else(|| "Missing sub claim")?;
+        .ok_or("Missing sub claim")?;
 
     let api_arn = get_api_arn_pattern(event.method_arn.as_deref().unwrap_or_default());
     let context = build_context([
@@ -222,7 +223,10 @@ async fn validate_api_key(api_key: &str, state: &AppState) -> Result<Option<ApiK
         .get_item()
         .table_name(&state.table_name)
         .key("pk", AttributeValue::S(decoded.tenant_id.clone()))
-        .key("sk", AttributeValue::S(format!("apikey#{}", decoded.key_id)))
+        .key(
+            "sk",
+            AttributeValue::S(format!("apikey#{}", decoded.key_id)),
+        )
         .send()
         .await?;
 
@@ -338,10 +342,7 @@ fn parse_timestamp(value: Option<&Value>) -> Option<i64> {
     }
 }
 
-fn get_string_attr(
-    item: &HashMap<String, AttributeValue>,
-    key: &str,
-) -> Result<String, Error> {
+fn get_string_attr(item: &HashMap<String, AttributeValue>, key: &str) -> Result<String, Error> {
     item.get(key)
         .and_then(|value| value.as_s().ok())
         .map(|value| value.to_string())
@@ -415,9 +416,8 @@ async fn fetch_jwks(user_pool_id: &str) -> Result<JwkSet, Error> {
         .split('_')
         .next()
         .ok_or("Invalid USER_POOL_ID")?;
-    let url = format!(
-        "https://cognito-idp.{region}.amazonaws.com/{user_pool_id}/.well-known/jwks.json"
-    );
+    let url =
+        format!("https://cognito-idp.{region}.amazonaws.com/{user_pool_id}/.well-known/jwks.json");
     let response = reqwest::get(url).await?.error_for_status()?;
     let jwks = response.json::<JwkSet>().await?;
     Ok(jwks)

@@ -1,9 +1,9 @@
+use crate::error::AppError;
 use base64::Engine;
 use lambda_http::RequestExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use crate::error::AppError;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct UserContext {
@@ -74,12 +74,10 @@ pub fn get_user_context(event: &lambda_http::Request) -> Result<UserContext, App
         }
     }
 
-    let user_id = user_id.ok_or_else(|| {
-        AppError::Unauthorized("Invalid authorization context".to_string())
-    })?;
-    let email = email.ok_or_else(|| {
-        AppError::Unauthorized("Invalid authorization context".to_string())
-    })?;
+    let user_id = user_id
+        .ok_or_else(|| AppError::Unauthorized("Invalid authorization context".to_string()))?;
+    let email =
+        email.ok_or_else(|| AppError::Unauthorized("Invalid authorization context".to_string()))?;
 
     Ok(UserContext {
         user_id,
@@ -155,27 +153,33 @@ fn get_optional_string_field(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::prelude::*;
-    use lambda_http::{Body, Request, RequestExt};
-    use serde_json::json;
     use aws_lambda_events::apigw::{ApiGatewayProxyRequestContext, ApiGatewayRequestAuthorizer};
-    use lambda_http::request::RequestContext;
-    use lambda_http::http::Method;
-    use std::collections::HashMap;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use lambda_http::http::Method;
+    use lambda_http::request::RequestContext;
+    use lambda_http::{Body, Request, RequestExt};
+    use proptest::prelude::*;
+    use serde_json::json;
+    use std::collections::HashMap;
 
     fn build_request_with_authorizer_fields(fields: HashMap<String, serde_json::Value>) -> Request {
-        let mut context = ApiGatewayProxyRequestContext::default();
-        context.http_method = Method::GET;
-        context.authorizer = ApiGatewayRequestAuthorizer {
-            fields,
+        let context = ApiGatewayProxyRequestContext {
+            http_method: Method::GET,
+            authorizer: ApiGatewayRequestAuthorizer {
+                fields,
+                ..Default::default()
+            },
             ..Default::default()
         };
 
         Request::new(Body::Empty).with_request_context(RequestContext::ApiGatewayV1(context))
     }
 
-    fn create_test_request_with_claims(user_id: &str, email: &str, tenant_id: Option<&str>) -> Request {
+    fn create_test_request_with_claims(
+        user_id: &str,
+        email: &str,
+        tenant_id: Option<&str>,
+    ) -> Request {
         let mut claims = json!({
             "sub": user_id,
             "email": email
@@ -191,7 +195,11 @@ mod tests {
         build_request_with_authorizer_fields(fields)
     }
 
-    fn create_test_request_with_authorizer_fields(user_id: &str, email: &str, tenant_id: Option<&str>) -> Request {
+    fn create_test_request_with_authorizer_fields(
+        user_id: &str,
+        email: &str,
+        tenant_id: Option<&str>,
+    ) -> Request {
         let mut fields = HashMap::new();
         fields.insert("userId".to_string(), json!(user_id));
         fields.insert("email".to_string(), json!(email));

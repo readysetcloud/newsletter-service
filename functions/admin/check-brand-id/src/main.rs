@@ -1,8 +1,8 @@
+use aws_sdk_dynamodb::types::AttributeValue;
 use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
 use serde::Serialize;
 use serde_json::json;
 use shared::{aws_clients, format_error_response, format_response, get_user_context, AppError};
-use aws_sdk_dynamodb::types::AttributeValue;
 use std::env;
 
 #[derive(Serialize)]
@@ -19,18 +19,24 @@ async fn function_handler(event: Request) -> Result<Response<Body>, Error> {
     let brand_id = match query_params.first("brandId") {
         Some(value) => value,
         None => {
-            return Ok(format_response(400, json!({ "message": "brandId parameter is required" }))?);
+            return Ok(format_response(
+                400,
+                json!({ "message": "brandId parameter is required" }),
+            )?);
         }
     };
 
     let validation_result = validate_brand_id(brand_id);
     if !validation_result.is_valid {
-        return Ok(format_response(200, json!({
-            "available": false,
-            "brandId": brand_id,
-            "error": validation_result.error,
-            "suggestions": generate_suggestions(brand_id),
-        }))?);
+        return Ok(format_response(
+            200,
+            json!({
+                "available": false,
+                "brandId": brand_id,
+                "error": validation_result.error,
+                "suggestions": generate_suggestions(brand_id),
+            }),
+        )?);
     }
 
     let is_available = check_brand_id_availability(brand_id).await;
@@ -62,11 +68,42 @@ fn validate_brand_id(brand_id: &str) -> ValidationResult {
     }
 
     let reserved_words = [
-        "admin", "api", "www", "mail", "email", "support", "help", "blog",
-        "news", "app", "mobile", "web", "ftp", "cdn", "assets", "static",
-        "dev", "test", "staging", "prod", "production", "beta", "alpha",
-        "dashboard", "console", "panel", "login", "signup", "register",
-        "auth", "oauth", "sso", "security", "privacy", "terms", "legal",
+        "admin",
+        "api",
+        "www",
+        "mail",
+        "email",
+        "support",
+        "help",
+        "blog",
+        "news",
+        "app",
+        "mobile",
+        "web",
+        "ftp",
+        "cdn",
+        "assets",
+        "static",
+        "dev",
+        "test",
+        "staging",
+        "prod",
+        "production",
+        "beta",
+        "alpha",
+        "dashboard",
+        "console",
+        "panel",
+        "login",
+        "signup",
+        "register",
+        "auth",
+        "oauth",
+        "sso",
+        "security",
+        "privacy",
+        "terms",
+        "legal",
     ];
 
     let normalized = brand_id.to_lowercase();
@@ -154,11 +191,14 @@ async fn main() -> Result<(), Error> {
                 if let Some(app_err) = e.downcast_ref::<AppError>() {
                     Ok(format_error_response(app_err))
                 } else {
-                    Ok(format_error_response(&AppError::InternalError(e.to_string())))
+                    Ok(format_error_response(&AppError::InternalError(
+                        e.to_string(),
+                    )))
                 }
             }
         }
-    })).await
+    }))
+    .await
 }
 
 #[cfg(test)]
@@ -222,7 +262,9 @@ mod tests {
         let suggestions = generate_suggestions("brand-123");
         assert!(!suggestions.is_empty());
         assert!(suggestions.len() <= 5);
-        assert!(suggestions.iter().all(|s| s.chars().all(|c| c.is_ascii_lowercase())));
+        assert!(suggestions
+            .iter()
+            .all(|s| s.chars().all(|c| c.is_ascii_lowercase())));
     }
 
     #[test]

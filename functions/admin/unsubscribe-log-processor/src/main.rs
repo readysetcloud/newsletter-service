@@ -30,8 +30,6 @@ struct TimeRange {
 struct UnsubscribeEvent {
     email: String,
     tenant_id: String,
-    timestamp: Option<String>,
-    ses_removal_success: Option<Value>,
 }
 
 #[derive(Default)]
@@ -123,7 +121,8 @@ async fn process_unsubscribe_logs() -> Result<Report, String> {
         "Processing unsubscribe logs"
     );
 
-    let log_events = query_unsubscribe_logs(&log_group_name, time_range.start_time, time_range.end_time).await?;
+    let log_events =
+        query_unsubscribe_logs(&log_group_name, time_range.start_time, time_range.end_time).await?;
     let unsubscribe_events = parse_unsubscribe_events(&log_events);
     let processing_results = process_unsubscribe_events(unsubscribe_events.clone()).await;
 
@@ -179,7 +178,7 @@ async fn query_unsubscribe_logs(
         .to_string();
 
     let mut all_results: Vec<Vec<ResultField>> = Vec::new();
-    let mut next_token: Option<String> = None;
+    let _next_token: Option<String> = None;
     let mut poll_attempts = 0;
     let max_poll_attempts = 60;
 
@@ -205,7 +204,10 @@ async fn query_unsubscribe_logs(
                 break;
             }
             QueryStatus::Failed | QueryStatus::Cancelled => {
-                return Err(format!("CloudWatch Logs query {}", status.as_str().to_lowercase()));
+                return Err(format!(
+                    "CloudWatch Logs query {}",
+                    status.as_str().to_lowercase()
+                ));
             }
             _ => {}
         }
@@ -216,14 +218,13 @@ async fn query_unsubscribe_logs(
 }
 
 fn parse_unsubscribe_events(log_events: &[Vec<ResultField>]) -> Vec<UnsubscribeEvent> {
-    let email_regex = Regex::new(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
-        .unwrap_or_else(|_| Regex::new(r".*").unwrap());
+    let email_regex =
+        Regex::new(r"^[^\s@]+@[^\s@]+\.[^\s@]+$").unwrap_or_else(|_| Regex::new(r".*").unwrap());
     let mut unsubscribe_events = Vec::new();
     let mut seen = HashSet::new();
 
     for log_event in log_events {
         let message = extract_field_value(log_event, "@message");
-        let timestamp = extract_field_value(log_event, "@timestamp");
 
         let message = match message {
             Some(value) => value,
@@ -271,8 +272,6 @@ fn parse_unsubscribe_events(log_events: &[Vec<ResultField>]) -> Vec<UnsubscribeE
         unsubscribe_events.push(UnsubscribeEvent {
             email: email_address,
             tenant_id,
-            timestamp,
-            ses_removal_success: log_data.get("sesRemoved").cloned(),
         });
     }
 
@@ -286,7 +285,9 @@ fn extract_field_value(fields: &[ResultField], name: &str) -> Option<String> {
         .and_then(|field| field.value().map(|value| value.to_string()))
 }
 
-async fn process_unsubscribe_events(unsubscribe_events: Vec<UnsubscribeEvent>) -> ProcessingResults {
+async fn process_unsubscribe_events(
+    unsubscribe_events: Vec<UnsubscribeEvent>,
+) -> ProcessingResults {
     let mut results = ProcessingResults::default();
 
     let mut events_by_tenant: HashMap<String, Vec<UnsubscribeEvent>> = HashMap::new();
@@ -311,7 +312,11 @@ async fn process_tenant_unsubscribes(
     events: &[UnsubscribeEvent],
 ) -> ProcessingResults {
     let mut results = ProcessingResults::default();
-    tracing::info!("Processing {} events for tenant {}", events.len(), tenant_id);
+    tracing::info!(
+        "Processing {} events for tenant {}",
+        events.len(),
+        tenant_id
+    );
 
     let batch_size = 10;
     let mut index = 0;
@@ -325,11 +330,7 @@ async fn process_tenant_unsubscribes(
             join_set.spawn(async move {
                 match process_individual_unsubscribe(&tenant, &event).await {
                     Ok(result) => result,
-                    Err(err) => ProcessResult::failed(
-                        Some(event.email.clone()),
-                        Some(tenant),
-                        err,
-                    ),
+                    Err(err) => ProcessResult::failed(Some(event.email.clone()), Some(tenant), err),
                 }
             });
         }
@@ -344,11 +345,9 @@ async fn process_tenant_unsubscribes(
                     }
                 }
                 Err(err) => {
-                    results.failed.push(ProcessResult::failed(
-                        None,
-                        None,
-                        err.to_string(),
-                    ));
+                    results
+                        .failed
+                        .push(ProcessResult::failed(None, None, err.to_string()));
                 }
             }
         }
@@ -425,10 +424,7 @@ async fn unsubscribe_user(tenant_id: &str, email_address: &str, method: &str) ->
         AttributeValue::S(now.to_rfc3339()),
     );
     item.insert("ttl".to_string(), AttributeValue::N(ttl.to_string()));
-    item.insert(
-        "method".to_string(),
-        AttributeValue::S(method.to_string()),
-    );
+    item.insert("method".to_string(), AttributeValue::S(method.to_string()));
 
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let put_result = ddb_client

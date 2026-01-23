@@ -58,14 +58,14 @@ async fn handle_request(event: Request) -> Result<Response<Body>, UpdateProfileE
 
     let updated_profile = update_personal_info(&email, &profile_data).await?;
 
-    Ok(format_response(
+    format_response(
         200,
         json!({
             "message": "Profile updated successfully",
             "profile": updated_profile
         }),
     )
-    .map_err(|err| UpdateProfileError::Internal(err.to_string()))?)
+    .map_err(|err| UpdateProfileError::Internal(err.to_string()))
 }
 
 fn parse_body(event: &Request) -> Result<Value, UpdateProfileError> {
@@ -190,9 +190,13 @@ fn non_empty_string(value: &Value) -> Option<&str> {
 }
 
 fn normalize_string_response(value: Option<&Value>) -> Option<String> {
-    value
-        .and_then(|value| value.as_str())
-        .and_then(|s| if s.is_empty() { None } else { Some(s.to_string()) })
+    value.and_then(|value| value.as_str()).and_then(|s| {
+        if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        }
+    })
 }
 
 fn normalize_links_response(value: Option<&Value>) -> Option<Value> {
@@ -206,8 +210,14 @@ fn format_error_response(err: UpdateProfileError) -> Response<Body> {
     let (status, message) = match err {
         UpdateProfileError::Unauthorized => (403, "Authentication required".to_string()),
         UpdateProfileError::BadRequest(message) => (400, message),
-        UpdateProfileError::NotFound(_) => (404, "User not found".to_string()),
-        UpdateProfileError::Internal(_) => (500, "Failed to update profile".to_string()),
+        UpdateProfileError::NotFound(message) => {
+            tracing::warn!(error = %message, "Update profile not found");
+            (404, "User not found".to_string())
+        }
+        UpdateProfileError::Internal(message) => {
+            tracing::error!(error = %message, "Update profile internal error");
+            (500, "Failed to update profile".to_string())
+        }
     };
 
     format_response(status, json!({ "message": message }))

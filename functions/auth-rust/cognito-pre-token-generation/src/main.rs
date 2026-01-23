@@ -26,7 +26,7 @@ async fn function_handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
 }
 
 async fn process_event(payload: &mut Value, correlation_id: &str) -> Result<(), String> {
-    let (user_id, _email, tenant_id, user_name) = extract_user_context(payload, correlation_id);
+    let (_user_id, _email, tenant_id, user_name) = extract_user_context(payload, correlation_id);
 
     enrich_claims(payload, tenant_id.as_deref(), correlation_id, &user_name);
 
@@ -112,7 +112,10 @@ fn enrich_claims(
     let claims = ensure_claims_map(payload);
 
     if let Some(tenant_id) = tenant_id {
-        claims.insert("custom:tenant_id".to_string(), Value::String(tenant_id.to_string()));
+        claims.insert(
+            "custom:tenant_id".to_string(),
+            Value::String(tenant_id.to_string()),
+        );
         tracing::info!(
             correlation_id = %correlation_id,
             user_name = %user_name,
@@ -120,7 +123,6 @@ fn enrich_claims(
             "Added tenant ID to JWT claims"
         );
     }
-
 }
 
 fn ensure_claims_map(payload: &mut Value) -> &mut Map<String, Value> {
@@ -186,6 +188,9 @@ mod tests {
             .and_then(|v| v.as_object())
             .unwrap();
 
-        assert_eq!(claims.get("custom:tenant_id").and_then(|v| v.as_str()), Some("tenant-1"));
+        assert_eq!(
+            claims.get("custom:tenant_id").and_then(|v| v.as_str()),
+            Some("tenant-1")
+        );
     }
 }

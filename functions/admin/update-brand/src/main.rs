@@ -108,11 +108,16 @@ async fn handle_request(event: Request) -> Result<Response<Body>, UpdateBrandErr
         ));
     }
 
-    let final_tenant_id = tenant_id.ok_or_else(|| {
-        UpdateBrandError::Internal("Tenant ID missing after update".to_string())
-    })?;
+    let final_tenant_id = tenant_id
+        .ok_or_else(|| UpdateBrandError::Internal("Tenant ID missing after update".to_string()))?;
 
-    publish_brand_event(&final_tenant_id, &user_id, &brand_data, is_first_time_brand_save).await;
+    publish_brand_event(
+        &final_tenant_id,
+        &user_id,
+        &brand_data,
+        is_first_time_brand_save,
+    )
+    .await;
 
     format_empty_response()
 }
@@ -165,7 +170,10 @@ fn extract_brand_data(body: &Value) -> BrandData {
     data
 }
 
-async fn update_brand_info(tenant_id: &str, brand_data: &BrandData) -> Result<(), UpdateBrandError> {
+async fn update_brand_info(
+    tenant_id: &str,
+    brand_data: &BrandData,
+) -> Result<(), UpdateBrandError> {
     let updated_at = Utc::now().to_rfc3339();
     let mut update_data: HashMap<String, Value> = HashMap::new();
     update_data.insert("updatedAt".to_string(), Value::String(updated_at));
@@ -181,10 +189,7 @@ async fn update_brand_info(tenant_id: &str, brand_data: &BrandData) -> Result<()
 
     for field in fields_to_update {
         if brand_data.has(field) {
-            let value = brand_data
-                .get_value(field)
-                .cloned()
-                .unwrap_or(Value::Null);
+            let value = brand_data.get_value(field).cloned().unwrap_or(Value::Null);
             if field == "brandName" {
                 update_data.insert("name".to_string(), value);
             } else {
@@ -284,10 +289,22 @@ async fn create_tenant_with_brand_data(
     );
     item.insert("createdAt".to_string(), AttributeValue::S(now.clone()));
     item.insert("updatedAt".to_string(), AttributeValue::S(now.clone()));
-    item.insert("status".to_string(), AttributeValue::S("pending".to_string()));
-    item.insert("subscribers".to_string(), AttributeValue::N("0".to_string()));
-    item.insert("GSI1PK".to_string(), AttributeValue::S("tenant".to_string()));
-    item.insert("GSI1SK".to_string(), AttributeValue::S(tenant_id.to_string()));
+    item.insert(
+        "status".to_string(),
+        AttributeValue::S("pending".to_string()),
+    );
+    item.insert(
+        "subscribers".to_string(),
+        AttributeValue::N("0".to_string()),
+    );
+    item.insert(
+        "GSI1PK".to_string(),
+        AttributeValue::S("tenant".to_string()),
+    );
+    item.insert(
+        "GSI1SK".to_string(),
+        AttributeValue::S(tenant_id.to_string()),
+    );
 
     if let Some(value) = brand_data.get_string("website").filter(|v| !v.is_empty()) {
         item.insert("website".to_string(), AttributeValue::S(value));
@@ -352,10 +369,10 @@ async fn set_user_tenant_id(email: &str, tenant_id: &str) -> Result<(), UpdateBr
         .await;
 
     if let Err(err) = result {
-        if let Some(service_err) = err.as_service_error() {
-            if let AdminUpdateUserAttributesError::UserNotFoundException(_) = service_err {
-                return Err(UpdateBrandError::NotFound("User not found".to_string()));
-            }
+        if let Some(AdminUpdateUserAttributesError::UserNotFoundException(_)) =
+            err.as_service_error()
+        {
+            return Err(UpdateBrandError::NotFound("User not found".to_string()));
         }
 
         return Err(UpdateBrandError::Internal(format!(
@@ -507,10 +524,7 @@ fn extract_s3_key(logo_url: &str) -> Result<String, String> {
         .find('/')
         .ok_or_else(|| "Logo URL has no path".to_string())?;
     let path_with_query = &without_scheme[path_start + 1..];
-    let path = path_with_query
-        .split(['?', '#'])
-        .next()
-        .unwrap_or("");
+    let path = path_with_query.split(['?', '#']).next().unwrap_or("");
 
     if path.is_empty() {
         return Err("Logo URL path is empty".to_string());
@@ -602,8 +616,14 @@ fn format_error_response(err: UpdateBrandError) -> Response<Body> {
     let (status, message) = match err {
         UpdateBrandError::Unauthorized => (403, "Authentication required".to_string()),
         UpdateBrandError::Conflict(message) => (409, message),
-        UpdateBrandError::NotFound(_) => (404, "User not found".to_string()),
-        UpdateBrandError::Internal(_) => (500, "Failed to update brand details".to_string()),
+        UpdateBrandError::NotFound(message) => {
+            tracing::warn!(error = %message, "Update brand not found");
+            (404, "User not found".to_string())
+        }
+        UpdateBrandError::Internal(message) => {
+            tracing::error!(error = %message, "Update brand internal error");
+            (500, "Failed to update brand details".to_string())
+        }
     };
 
     format_response(status, json!({ "message": message }))

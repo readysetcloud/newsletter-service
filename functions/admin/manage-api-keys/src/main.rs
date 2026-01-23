@@ -1,8 +1,8 @@
 use aws_sdk_dynamodb::types::AttributeValue;
 use base64::Engine;
 use chrono::{DateTime, Utc};
-use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
 use lambda_http::http::Method;
+use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -32,6 +32,18 @@ struct CreateApiKeyRequest {
 struct ApiKeyListResponse {
     api_keys: Vec<serde_json::Value>,
     count: usize,
+}
+
+struct ApiKeyRecordInput<'a> {
+    tenant_id: &'a str,
+    user_id: &'a str,
+    name: &'a str,
+    description: Option<&'a str>,
+    scopes: Option<Vec<String>>,
+    key_id: &'a str,
+    hashed_key: &'a str,
+    expires_at: Option<&'a str>,
+    ttl: Option<i64>,
 }
 
 async fn function_handler(event: Request) -> Result<Response<Body>, Error> {
@@ -78,8 +90,10 @@ async fn handle_request(event: Request) -> Result<Response<Body>, ManageApiKeysE
                 delete_api_key(&tenant_id, key_id).await
             }
         }
-        _ => Ok(format_response(405, json!({ "message": "Method not allowed" }))
-            .map_err(|err| ManageApiKeysError::Other(err.to_string()))?),
+        _ => Ok(
+            format_response(405, json!({ "message": "Method not allowed" }))
+                .map_err(|err| ManageApiKeysError::Other(err.to_string()))?,
+        ),
     }
 }
 
@@ -87,7 +101,10 @@ fn format_error(err: ManageApiKeysError) -> Response<Body> {
     let (status, message) = match err {
         ManageApiKeysError::Unauthorized => (403, "Authentication required".to_string()),
         ManageApiKeysError::Validation(message) => (400, message),
-        ManageApiKeysError::Other(_) => (500, "Something went wrong".to_string()),
+        ManageApiKeysError::Other(message) => {
+            tracing::error!(error = %message, "API key management internal error");
+            (500, "Something went wrong".to_string())
+        }
     };
 
     format_response(status, json!({ "message": message }))
@@ -109,9 +126,9 @@ async fn create_api_key(
     tenant_id: &Option<String>,
     body: CreateApiKeyRequest,
 ) -> Result<Response<Body>, ManageApiKeysError> {
-    let tenant_id = tenant_id
-        .as_ref()
-        .ok_or_else(|| ManageApiKeysError::Other("\"tenantId\" is required for API key operations".to_string()))?;
+    let tenant_id = tenant_id.as_ref().ok_or_else(|| {
+        ManageApiKeysError::Other("\"tenantId\" is required for API key operations".to_string())
+    })?;
 
     let name_raw = body.name.ok_or_else(|| {
         ManageApiKeysError::Other("\"name\" is required and must be a non-empty string".to_string())
@@ -171,17 +188,17 @@ async fn create_api_key(
     let key_value = generate_api_key(tenant_id, &key_id)?;
     let hashed_key = hash_api_key(&key_value);
 
-    let api_key_record = build_api_key_record(
+    let api_key_record = build_api_key_record(ApiKeyRecordInput {
         tenant_id,
         user_id,
-        &trimmed_name,
-        description.as_deref(),
-        body.scopes,
-        &key_id,
-        &hashed_key,
-        expires_at_iso.as_deref(),
-        expiration_timestamp,
-    );
+        name: &trimmed_name,
+        description: description.as_deref(),
+        scopes: body.scopes,
+        key_id: &key_id,
+        hashed_key: &hashed_key,
+        expires_at: expires_at_iso.as_deref(),
+        ttl: expiration_timestamp,
+    });
 
     ddb_client
         .put_item()
@@ -192,8 +209,8 @@ async fn create_api_key(
         .await
         .map_err(|err| ManageApiKeysError::Other(format!("DynamoDB put failed: {}", err)))?;
 
-    Ok(format_response(201, json!({ "id": key_id, "value": key_value }))
-        .map_err(|err| ManageApiKeysError::Other(err.to_string()))?)
+    format_response(201, json!({ "id": key_id, "value": key_value }))
+        .map_err(|err| ManageApiKeysError::Other(err.to_string()))
 }
 
 async fn list_api_keys(tenant_id: &Option<String>) -> Result<Response<Body>, ManageApiKeysError> {
@@ -227,8 +244,7 @@ async fn list_api_keys(tenant_id: &Option<String>) -> Result<Response<Body>, Man
         api_keys,
     };
 
-    Ok(format_response(200, response_body)
-        .map_err(|err| ManageApiKeysError::Other(err.to_string()))?)
+    format_response(200, response_body).map_err(|err| ManageApiKeysError::Other(err.to_string()))
 }
 
 async fn get_api_key(
@@ -236,7 +252,9 @@ async fn get_api_key(
     key_id: &str,
 ) -> Result<Response<Body>, ManageApiKeysError> {
     if key_id.is_empty() {
-        return Err(ManageApiKeysError::Other("\"keyId\" is required".to_string()));
+        return Err(ManageApiKeysError::Other(
+            "\"keyId\" is required".to_string(),
+        ));
     }
 
     let tenant_id = tenant_id.as_ref().ok_or_else(|| {
@@ -259,14 +277,14 @@ async fn get_api_key(
     let item = match response.item() {
         Some(item) => item,
         None => {
-            return Ok(format_response(404, json!({ "message": "API key not found" }))
-                .map_err(|err| ManageApiKeysError::Other(err.to_string()))?);
+            return format_response(404, json!({ "message": "API key not found" }))
+                .map_err(|err| ManageApiKeysError::Other(err.to_string()));
         }
     };
 
     let api_key = api_key_to_detail(item)?;
-    Ok(format_response(200, json!({ "apiKey": api_key }))
-        .map_err(|err| ManageApiKeysError::Other(err.to_string()))?)
+    format_response(200, json!({ "apiKey": api_key }))
+        .map_err(|err| ManageApiKeysError::Other(err.to_string()))
 }
 
 async fn revoke_api_key(
@@ -301,8 +319,8 @@ async fn revoke_api_key(
     let item = match exists.item() {
         Some(item) => item,
         None => {
-            return Ok(format_response(404, json!({ "message": "API key not found" }))
-                .map_err(|err| ManageApiKeysError::Other(err.to_string()))?);
+            return format_response(404, json!({ "message": "API key not found" }))
+                .map_err(|err| ManageApiKeysError::Other(err.to_string()));
         }
     };
 
@@ -312,8 +330,8 @@ async fn revoke_api_key(
         .map_or("active", |value| value.as_str());
 
     if status == "revoked" {
-        return Ok(format_response(400, json!({ "message": "API key is already revoked" }))
-            .map_err(|err| ManageApiKeysError::Other(err.to_string()))?);
+        return format_response(400, json!({ "message": "API key is already revoked" }))
+            .map_err(|err| ManageApiKeysError::Other(err.to_string()));
     }
 
     let revoked_at = Utc::now().to_rfc3339();
@@ -330,13 +348,16 @@ async fn revoke_api_key(
         .await
         .map_err(|err| ManageApiKeysError::Other(format!("DynamoDB update failed: {}", err)))?;
 
-    Ok(format_response(200, json!({
-        "message": "API key revoked successfully",
-        "keyId": key_id,
-        "status": "revoked",
-        "revokedAt": revoked_at,
-    }))
-    .map_err(|err| ManageApiKeysError::Other(err.to_string()))?)
+    format_response(
+        200,
+        json!({
+            "message": "API key revoked successfully",
+            "keyId": key_id,
+            "status": "revoked",
+            "revokedAt": revoked_at,
+        }),
+    )
+    .map_err(|err| ManageApiKeysError::Other(err.to_string()))
 }
 
 async fn delete_api_key(
@@ -344,7 +365,9 @@ async fn delete_api_key(
     key_id: &str,
 ) -> Result<Response<Body>, ManageApiKeysError> {
     if key_id.is_empty() {
-        return Err(ManageApiKeysError::Other("\"keyId\" is required".to_string()));
+        return Err(ManageApiKeysError::Other(
+            "\"keyId\" is required".to_string(),
+        ));
     }
 
     let tenant_id = tenant_id.as_ref().ok_or_else(|| {
@@ -365,8 +388,8 @@ async fn delete_api_key(
         .map_err(|err| ManageApiKeysError::Other(format!("DynamoDB get failed: {}", err)))?;
 
     if exists.item().is_none() {
-        return Ok(format_response(404, json!({ "message": "API key not found" }))
-            .map_err(|err| ManageApiKeysError::Other(err.to_string()))?);
+        return format_response(404, json!({ "message": "API key not found" }))
+            .map_err(|err| ManageApiKeysError::Other(err.to_string()));
     }
 
     ddb_client
@@ -389,7 +412,11 @@ fn parse_expiration(
 ) -> Result<(Option<String>, Option<i64>), ManageApiKeysError> {
     if let Some(expires_at) = expires_at {
         let parsed: DateTime<Utc> = DateTime::parse_from_rfc3339(&expires_at)
-            .map_err(|_| ManageApiKeysError::Other("\"expiresAt\" must be a valid ISO date string".to_string()))?
+            .map_err(|_| {
+                ManageApiKeysError::Other(
+                    "\"expiresAt\" must be a valid ISO date string".to_string(),
+                )
+            })?
             .with_timezone(&Utc);
 
         if parsed <= Utc::now() {
@@ -411,8 +438,9 @@ fn generate_api_key(tenant_id: &str, key_id: &str) -> Result<String, ManageApiKe
         "k": key_id,
         "ts": Utc::now().timestamp_millis(),
     });
-    let payload_json = serde_json::to_string(&payload)
-        .map_err(|err| ManageApiKeysError::Other(format!("Failed to serialize payload: {}", err)))?;
+    let payload_json = serde_json::to_string(&payload).map_err(|err| {
+        ManageApiKeysError::Other(format!("Failed to serialize payload: {}", err))
+    })?;
 
     let encoded_payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload_json);
 
@@ -435,17 +463,18 @@ fn hash_api_key(key_value: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-fn build_api_key_record(
-    tenant_id: &str,
-    user_id: &str,
-    name: &str,
-    description: Option<&str>,
-    scopes: Option<Vec<String>>,
-    key_id: &str,
-    hashed_key: &str,
-    expires_at: Option<&str>,
-    ttl: Option<i64>,
-) -> HashMap<String, AttributeValue> {
+fn build_api_key_record(input: ApiKeyRecordInput<'_>) -> HashMap<String, AttributeValue> {
+    let ApiKeyRecordInput {
+        tenant_id,
+        user_id,
+        name,
+        description,
+        scopes,
+        key_id,
+        hashed_key,
+        expires_at,
+        ttl,
+    } = input;
     let now = Utc::now().to_rfc3339();
     let scopes = scopes.unwrap_or_else(|| vec!["default".to_string()]);
 
@@ -465,12 +494,7 @@ fn build_api_key_record(
     );
     item.insert(
         "scopes".to_string(),
-        AttributeValue::L(
-            scopes
-                .into_iter()
-                .map(|value| AttributeValue::S(value))
-                .collect(),
-        ),
+        AttributeValue::L(scopes.into_iter().map(AttributeValue::S).collect()),
     );
     item.insert(
         "hashedKey".to_string(),
@@ -487,7 +511,10 @@ fn build_api_key_record(
     item.insert("createdAt".to_string(), AttributeValue::S(now));
     item.insert("lastUsed".to_string(), AttributeValue::Null(true));
     item.insert("usageCount".to_string(), AttributeValue::N("0".to_string()));
-    item.insert("status".to_string(), AttributeValue::S("active".to_string()));
+    item.insert(
+        "status".to_string(),
+        AttributeValue::S("active".to_string()),
+    );
 
     if let Some(expires_at) = expires_at {
         item.insert(

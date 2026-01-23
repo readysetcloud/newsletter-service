@@ -23,3 +23,30 @@ jobs:
         run: |
           npm ci
           npm run coverage
+
+  rust-tests:
+    name: Run Rust Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Rust Tests
+        run: |
+          cargo test --workspace
+
+  rust-lint:
+    name: Rust Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Rust Format
+        run: |
+          cargo fmt --all -- --check
+      - name: Rust Clippy
+        run: |
+          cargo clippy --workspace --all-targets --all-features -- -D warnings

@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = [
+    "functions/admin/get-profile",
+    "functions/admin/update-profile",
+    "functions/admin/manage-api-keys",
+    "functions/admin/check-brand-id",
+    "functions/admin/update-brand",
+    "functions/admin/upload-brand-photo",
+    "functions/admin/add-user-to-group",
+    "functions/admin/unsubscribe-log-processor",
+    "functions/admin/shared",
+    "functions/auth-rust/cognito-post-confirmation",
+    "functions/auth-rust/cognito-pre-token-generation",
+    "functions/auth-rust/lambda-authorizer",
+    "crates/integration-tests"
+]
+
+[workspace.dependencies]
+lambda_runtime = "0.13"
+lambda_http = "0.13"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-dynamodb = "1"
+aws-sdk-cognitoidentityprovider = "1"
+aws-sdk-s3 = "1"
+aws-sdk-cloudwatchlogs = "1"
+aws-sdk-sesv2 = "1"
+aws-sdk-eventbridge = "1"
+aws-smithy-types = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+thiserror = "1"
+chrono = { version = "0.4", features = ["serde"] }
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.22"
+hex = "0.4"
+proptest = "1"
+regex = "1"

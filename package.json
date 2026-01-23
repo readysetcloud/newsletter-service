@@ -8,7 +8,12 @@
   "scripts": {
     "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js",
     "lint": "eslint .",
-    "coverage": "c8 npm test"
+    "coverage": "c8 npm test",
+    "test:rust": "cargo test --workspace",
+    "lint:rust": "cargo clippy --workspace --all-targets",
+    "lint:rust:fix": "cargo clippy --workspace --all-targets --fix --allow-dirty --allow-staged",
+    "fmt:rust": "cargo fmt --all -- --check",
+    "fmt:rust:fix": "cargo fmt --all"
   },
   "dependencies": {
     "@aws-lambda-powertools/logger": "^2.30.2",

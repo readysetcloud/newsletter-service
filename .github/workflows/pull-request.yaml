@@ -27,6 +27,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Install Rust toolchain with Cargo Lambda
+        uses: moonrepo/setup-rust@v1
+        with:
+          bins: cargo-lambda
+          targets: aarch64-unknown-linux-gnu
+      - name: Install Zig toolchain
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.14.0
       - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v5
         with:
@@ -40,14 +49,14 @@ jobs:
           npm ci
 
           sam --info
-          sam build --parallel
+          sam build --parallel --beta-features
 
           sam deploy \
           --stack-name newsletter-service \
           --resolve-s3 \
           --no-fail-on-empty-changeset \
           --capabilities CAPABILITY_IAM \
-          --parameter-overrides Environment=stage EncryptionKey=${{secrets.ENCRYPTION_KEY}} MomentoCacheName=newsletter MomentoApiKey=${{secrets.MOMENTO_API_KEY}} VerifiedFromEmail=${{vars.VERIFIED_FROM_EMAIL}}
+          --parameter-overrides Environment=stage EncryptionKey=${{secrets.ENCRYPTION_KEY}} VerifiedFromEmail=${{vars.VERIFIED_FROM_EMAIL}}
 
   deploy-dependabot:
     name: Deploy Dependabot Updates
@@ -59,6 +68,15 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v6
+      - name: Install Rust toolchain with Cargo Lambda
+        uses: moonrepo/setup-rust@v1
+        with:
+          bins: cargo-lambda
+          targets: aarch64-unknown-linux-gnu
+      - name: Install Zig toolchain
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.14.0
       - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v5
         with:
@@ -72,14 +90,14 @@ jobs:
           npm ci
 
           sam --info
-          sam build --parallel
+          sam build --parallel --beta-features
 
           sam deploy \
           --stack-name newsletter-service \
           --resolve-s3 \
           --no-fail-on-empty-changeset \
           --capabilities CAPABILITY_IAM \
-          --parameter-overrides Environment=stage EncryptionKey=${{secrets.ENCRYPTION_KEY}} MomentoCacheName=newsletter MomentoApiKey=${{secrets.MOMENTO_API_KEY}} VerifiedFromEmail=${{vars.VERIFIED_FROM_EMAIL}}
+          --parameter-overrides Environment=stage EncryptionKey=${{secrets.ENCRYPTION_KEY}} VerifiedFromEmail=${{vars.VERIFIED_FROM_EMAIL}}
 
   auto-merge-dependabot-update:
     name: Auto Merge Dependabot Update

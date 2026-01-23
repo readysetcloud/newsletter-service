@@ -1,7 +1,6 @@
 import { CognitoIdentityProviderClient, AdminAddUserToGroupCommand, AdminRemoveUserFromGroupCommand } from '@aws-sdk/client-cognito-identity-provider';
 import { DynamoDBClient, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
-import { triggerJwtRefreshForSubscriptionChange, triggerJwtRefreshForNewUser } from './jwt-claims-refresh.mjs';
 
 const cognitoClient = new CognitoIdentityProviderClient({});
 const dynamoClient = new DynamoDBClient({});
@@ -259,15 +258,6 @@ export async function updateTenantUserGroups(tenantId, fromPlan, toPlan) {
     });
   }
 
-  // Trigger JWT claims refresh for all affected users
-  try {
-    const refreshResult = await triggerJwtRefreshForSubscriptionChange(tenantId, fromPlan, toPlan, users);
-    console.log(`JWT refresh triggered for tenant ${tenantId}:`, refreshResult);
-  } catch (error) {
-    console.error(`Failed to trigger JWT refresh for tenant ${tenantId}:`, error);
-    // Don't fail the group update if JWT refresh fails
-  }
-
   return {
     tenantId,
     users: users.length,
@@ -336,15 +326,6 @@ export async function ensureUserInCorrectGroup(username, tenantId) {
 
   // Add to correct group
   const addSuccess = await addUserToGroup(username, targetGroup);
-
-  // Trigger JWT refresh for the user
-  try {
-    const refreshResult = await triggerJwtRefreshForNewUser(username, tenantId, targetPlan);
-    console.log(`JWT refresh triggered for user ${username}:`, refreshResult);
-  } catch (error) {
-    console.error(`Failed to trigger JWT refresh for user ${username}:`, error);
-    // Don't fail the group assignment if JWT refresh fails
-  }
 
   return {
     username,

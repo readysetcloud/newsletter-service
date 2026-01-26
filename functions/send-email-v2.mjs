@@ -3,7 +3,12 @@ import { SchedulerClient, CreateScheduleCommand } from "@aws-sdk/client-schedule
 import { DynamoDBClient, QueryCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { encrypt } from './utils/helpers.mjs';
-import { KEY_PATTERNS } from './senders/types.mjs';
+
+// Key patterns for DynamoDB (previously from ./senders/types.mjs)
+const KEY_PATTERNS = {
+  SENDER: (senderId) => `sender#${senderId}`,
+  SENDER_GSI1PK: (tenantId) => `sender#${tenantId}`
+};
 
 const ses = new SESv2Client();
 const scheduler = new SchedulerClient();

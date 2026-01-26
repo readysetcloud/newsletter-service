@@ -736,7 +736,7 @@ Resources:
       BuildProperties:
         Binary: cognito-post-confirmation
     Properties:
-      CodeUri: functions/auth-rust/cognito-post-confirmation
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -760,7 +760,7 @@ Resources:
       BuildProperties:
         Binary: cognito-pre-token-generation
     Properties:
-      CodeUri: functions/auth-rust/cognito-pre-token-generation
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Environment:
@@ -789,7 +789,7 @@ Resources:
       BuildProperties:
         Binary: add-user-to-group
     Properties:
-      CodeUri: functions/admin/add-user-to-group
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -960,7 +960,7 @@ Resources:
       BuildProperties:
         Binary: lambda-authorizer
     Properties:
-      CodeUri: functions/auth-rust/lambda-authorizer
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -972,6 +972,10 @@ Resources:
                 - dynamodb:GetItem
                 - dynamodb:UpdateItem
               Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminListGroupsForUser
+              Resource: !GetAtt NewsletterUserPool.Arn
       Environment:
         Variables:
           USER_POOL_ID: !Ref NewsletterUserPool
@@ -984,7 +988,7 @@ Resources:
       BuildProperties:
         Binary: get-profile
     Properties:
-      CodeUri: functions/admin/get-profile
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -1023,7 +1027,7 @@ Resources:
       BuildProperties:
         Binary: check-brand-id
     Properties:
-      CodeUri: functions/admin/check-brand-id
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -1049,7 +1053,7 @@ Resources:
       BuildProperties:
         Binary: update-brand
     Properties:
-      CodeUri: functions/admin/update-brand
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -1154,7 +1158,7 @@ Resources:
       BuildProperties:
         Binary: update-profile
     Properties:
-      CodeUri: functions/admin/update-profile
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -1183,7 +1187,7 @@ Resources:
       BuildProperties:
         Binary: manage-api-keys
     Properties:
-      CodeUri: functions/admin/manage-api-keys
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -1231,7 +1235,7 @@ Resources:
       BuildProperties:
         Binary: upload-brand-photo
     Properties:
-      CodeUri: functions/admin/upload-brand-photo
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -1624,15 +1628,14 @@ Resources:
   GenerateInsightsFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - ai/generate-insights.mjs
+        Binary: generate-insights
     Properties:
-      Runtime: nodejs22.x
-      CodeUri: functions
-      Handler: ai/generate-insights.handler
+      CodeUri: .
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Timeout: 90
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -1653,7 +1656,6 @@ Resources:
                 - !Sub arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/us.amazon.nova-*
       Environment:
         Variables:
-          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           MODEL_ID: us.amazon.nova-pro-v1:0
 
   CompileReportFunction:
@@ -1679,15 +1681,14 @@ Resources:
   GenerateSocialPostFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - ai/generate-social-post.mjs
+        Binary: generate-social-post
     Properties:
-      Runtime: nodejs22.x
-      CodeUri: functions
-      Handler: ai/generate-social-post.handler
+      CodeUri: .
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Timeout: 90
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -1710,7 +1711,6 @@ Resources:
                 - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/amazon.nova-pro-v1:0
       Environment:
         Variables:
-          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           MODEL_ID: us.amazon.nova-pro-v1:0
 
   GetNextIssueDateFunction:
@@ -3093,15 +3093,13 @@ Resources:
   GetSendersFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - senders/get-senders.mjs
+        Binary: get-senders
     Properties:
-      Runtime: nodejs22.x
-      CodeUri: functions
-      Handler: senders/get-senders.handler
+      CodeUri: .
+      Handler: bootstrap
+      Runtime: provided.al2023
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -3127,15 +3125,13 @@ Resources:
   GetSenderStatusFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - senders/get-sender-status.mjs
+        Binary: get-sender-status
     Properties:
-      Runtime: nodejs22.x
-      CodeUri: functions
-      Handler: senders/get-sender-status.handler
+      CodeUri: .
+      Handler: bootstrap
+      Runtime: provided.al2023
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -3165,15 +3161,13 @@ Resources:
   CreateSenderFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - senders/create-sender.mjs
+        Binary: create-sender
     Properties:
-      Runtime: nodejs22.x
-      CodeUri: functions
-      Handler: senders/create-sender.handler
+      CodeUri: .
+      Handler: bootstrap
+      Runtime: provided.al2023
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -3194,9 +3188,18 @@ Resources:
                 - ses:SendCustomVerificationEmail
                 - ses:CreateTenantResourceAssociation
               Resource: "*"
+            - Effect: Allow
+              Action:
+                - scheduler:CreateSchedule
+              Resource: !Sub "arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/default/sender-check-*"
+            - Effect: Allow
+              Action:
+                - iam:PassRole
+              Resource: !GetAtt SchedulerExecutionRole.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          TABLE_NAME: !Ref NewsletterTable
           SES_CONFIGURATION_SET: !Ref ConfigurationSet
           SYSTEM_FROM_EMAIL: !If
             - HasVerifiedFromEmail
@@ -3205,6 +3208,8 @@ Resources:
           SES_VERIFY_TEMPLATE_NAME: !Sub "${AWS::StackName}-sender-verification"
           ENVIRONMENT: !Ref Environment
           RESOURCE_ARN_PREFIX: !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/
+          CHECK_SENDER_STATUS_FUNCTION_ARN: !GetAtt CheckSenderStatusAutomaticallyFunction.Arn
+          SCHEDULER_ROLE_ARN: !GetAtt SchedulerExecutionRole.Arn
       Events:
         CreateSender:
           Type: Api
@@ -3216,15 +3221,13 @@ Resources:
   BootstrapVerificationTemplateFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - senders/bootstrap-verification-template.mjs
+        Binary: bootstrap-verification-template
     Properties:
-      Runtime: nodejs22.x
-      CodeUri: functions
-      Handler: senders/bootstrap-verification-template.handler
+      CodeUri: .
+      Handler: bootstrap
+      Runtime: provided.al2023
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -3254,15 +3257,13 @@ Resources:
   UpdateSenderFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - senders/update-sender.mjs
+        Binary: update-sender
     Properties:
-      Runtime: nodejs22.x
-      CodeUri: functions
-      Handler: senders/update-sender.handler
+      CodeUri: .
+      Handler: bootstrap
+      Runtime: provided.al2023
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -3293,15 +3294,13 @@ Resources:
   DeleteSenderFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - senders/delete-sender.mjs
+        Binary: delete-sender
     Properties:
-      Runtime: nodejs22.x
-      CodeUri: functions
-      Handler: senders/delete-sender.handler
+      CodeUri: .
+      Handler: bootstrap
+      Runtime: provided.al2023
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -3322,8 +3321,7 @@ Resources:
               Resource: "*"
       Environment:
         Variables:
-          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
-          SES_CONFIGURATION_SET: !Ref ConfigurationSet
+          TABLE_NAME: !Ref NewsletterTable
           RESOURCE_ARN_PREFIX: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/"
       Events:
         DeleteSender:
@@ -3336,15 +3334,13 @@ Resources:
   VerifyDomainFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - senders/verify-domain.mjs
+        Binary: verify-domain
     Properties:
-      Runtime: nodejs22.x
-      CodeUri: functions
-      Handler: senders/verify-domain.handler
+      CodeUri: .
+      Handler: bootstrap
+      Runtime: provided.al2023
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -3377,15 +3373,13 @@ Resources:
   GetDomainVerificationFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - senders/get-domain-verification.mjs
+        Binary: get-domain-verification
     Properties:
-      Runtime: nodejs22.x
-      CodeUri: functions
-      Handler: senders/get-domain-verification.handler
+      CodeUri: .
+      Handler: bootstrap
+      Runtime: provided.al2023
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -3418,15 +3412,13 @@ Resources:
   CheckSenderStatusAutomaticallyFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: esbuild
+      BuildMethod: rust-cargolambda
       BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - senders/check-sender-status-automatically.mjs
+        Binary: check-sender-status-automatically
     Properties:
-      Runtime: nodejs22.x
-      CodeUri: functions
-      Handler: senders/check-sender-status-automatically.handler
+      CodeUri: .
+      Handler: bootstrap
+      Runtime: provided.al2023
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -3511,7 +3503,7 @@ Resources:
       BuildProperties:
         Binary: unsubscribe-log-processor
     Properties:
-      CodeUri: functions/admin/unsubscribe-log-processor
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:

@@ -202,7 +202,7 @@ export const VerificationProgress: React.FC<VerificationProgressProps> = ({
           icon: <LoadingSpinner size="md" />,
           title: `Verifying ${type === 'email' ? 'Email' : 'Domain'}`,
           message: type === 'email'
-            ? 'Check your email for a verification link from Amazon SES.'
+            ? 'Check your email for a verification link.'
             : 'We\'re checking your DNS records. This may take up to 72 hours.',
           bgColor: 'bg-blue-50',
           borderColor: 'border-blue-200',

@@ -38,5 +38,3 @@ pub fn get_optional_number_attr(item: &HashMap<String, AttributeValue>, key: &st
         .and_then(|v| v.as_n().ok())
         .and_then(|n| n.parse().ok())
 }
-
-

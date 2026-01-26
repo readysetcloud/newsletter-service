@@ -45,5 +45,3 @@ pub fn format_error_response(error: &AppError) -> Response<Body> {
         .body(Body::Text(body.to_string()))
         .unwrap_or_else(|_| Response::builder().status(500).body(Body::Empty).unwrap())
 }
-
-

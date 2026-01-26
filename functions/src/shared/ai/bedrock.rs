@@ -251,5 +251,3 @@ mod tests {
         assert_eq!(result, "Just a normal response");
     }
 }
-
-

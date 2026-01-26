@@ -5,8 +5,8 @@ use aws_sdk_s3::types::ObjectCannedAcl;
 use chrono::Utc;
 use lambda_http::http::Method;
 use lambda_http::{run, service_fn, Body, Error, Request, Response};
-use serde_json::{json, Value};
 use newsletter_lambdas::admin::{aws_clients, format_response, get_user_context};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -299,5 +299,3 @@ mod tests {
         assert_eq!(output, "brand-Logo.01.png");
     }
 }
-
-

@@ -1,5 +1,7 @@
 use lambda_http::{run, service_fn, Body, Error, Request, Response};
-use newsletter_lambdas::senders::{auth, aws_clients, error::AppError, response, types::*, validation};
+use newsletter_lambdas::senders::{
+    auth, aws_clients, error::AppError, response, types::*, validation,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -381,5 +383,3 @@ mod tests {
         assert_eq!(pattern, "domain#sub.example.com");
     }
 }
-
-

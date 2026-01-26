@@ -70,5 +70,3 @@ fn get_optional_string_field(
         }
     })
 }
-
-

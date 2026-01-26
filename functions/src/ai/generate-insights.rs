@@ -1,9 +1,9 @@
+use aws_sdk_dynamodb::types::AttributeValue;
+use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use newsletter_lambdas::ai::{
     converse, get_create_insights_tool, get_dynamodb_client, ConverseOptions, FunctionError,
     GenerateInsightsEvent, GenerateInsightsResponse,
 };
-use aws_sdk_dynamodb::types::AttributeValue;
-use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use serde_json::Value;
 
 async fn function_handler(
@@ -284,5 +284,3 @@ async fn main() -> Result<(), Error> {
 
     run(service_fn(function_handler)).await
 }
-
-

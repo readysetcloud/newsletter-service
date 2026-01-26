@@ -3,11 +3,11 @@ use base64::Engine;
 use chrono::{DateTime, Utc};
 use lambda_http::http::Method;
 use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
+use newsletter_lambdas::admin::{aws_clients, format_response, get_user_context};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use newsletter_lambdas::admin::{aws_clients, format_response, get_user_context};
 use std::collections::HashMap;
 use std::env;
 
@@ -671,5 +671,3 @@ mod tests {
         );
     }
 }
-
-

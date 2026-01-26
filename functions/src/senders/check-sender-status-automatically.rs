@@ -592,5 +592,3 @@ mod tests {
         assert_eq!(parsed["error"], "Identity not found in SES");
     }
 }
-
-

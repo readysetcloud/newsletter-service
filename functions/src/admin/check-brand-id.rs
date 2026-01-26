@@ -1,8 +1,10 @@
 use aws_sdk_dynamodb::types::AttributeValue;
 use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
+use newsletter_lambdas::admin::{
+    aws_clients, format_error_response, format_response, get_user_context, AppError,
+};
 use serde::Serialize;
 use serde_json::json;
-use newsletter_lambdas::admin::{aws_clients, format_error_response, format_response, get_user_context, AppError};
 use std::env;
 
 #[derive(Serialize)]
@@ -275,5 +277,3 @@ mod tests {
         assert!(suggestions.iter().all(|s| s.len() <= 50));
     }
 }
-
-

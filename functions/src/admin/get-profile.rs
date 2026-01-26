@@ -2,10 +2,10 @@ use aws_sdk_cognitoidentityprovider::types::AttributeType;
 use aws_sdk_dynamodb::types::AttributeValue;
 use aws_smithy_types::DateTime;
 use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
-use serde::Serialize;
 use newsletter_lambdas::admin::{
     aws_clients, dynamodb_utils, format_error_response, format_response, get_user_context, AppError,
 };
+use serde::Serialize;
 use std::collections::HashMap;
 
 #[derive(Serialize)]
@@ -506,5 +506,3 @@ mod tests {
         assert!(parsed_links.is_none(), "empty string should return None");
     }
 }
-
-

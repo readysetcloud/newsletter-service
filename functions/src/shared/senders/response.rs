@@ -61,5 +61,3 @@ pub fn format_error_response(error: &AppError) -> Response<Body> {
                 .unwrap()
         })
 }
-
-

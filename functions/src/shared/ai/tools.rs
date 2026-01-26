@@ -530,5 +530,3 @@ mod tests {
         assert_eq!(ttl, expected_ttl);
     }
 }
-
-

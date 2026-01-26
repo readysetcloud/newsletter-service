@@ -43,5 +43,3 @@ pub struct HistoricalAnalytics {
     #[serde(flatten)]
     pub data: serde_json::Value,
 }
-
-

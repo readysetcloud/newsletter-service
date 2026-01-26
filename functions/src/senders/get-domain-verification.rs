@@ -1,7 +1,9 @@
 use aws_sdk_dynamodb::types::AttributeValue;
 use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
+use newsletter_lambdas::senders::{
+    auth, aws_clients, error::AppError, response, types::*, validation,
+};
 use serde::Serialize;
-use newsletter_lambdas::senders::{auth, aws_clients, error::AppError, response, types::*, validation};
 use std::collections::HashMap;
 
 #[derive(Debug, Serialize)]
@@ -472,5 +474,3 @@ mod tests {
         assert!(instructions.iter().any(|i| i.contains("value3")));
     }
 }
-
-

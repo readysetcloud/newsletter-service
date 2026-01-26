@@ -2,8 +2,8 @@ use aws_sdk_cognitoidentityprovider::operation::admin_update_user_attributes::Ad
 use aws_sdk_cognitoidentityprovider::types::AttributeType;
 use chrono::Utc;
 use lambda_http::{run, service_fn, Body, Error, Request, Response};
-use serde_json::{json, Value};
 use newsletter_lambdas::admin::{aws_clients, format_response, get_user_context};
+use serde_json::{json, Value};
 
 #[derive(Debug)]
 enum UpdateProfileError {
@@ -256,5 +256,3 @@ mod tests {
         assert!(normalize_string_response(Some(&value)).is_none());
     }
 }
-
-

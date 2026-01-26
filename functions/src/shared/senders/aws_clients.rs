@@ -33,5 +33,3 @@ pub async fn get_scheduler_client() -> &'static SchedulerClient {
         })
         .await
 }
-
-

@@ -1,7 +1,7 @@
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
+use newsletter_lambdas::admin::{aws_clients, AppError};
 use serde::Deserialize;
 use serde_json::Value;
-use newsletter_lambdas::admin::{aws_clients, AppError};
 
 #[derive(Deserialize)]
 struct EventBridgeEnvelope<T> {
@@ -97,5 +97,3 @@ mod tests {
         assert!(matches!(err, AppError::BadRequest(_)));
     }
 }
-
-

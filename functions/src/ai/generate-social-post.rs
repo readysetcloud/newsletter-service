@@ -1,11 +1,11 @@
+use aws_sdk_dynamodb::types::AttributeValue;
+use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use newsletter_lambdas::ai::{
     bedrock::converse,
     error::FunctionError,
     models::{ErrorResponse, GenerateSocialPostEvent, GenerateSocialPostResponse},
     tools::{get_dynamodb_client, get_social_post_tool, ConverseOptions},
 };
-use aws_sdk_dynamodb::types::AttributeValue;
-use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use serde_json::Value;
 
 #[tokio::main]
@@ -208,5 +208,3 @@ async fn load_social_post(tenant_id: &str, issue_id: &str) -> Result<String, Fun
 
     Ok(copy.to_string())
 }
-
-

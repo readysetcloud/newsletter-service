@@ -356,5 +356,3 @@ mod tests {
         assert_eq!(sender.emails_sent, 0);
     }
 }
-
-

@@ -4,10 +4,10 @@ use aws_sdk_dynamodb::types::AttributeValue;
 use aws_sdk_sesv2::Client as SesClient;
 use chrono::{Duration, Utc};
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
+use newsletter_lambdas::admin::aws_clients;
 use regex::Regex;
 use serde::Serialize;
 use serde_json::{json, Value};
-use newsletter_lambdas::admin::aws_clients;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use tokio::sync::OnceCell;
@@ -553,5 +553,3 @@ async fn main() -> Result<(), Error> {
 
     run(service_fn(function_handler)).await
 }
-
-

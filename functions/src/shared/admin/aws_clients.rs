@@ -33,5 +33,3 @@ pub async fn get_s3_client() -> &'static S3Client {
         })
         .await
 }
-
-

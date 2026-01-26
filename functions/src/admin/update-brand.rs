@@ -3,9 +3,9 @@ use aws_sdk_dynamodb::types::{AttributeValue, ReturnValue};
 use aws_sdk_eventbridge::Client as EventBridgeClient;
 use chrono::Utc;
 use lambda_http::{run, service_fn, Body, Error, Request, Response};
+use newsletter_lambdas::admin::{aws_clients, format_response, get_user_context};
 use rand::RngCore;
 use serde_json::{json, Value};
-use newsletter_lambdas::admin::{aws_clients, format_response, get_user_context};
 use std::collections::HashMap;
 use std::env;
 use tokio::sync::OnceCell;
@@ -690,5 +690,3 @@ mod tests {
         assert_eq!(key, "brand-logos/tenant/logo.png");
     }
 }
-
-

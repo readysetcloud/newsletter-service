@@ -4,5 +4,3 @@ pub mod error;
 pub mod response;
 pub mod types;
 pub mod validation;
-
-

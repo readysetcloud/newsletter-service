@@ -383,5 +383,3 @@ mod tests {
         assert!(parsed.get("lastSentAt").is_none());
     }
 }
-
-

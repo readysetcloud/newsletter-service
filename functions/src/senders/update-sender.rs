@@ -1,8 +1,8 @@
 use aws_sdk_dynamodb::types::AttributeValue;
 use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
+use newsletter_lambdas::senders::{auth, aws_clients, error::AppError, response, types::*};
 use serde::{Deserialize, Serialize};
 use serde_dynamo::from_item;
-use newsletter_lambdas::senders::{auth, aws_clients, error::AppError, response, types::*};
 use std::collections::HashMap;
 
 #[derive(Deserialize)]
@@ -318,5 +318,3 @@ mod tests {
         assert!(matches!(result.unwrap_err(), AppError::BadRequest(_)));
     }
 }
-
-

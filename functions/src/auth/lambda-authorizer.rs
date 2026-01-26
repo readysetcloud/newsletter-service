@@ -572,5 +572,3 @@ mod tests {
         assert_eq!(get_api_arn_pattern(arn), arn);
     }
 }
-
-

@@ -198,5 +198,3 @@ mod tests {
         assert!(limits.can_use_mailbox);
     }
 }
-
-

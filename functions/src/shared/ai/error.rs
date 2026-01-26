@@ -56,5 +56,3 @@ pub enum FunctionError {
     #[error("JSON error: {0}")]
     Json(String),
 }
-
-

@@ -205,5 +205,3 @@ impl<E> From<S3SdkError<PutObjectError, E>> for AppError {
         AppError::AwsError(format!("S3 PutObject error: {}", err))
     }
 }
-
-

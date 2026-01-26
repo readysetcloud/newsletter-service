@@ -1,6 +1,8 @@
 use aws_sdk_dynamodb::types::AttributeValue;
 use lambda_http::{run, service_fn, Body, Error, Request, Response};
-use newsletter_lambdas::senders::{auth, aws_clients, error::AppError, response, types::*, validation};
+use newsletter_lambdas::senders::{
+    auth, aws_clients, error::AppError, response, types::*, validation,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -765,5 +767,3 @@ mod tests {
         assert!(!one_sender.is_empty());
     }
 }
-
-

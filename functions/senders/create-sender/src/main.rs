@@ -347,7 +347,7 @@ async fn send_custom_verification_email(email: &str, tenant_id: &str) -> Result<
 
 async fn schedule_initial_status_check(tenant_id: &str, sender_id: &str) -> Result<(), AppError> {
     let scheduler = aws_clients::get_scheduler_client().await;
-    let schedule_name = format!("sender-check-{}-{}", tenant_id, sender_id);
+    let schedule_name = build_schedule_name(tenant_id, sender_id);
 
     let target_arn = std::env::var("CHECK_SENDER_STATUS_FUNCTION_ARN").map_err(|_| {
         AppError::InternalError("CHECK_SENDER_STATUS_FUNCTION_ARN not set".to_string())
@@ -355,18 +355,21 @@ async fn schedule_initial_status_check(tenant_id: &str, sender_id: &str) -> Resu
     let role_arn = std::env::var("SCHEDULER_ROLE_ARN")
         .map_err(|_| AppError::InternalError("SCHEDULER_ROLE_ARN not set".to_string()))?;
 
-    let one_hour_from_now = chrono::Utc::now() + chrono::Duration::hours(1);
-    let schedule_expression = format!("at({})", one_hour_from_now.format("%Y-%m-%dT%H:%M:%S"));
+    let start_time = chrono::Utc::now();
+    let run_at = start_time + chrono::Duration::minutes(1);
+    let schedule_expression = format!("at({})", run_at.format("%Y-%m-%dT%H:%M:%S"));
 
     let input = serde_json::json!({
         "tenantId": tenant_id,
-        "senderId": sender_id
+        "senderId": sender_id,
+        "startTime": start_time.to_rfc3339()
     });
 
     scheduler
         .create_schedule()
         .name(&schedule_name)
         .schedule_expression(&schedule_expression)
+        .action_after_completion(aws_sdk_scheduler::types::ActionAfterCompletion::Delete)
         .flexible_time_window(
             aws_sdk_scheduler::types::FlexibleTimeWindow::builder()
                 .mode(aws_sdk_scheduler::types::FlexibleTimeWindowMode::Off)
@@ -394,6 +397,13 @@ async fn schedule_initial_status_check(tenant_id: &str, sender_id: &str) -> Resu
     );
 
     Ok(())
+}
+
+fn build_schedule_name(tenant_id: &str, sender_id: &str) -> String {
+    let tenant_prefix: String = tenant_id.chars().take(8).collect();
+    let sender_prefix: String = sender_id.chars().take(8).collect();
+    let suffix = chrono::Utc::now().timestamp_millis();
+    format!("sender-check-{}-{}-{}", tenant_prefix, sender_prefix, suffix)
 }
 
 #[tokio::main]

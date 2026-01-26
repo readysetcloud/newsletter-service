@@ -1,7 +1,8 @@
 use aws_sdk_dynamodb::Client as DynamoDbClient;
 use aws_sdk_sesv2::Client as SesClient;
+use chrono::{DateTime, Duration, Utc};
 use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
-use senders_shared::{auth, error::AppError, response, types::*};
+use senders_shared::{auth, aws_clients, error::AppError, response, types::*};
 use serde::{Deserialize, Serialize};
 use std::env;
 
@@ -50,6 +51,16 @@ struct SesStatusInfo {
     identity_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SchedulerCheckRequest {
+    #[serde(rename = "tenantId")]
+    tenant_id: String,
+    #[serde(rename = "senderId")]
+    sender_id: String,
+    #[serde(rename = "startTime")]
+    start_time: Option<String>,
 }
 
 async fn get_sender_by_id(
@@ -208,16 +219,109 @@ async fn update_sender_verification_status(
     Ok(now)
 }
 
-async fn function_handler(event: Request) -> Result<Response<Body>, AppError> {
-    let user_context = auth::get_user_context(&event)?;
-    let tenant_id = user_context
-        .tenant_id
-        .ok_or_else(|| AppError::Unauthorized("Tenant access required".to_string()))?;
+async fn schedule_next_status_check(
+    tenant_id: &str,
+    sender_id: &str,
+    start_time: DateTime<Utc>,
+) -> Result<(), AppError> {
+    let scheduler = aws_clients::get_scheduler_client().await;
+    let schedule_name = build_schedule_name(tenant_id, sender_id);
+    let target_arn = env::var("CHECK_SENDER_STATUS_FUNCTION_ARN").map_err(|_| {
+        AppError::InternalError("CHECK_SENDER_STATUS_FUNCTION_ARN not set".to_string())
+    })?;
+    let role_arn = env::var("SCHEDULER_ROLE_ARN")
+        .map_err(|_| AppError::InternalError("SCHEDULER_ROLE_ARN not set".to_string()))?;
 
-    let path_params = event.path_parameters();
-    let sender_id = path_params
-        .first("senderId")
-        .ok_or_else(|| AppError::BadRequest("Missing senderId parameter".to_string()))?;
+    let run_at = Utc::now() + Duration::minutes(1);
+    let schedule_expression = format!("at({})", run_at.format("%Y-%m-%dT%H:%M:%S"));
+    let input = serde_json::json!({
+        "tenantId": tenant_id,
+        "senderId": sender_id,
+        "startTime": start_time.to_rfc3339()
+    });
+
+    scheduler
+        .create_schedule()
+        .name(&schedule_name)
+        .schedule_expression(&schedule_expression)
+        .action_after_completion(aws_sdk_scheduler::types::ActionAfterCompletion::Delete)
+        .flexible_time_window(
+            aws_sdk_scheduler::types::FlexibleTimeWindow::builder()
+                .mode(aws_sdk_scheduler::types::FlexibleTimeWindowMode::Off)
+                .build()
+                .map_err(|e| AppError::InternalError(format!("Failed to build time window: {}", e)))?,
+        )
+        .target(
+            aws_sdk_scheduler::types::Target::builder()
+                .arn(&target_arn)
+                .role_arn(&role_arn)
+                .input(input.to_string())
+                .build()
+                .map_err(|e| AppError::InternalError(format!("Failed to build target: {}", e)))?,
+        )
+        .send()
+        .await
+        .map_err(|e| AppError::AwsError(format!("Scheduler create schedule failed: {}", e)))?;
+
+    tracing::info!(
+        "Scheduled follow-up sender status check: tenantId={}, senderId={}, scheduleName={}",
+        tenant_id,
+        sender_id,
+        schedule_name
+    );
+
+    Ok(())
+}
+
+fn build_schedule_name(tenant_id: &str, sender_id: &str) -> String {
+    let tenant_prefix: String = tenant_id.chars().take(8).collect();
+    let sender_prefix: String = sender_id.chars().take(8).collect();
+    let suffix = Utc::now().timestamp_millis();
+    format!("sender-check-{}-{}-{}", tenant_prefix, sender_prefix, suffix)
+}
+
+fn parse_scheduler_payload(event: &Request) -> Result<SchedulerCheckRequest, AppError> {
+    let body = event.body();
+    if body.is_empty() {
+        return Err(AppError::BadRequest(
+            "Missing scheduler payload".to_string(),
+        ));
+    }
+
+    serde_json::from_slice(body)
+        .map_err(|e| AppError::BadRequest(format!("Invalid scheduler payload: {}", e)))
+}
+
+async fn function_handler(event: Request) -> Result<Response<Body>, AppError> {
+    let mut schedule_follow_up = false;
+    let mut start_time = None;
+
+    let (tenant_id, sender_id) = match auth::get_user_context(&event) {
+        Ok(user_context) => {
+            let tenant_id = user_context
+                .tenant_id
+                .ok_or_else(|| AppError::Unauthorized("Tenant access required".to_string()))?;
+            let path_params = event.path_parameters();
+            let sender_id = path_params
+                .first("senderId")
+                .ok_or_else(|| AppError::BadRequest("Missing senderId parameter".to_string()))?;
+            (tenant_id, sender_id.to_string())
+        }
+        Err(_) => {
+            let payload = parse_scheduler_payload(&event)?;
+            let parsed_start_time = match payload.start_time.as_deref() {
+                Some(value) => DateTime::parse_from_rfc3339(value)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .map_err(|e| {
+                        AppError::BadRequest(format!("Invalid startTime value: {}", e))
+                    })?,
+                None => Utc::now(),
+            };
+            schedule_follow_up = true;
+            start_time = Some(parsed_start_time);
+            (payload.tenant_id, payload.sender_id)
+        }
+    };
 
     let table_name = env::var("TABLE_NAME")
         .map_err(|_| AppError::InternalError("TABLE_NAME not configured".to_string()))?;
@@ -261,6 +365,38 @@ async fn function_handler(event: Request) -> Result<Response<Body>, AppError> {
         }
 
         ses_status_info = Some(ses_status);
+    }
+
+    if schedule_follow_up {
+        if let Some(start_time) = start_time {
+            let elapsed = Utc::now().signed_duration_since(start_time);
+            let timed_out = elapsed >= Duration::hours(1);
+
+            if updated_sender.verification_status == VerificationStatus::Pending {
+                if timed_out {
+                    let updated_at = update_sender_verification_status(
+                        &ddb_client,
+                        &table_name,
+                        &tenant_id,
+                        &sender_id,
+                        &VerificationStatus::VerificationTimedOut,
+                    )
+                    .await?;
+
+                    updated_sender.verification_status = VerificationStatus::VerificationTimedOut;
+                    updated_sender.updated_at = updated_at;
+                    status_changed = true;
+
+                    tracing::info!(
+                        "Sender verification timed out: tenantId={}, senderId={}",
+                        tenant_id,
+                        sender_id
+                    );
+                } else {
+                    schedule_next_status_check(&tenant_id, &sender_id, start_time).await?;
+                }
+            }
+        }
     }
 
     response::format_response(

@@ -403,7 +403,10 @@ fn build_schedule_name(tenant_id: &str, sender_id: &str) -> String {
     let tenant_prefix: String = tenant_id.chars().take(8).collect();
     let sender_prefix: String = sender_id.chars().take(8).collect();
     let suffix = chrono::Utc::now().timestamp_millis();
-    format!("sender-check-{}-{}-{}", tenant_prefix, sender_prefix, suffix)
+    format!(
+        "sender-check-{}-{}-{}",
+        tenant_prefix, sender_prefix, suffix
+    )
 }
 
 #[tokio::main]

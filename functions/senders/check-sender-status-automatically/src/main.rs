@@ -1,11 +1,13 @@
 use aws_sdk_dynamodb::Client as DynamoDbClient;
 use aws_sdk_sesv2::Client as SesClient;
 use chrono::{DateTime, Duration, Utc};
-use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
-use senders_shared::{auth, aws_clients, error::AppError, response, types::*};
+use lambda_runtime::{run, service_fn, Error, LambdaEvent};
+use senders_shared::{aws_clients, error::AppError, types::*};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::env;
 
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 struct GetSenderStatusResponse {
     #[serde(rename = "senderId")]
@@ -61,6 +63,22 @@ struct SchedulerCheckRequest {
     sender_id: String,
     #[serde(rename = "startTime")]
     start_time: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SchedulerCheckResponse {
+    status: String,
+    message: String,
+    #[serde(rename = "senderId", skip_serializing_if = "Option::is_none")]
+    sender_id: Option<String>,
+    #[serde(rename = "tenantId", skip_serializing_if = "Option::is_none")]
+    tenant_id: Option<String>,
+    #[serde(rename = "verificationStatus", skip_serializing_if = "Option::is_none")]
+    verification_status: Option<VerificationStatus>,
+    #[serde(rename = "statusChanged")]
+    status_changed: bool,
+    #[serde(rename = "lastChecked")]
+    last_checked: String,
 }
 
 async fn get_sender_by_id(
@@ -167,7 +185,7 @@ async fn update_sender_verification_status(
 ) -> Result<String, AppError> {
     let pk = tenant_id.to_string();
     let sk = KeyPatterns::sender(sender_id);
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = Utc::now().to_rfc3339();
 
     let status_str = match new_status {
         VerificationStatus::Verified => "verified",
@@ -223,12 +241,10 @@ async fn schedule_next_status_check(
     tenant_id: &str,
     sender_id: &str,
     start_time: DateTime<Utc>,
+    target_arn: &str,
 ) -> Result<(), AppError> {
     let scheduler = aws_clients::get_scheduler_client().await;
     let schedule_name = build_schedule_name(tenant_id, sender_id);
-    let target_arn = env::var("CHECK_SENDER_STATUS_FUNCTION_ARN").map_err(|_| {
-        AppError::InternalError("CHECK_SENDER_STATUS_FUNCTION_ARN not set".to_string())
-    })?;
     let role_arn = env::var("SCHEDULER_ROLE_ARN")
         .map_err(|_| AppError::InternalError("SCHEDULER_ROLE_ARN not set".to_string()))?;
 
@@ -249,11 +265,13 @@ async fn schedule_next_status_check(
             aws_sdk_scheduler::types::FlexibleTimeWindow::builder()
                 .mode(aws_sdk_scheduler::types::FlexibleTimeWindowMode::Off)
                 .build()
-                .map_err(|e| AppError::InternalError(format!("Failed to build time window: {}", e)))?,
+                .map_err(|e| {
+                    AppError::InternalError(format!("Failed to build time window: {}", e))
+                })?,
         )
         .target(
             aws_sdk_scheduler::types::Target::builder()
-                .arn(&target_arn)
+                .arn(target_arn)
                 .role_arn(&role_arn)
                 .input(input.to_string())
                 .build()
@@ -277,67 +295,61 @@ fn build_schedule_name(tenant_id: &str, sender_id: &str) -> String {
     let tenant_prefix: String = tenant_id.chars().take(8).collect();
     let sender_prefix: String = sender_id.chars().take(8).collect();
     let suffix = Utc::now().timestamp_millis();
-    format!("sender-check-{}-{}-{}", tenant_prefix, sender_prefix, suffix)
+    format!(
+        "sender-check-{}-{}-{}",
+        tenant_prefix, sender_prefix, suffix
+    )
 }
 
-fn parse_scheduler_payload(event: &Request) -> Result<SchedulerCheckRequest, AppError> {
-    let body = event.body();
-    if body.is_empty() {
-        return Err(AppError::BadRequest(
-            "Missing scheduler payload".to_string(),
-        ));
+fn parse_scheduler_payload(event: &Value) -> Result<SchedulerCheckRequest, AppError> {
+    if let Ok(payload) = serde_json::from_value::<SchedulerCheckRequest>(event.clone()) {
+        return Ok(payload);
     }
 
-    serde_json::from_slice(body)
-        .map_err(|e| AppError::BadRequest(format!("Invalid scheduler payload: {}", e)))
+    if let Some(detail) = event.get("detail") {
+        if let Ok(payload) = serde_json::from_value::<SchedulerCheckRequest>(detail.clone()) {
+            return Ok(payload);
+        }
+    }
+
+    if let Some(body) = event.get("body").and_then(|value| value.as_str()) {
+        if let Ok(payload) = serde_json::from_str::<SchedulerCheckRequest>(body) {
+            return Ok(payload);
+        }
+    }
+
+    Err(AppError::BadRequest(
+        "Unsupported scheduler payload".to_string(),
+    ))
 }
 
-async fn function_handler(event: Request) -> Result<Response<Body>, AppError> {
-    let mut schedule_follow_up = false;
-    let mut start_time = None;
-
-    let (tenant_id, sender_id) = match auth::get_user_context(&event) {
-        Ok(user_context) => {
-            let tenant_id = user_context
-                .tenant_id
-                .ok_or_else(|| AppError::Unauthorized("Tenant access required".to_string()))?;
-            let path_params = event.path_parameters();
-            let sender_id = path_params
-                .first("senderId")
-                .ok_or_else(|| AppError::BadRequest("Missing senderId parameter".to_string()))?;
-            (tenant_id, sender_id.to_string())
-        }
-        Err(_) => {
-            let payload = parse_scheduler_payload(&event)?;
-            let parsed_start_time = match payload.start_time.as_deref() {
-                Some(value) => DateTime::parse_from_rfc3339(value)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .map_err(|e| {
-                        AppError::BadRequest(format!("Invalid startTime value: {}", e))
-                    })?,
-                None => Utc::now(),
-            };
-            schedule_follow_up = true;
-            start_time = Some(parsed_start_time);
-            (payload.tenant_id, payload.sender_id)
-        }
+async fn function_handler(event: LambdaEvent<Value>) -> Result<SchedulerCheckResponse, AppError> {
+    let last_checked = Utc::now().to_rfc3339();
+    let payload = parse_scheduler_payload(&event.payload)?;
+    let start_time = match payload.start_time.as_deref() {
+        Some(value) => DateTime::parse_from_rfc3339(value)
+            .map(|dt| dt.with_timezone(&Utc))
+            .map_err(|e| AppError::BadRequest(format!("Invalid startTime value: {}", e)))?,
+        None => Utc::now(),
     };
+    let tenant_id = payload.tenant_id;
+    let sender_id = payload.sender_id;
 
     let table_name = env::var("TABLE_NAME")
         .map_err(|_| AppError::InternalError("TABLE_NAME not configured".to_string()))?;
+    let target_arn = event.context.invoked_function_arn;
 
     let config = aws_config::load_from_env().await;
     let ddb_client = DynamoDbClient::new(&config);
     let ses_client = SesClient::new(&config);
 
-    let sender = get_sender_by_id(&ddb_client, &table_name, &tenant_id, sender_id)
+    let sender = get_sender_by_id(&ddb_client, &table_name, &tenant_id, &sender_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Sender not found".to_string()))?;
 
     let mut updated_sender = sender.clone();
     let mut status_changed = false;
     let mut ses_status_info = None;
-    let last_checked = chrono::Utc::now().to_rfc3339();
 
     if sender.verification_status != VerificationStatus::Verified {
         let ses_status = check_ses_verification_status(&ses_client, &sender.email).await?;
@@ -348,7 +360,7 @@ async fn function_handler(event: Request) -> Result<Response<Body>, AppError> {
                     &ddb_client,
                     &table_name,
                     &tenant_id,
-                    sender_id,
+                    &sender_id,
                     &new_status,
                 )
                 .await?;
@@ -367,59 +379,52 @@ async fn function_handler(event: Request) -> Result<Response<Body>, AppError> {
         ses_status_info = Some(ses_status);
     }
 
-    if schedule_follow_up {
-        if let Some(start_time) = start_time {
-            let elapsed = Utc::now().signed_duration_since(start_time);
-            let timed_out = elapsed >= Duration::hours(1);
+    let elapsed = Utc::now().signed_duration_since(start_time);
+    let timed_out = elapsed >= Duration::hours(1);
 
-            if updated_sender.verification_status == VerificationStatus::Pending {
-                if timed_out {
-                    let updated_at = update_sender_verification_status(
-                        &ddb_client,
-                        &table_name,
-                        &tenant_id,
-                        &sender_id,
-                        &VerificationStatus::VerificationTimedOut,
-                    )
-                    .await?;
+    if updated_sender.verification_status == VerificationStatus::Pending {
+        if timed_out {
+            let updated_at = update_sender_verification_status(
+                &ddb_client,
+                &table_name,
+                &tenant_id,
+                &sender_id,
+                &VerificationStatus::VerificationTimedOut,
+            )
+            .await?;
 
-                    updated_sender.verification_status = VerificationStatus::VerificationTimedOut;
-                    updated_sender.updated_at = updated_at;
-                    status_changed = true;
+            updated_sender.verification_status = VerificationStatus::VerificationTimedOut;
+            updated_sender.updated_at = updated_at;
+            status_changed = true;
 
-                    tracing::info!(
-                        "Sender verification timed out: tenantId={}, senderId={}",
-                        tenant_id,
-                        sender_id
-                    );
-                } else {
-                    schedule_next_status_check(&tenant_id, &sender_id, start_time).await?;
-                }
-            }
+            tracing::info!(
+                "Sender verification timed out: tenantId={}, senderId={}",
+                tenant_id,
+                sender_id
+            );
+        } else {
+            schedule_next_status_check(&tenant_id, &sender_id, start_time, &target_arn).await?;
         }
     }
 
-    response::format_response(
-        200,
-        GetSenderStatusResponse {
-            sender_id: updated_sender.sender_id,
-            email: updated_sender.email,
-            name: updated_sender.name,
-            verification_type: updated_sender.verification_type,
-            verification_status: updated_sender.verification_status,
-            is_default: updated_sender.is_default,
-            domain: updated_sender.domain,
-            created_at: updated_sender.created_at,
-            updated_at: updated_sender.updated_at,
-            verified_at: updated_sender.verified_at,
-            failure_reason: updated_sender.failure_reason,
-            emails_sent: updated_sender.emails_sent,
-            last_sent_at: updated_sender.last_sent_at,
-            status_changed,
-            ses_status: ses_status_info,
-            last_checked,
-        },
-    )
+    if let Some(ses_status) = ses_status_info {
+        tracing::info!(
+            "SES status info: tenantId={}, senderId={}, status={}",
+            tenant_id,
+            sender_id,
+            ses_status.verification_status
+        );
+    }
+
+    Ok(SchedulerCheckResponse {
+        status: "ok".to_string(),
+        message: "Sender verification status checked".to_string(),
+        sender_id: Some(updated_sender.sender_id),
+        tenant_id: Some(tenant_id),
+        verification_status: Some(updated_sender.verification_status),
+        status_changed,
+        last_checked,
+    })
 }
 
 #[tokio::main]
@@ -429,11 +434,20 @@ async fn main() -> Result<(), Error> {
         .json()
         .init();
 
-    run(service_fn(|event: Request| async move {
+    run(service_fn(|event: LambdaEvent<Value>| async move {
         match function_handler(event).await {
-            Ok(response) => Ok::<Response<Body>, std::convert::Infallible>(response),
+            Ok(response) => Ok::<SchedulerCheckResponse, Error>(response),
             Err(e) => {
-                Ok::<Response<Body>, std::convert::Infallible>(response::format_error_response(&e))
+                tracing::error!("Automatic sender status check failed: {}", e);
+                Ok::<SchedulerCheckResponse, Error>(SchedulerCheckResponse {
+                    status: "error".to_string(),
+                    message: e.to_string(),
+                    sender_id: None,
+                    tenant_id: None,
+                    verification_status: None,
+                    status_changed: false,
+                    last_checked: Utc::now().to_rfc3339(),
+                })
             }
         }
     }))

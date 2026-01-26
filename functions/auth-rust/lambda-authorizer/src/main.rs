@@ -236,7 +236,7 @@ async fn get_user_tier(
                 .any(|g| g.group_name() == Some("creator-tier"))
             {
                 Some("creator-tier".to_string())
-            }else {
+            } else {
                 Some("free-tier".to_string())
             }
         }

@@ -6,18 +6,20 @@ use aws_sdk_bedrockruntime::types::{
 };
 use aws_sdk_bedrockruntime::Client as BedrockClient;
 use serde_json::Value;
-use std::sync::OnceLock;
+use tokio::sync::OnceCell;
 
-static BEDROCK_CLIENT: OnceLock<BedrockClient> = OnceLock::new();
+static BEDROCK_CLIENT: OnceCell<BedrockClient> = OnceCell::const_new();
 
 const MAX_ITERATIONS: usize = 10;
 const MAX_TOKENS: i32 = 10000;
 
 pub async fn get_bedrock_client() -> &'static BedrockClient {
-    BEDROCK_CLIENT.get_or_init(|| {
-        let config = tokio::runtime::Handle::current().block_on(aws_config::load_from_env());
-        BedrockClient::new(&config)
-    })
+    BEDROCK_CLIENT
+        .get_or_init(|| async {
+            let config = aws_config::load_from_env().await;
+            BedrockClient::new(&config)
+        })
+        .await
 }
 
 pub async fn converse(

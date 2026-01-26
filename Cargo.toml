@@ -16,6 +16,16 @@ members = [
     "functions/ai/generate-insights",
     "functions/ai/generate-social-post",
     "functions/ai/shared",
+    "functions/senders/shared",
+    "functions/senders/create-sender",
+    "functions/senders/delete-sender",
+    "functions/senders/get-senders",
+    "functions/senders/update-sender",
+    "functions/senders/get-sender-status",
+    "functions/senders/verify-domain",
+    "functions/senders/get-domain-verification",
+    "functions/senders/check-sender-status-automatically",
+    "functions/senders/bootstrap-verification-template",
     "crates/integration-tests"
 ]
 
@@ -33,6 +43,7 @@ aws-sdk-cloudwatchlogs = "1"
 aws-sdk-sesv2 = "1"
 aws-sdk-eventbridge = "1"
 aws-sdk-bedrockruntime = "1"
+aws-sdk-scheduler = "1"
 aws-smithy-types = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
@@ -44,3 +55,6 @@ base64 = "0.22"
 hex = "0.4"
 proptest = "1"
 regex = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+serde_dynamo = "4"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }

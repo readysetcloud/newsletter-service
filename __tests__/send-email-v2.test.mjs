@@ -33,13 +33,7 @@ jest.unstable_mockModule('../functions/utils/helpers.mjs', () => ({
   encrypt: jest.fn((email) => `encrypted_${email}`)
 }));
 
-// Mock sender types
-jest.unstable_mockModule('../functions/senders/types.mjs', () => ({
-  KEY_PATTERNS: {
-    SENDER: (senderId) => `sender#${senderId}`,
-    SENDER_GSI1PK: (tenantId) => `sender#${tenantId}`
-  }
-}));
+// Note: KEY_PATTERNS is now defined inline in send-email-v2.mjs (no longer imported from senders/types.mjs)
 
 // Import after mocks
 const { handler } = await import('../functions/send-email-v2.mjs');

@@ -7,15 +7,17 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::OnceLock;
+use tokio::sync::OnceCell;
 
-static DYNAMODB_CLIENT: OnceLock<DynamoDbClient> = OnceLock::new();
+static DYNAMODB_CLIENT: OnceCell<DynamoDbClient> = OnceCell::const_new();
 
 pub async fn get_dynamodb_client() -> &'static DynamoDbClient {
-    DYNAMODB_CLIENT.get_or_init(|| {
-        let config = tokio::runtime::Handle::current().block_on(aws_config::load_from_env());
-        DynamoDbClient::new(&config)
-    })
+    DYNAMODB_CLIENT
+        .get_or_init(|| async {
+            let config = aws_config::load_from_env().await;
+            DynamoDbClient::new(&config)
+        })
+        .await
 }
 
 pub struct ConverseOptions {

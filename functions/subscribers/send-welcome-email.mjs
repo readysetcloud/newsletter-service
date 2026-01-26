@@ -4,7 +4,12 @@ import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import Handlebars from 'handlebars';
 import welcomeTemplate from '../../templates/welcome.hbs';
 import { encrypt } from '../utils/helpers.mjs';
-import { KEY_PATTERNS } from '../senders/types.mjs';
+
+// Key patterns for DynamoDB (previously from ../senders/types.mjs)
+const KEY_PATTERNS = {
+  SENDER: (senderId) => `sender#${senderId}`,
+  SENDER_GSI1PK: (tenantId) => `sender#${tenantId}`
+};
 
 const ddb = new DynamoDBClient();
 const eventBridge = new EventBridgeClient();

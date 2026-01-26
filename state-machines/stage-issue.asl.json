@@ -515,7 +515,7 @@
         "Payload": {
           "content.$": "$$.Execution.Input.content",
           "tenantId.$": "$$.Execution.Input.tenant.id",
-          "issueId.$": "$$.Execution.Input.issueId"
+          "issueId.$": "States.Format('{}', $$.Execution.Input.issueId)"
         }
       },
       "Retry": [

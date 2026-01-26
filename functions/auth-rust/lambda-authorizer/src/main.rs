@@ -181,6 +181,8 @@ async fn handle_jwt_auth(
         .or_else(|| claims.sub.clone())
         .ok_or("Missing sub claim")?;
 
+    let tier = get_user_tier(&state.cognito, &state.user_pool_id, &principal_id).await;
+
     let api_arn = get_api_arn_pattern(event.method_arn.as_deref().unwrap_or_default());
     let context = build_context([
         ("userId", Some(principal_id.clone())),
@@ -189,6 +191,7 @@ async fn handle_jwt_auth(
         ("lastName", user_info.get("family_name").cloned()),
         ("timezone", user_info.get("zoneinfo").cloned()),
         ("tenantId", tenant_id),
+        ("tier", tier),
         ("authType", Some("jwt".to_string())),
     ]);
 
@@ -208,6 +211,40 @@ async fn get_user_attributes(
         Err(err) => {
             error!(error = %err, "Error fetching user attributes");
             HashMap::new()
+        }
+    }
+}
+
+async fn get_user_tier(
+    client: &CognitoClient,
+    user_pool_id: &str,
+    username: &str,
+) -> Option<String> {
+    match client
+        .admin_list_groups_for_user()
+        .user_pool_id(user_pool_id)
+        .username(username)
+        .send()
+        .await
+    {
+        Ok(response) => {
+            let groups = response.groups();
+            if groups.iter().any(|g| g.group_name() == Some("pro-tier")) {
+                Some("pro-tier".to_string())
+            } else if groups
+                .iter()
+                .any(|g| g.group_name() == Some("creator-tier"))
+            {
+                Some("creator-tier".to_string())
+            } else if groups.iter().any(|g| g.group_name() == Some("free-tier")) {
+                Some("free-tier".to_string())
+            } else {
+                Some("free-tier".to_string())
+            }
+        }
+        Err(err) => {
+            error!(error = %err, "Error fetching user groups");
+            Some("free-tier".to_string())
         }
     }
 }

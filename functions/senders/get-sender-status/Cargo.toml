@@ -1,0 +1,19 @@
+[package]
+name = "get-sender-status"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+senders-shared = { path = "../shared" }
+lambda_http = { workspace = true }
+lambda_runtime = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+aws-sdk-dynamodb = { workspace = true }
+aws-sdk-sesv2 = { workspace = true }
+aws-config = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = { workspace = true }
+serde_dynamo = { version = "4", features = ["aws-sdk-dynamodb+1"] }

@@ -736,7 +736,7 @@ Resources:
       BuildProperties:
         Binary: cognito-post-confirmation
     Properties:
-      CodeUri: functions/auth-rust/cognito-post-confirmation
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -760,7 +760,7 @@ Resources:
       BuildProperties:
         Binary: cognito-pre-token-generation
     Properties:
-      CodeUri: functions/auth-rust/cognito-pre-token-generation
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Environment:
@@ -789,7 +789,7 @@ Resources:
       BuildProperties:
         Binary: add-user-to-group
     Properties:
-      CodeUri: functions/admin/add-user-to-group
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -960,7 +960,7 @@ Resources:
       BuildProperties:
         Binary: lambda-authorizer
     Properties:
-      CodeUri: functions/auth-rust/lambda-authorizer
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -988,7 +988,7 @@ Resources:
       BuildProperties:
         Binary: get-profile
     Properties:
-      CodeUri: functions/admin/get-profile
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -1027,7 +1027,7 @@ Resources:
       BuildProperties:
         Binary: check-brand-id
     Properties:
-      CodeUri: functions/admin/check-brand-id
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -1053,7 +1053,7 @@ Resources:
       BuildProperties:
         Binary: update-brand
     Properties:
-      CodeUri: functions/admin/update-brand
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -1158,7 +1158,7 @@ Resources:
       BuildProperties:
         Binary: update-profile
     Properties:
-      CodeUri: functions/admin/update-profile
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -1187,7 +1187,7 @@ Resources:
       BuildProperties:
         Binary: manage-api-keys
     Properties:
-      CodeUri: functions/admin/manage-api-keys
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -1235,7 +1235,7 @@ Resources:
       BuildProperties:
         Binary: upload-brand-photo
     Properties:
-      CodeUri: functions/admin/upload-brand-photo
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -1632,7 +1632,7 @@ Resources:
       BuildProperties:
         Binary: generate-insights
     Properties:
-      CodeUri: functions/ai/generate-insights
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Timeout: 90
@@ -1685,7 +1685,7 @@ Resources:
       BuildProperties:
         Binary: generate-social-post
     Properties:
-      CodeUri: functions/ai/generate-social-post
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Timeout: 90
@@ -3097,7 +3097,7 @@ Resources:
       BuildProperties:
         Binary: get-senders
     Properties:
-      CodeUri: functions/senders/get-senders
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -3129,7 +3129,7 @@ Resources:
       BuildProperties:
         Binary: get-sender-status
     Properties:
-      CodeUri: functions/senders/get-sender-status
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -3165,7 +3165,7 @@ Resources:
       BuildProperties:
         Binary: create-sender
     Properties:
-      CodeUri: functions/senders/create-sender
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -3225,7 +3225,7 @@ Resources:
       BuildProperties:
         Binary: bootstrap-verification-template
     Properties:
-      CodeUri: functions/senders/bootstrap-verification-template
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -3261,7 +3261,7 @@ Resources:
       BuildProperties:
         Binary: update-sender
     Properties:
-      CodeUri: functions/senders/update-sender
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -3298,7 +3298,7 @@ Resources:
       BuildProperties:
         Binary: delete-sender
     Properties:
-      CodeUri: functions/senders/delete-sender
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -3338,7 +3338,7 @@ Resources:
       BuildProperties:
         Binary: verify-domain
     Properties:
-      CodeUri: functions/senders/verify-domain
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -3377,7 +3377,7 @@ Resources:
       BuildProperties:
         Binary: get-domain-verification
     Properties:
-      CodeUri: functions/senders/get-domain-verification
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -3416,7 +3416,7 @@ Resources:
       BuildProperties:
         Binary: check-sender-status-automatically
     Properties:
-      CodeUri: functions/senders/check-sender-status-automatically
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:
@@ -3503,7 +3503,7 @@ Resources:
       BuildProperties:
         Binary: unsubscribe-log-processor
     Properties:
-      CodeUri: functions/admin/unsubscribe-log-processor
+      CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
       Policies:

@@ -1,31 +1,141 @@
+[package]
+name = "newsletter-lambdas"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "functions/src/shared/lib.rs"
+
+[dependencies]
+aws-config = { workspace = true }
+aws-sdk-bedrockruntime = { workspace = true }
+aws-sdk-cloudwatchlogs = { workspace = true }
+aws-sdk-cognitoidentityprovider = { workspace = true }
+aws-sdk-dynamodb = { workspace = true }
+aws-sdk-eventbridge = { workspace = true }
+aws-sdk-s3 = { workspace = true }
+aws-sdk-scheduler = { workspace = true }
+aws-sdk-sesv2 = { workspace = true }
+aws-smithy-types = { workspace = true }
+aws_lambda_events = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+hex = { workspace = true }
+jsonwebtoken = { workspace = true }
+lambda_http = { workspace = true }
+lambda_runtime = { workspace = true }
+momento = { workspace = true }
+rand = { workspace = true }
+regex = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_dynamo = { version = "4", features = ["aws-sdk-dynamodb+1"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+aws_lambda_events = { workspace = true }
+proptest = { workspace = true }
+serial_test = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+[[bin]]
+name = "add-user-to-group"
+path = "functions/src/admin/add-user-to-group.rs"
+
+[[bin]]
+name = "check-brand-id"
+path = "functions/src/admin/check-brand-id.rs"
+
+[[bin]]
+name = "get-profile"
+path = "functions/src/admin/get-profile.rs"
+
+[[bin]]
+name = "manage-api-keys"
+path = "functions/src/admin/manage-api-keys.rs"
+
+[[bin]]
+name = "unsubscribe-log-processor"
+path = "functions/src/admin/unsubscribe-log-processor.rs"
+
+[[bin]]
+name = "update-brand"
+path = "functions/src/admin/update-brand.rs"
+
+[[bin]]
+name = "update-profile"
+path = "functions/src/admin/update-profile.rs"
+
+[[bin]]
+name = "upload-brand-photo"
+path = "functions/src/admin/upload-brand-photo.rs"
+
+[[bin]]
+name = "cognito-post-confirmation"
+path = "functions/src/auth/cognito-post-confirmation.rs"
+
+[[bin]]
+name = "cognito-pre-token-generation"
+path = "functions/src/auth/cognito-pre-token-generation.rs"
+
+[[bin]]
+name = "lambda-authorizer"
+path = "functions/src/auth/lambda-authorizer.rs"
+
+[[bin]]
+name = "generate-insights"
+path = "functions/src/ai/generate-insights.rs"
+
+[[bin]]
+name = "generate-social-post"
+path = "functions/src/ai/generate-social-post.rs"
+
+[[bin]]
+name = "get-senders"
+path = "functions/src/senders/get-senders.rs"
+
+[[bin]]
+name = "get-sender-status"
+path = "functions/src/senders/get-sender-status.rs"
+
+[[bin]]
+name = "create-sender"
+path = "functions/src/senders/create-sender.rs"
+
+[[bin]]
+name = "bootstrap-verification-template"
+path = "functions/src/senders/bootstrap-verification-template.rs"
+
+[[bin]]
+name = "update-sender"
+path = "functions/src/senders/update-sender.rs"
+
+[[bin]]
+name = "delete-sender"
+path = "functions/src/senders/delete-sender.rs"
+
+[[bin]]
+name = "verify-domain"
+path = "functions/src/senders/verify-domain.rs"
+
+[[bin]]
+name = "get-domain-verification"
+path = "functions/src/senders/get-domain-verification.rs"
+
+[[bin]]
+name = "check-sender-status-automatically"
+path = "functions/src/senders/check-sender-status-automatically.rs"
+
 [workspace]
 resolver = "2"
 members = [
-    "functions/admin/get-profile",
-    "functions/admin/update-profile",
-    "functions/admin/manage-api-keys",
-    "functions/admin/check-brand-id",
-    "functions/admin/update-brand",
-    "functions/admin/upload-brand-photo",
-    "functions/admin/add-user-to-group",
-    "functions/admin/unsubscribe-log-processor",
-    "functions/admin/shared",
-    "functions/auth-rust/cognito-post-confirmation",
-    "functions/auth-rust/cognito-pre-token-generation",
-    "functions/auth-rust/lambda-authorizer",
-    "functions/ai/generate-insights",
-    "functions/ai/generate-social-post",
-    "functions/ai/shared",
-    "functions/senders/shared",
-    "functions/senders/create-sender",
-    "functions/senders/delete-sender",
-    "functions/senders/get-senders",
-    "functions/senders/update-sender",
-    "functions/senders/get-sender-status",
-    "functions/senders/verify-domain",
-    "functions/senders/get-domain-verification",
-    "functions/senders/check-sender-status-automatically",
-    "functions/senders/bootstrap-verification-template",
     "crates/integration-tests"
 ]
 
@@ -57,4 +167,8 @@ proptest = "1"
 regex = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 serde_dynamo = "4"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+aws_lambda_events = "0.15"
+jsonwebtoken = "9"
+momento = "0.59.0"
+serial_test = "3"

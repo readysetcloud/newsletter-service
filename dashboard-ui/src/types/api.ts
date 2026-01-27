@@ -1,5 +1,5 @@
 // API Response Types
-export interface ApiResponse<T = any> {
+export interface ApiResponse<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;
@@ -11,7 +11,7 @@ export interface ApiResponse<T = any> {
 export interface ApiError {
   message: string;
   code?: string;
-  details?: Record<string, any>;
+  details?: Record<string, unknown>;
 }
 
 // User Profile Types
@@ -92,7 +92,7 @@ export interface Issue {
   title: string;
   sentDate: string;
   metrics?: IssueMetrics;
-  performance?: any;
+  performance?: unknown;
 }
 
 export interface IssueMetrics {
@@ -127,7 +127,7 @@ export interface ActivityItem {
   title: string;
   description: string;
   timestamp: string;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 // Brand Management Types
@@ -151,17 +151,6 @@ export interface BrandPhotoUploadResponse {
   expiresIn: number;
   maxSize: number;
   publicUrl: string;
-}
-
-// Notification Types
-export interface Notification {
-  id: string;
-  type: 'info' | 'success' | 'warning' | 'error';
-  title: string;
-  message: string;
-  timestamp: string;
-  read: boolean;
-  actionUrl?: string;
 }
 
 // Authentication Types

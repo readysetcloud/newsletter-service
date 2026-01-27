@@ -148,7 +148,7 @@ describe('ConfirmationDialog', () => {
     );
 
     let confirmButton = screen.getByRole('button', { name: /confirm/i });
-    expect(confirmButton).toHaveClass('bg-red-600');
+    expect(confirmButton).toHaveClass('bg-error-600');
 
     rerender(
       <ConfirmationDialog
@@ -162,7 +162,7 @@ describe('ConfirmationDialog', () => {
     );
 
     confirmButton = screen.getByRole('button', { name: /confirm/i });
-    expect(confirmButton).toHaveClass('bg-blue-600');
+    expect(confirmButton).toHaveClass('bg-primary-600');
   });
 
   it('uses preset configurations correctly', () => {

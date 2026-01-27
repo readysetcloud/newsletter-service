@@ -36,8 +36,6 @@ export function useOnboardingStatus(): OnboardingStatus {
   // But we can offer it as an optional third step
   const needsSenderSetup = !needsBrandSetup && !needsProfileSetup;
 
-  console.log(user);
-
   const isNewUser = needsBrandSetup || needsProfileSetup;
   const isOnboardingComplete = !isNewUser;
 

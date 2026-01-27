@@ -1,9 +1,9 @@
-import type { UserProfile, Notification } from './api';
+import type { ComponentType, ReactNode } from 'react';
+import type { UserProfile } from './api';
 
 // Application State Types
 export interface AppState {
   user: UserState;
-  notifications: NotificationState;
   ui: UIState;
 }
 
@@ -11,13 +11,6 @@ export interface UserState {
   isAuthenticated: boolean;
   isLoading: boolean;
   profile: UserProfile | null;
-  error: string | null;
-}
-
-export interface NotificationState {
-  notifications: Notification[];
-  unreadCount: number;
-  isLoading: boolean;
   error: string | null;
 }
 
@@ -29,7 +22,7 @@ export interface UIState {
 }
 
 // Form Types
-export interface FormState<T = any> {
+export interface FormState<T = unknown> {
   data: T;
   errors: Record<string, string>;
   isSubmitting: boolean;
@@ -40,7 +33,7 @@ export interface FormState<T = any> {
 // Component Props Types
 export interface BaseComponentProps {
   className?: string;
-  children?: React.ReactNode;
+  children?: ReactNode;
 }
 
 export interface LoadingState {
@@ -51,7 +44,7 @@ export interface LoadingState {
 // Route Types
 export interface RouteConfig {
   path: string;
-  component: React.ComponentType;
+  component: ComponentType;
   requiresAuth: boolean;
   title: string;
 }
@@ -60,7 +53,7 @@ export interface RouteConfig {
 export interface RequestConfig {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   headers?: Record<string, string>;
-  body?: any;
+  body?: unknown;
   timeout?: number;
 }
 
@@ -88,7 +81,6 @@ export type {
   BrandUpdateRequest,
   BrandPhotoUploadRequest,
   BrandPhotoUploadResponse,
-  Notification,
   AuthTokens,
   CognitoUser,
 } from './api';

@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testieact';
+import { render, screen, waitFor } from '@testieact';
 import userEvent from '@testing-library/user-event';
 import { SenderEmailSetupPage } from '../SenderEmailSetupPage';
 import { senderService } from '@/services/senderService';
@@ -9,12 +9,9 @@ vi.mock('@/services/senderService');
 vi.mock('@/components/layout/AppHeader', () => ({
   AppHeader: () => <div data-testid="app-header">App Header</div>
 }));
-vi.mock('@/hooks/useNotifications', () => ({
-  useNotifications: () => ({
-    showSuccess: vi.fn(),
-    showError: vi.fn(),
-    showInfo: vi.fn(),
-    isSubscribed: true
+vi.mock('@/components/ui/Toast', () => ({
+  useToast: () => ({
+    addToast: vi.fn()
   })
 }));
 vi.mock('@/contexts/AuthContext', () => ({
@@ -114,14 +111,6 @@ describe('SenderEmailSetupPage', () => {
     await waitFor(() => {
       expect(screen.getByText(/current plan: creator tier/i)).toBeInTheDocument();
       expect(screen.getByText('1 of 2 sender emails configured')).toBeInTheDocument();
-    });
-  });
-
-  it('shows real-time status indicator when subscribed', async () => {
-    render(<SenderEmailSetupPage />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Real-time updates active')).toBeInTheDocument();
     });
   });
 
@@ -378,7 +367,6 @@ describe('SenderEmailSetupPage', () => {
   });
 
   it('handles domain verification', async () => {
-    const user = userEvent.setup();
     mockSenderService.verifyDomainWithRetry.mockResolvedValue({
       success: true,
       data: {

@@ -1,4 +1,5 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+/* eslint-disable react-refresh/only-export-components */
+import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
 import {
   signIn as amplifySignIn,
   signOut as amplifySignOut,
@@ -29,7 +30,7 @@ interface AuthContextType {
   isLoading: boolean;
   error: string | null;
   signIn: (email: string, password: string) => Promise<void>;
-  signUp: (email: string, password: string, firstName: string, lastName: string) => Promise<{ isSignUpComplete: boolean; nextStep?: any }>;
+  signUp: (email: string, password: string, firstName: string, lastName: string) => Promise<{ isSignUpComplete: boolean; nextStep?: unknown }>;
   confirmSignUp: (email: string, confirmationCode: string) => Promise<void>;
   resendSignUpCode: (email: string) => Promise<void>;
   signOut: () => Promise<void>;
@@ -44,41 +45,35 @@ interface AuthProviderProps {
   children: ReactNode;
 }
 
+const parseJwtToken = (token: string): Partial<User> => {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    return {
+      userId: payload.sub,
+      email: payload.email,
+      emailVerified: payload.email_verified,
+      tenantId: payload['custom:tenant_id'],
+      role: payload['custom:role'],
+      isAdmin: payload['custom:role'] === 'admin',
+      isTenantAdmin: payload['custom:role'] === 'tenant_admin',
+      profileCompleted: payload['custom:profile_completed'] === 'true',
+      groups: payload['cognito:groups'] || [],
+      firstName: payload.given_name,
+      lastName: payload.family_name
+    };
+  } catch (error) {
+    console.error('Error parsing JWT token:', error);
+    return {};
+  }
+};
+
 export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Parse JWT token to extract user information
-  const parseJwtToken = (token: string): Partial<User> => {
-    try {
-      const payload = JSON.parse(atob(token.split('.')[1]));
-      return {
-        userId: payload.sub,
-        email: payload.email,
-        emailVerified: payload.email_verified,
-        tenantId: payload['custom:tenant_id'],
-        role: payload['custom:role'],
-        isAdmin: payload['custom:role'] === 'admin',
-        isTenantAdmin: payload['custom:role'] === 'tenant_admin',
-        profileCompleted: payload['custom:profile_completed'] === 'true',
-        groups: payload['cognito:groups'] || [],
-        firstName: payload.given_name,
-        lastName: payload.family_name
-      };
-    } catch (error) {
-      console.error('Error parsing JWT token:', error);
-      return {};
-    }
-  };
-
-  // Check authentication status on mount
-  useEffect(() => {
-    checkAuthStatus();
-  }, []);
-
-  const checkAuthStatus = async () => {
+  const checkAuthStatus = useCallback(async () => {
     try {
       setIsLoading(true);
       const currentUser = await getCurrentUser();
@@ -97,14 +92,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
         setUser(null);
         setIsAuthenticated(false);
       }
-    } catch (error) {
+    } catch {
       console.log('No authenticated user found');
       setUser(null);
       setIsAuthenticated(false);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   const signIn = async (email: string, password: string) => {
     try {
@@ -124,18 +119,21 @@ export function AuthProvider({ children }: AuthProviderProps) {
       } else {
         setError('Sign in incomplete. Please try again.');
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Sign in error:', error);
       let errorMessage = 'An error occurred during sign in';
 
-      if (error.name === 'NotAuthorizedException') {
+      const errorName = getErrorName(error);
+      const errorMessageFromError = getErrorMessage(error);
+
+      if (errorName === 'NotAuthorizedException') {
         errorMessage = 'Invalid email or password';
-      } else if (error.name === 'UserNotConfirmedException') {
+      } else if (errorName === 'UserNotConfirmedException') {
         errorMessage = 'Account not confirmed. Please check your email.';
-      } else if (error.name === 'UserNotFoundException') {
+      } else if (errorName === 'UserNotFoundException') {
         errorMessage = 'User not found';
-      } else if (error.message) {
-        errorMessage = error.message;
+      } else if (errorMessageFromError) {
+        errorMessage = errorMessageFromError;
       }
 
       setError(errorMessage);
@@ -153,13 +151,18 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setUser(null);
       setIsAuthenticated(false);
       setError(null);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Sign out error:', error);
       setError('Error signing out');
     } finally {
       setIsLoading(false);
     }
   };
+
+  // Check authentication status on mount
+  useEffect(() => {
+    checkAuthStatus();
+  }, [checkAuthStatus]);
 
   const getToken = async (): Promise<string> => {
     try {
@@ -215,18 +218,21 @@ export function AuthProvider({ children }: AuthProviderProps) {
       });
 
       return { isSignUpComplete, nextStep };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Sign up error:', error);
       let errorMessage = 'An error occurred during sign up';
 
-      if (error.name === 'UsernameExistsException') {
+      const errorName = getErrorName(error);
+      const errorMessageFromError = getErrorMessage(error);
+
+      if (errorName === 'UsernameExistsException') {
         errorMessage = 'An account with this email already exists';
-      } else if (error.name === 'InvalidPasswordException') {
+      } else if (errorName === 'InvalidPasswordException') {
         errorMessage = 'Password does not meet requirements';
-      } else if (error.name === 'InvalidParameterException') {
+      } else if (errorName === 'InvalidParameterException') {
         errorMessage = 'Invalid email or password format';
-      } else if (error.message) {
-        errorMessage = error.message;
+      } else if (errorMessageFromError) {
+        errorMessage = errorMessageFromError;
       }
 
       setError(errorMessage);
@@ -248,18 +254,21 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       // After successful confirmation, automatically sign in
       await checkAuthStatus();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Confirm sign up error:', error);
       let errorMessage = 'An error occurred during confirmation';
 
-      if (error.name === 'CodeMismatchException') {
+      const errorName = getErrorName(error);
+      const errorMessageFromError = getErrorMessage(error);
+
+      if (errorName === 'CodeMismatchException') {
         errorMessage = 'Invalid confirmation code';
-      } else if (error.name === 'ExpiredCodeException') {
+      } else if (errorName === 'ExpiredCodeException') {
         errorMessage = 'Confirmation code has expired';
-      } else if (error.name === 'NotAuthorizedException') {
+      } else if (errorName === 'NotAuthorizedException') {
         errorMessage = 'User is already confirmed';
-      } else if (error.message) {
-        errorMessage = error.message;
+      } else if (errorMessageFromError) {
+        errorMessage = errorMessageFromError;
       }
 
       setError(errorMessage);
@@ -277,16 +286,19 @@ export function AuthProvider({ children }: AuthProviderProps) {
       await amplifyResendSignUpCode({
         username: email,
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Resend code error:', error);
       let errorMessage = 'An error occurred while resending code';
 
-      if (error.name === 'LimitExceededException') {
+      const errorName = getErrorName(error);
+      const errorMessageFromError = getErrorMessage(error);
+
+      if (errorName === 'LimitExceededException') {
         errorMessage = 'Too many requests. Please wait before requesting another code.';
-      } else if (error.name === 'InvalidParameterException') {
+      } else if (errorName === 'InvalidParameterException') {
         errorMessage = 'Invalid email address';
-      } else if (error.message) {
-        errorMessage = error.message;
+      } else if (errorMessageFromError) {
+        errorMessage = errorMessageFromError;
       }
 
       setError(errorMessage);
@@ -328,4 +340,26 @@ export function useAuth() {
     throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;
+}
+
+function getErrorMessage(error: unknown): string | undefined {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    return typeof message === 'string' ? message : undefined;
+  }
+  return undefined;
+}
+
+function getErrorName(error: unknown): string | undefined {
+  if (error instanceof Error) {
+    return error.name;
+  }
+  if (typeof error === 'object' && error !== null && 'name' in error) {
+    const name = (error as { name?: unknown }).name;
+    return typeof name === 'string' ? name : undefined;
+  }
+  return undefined;
 }

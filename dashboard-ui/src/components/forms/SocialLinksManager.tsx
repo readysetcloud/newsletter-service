@@ -66,17 +66,17 @@ export function SocialLinksManager({ initialLinks = [], onUpdate, isLoading = fa
   return (
     <Card className="p-6">
       <div className="mb-6">
-        <h3 className="text-lg font-semibold text-gray-900">Social Links</h3>
-        <p className="text-sm text-gray-600 mt-1">
+        <h3 className="text-lg font-semibold text-foreground">Social Links</h3>
+        <p className="text-sm text-muted-foreground mt-1">
           Add your social media profiles and professional links.
         </p>
       </div>
 
       <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-4">
         {fields.map((field, index) => (
-          <div key={field.id} className="border border-gray-200 rounded-lg p-4 bg-gray-50">
+          <div key={field.id} className="border border-border rounded-lg p-4 bg-background">
             <div className="flex justify-between items-center mb-3">
-              <h4 className="text-sm font-medium text-gray-700">Link {index + 1}</h4>
+              <h4 className="text-sm font-medium text-muted-foreground">Link {index + 1}</h4>
               {fields.length > 1 && (
                 <Button
                   type="button"
@@ -84,7 +84,7 @@ export function SocialLinksManager({ initialLinks = [], onUpdate, isLoading = fa
                   size="sm"
                   onClick={() => removeLink(index)}
                   disabled={isLoading || isSubmitting}
-                  className="text-red-600 hover:text-red-700"
+                  className="text-error-600 hover:text-error-700"
                 >
                   <TrashIcon className="h-4 w-4" />
                 </Button>

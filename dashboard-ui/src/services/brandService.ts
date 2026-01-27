@@ -1,4 +1,5 @@
 import { apiClient } from './api';
+import type { BrandInfo } from '@/types';
 
 export interface BrandIdAvailabilityResponse {
   available: boolean;
@@ -34,11 +35,15 @@ export async function updateBrand(brandData: {
   brandDescription?: string;
   brandLogo?: string;
   tags?: string[];
-}): Promise<any> {
-  const response = await apiClient.put('/me/brand', brandData);
+}): Promise<BrandInfo> {
+  const response = await apiClient.put<BrandInfo>('/me/brand', brandData);
 
   if (!response.success) {
     throw new Error(response.error || 'Failed to update brand');
+  }
+
+  if (!response.data) {
+    throw new Error('No brand data returned from server');
   }
 
   return response.data;

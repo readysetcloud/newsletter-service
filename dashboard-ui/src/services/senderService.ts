@@ -218,7 +218,7 @@ export class SenderService {
     baseDelay: number = 1000,
     context: string = 'operation'
   ): Promise<ApiResponse<T>> {
-    let lastError: any;
+    let lastError: unknown;
     let lastResponse: ApiResponse<T> | null = null;
 
     for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
@@ -286,7 +286,7 @@ export class SenderService {
   /**
    * Check if an error is retryable based on error code and response
    */
-  private isErrorRetryable(error: any, response?: ApiResponse<any>): boolean {
+  private isErrorRetryable(error: unknown, response?: ApiResponse<unknown>): boolean {
     // Check for specific error codes that should not be retried
     if (response?.errorCode) {
       const nonRetryableErrorCodes = [

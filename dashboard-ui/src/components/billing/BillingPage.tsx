@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui';
 import { billingService } from '@/services';
@@ -33,7 +33,7 @@ export function BillingPage({ onError, onSuccess }: BillingPageProps) {
   const [activeTab, setActiveTab] = useState<'overview' | 'plans' | 'manage'>('overview');
 
   // Load subscription data
-  const loadSubscriptionData = async () => {
+  const loadSubscriptionData = useCallback(async () => {
     try {
       setLoading(prev => ({ ...prev, subscription: true }));
       setError(null);
@@ -59,7 +59,7 @@ export function BillingPage({ onError, onSuccess }: BillingPageProps) {
     } finally {
       setLoading(prev => ({ ...prev, subscription: false }));
     }
-  };
+  }, [onError]);
 
   // Handle plan selection
   const handlePlanSelect = async (planId: string) => {
@@ -122,7 +122,7 @@ export function BillingPage({ onError, onSuccess }: BillingPageProps) {
   // Load data on mount
   useEffect(() => {
     loadSubscriptionData();
-  }, []);
+  }, [loadSubscriptionData]);
 
   // Handle URL parameters (success/cancel from Stripe)
   useEffect(() => {
@@ -140,15 +140,15 @@ export function BillingPage({ onError, onSuccess }: BillingPageProps) {
       // Clean up URL
       window.history.replaceState({}, '', window.location.pathname);
     }
-  }, [onSuccess, onError]);
+  }, [onSuccess, onError, loadSubscriptionData]);
 
   if (error && !subscriptionData) {
     return (
       <div className="max-w-4xl mx-auto p-6">
-        <div className="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
-          <AlertTriangle className="w-8 h-8 text-red-600 mx-auto mb-4" />
-          <h2 className="text-lg font-semibold text-red-900 mb-2">Failed to Load Billing Data</h2>
-          <p className="text-red-700 mb-4">{error}</p>
+        <div className="bg-error-50 border border-error-200 rounded-lg p-6 text-center">
+          <AlertTriangle className="w-8 h-8 text-error-600 mx-auto mb-4" />
+          <h2 className="text-lg font-semibold text-error-900 mb-2">Failed to Load Billing Data</h2>
+          <p className="text-error-700 mb-4">{error}</p>
           <Button onClick={loadSubscriptionData} className="flex items-center gap-2">
             <RefreshCw className="w-4 h-4" />
             Retry
@@ -162,8 +162,8 @@ export function BillingPage({ onError, onSuccess }: BillingPageProps) {
     <div className="max-w-6xl mx-auto p-6 space-y-6">
       {/* Page Header */}
       <div>
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">Billing & Subscription</h1>
-        <p className="text-gray-600">
+        <h1 className="text-3xl font-bold text-foreground mb-2">Billing & Subscription</h1>
+        <p className="text-muted-foreground">
           Manage your subscription, view usage, and update billing information.
         </p>
       </div>
@@ -178,14 +178,14 @@ export function BillingPage({ onError, onSuccess }: BillingPageProps) {
       )}
 
       {/* Tab Navigation */}
-      <div className="border-b border-gray-200">
+      <div className="border-b border-border">
         <nav className="-mb-px flex space-x-8">
           <button
             onClick={() => setActiveTab('overview')}
             className={`py-2 px-1 border-b-2 font-medium text-sm ${
               activeTab === 'overview'
-                ? 'border-blue-500 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                ? 'border-primary-500 text-primary-600'
+                : 'border-transparent text-muted-foreground hover:text-muted-foreground hover:border-border'
             }`}
           >
             Overview
@@ -194,8 +194,8 @@ export function BillingPage({ onError, onSuccess }: BillingPageProps) {
             onClick={() => setActiveTab('plans')}
             className={`py-2 px-1 border-b-2 font-medium text-sm ${
               activeTab === 'plans'
-                ? 'border-blue-500 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                ? 'border-primary-500 text-primary-600'
+                : 'border-transparent text-muted-foreground hover:text-muted-foreground hover:border-border'
             }`}
           >
             Plans & Pricing
@@ -204,8 +204,8 @@ export function BillingPage({ onError, onSuccess }: BillingPageProps) {
             onClick={() => setActiveTab('manage')}
             className={`py-2 px-1 border-b-2 font-medium text-sm ${
               activeTab === 'manage'
-                ? 'border-blue-500 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                ? 'border-primary-500 text-primary-600'
+                : 'border-transparent text-muted-foreground hover:text-muted-foreground hover:border-border'
             }`}
           >
             Manage Billing

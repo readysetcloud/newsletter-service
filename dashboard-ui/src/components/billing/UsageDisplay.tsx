@@ -4,10 +4,9 @@ import { Card, CardContent, CardHeader, CardTitle, Button } from '@/components/u
 import {
   calculateUsagePercentage,
   getUsageStatus,
-  formatUsage,
-  USAGE_THRESHOLDS
+  formatUsage
 } from '@/constants';
-import type { UsageDisplayProps, UsageMetrics, SubscriptionPlan } from '@/types';
+import type { UsageDisplayProps } from '@/types';
 
 interface UsageProgressBarProps {
   current: number;
@@ -23,19 +22,19 @@ function UsageProgressBar({ current, limit, label, icon, resetDate }: UsageProgr
 
   const getBarColor = () => {
     switch (status) {
-      case 'blocked': return 'bg-red-500';
-      case 'critical': return 'bg-red-400';
-      case 'warning': return 'bg-yellow-400';
-      default: return 'bg-blue-500';
+      case 'blocked': return 'bg-error-500';
+      case 'critical': return 'bg-error-400';
+      case 'warning': return 'bg-warning-400';
+      default: return 'bg-primary-500';
     }
   };
 
   const getTextColor = () => {
     switch (status) {
-      case 'blocked': return 'text-red-700';
-      case 'critical': return 'text-red-600';
-      case 'warning': return 'text-yellow-700';
-      default: return 'text-gray-700';
+      case 'blocked': return 'text-error-700';
+      case 'critical': return 'text-error-600';
+      case 'warning': return 'text-warning-700';
+      default: return 'text-muted-foreground';
     }
   };
 
@@ -44,14 +43,14 @@ function UsageProgressBar({ current, limit, label, icon, resetDate }: UsageProgr
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           {icon}
-          <span className="text-sm font-medium text-gray-900">{label}</span>
+          <span className="text-sm font-medium text-foreground">{label}</span>
         </div>
         <span className={`text-sm font-medium ${getTextColor()}`}>
           {formatUsage(current, limit)} ({percentage}%)
         </span>
       </div>
 
-      <div className="w-full bg-gray-200 rounded-full h-2">
+      <div className="w-full bg-muted rounded-full h-2">
         <div
           className={`h-2 rounded-full transition-all duration-300 ${getBarColor()}`}
           style={{ width: `${Math.min(percentage, 100)}%` }}
@@ -59,7 +58,7 @@ function UsageProgressBar({ current, limit, label, icon, resetDate }: UsageProgr
       </div>
 
       {resetDate && (
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-muted-foreground">
           Resets on {new Date(resetDate).toLocaleDateString('en-US', {
             month: 'short',
             day: 'numeric'
@@ -68,21 +67,21 @@ function UsageProgressBar({ current, limit, label, icon, resetDate }: UsageProgr
       )}
 
       {status === 'warning' && (
-        <div className="flex items-center gap-1 text-yellow-700">
+        <div className="flex items-center gap-1 text-warning-700">
           <AlertTriangle className="w-3 h-3" />
           <span className="text-xs">Approaching limit</span>
         </div>
       )}
 
       {status === 'critical' && (
-        <div className="flex items-center gap-1 text-red-700">
+        <div className="flex items-center gap-1 text-error-700">
           <AlertTriangle className="w-3 h-3" />
           <span className="text-xs">Near limit - consider upgrading</span>
         </div>
       )}
 
       {status === 'blocked' && (
-        <div className="flex items-center gap-1 text-red-700">
+        <div className="flex items-center gap-1 text-error-700">
           <AlertTriangle className="w-3 h-3" />
           <span className="text-xs font-medium">Limit reached</span>
         </div>
@@ -117,7 +116,7 @@ export function UsageDisplay({
           current={usage.subscribers.current}
           limit={usage.subscribers.limit}
           label="Subscribers"
-          icon={<Users className="w-4 h-4 text-gray-400" />}
+          icon={<Users className="w-4 h-4 text-muted-foreground" />}
         />
 
         {/* Monthly Emails Usage */}
@@ -125,36 +124,36 @@ export function UsageDisplay({
           current={usage.monthlyEmails.current}
           limit={usage.monthlyEmails.limit}
           label="Monthly Emails"
-          icon={<Mail className="w-4 h-4 text-gray-400" />}
+          icon={<Mail className="w-4 h-4 text-muted-foreground" />}
           resetDate={usage.monthlyEmails.resetDate}
         />
 
         {/* Plan Features */}
         <div className="border-t pt-4">
-          <h4 className="text-sm font-medium text-gray-900 mb-3">Plan Features</h4>
+          <h4 className="text-sm font-medium text-foreground mb-3">Plan Features</h4>
           <div className="grid grid-cols-2 gap-4 text-sm">
             <div className="flex items-center justify-between">
-              <span className="text-gray-600">Custom Domain</span>
-              <span className={plan.limits.customDomain ? 'text-green-600' : 'text-gray-400'}>
-                {plan.limits.customDomain ? '✓' : '✗'}
+              <span className="text-muted-foreground">Custom Domain</span>
+              <span className={plan.limits.customDomain ? 'text-success-600' : 'text-muted-foreground'}>
+                {plan.limits.customDomain ? '&check;' : '&times;'}
               </span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-gray-600">Sponsor Reminders</span>
-              <span className={plan.limits.sponsorReminders ? 'text-green-600' : 'text-gray-400'}>
-                {plan.limits.sponsorReminders ? '✓' : '✗'}
+              <span className="text-muted-foreground">Sponsor Reminders</span>
+              <span className={plan.limits.sponsorReminders ? 'text-success-600' : 'text-muted-foreground'}>
+                {plan.limits.sponsorReminders ? '&check;' : '&times;'}
               </span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-gray-600">API Access</span>
-              <span className={plan.limits.apiAccess ? 'text-green-600' : 'text-gray-400'}>
-                {plan.limits.apiAccess ? '✓' : '✗'}
+              <span className="text-muted-foreground">API Access</span>
+              <span className={plan.limits.apiAccess ? 'text-success-600' : 'text-muted-foreground'}>
+                {plan.limits.apiAccess ? '&check;' : '&times;'}
               </span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-gray-600">Advanced Analytics</span>
-              <span className={plan.limits.analytics ? 'text-green-600' : 'text-gray-400'}>
-                {plan.limits.analytics ? '✓' : '✗'}
+              <span className="text-muted-foreground">Advanced Analytics</span>
+              <span className={plan.limits.analytics ? 'text-success-600' : 'text-muted-foreground'}>
+                {plan.limits.analytics ? '&check;' : '&times;'}
               </span>
             </div>
           </div>
@@ -162,15 +161,15 @@ export function UsageDisplay({
 
         {/* Upgrade Prompt */}
         {shouldShowUpgrade && onUpgrade && (
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <div className="bg-primary-50 border border-primary-200 rounded-lg p-4">
             <div className="flex items-start gap-3">
-              <TrendingUp className="w-5 h-5 text-blue-600 mt-0.5" />
+              <TrendingUp className="w-5 h-5 text-primary-600 mt-0.5" />
               <div className="flex-1">
-                <h4 className="text-sm font-medium text-blue-800">
+                <h4 className="text-sm font-medium text-primary-800">
                   Consider Upgrading
                 </h4>
-                <p className="text-sm text-blue-700 mt-1">
-                  You're approaching your plan limits. Upgrade to get more capacity and additional features.
+                <p className="text-sm text-primary-700 mt-1">
+                  You&apos;re approaching your plan limits. Upgrade to get more capacity and additional features.
                 </p>
                 <Button
                   size="sm"
@@ -186,15 +185,15 @@ export function UsageDisplay({
 
         {/* Blocked State */}
         {(subscribersStatus === 'blocked' || emailsStatus === 'blocked') && (
-          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+          <div className="bg-error-50 border border-error-200 rounded-lg p-4">
             <div className="flex items-start gap-3">
-              <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5" />
+              <AlertTriangle className="w-5 h-5 text-error-600 mt-0.5" />
               <div className="flex-1">
-                <h4 className="text-sm font-medium text-red-800">
+                <h4 className="text-sm font-medium text-error-800">
                   Limit Reached
                 </h4>
-                <p className="text-sm text-red-700 mt-1">
-                  You've reached your plan limits.
+                <p className="text-sm text-error-700 mt-1">
+                  You&apos;ve reached your plan limits.
                   {subscribersStatus === 'blocked' && ' You cannot add more subscribers.'}
                   {emailsStatus === 'blocked' && ' You cannot send more emails this month.'}
                   {' '}Upgrade your plan to continue.
@@ -218,3 +217,4 @@ export function UsageDisplay({
 }
 
 export default UsageDisplay;
+

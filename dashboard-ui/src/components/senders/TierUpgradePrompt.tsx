@@ -162,28 +162,28 @@ export const TierUpgradePrompt: React.FC<TierUpgradePromptProps> = ({
   const getColorClasses = (color: string) => {
     const colors = {
       amber: {
-        bg: 'bg-amber-50',
-        border: 'border-amber-200',
-        icon: 'text-amber-600',
-        title: 'text-amber-900',
-        text: 'text-amber-800',
-        button: 'bg-amber-600 hover:bg-amber-700 text-white'
+        bg: 'bg-warning-50',
+        border: 'border-warning-200',
+        icon: 'text-warning-600',
+        title: 'text-warning-900',
+        text: 'text-warning-800',
+        button: 'bg-warning-600 hover:bg-warning-700 text-white'
       },
       blue: {
-        bg: 'bg-blue-50',
-        border: 'border-blue-200',
-        icon: 'text-blue-600',
-        title: 'text-blue-900',
-        text: 'text-blue-800',
-        button: 'bg-blue-600 hover:bg-blue-700 text-white'
+        bg: 'bg-primary-50',
+        border: 'border-primary-200',
+        icon: 'text-primary-600',
+        title: 'text-primary-900',
+        text: 'text-primary-800',
+        button: 'bg-primary-600 hover:bg-primary-700 text-white'
       },
       purple: {
-        bg: 'bg-purple-50',
-        border: 'border-purple-200',
-        icon: 'text-purple-600',
-        title: 'text-purple-900',
-        text: 'text-purple-800',
-        button: 'bg-purple-600 hover:bg-purple-700 text-white'
+        bg: 'bg-primary-50',
+        border: 'border-primary-200',
+        icon: 'text-primary-600',
+        title: 'text-foreground',
+        text: 'text-muted-foreground',
+        button: 'bg-primary-600 hover:bg-primary-700 text-white'
       }
     };
     return colors[color as keyof typeof colors] || colors.blue;
@@ -259,56 +259,56 @@ export const TierUpgradePrompt: React.FC<TierUpgradePromptProps> = ({
           </div>
         </div>
 
-        <h3 className="text-lg font-semibold text-gray-900 mb-2">
+        <h3 className="text-lg font-semibold text-foreground mb-2">
           {contextMessage.title}
         </h3>
 
-        <p className="text-gray-600 mb-6">
+        <p className="text-muted-foreground mb-6">
           {contextMessage.description}
         </p>
 
         {nextTier && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
             {/* Upgrade Information */}
-            <div className="bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200 rounded-lg p-4">
+            <div className="bg-gradient-to-r from-primary-50 to-background border border-primary-200 rounded-lg p-4">
               <div className="flex items-center justify-center space-x-2 mb-3">
-                <SparklesIcon className="w-5 h-5 text-blue-600" />
-                <h4 className="font-semibold text-blue-900">
+                <SparklesIcon className="w-5 h-5 text-primary-600" />
+                <h4 className="font-semibold text-primary-900">
                   Upgrade to {nextTier.displayName}
                 </h4>
                 {nextTier.popular && (
-                  <span className="bg-blue-600 text-white text-xs px-2 py-1 rounded-full">
+                  <span className="bg-primary-600 text-white text-xs px-2 py-1 rounded-full">
                     Popular
                   </span>
                 )}
               </div>
 
               <div className="text-center mb-4">
-                <span className="text-2xl font-bold text-gray-900">{nextTier.price}</span>
+                <span className="text-2xl font-bold text-foreground">{nextTier.price}</span>
               </div>
 
               <div className="space-y-2 text-sm">
                 <div className="flex items-center space-x-2">
-                  <CheckIcon className="w-4 h-4 text-green-600" />
+                  <CheckIcon className="w-4 h-4 text-success-600" />
                   <span>{nextTier.maxSenders} sender email{nextTier.maxSenders !== 1 ? 's' : ''}</span>
                 </div>
                 <div className="flex items-center space-x-2">
                   {nextTier.canUseDNS ? (
-                    <CheckIcon className="w-4 h-4 text-green-600" />
+                    <CheckIcon className="w-4 h-4 text-success-600" />
                   ) : (
-                    <XMarkIcon className="w-4 h-4 text-gray-400" />
+                    <XMarkIcon className="w-4 h-4 text-muted-foreground" />
                   )}
-                  <span className={nextTier.canUseDNS ? '' : 'text-gray-500'}>
+                  <span className={nextTier.canUseDNS ? '' : 'text-muted-foreground'}>
                     Domain verification
                   </span>
                 </div>
                 <div className="flex items-center space-x-2">
                   {nextTier.canUseMailbox ? (
-                    <CheckIcon className="w-4 h-4 text-green-600" />
+                    <CheckIcon className="w-4 h-4 text-success-600" />
                   ) : (
-                    <XMarkIcon className="w-4 h-4 text-gray-400" />
+                    <XMarkIcon className="w-4 h-4 text-muted-foreground" />
                   )}
-                  <span className={nextTier.canUseMailbox ? '' : 'text-gray-500'}>
+                  <span className={nextTier.canUseMailbox ? '' : 'text-muted-foreground'}>
                     Email verification
                   </span>
                 </div>
@@ -316,23 +316,23 @@ export const TierUpgradePrompt: React.FC<TierUpgradePromptProps> = ({
             </div>
 
             {/* Additional Features */}
-            <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-              <h5 className="font-semibold text-gray-900 mb-3 flex items-center">
-                <ChartBarIcon className="w-5 h-5 text-gray-600 mr-2" />
+            <div className="bg-background border border-border rounded-lg p-4">
+              <h5 className="font-semibold text-foreground mb-3 flex items-center">
+                <ChartBarIcon className="w-5 h-5 text-muted-foreground mr-2" />
                 Additional Benefits
               </h5>
               <div className="space-y-2 text-sm">
                 {nextTier.features.slice(3, 6).map((feature, index) => (
                   <div key={index} className="flex items-center space-x-2">
-                    <CheckIcon className="w-4 h-4 text-green-600" />
+                    <CheckIcon className="w-4 h-4 text-success-600" />
                     <span>{feature}</span>
                   </div>
                 ))}
               </div>
 
               {/* Visual enhancement - stats or icons */}
-              <div className="mt-4 pt-3 border-t border-gray-300">
-                <div className="flex items-center justify-between text-xs text-gray-600">
+              <div className="mt-4 pt-3 border-t border-border">
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
                   <div className="flex items-center space-x-1">
                     <UserGroupIcon className="w-4 h-4" />
                     <span>More subscribers</span>
@@ -356,14 +356,14 @@ export const TierUpgradePrompt: React.FC<TierUpgradePromptProps> = ({
           {nextTier ? `Upgrade to ${nextTier.displayName}` : 'Upgrade Plan'}
         </Button>
 
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-muted-foreground">
           Upgrade anytime • Cancel anytime • 30-day money-back guarantee
         </p>
       </div>
 
       {showComparison && (
-        <div className="mt-8 pt-6 border-t border-gray-200">
-          <h4 className="text-md font-semibold text-gray-900 mb-4 text-center">
+        <div className="mt-8 pt-6 border-t border-border">
+          <h4 className="text-md font-semibold text-foreground mb-4 text-center">
             Compare Plans
           </h4>
 
@@ -374,15 +374,15 @@ export const TierUpgradePrompt: React.FC<TierUpgradePromptProps> = ({
                 className={cn(
                   'border rounded-lg p-4 relative',
                   tier.name === currentTier.tier
-                    ? 'border-blue-500 bg-blue-50'
+                    ? 'border-primary-500 bg-primary-50'
                     : tier.highlight
-                    ? 'border-purple-300 bg-purple-50'
-                    : 'border-gray-200'
+                    ? 'border-primary-300 bg-primary-50'
+                    : 'border-border'
                 )}
               >
                 {tier.name === currentTier.tier && (
                   <div className="absolute -top-2 left-1/2 transform -translate-x-1/2">
-                    <span className="bg-blue-600 text-white text-xs px-2 py-1 rounded-full">
+                    <span className="bg-primary-600 text-white text-xs px-2 py-1 rounded-full">
                       Current Plan
                     </span>
                   </div>
@@ -390,15 +390,15 @@ export const TierUpgradePrompt: React.FC<TierUpgradePromptProps> = ({
 
                 {tier.popular && tier.name !== currentTier.tier && (
                   <div className="absolute -top-2 left-1/2 transform -translate-x-1/2">
-                    <span className="bg-green-600 text-white text-xs px-2 py-1 rounded-full">
+                    <span className="bg-success-600 text-white text-xs px-2 py-1 rounded-full">
                       Most Popular
                     </span>
                   </div>
                 )}
 
                 <div className="text-center mb-4">
-                  <h5 className="font-semibold text-gray-900 mb-1">{tier.displayName}</h5>
-                  <p className="text-lg font-bold text-gray-900">{tier.price}</p>
+                  <h5 className="font-semibold text-foreground mb-1">{tier.displayName}</h5>
+                  <p className="text-lg font-bold text-foreground">{tier.price}</p>
                 </div>
 
                 <div className="space-y-2 text-sm">
@@ -409,17 +409,17 @@ export const TierUpgradePrompt: React.FC<TierUpgradePromptProps> = ({
                   <div className="flex items-center justify-between">
                     <span>Domain verification</span>
                     {tier.canUseDNS ? (
-                      <CheckIcon className="w-4 h-4 text-green-600" />
+                      <CheckIcon className="w-4 h-4 text-success-600" />
                     ) : (
-                      <XMarkIcon className="w-4 h-4 text-gray-400" />
+                      <XMarkIcon className="w-4 h-4 text-muted-foreground" />
                     )}
                   </div>
                   <div className="flex items-center justify-between">
                     <span>Email verification</span>
                     {tier.canUseMailbox ? (
-                      <CheckIcon className="w-4 h-4 text-green-600" />
+                      <CheckIcon className="w-4 h-4 text-success-600" />
                     ) : (
-                      <XMarkIcon className="w-4 h-4 text-gray-400" />
+                      <XMarkIcon className="w-4 h-4 text-muted-foreground" />
                     )}
                   </div>
                 </div>

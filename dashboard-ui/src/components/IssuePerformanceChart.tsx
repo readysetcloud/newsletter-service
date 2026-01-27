@@ -6,6 +6,36 @@ interface IssuePerformanceChartProps {
   issues: Issue[];
 }
 
+type TooltipPayloadItem = {
+  name?: string;
+  value?: number;
+  color?: string;
+};
+
+function CustomTooltip({
+  active,
+  payload,
+  label
+}: {
+  active?: boolean;
+  payload?: TooltipPayloadItem[];
+  label?: string;
+}) {
+  if (active && Array.isArray(payload) && payload.length > 0) {
+    return (
+      <div className="bg-surface p-4 border border-border rounded-lg shadow-lg">
+        <p className="font-medium text-foreground">{label}</p>
+        {payload.map((entry, index) => (
+          <p key={index} className="text-sm" style={{ color: entry.color }}>
+            {entry.name}: {typeof entry.value === 'number' ? entry.value.toFixed(2) : '0.00'}%
+          </p>
+        ))}
+      </div>
+    );
+  }
+  return null;
+}
+
 export default function IssuePerformanceChart({ issues }: IssuePerformanceChartProps) {
   const chartData = issues?.map(issue => ({
     name: issue.title,
@@ -16,25 +46,9 @@ export default function IssuePerformanceChart({ issues }: IssuePerformanceChartP
     bounceRate: issue.metrics?.bounceRate || 0
   })).reverse() || [];
 
-  const CustomTooltip = ({ active, payload, label }: any) => {
-    if (active && payload && payload.length) {
-      return (
-        <div className="bg-white p-4 border border-gray-200 rounded-lg shadow-lg">
-          <p className="font-medium text-gray-900">{label}</p>
-          {payload.map((entry: any, index: number) => (
-            <p key={index} className="text-sm" style={{ color: entry.color }}>
-              {entry.name}: {entry.value.toFixed(2)}%
-            </p>
-          ))}
-        </div>
-      );
-    }
-    return null;
-  };
-
   return (
-    <div className="bg-white rounded-lg shadow p-6">
-      <h3 className="text-lg font-medium text-gray-900 mb-4">Newsletter Issue Performance Trends</h3>
+    <div className="bg-surface rounded-lg shadow p-6">
+      <h3 className="text-lg font-medium text-foreground mb-4">Newsletter Issue Performance Trends</h3>
       <div className="h-80">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={chartData}>
@@ -50,7 +64,7 @@ export default function IssuePerformanceChart({ issues }: IssuePerformanceChartP
               tick={{ fontSize: 12 }}
               label={{ value: 'Rate (%)', angle: -90, position: 'insideLeft' }}
             />
-            <Tooltip content={<CustomTooltip />} />
+            <Tooltip content={CustomTooltip} />
             <Legend />
             <Line
               type="monotone"

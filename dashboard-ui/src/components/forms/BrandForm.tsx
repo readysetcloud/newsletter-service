@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { useForm } from 'react-hook-form';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Input } from '../ui/Input';
 import { EnhancedInput } from '../ui/EnhancedInput';
@@ -12,7 +12,7 @@ import { BrandPhotoUpload } from './BrandPhotoUpload';
 import { BrandIdInput } from './BrandIdInput';
 import { brandSchema, BrandFormData, industryOptions } from '../../schemas/brandSchema';
 import { BrandInfo } from '../../types';
-import { useRealTimeValidation, useFormValidationState } from '../../hooks/useRealTimeValidation';
+import { useFormValidationState } from '../../hooks/useRealTimeValidation';
 import { getUserFriendlyErrorMessage } from '../../utils/errorHandling';
 
 
@@ -28,7 +28,22 @@ interface BrandFormProps {
   onCancel?: () => void;
 }
 
-export const BrandForm: React.FC<BrandFormProps> = ({
+export const BrandForm: React.FC<BrandFormProps> = (props) => {
+  const { initialData } = props;
+  const resetKey = [
+    initialData?.brandId ?? 'new',
+    initialData?.brandName ?? '',
+    initialData?.website ?? '',
+    initialData?.industry ?? '',
+    initialData?.brandDescription ?? '',
+    initialData?.tags?.join(',') ?? '',
+    initialData?.brandLogo ?? ''
+  ].join('|');
+
+  return <BrandFormInner key={resetKey} {...props} />;
+};
+
+const BrandFormInner: React.FC<BrandFormProps> = ({
   initialData,
   onSubmit,
   onPreviewChange,
@@ -62,53 +77,47 @@ export const BrandForm: React.FC<BrandFormProps> = ({
   const {
     register,
     handleSubmit,
-    watch,
-    formState: { errors, isDirty, isValid },
+    formState: { errors, isDirty },
     setValue,
-    reset
+    control,
+    getValues
   } = form;
 
   // Enhanced validation state
-  const { isFormValid, validationErrors } = useFormValidationState(form);
+  const { isFormValid } = useFormValidationState(form);
 
   // Watch specific form values for preview updates
-  const brandId = watch('brandId');
-  const brandName = watch('brandName');
-  const website = watch('website');
-  const industry = watch('industry');
-  const brandDescription = watch('brandDescription');
-  const tags = watch('tags');
+  const brandId = useWatch({ control, name: 'brandId' });
+  const brandName = useWatch({ control, name: 'brandName' });
+  const website = useWatch({ control, name: 'website' });
+  const industry = useWatch({ control, name: 'industry' });
+  const brandDescription = useWatch({ control, name: 'brandDescription' });
+  const tags = useWatch({ control, name: 'tags' });
+
+  const previewValues = useMemo(() => ({
+    brandId,
+    brandName,
+    website,
+    industry,
+    brandDescription,
+    tags
+  }), [brandId, brandName, website, industry, brandDescription, tags]);
+
+  const lastPreviewKeyRef = useRef<string | null>(null);
+  const previewKey = useMemo(() => {
+    return JSON.stringify({
+      previewValues,
+      logoPreview: logoPreview || null
+    });
+  }, [previewValues, logoPreview]);
 
   // Update preview when form values change
   useEffect(() => {
-    if (onPreviewChange) {
-      const watchedValues = {
-        brandId,
-        brandName,
-        website,
-        industry,
-        brandDescription,
-        tags
-      };
-      onPreviewChange(watchedValues, logoPreview || undefined);
-    }
-  }, [brandId, brandName, website, industry, brandDescription, tags, logoPreview]); // Watch individual values instead of the whole object
-
-  // Reset form when initial data changes
-  useEffect(() => {
-    if (initialData) {
-      reset({
-        brandId: initialData.brandId || '',
-        brandName: initialData.brandName || '',
-        website: initialData.website || '',
-        industry: initialData.industry || '',
-        brandDescription: initialData.brandDescription || '',
-        tags: initialData.tags || []
-      });
-      setHasLogoChanged(false); // Reset logo change state when form resets
-      setIsLogoRemoved(false); // Reset logo removal state when form resets
-    }
-  }, [initialData]); // Removed reset from dependencies since it's stable from react-hook-form
+    if (!onPreviewChange) return;
+    if (lastPreviewKeyRef.current === previewKey) return;
+    lastPreviewKeyRef.current = previewKey;
+    onPreviewChange(previewValues, logoPreview || undefined);
+  }, [previewKey, previewValues, logoPreview, onPreviewChange]);
 
   const handlePhotoChange = useCallback((file: File | null) => {
     setLogoFile(file);
@@ -139,13 +148,13 @@ export const BrandForm: React.FC<BrandFormProps> = ({
 
     // Trigger preview update to remove the logo from preview
     if (onPreviewChange) {
-      const currentValues = watch();
+      const currentValues = getValues();
       onPreviewChange({
         ...currentValues,
         brandLogo: undefined // Remove logo from preview
       });
     }
-  }, [logoPreview, onPreviewChange, watch]);
+  }, [logoPreview, onPreviewChange, getValues]);
 
   const handleFormSubmit = async (data: BrandFormData) => {
     try {
@@ -193,16 +202,16 @@ export const BrandForm: React.FC<BrandFormProps> = ({
           label="Brand Name *"
           placeholder="Enter your brand name"
           error={errors.brandName?.message}
-          validationState={errors.brandName ? 'error' : watch('brandName') ? 'success' : 'idle'}
+          validationState={errors.brandName ? 'error' : brandName ? 'success' : 'idle'}
           showValidationIcon={true}
           {...register('brandName')}
         />
 
         {/* Brand ID */}
         <BrandIdInput
-          value={watch('brandId') || ''}
+          value={brandId || ''}
           onChange={(value) => setValue('brandId', value, { shouldValidate: true })}
-          brandName={watch('brandName') || ''}
+          brandName={brandName || ''}
           error={errors.brandId?.message}
           disabled={!!initialData?.brandId} // Disable if brand already exists
           isOnboarding={!initialData?.brandId}
@@ -215,7 +224,7 @@ export const BrandForm: React.FC<BrandFormProps> = ({
           placeholder="https://example.com"
           error={errors.website?.message}
           helperText="Include http:// or https://"
-          validationState={errors.website ? 'error' : watch('website') && !errors.website ? 'success' : 'idle'}
+          validationState={errors.website ? 'error' : website && !errors.website ? 'success' : 'idle'}
           showValidationIcon={true}
           {...register('website')}
         />

@@ -46,7 +46,7 @@ export function ConfirmSignUpForm({ email, onSuccess, onBackToSignUp }: ConfirmS
     try {
       await confirmSignUp(email, confirmationCode);
       onSuccess?.();
-    } catch (error) {
+    } catch {
       // Error is handled by the AuthContext
     }
   };
@@ -59,7 +59,7 @@ export function ConfirmSignUpForm({ email, onSuccess, onBackToSignUp }: ConfirmS
     try {
       await resendSignUpCode(email);
       setResendCooldown(60); // 60 second cooldown
-    } catch (error) {
+    } catch {
       // Error is handled by the AuthContext
     }
   };
@@ -80,19 +80,19 @@ export function ConfirmSignUpForm({ email, onSuccess, onBackToSignUp }: ConfirmS
 
   return (
     <div className="w-full max-w-md mx-auto">
-      <div className="bg-white shadow-lg rounded-lg px-8 py-6">
+      <div className="bg-surface shadow-lg rounded-lg px-8 py-6">
         <div className="mb-6 text-center">
-          <h2 className="text-2xl font-bold text-gray-900">Verify Your Email</h2>
-          <p className="text-gray-600 mt-2">
-            We've sent a confirmation code to
+          <h2 className="text-2xl font-bold text-foreground">Verify Your Email</h2>
+          <p className="text-muted-foreground mt-2">
+            We&apos;ve sent a confirmation code to
           </p>
-          <p className="text-gray-900 font-medium">{email}</p>
+          <p className="text-foreground font-medium">{email}</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Confirmation Code Field */}
           <div>
-            <label htmlFor="confirmationCode" className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="confirmationCode" className="block text-sm font-medium text-muted-foreground mb-1">
               Confirmation Code
             </label>
             <input
@@ -100,22 +100,22 @@ export function ConfirmSignUpForm({ email, onSuccess, onBackToSignUp }: ConfirmS
               type="text"
               value={confirmationCode}
               onChange={(e) => handleInputChange(e.target.value)}
-              className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-lg tracking-widest ${
-                formErrors.confirmationCode ? 'border-red-300' : 'border-gray-300'
+              className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-primary-500 text-center text-lg tracking-widest ${
+                formErrors.confirmationCode ? 'border-error-300' : 'border-border'
               }`}
               placeholder="000000"
               disabled={isLoading}
               maxLength={6}
             />
             {formErrors.confirmationCode && (
-              <p className="mt-1 text-sm text-red-600">{formErrors.confirmationCode}</p>
+              <p className="mt-1 text-sm text-error-600">{formErrors.confirmationCode}</p>
             )}
           </div>
 
           {/* Global Error */}
           {error && (
-            <div className="bg-red-50 border border-red-200 rounded-md p-3">
-              <p className="text-sm text-red-600">{error}</p>
+            <div className="bg-error-50 border border-error-200 rounded-md p-3">
+              <p className="text-sm text-error-600">{error}</p>
             </div>
           )}
 
@@ -123,7 +123,7 @@ export function ConfirmSignUpForm({ email, onSuccess, onBackToSignUp }: ConfirmS
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isLoading ? (
               <div className="flex items-center">
@@ -141,14 +141,14 @@ export function ConfirmSignUpForm({ email, onSuccess, onBackToSignUp }: ConfirmS
 
         {/* Resend Code */}
         <div className="mt-6 text-center">
-          <p className="text-sm text-gray-600 mb-2">
-            Didn't receive the code?
+          <p className="text-sm text-muted-foreground mb-2">
+            Didn&apos;t receive the code?
           </p>
           <button
             type="button"
             onClick={handleResendCode}
             disabled={isLoading || resendCooldown > 0}
-            className="text-sm text-blue-600 hover:text-blue-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            className="text-sm text-primary-600 hover:text-primary-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {resendCooldown > 0
               ? `Resend code in ${resendCooldown}s`
@@ -163,9 +163,9 @@ export function ConfirmSignUpForm({ email, onSuccess, onBackToSignUp }: ConfirmS
             <button
               type="button"
               onClick={onBackToSignUp}
-              className="text-sm text-gray-600 hover:text-gray-700"
+              className="text-sm text-muted-foreground hover:text-muted-foreground"
             >
-              ← Back to sign up
+              &larr; Back to sign up
             </button>
           </div>
         )}

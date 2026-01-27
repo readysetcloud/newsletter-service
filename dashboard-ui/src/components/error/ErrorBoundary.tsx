@@ -34,7 +34,7 @@ export class ErrorBoundary extends Component<Props, State> {
     });
 
     // Log error to console in development
-    if (process.env.NODE_ENV === 'development') {
+    if (import.meta.env.DEV) {
       console.error('ErrorBoundary caught an error:', error, errorInfo);
     }
 
@@ -42,7 +42,7 @@ export class ErrorBoundary extends Component<Props, State> {
     this.props.onError?.(error, errorInfo);
 
     // In production, you might want to send this to an error reporting service
-    if (process.env.NODE_ENV === 'production') {
+    if (import.meta.env.PROD) {
       // Example: Send to error reporting service
       // errorReportingService.captureException(error, { extra: errorInfo });
     }
@@ -65,26 +65,26 @@ export class ErrorBoundary extends Component<Props, State> {
 
       // Default error UI
       return (
-        <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
-          <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-6 text-center">
+        <div className="min-h-screen bg-background flex items-center justify-center px-4">
+          <div className="max-w-md w-full bg-surface rounded-lg shadow-lg p-6 text-center">
             <div className="flex justify-center mb-4">
-              <AlertTriangle className="h-12 w-12 text-red-500" />
+              <AlertTriangle className="h-12 w-12 text-error-500" />
             </div>
 
-            <h1 className="text-xl font-semibold text-gray-900 mb-2">
+            <h1 className="text-xl font-semibold text-foreground mb-2">
               Something went wrong
             </h1>
 
-            <p className="text-gray-600 mb-6">
-              We're sorry, but something unexpected happened. Please try refreshing the page or return to the dashboard.
+            <p className="text-muted-foreground mb-6">
+              We&apos;re sorry, but something unexpected happened. Please try refreshing the page or return to the dashboard.
             </p>
 
-            {process.env.NODE_ENV === 'development' && this.state.error && (
+            {import.meta.env.DEV && this.state.error && (
               <details className="mb-6 text-left">
-                <summary className="cursor-pointer text-sm text-gray-500 hover:text-gray-700">
+                <summary className="cursor-pointer text-sm text-muted-foreground hover:text-muted-foreground">
                   Error Details (Development Only)
                 </summary>
-                <div className="mt-2 p-3 bg-gray-100 rounded text-xs font-mono text-gray-800 overflow-auto max-h-32">
+                <div className="mt-2 p-3 bg-muted rounded text-xs font-mono text-foreground overflow-auto max-h-32">
                   <div className="font-semibold mb-1">Error:</div>
                   <div className="mb-2">{this.state.error.message}</div>
                   {this.state.errorInfo && (

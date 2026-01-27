@@ -1,7 +1,5 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from '@/contexts/AuthContext';
-import { NotificationProvider as NotificationContextProvider } from '@/contexts/NotificationContext';
-import { NotificationProvider } from '@/components/notifications/NotificationProvider';
 import { ToastProvider } from '@/components/ui/Toast';
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
 import { OnboardingGuard } from '@/components/auth/OnboardingGuard';
@@ -21,8 +19,11 @@ import {
 } from '@/utils/lazyImports';
 import { BrandOnboardingPage, ProfileOnboardingPage, SenderOnboardingPage } from '@/pages/onboarding';
 import { useEffect } from 'react';
+import { useTheme } from '@/hooks/useTheme';
 
 function App() {
+  useTheme();
+
   useEffect(() => {
     // Preload critical routes after initial render
     preloadCriticalRoutes();
@@ -37,10 +38,9 @@ function App() {
         }}
       >
         <AuthProvider>
-          <NotificationContextProvider>
-            <NotificationProvider>
-              <ToastProvider>
-              <div className="min-h-screen bg-gray-50 overflow-x-hidden">
+          <ToastProvider>
+            <div className="min-h-screen bg-background overflow-x-hidden flex flex-col">
+              <div className="flex-1">
                 <Routes>
                   {/* Public Routes */}
                   <Route
@@ -199,9 +199,13 @@ function App() {
                   <Route path="*" element={<Navigate to="/dashboard" replace />} />
                 </Routes>
               </div>
-              </ToastProvider>
-            </NotificationProvider>
-          </NotificationContextProvider>
+              <footer className="border-t border-border bg-surface">
+                <div className="mx-auto max-w-7xl px-4 py-3 text-xs text-muted-foreground sm:px-6 lg:px-8">
+                  © {new Date().getFullYear()} Outboxed
+                </div>
+              </footer>
+            </div>
+          </ToastProvider>
         </AuthProvider>
       </Router>
     </ErrorBoundary>

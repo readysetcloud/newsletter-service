@@ -41,8 +41,8 @@ export function UserPreferencesForm({ initialData, onSubmit, isLoading = false }
   return (
     <Card className="p-6">
       <div className="mb-6">
-        <h3 className="text-lg font-semibold text-gray-900">Preferences</h3>
-        <p className="text-sm text-gray-600 mt-1">
+        <h3 className="text-lg font-semibold text-foreground">Preferences</h3>
+        <p className="text-sm text-muted-foreground mt-1">
           Configure your timezone and language preferences.
         </p>
       </div>

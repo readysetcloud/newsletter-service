@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import * as userEvent from '@testing-library/user-event';
 import { TierUpgradePrompt } from '../TierUpgradePrompt';
 import type { TierLimits } from '@/types';
@@ -203,7 +203,7 @@ describe('TierUpgradePrompt', () => {
 
       // Creator should be marked as current
       const creatorCard = screen.getByText('Creator').closest('div');
-      expect(creatorCard).toHaveClass('border-blue-500', 'bg-blue-50');
+      expect(creatorCard).toHaveClass('border-primary-500', 'bg-primary-50');
     });
   });
 
@@ -282,7 +282,7 @@ describe('TierUpgradePrompt', () => {
       );
 
       const banner = screen.getByText('Sender limit reached').closest('div');
-      expect(banner).toHaveClass('bg-amber-50', 'border-amber-200');
+      expect(banner).toHaveClass('bg-warning-50', 'border-warning-200');
     });
 
     it('applies blue styling for dns-verification context', () => {
@@ -295,7 +295,7 @@ describe('TierUpgradePrompt', () => {
       );
 
       const banner = screen.getByText('Domain verification unavailable').closest('div');
-      expect(banner).toHaveClass('bg-blue-50', 'border-blue-200');
+      expect(banner).toHaveClass('bg-primary-50', 'border-primary-200');
     });
 
     it('applies purple styling for feature-disabled context', () => {
@@ -309,7 +309,7 @@ describe('TierUpgradePrompt', () => {
       );
 
       const banner = screen.getByText('Test Feature unavailable').closest('div');
-      expect(banner).toHaveClass('bg-purple-50', 'border-purple-200');
+      expect(banner).toHaveClass('bg-primary-50', 'border-primary-200');
     });
   });
 

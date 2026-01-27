@@ -10,6 +10,7 @@ import type {
   PlanChangeResponse,
   BillingAlert,
   SubscriptionPlan,
+  Subscription,
   UsageMetrics,
 } from '@/types';
 import {
@@ -147,9 +148,9 @@ export class BillingService {
   /**
    * Cancel subscription (will remain active until period end)
    */
-  async cancelSubscription(): Promise<ApiResponse<{ message: string; subscription: any }>> {
+  async cancelSubscription(): Promise<ApiResponse<{ message: string; subscription: Subscription }>> {
     try {
-      return apiClient.post<{ message: string; subscription: any }>('/billing/subscription/cancel');
+      return apiClient.post<{ message: string; subscription: Subscription }>('/billing/subscription/cancel');
     } catch (error) {
       return {
         success: false,
@@ -161,9 +162,9 @@ export class BillingService {
   /**
    * Reactivate a cancelled subscription
    */
-  async reactivateSubscription(): Promise<ApiResponse<{ message: string; subscription: any }>> {
+  async reactivateSubscription(): Promise<ApiResponse<{ message: string; subscription: Subscription }>> {
     try {
-      return apiClient.post<{ message: string; subscription: any }>('/billing/subscription/reactivate');
+      return apiClient.post<{ message: string; subscription: Subscription }>('/billing/subscription/reactivate');
     } catch (error) {
       return {
         success: false,

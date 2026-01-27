@@ -1,5 +1,4 @@
 import React from 'react';
-import { usePerformanceMetric } from '../../utils/performance';
 
 interface MainContentProps {
   children: React.ReactNode;
@@ -12,9 +11,6 @@ export const MainContent: React.FC<MainContentProps> = ({
   className = '',
   pageTitle
 }) => {
-  // Track page render performance
-  usePerformanceMetric(pageTitle || 'page');
-
   return (
     <main
       id="main-content"

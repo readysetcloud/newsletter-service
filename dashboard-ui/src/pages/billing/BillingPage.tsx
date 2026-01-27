@@ -13,9 +13,9 @@ export function BillingPage() {
   if (!hasAdminAccess) {
     return (
       <div className="max-w-4xl mx-auto p-6">
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
-          <h2 className="text-lg font-semibold text-yellow-900 mb-2">Access Restricted</h2>
-          <p className="text-yellow-700">
+        <div className="bg-warning-50 border border-warning-200 rounded-lg p-6 text-center">
+          <h2 className="text-lg font-semibold text-warning-900 mb-2">Access Restricted</h2>
+          <p className="text-warning-700">
             Only tenant administrators can access billing and subscription management.
           </p>
         </div>

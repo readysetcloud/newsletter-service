@@ -28,8 +28,8 @@ export function LogoutButton({
   };
 
   const baseClasses = variant === 'menu-item'
-    ? 'flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900'
-    : 'inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-gray-500 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500';
+    ? 'flex items-center w-full px-4 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground'
+    : 'inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-muted-foreground hover:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ring';
 
   const isDisabled = isLoading || isSigningOut;
 

@@ -1,7 +1,5 @@
-import { useForm } from 'react-hook-form';
+import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Button } from '@/components/ui/Button';
-import { Input } from '@/components/ui/Input';
 import { EnhancedInput } from '@/components/ui/EnhancedInput';
 import { EnhancedForm } from '@/components/ui/EnhancedForm';
 import { Card } from '@/components/ui/Card';
@@ -33,9 +31,11 @@ export function PersonalInfoForm({ initialData, onSubmit, isLoading = false }: P
   const {
     register,
     handleSubmit,
-    watch,
     formState: { errors, isSubmitting, isDirty }
   } = form;
+
+  const firstNameValue = useWatch({ control: form.control, name: 'firstName' });
+  const lastNameValue = useWatch({ control: form.control, name: 'lastName' });
 
   const { isFormValid } = useFormValidationState(form);
 
@@ -66,14 +66,14 @@ export function PersonalInfoForm({ initialData, onSubmit, isLoading = false }: P
   return (
     <Card className="p-6">
       <div className="mb-6">
-        <h3 className="text-lg font-semibold text-gray-900">Personal Information</h3>
-        <p className="text-sm text-gray-600 mt-1">
+        <h3 className="text-lg font-semibold text-foreground">Personal Information</h3>
+        <p className="text-sm text-muted-foreground mt-1">
           Update your personal details and contact information.
         </p>
       </div>
 
       <EnhancedForm
-        onSubmit={handleFormSubmit}
+        onSubmit={handleSubmit(handleFormSubmit)}
         submitButtonText="Save Changes"
         submitButtonLoadingText="Saving..."
         showProgress={true}
@@ -89,7 +89,7 @@ export function PersonalInfoForm({ initialData, onSubmit, isLoading = false }: P
               error={errors.firstName?.message}
               disabled={isLoading || isSubmitting}
               placeholder="Enter your first name"
-              validationState={errors.firstName ? 'error' : watch('firstName') ? 'success' : 'idle'}
+              validationState={errors.firstName ? 'error' : firstNameValue ? 'success' : 'idle'}
               showValidationIcon={true}
             />
           </div>
@@ -101,7 +101,7 @@ export function PersonalInfoForm({ initialData, onSubmit, isLoading = false }: P
               error={errors.lastName?.message}
               disabled={isLoading || isSubmitting}
               placeholder="Enter your last name"
-              validationState={errors.lastName ? 'error' : watch('lastName') ? 'success' : 'idle'}
+              validationState={errors.lastName ? 'error' : lastNameValue ? 'success' : 'idle'}
               showValidationIcon={true}
             />
           </div>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { z } from 'zod';
 import { UseFormReturn, FieldPath, FieldValues } from 'react-hook-form';
 
@@ -21,23 +21,22 @@ export interface RealTimeValidationOptions {
 export function useRealTimeValidation<T extends FieldValues>(
   form: UseFormReturn<T>,
   fieldName: FieldPath<T>,
-  schema: z.ZodSchema,
+  schema: z.ZodSchema<T>,
   options: RealTimeValidationOptions = {}
 ) {
   const {
     debounceMs = 300,
     validateOnMount = false,
-    showWarnings = true
   } = options;
 
   const [validationState, setValidationState] = useState<ValidationResult>({
     isValid: true
   });
 
-  const debounceTimer = useRef<NodeJS.Timeout>();
-  const lastValue = useRef<any>();
+  const debounceTimer = useRef<ReturnType<typeof setTimeout>>();
+  const lastValue = useRef<unknown>();
 
-  const validateField = useCallback(async (value: any) => {
+  const validateField = useCallback(async (value: unknown) => {
     // Skip validation if value hasn't changed
     if (lastValue.current === value) return;
     lastValue.current = value;
@@ -68,7 +67,7 @@ export function useRealTimeValidation<T extends FieldValues>(
     }
   }, [schema]);
 
-  const debouncedValidate = useCallback((value: any) => {
+  const debouncedValidate = useCallback((value: unknown) => {
     if (debounceTimer.current) {
       clearTimeout(debounceTimer.current);
     }
@@ -82,7 +81,8 @@ export function useRealTimeValidation<T extends FieldValues>(
   const fieldValue = form.watch(fieldName);
 
   useEffect(() => {
-    if (validateOnMount || (form.formState.touchedFields as any)[fieldName]) {
+    const touchedFields = form.formState.touchedFields as Record<string, boolean | undefined>;
+    if (validateOnMount || touchedFields[fieldName]) {
       debouncedValidate(fieldValue);
     }
   }, [fieldValue, debouncedValidate, validateOnMount, form.formState.touchedFields, fieldName]);
@@ -105,12 +105,9 @@ export function useRealTimeValidation<T extends FieldValues>(
 export function useFormValidationState<T extends FieldValues>(
   form: UseFormReturn<T>
 ) {
-  const [isFormValid, setIsFormValid] = useState(false);
-  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   const [validationWarnings, setValidationWarnings] = useState<Record<string, string>>({});
 
-  // Update form validation state when form errors change
-  useEffect(() => {
+  const validationErrors = useMemo(() => {
     const errors = form.formState.errors;
     const errorMessages: Record<string, string> = {};
 
@@ -120,15 +117,17 @@ export function useFormValidationState<T extends FieldValues>(
       }
     });
 
-    setValidationErrors(errorMessages);
-    setIsFormValid(Object.keys(errorMessages).length === 0);
+    return errorMessages;
   }, [form.formState.errors]);
+
+  const isFormValid = useMemo(() => Object.keys(validationErrors).length === 0, [validationErrors]);
 
   const setFieldWarning = useCallback((field: string, warning: string | null) => {
     setValidationWarnings(prev => {
       if (warning === null) {
-        const { [field]: _, ...rest } = prev;
-        return rest;
+        const next = { ...prev };
+        delete next[field];
+        return next;
       }
       return { ...prev, [field]: warning };
     });
@@ -204,11 +203,11 @@ export function useProgressiveValidation<T extends FieldValues>(
 export function useOptimisticFieldUpdate<T extends FieldValues>(
   form: UseFormReturn<T>,
   fieldName: FieldPath<T>,
-  onUpdate: (value: any) => Promise<void>
+  onUpdate: (value: T[FieldPath<T>]) => Promise<void>
 ) {
   const [isUpdating, setIsUpdating] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
-  const [lastSavedValue, setLastSavedValue] = useState<any>(null);
+  const [lastSavedValue, setLastSavedValue] = useState<T[FieldPath<T>] | null>(null);
 
   const fieldValue = form.watch(fieldName);
   const hasUnsavedChanges = lastSavedValue !== null && lastSavedValue !== fieldValue;
@@ -273,14 +272,11 @@ export function useCrossFieldValidation<T extends FieldValues>(
     message: string;
   }>
 ) {
-  const [crossFieldErrors, setCrossFieldErrors] = useState<Record<string, string>>({});
-
-  const validateCrossFields = useCallback(() => {
-    const formValues = form.getValues();
+  const buildCrossFieldErrors = useCallback((values: Partial<T>) => {
     const errors: Record<string, string> = {};
 
-    validationRules.forEach((rule, index) => {
-      const error = rule.validator(formValues);
+    validationRules.forEach((rule) => {
+      const error = rule.validator(values);
       if (error) {
         // Apply error to all fields in the rule
         rule.fields.forEach(field => {
@@ -289,16 +285,17 @@ export function useCrossFieldValidation<T extends FieldValues>(
       }
     });
 
-    setCrossFieldErrors(errors);
+    return errors;
+  }, [validationRules]);
+
+  const validateCrossFields = useCallback(() => {
+    const errors = buildCrossFieldErrors(form.getValues());
     return Object.keys(errors).length === 0;
-  }, [form, validationRules]);
+  }, [buildCrossFieldErrors, form]);
 
   // Watch all form values for cross-field validation
   const formValues = form.watch();
-
-  useEffect(() => {
-    validateCrossFields();
-  }, [formValues, validateCrossFields]);
+  const crossFieldErrors = buildCrossFieldErrors(formValues as Partial<T>);
 
   return {
     crossFieldErrors,

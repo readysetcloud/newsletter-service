@@ -6,7 +6,6 @@ import type {
   CheckoutSessionRequest,
   CheckoutSessionResponse,
   CustomerPortalRequest,
-  CustomerPortasponse,
   PlanChangeRequest,
 } from '@/types';
 

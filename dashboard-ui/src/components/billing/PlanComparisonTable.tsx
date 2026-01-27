@@ -20,8 +20,8 @@ interface FeatureRowProps {
 
 function FeatureRow({ feature, plans, getValue, formatValue }: FeatureRowProps) {
   return (
-    <tr className="border-b border-gray-200">
-      <td className="py-3 px-4 text-sm font-medium text-gray-900">{feature}</td>
+    <tr className="border-b border-border">
+      <td className="py-3 px-4 text-sm font-medium text-foreground">{feature}</td>
       {plans.map((plan) => {
         const value = getValue(plan);
         const formattedValue = formatValue ? formatValue(value) : value;
@@ -30,12 +30,12 @@ function FeatureRow({ feature, plans, getValue, formatValue }: FeatureRowProps) 
           <td key={plan.id} className="py-3 px-4 text-center">
             {typeof value === 'boolean' ? (
               value ? (
-                <Check className="w-5 h-5 text-green-500 mx-auto" />
+                <Check className="w-5 h-5 text-success-500 mx-auto" />
               ) : (
-                <X className="w-5 h-5 text-gray-300 mx-auto" />
+                <X className="w-5 h-5 text-muted-foreground/60 mx-auto" />
               )
             ) : (
-              <span className="text-sm text-gray-700">{formattedValue}</span>
+              <span className="text-sm text-muted-foreground">{formattedValue}</span>
             )}
           </td>
         );
@@ -60,20 +60,20 @@ export function PlanComparisonTable({
           <table className="w-full">
             {/* Header */}
             <thead>
-              <tr className="border-b-2 border-gray-200">
+              <tr className="border-b-2 border-border">
                 <th className="py-4 px-4 text-left">
-                  <span className="text-lg font-semibold text-gray-900">Features</span>
+                  <span className="text-lg font-semibold text-foreground">Features</span>
                 </th>
                 {plans.map((plan) => (
                   <th key={plan.id} className="py-4 px-4 text-center">
                     <div className="space-y-2">
-                      <div className="text-lg font-bold text-gray-900">{plan.name}</div>
-                      <div className="text-2xl font-bold text-blue-600">
+                      <div className="text-lg font-bold text-foreground">{plan.name}</div>
+                      <div className="text-2xl font-bold text-primary-600">
                         {formatPrice(plan.price)}
-                        {plan.price > 0 && <span className="text-sm text-gray-500">/mo</span>}
+                        {plan.price > 0 && <span className="text-sm text-muted-foreground">/mo</span>}
                       </div>
                       {plan.popular && (
-                        <div className="inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full">
+                        <div className="inline-block bg-primary-100 text-primary-800 text-xs px-2 py-1 rounded-full">
                           Most Popular
                         </div>
                       )}
@@ -159,24 +159,24 @@ export function PlanComparisonTable({
 
         {/* Additional Information */}
         <div className="mt-6 space-y-4">
-          <div className="bg-gray-50 rounded-lg p-4">
-            <h4 className="text-sm font-medium text-gray-900 mb-2">What's included in all plans:</h4>
-            <ul className="text-sm text-gray-600 space-y-1">
-              <li>• Unlimited newsletters</li>
-              <li>• Basic email analytics</li>
-              <li>• Newsletter templates</li>
-              <li>• Subscriber management</li>
-              <li>• Email deliverability optimization</li>
+          <div className="bg-background rounded-lg p-4">
+            <h4 className="text-sm font-medium text-foreground mb-2">What&apos;s included in all plans:</h4>
+            <ul className="text-sm text-muted-foreground space-y-1">
+              <li>&bull; Unlimited newsletters</li>
+              <li>&bull; Basic email analytics</li>
+              <li>&bull; Newsletter templates</li>
+              <li>&bull; Subscriber management</li>
+              <li>&bull; Email deliverability optimization</li>
             </ul>
           </div>
 
-          <div className="bg-blue-50 rounded-lg p-4">
-            <h4 className="text-sm font-medium text-blue-800 mb-2">Billing Information:</h4>
-            <ul className="text-sm text-blue-700 space-y-1">
-              <li>• All plans are billed monthly</li>
-              <li>• Upgrades are prorated and take effect immediately</li>
-              <li>• Downgrades take effect at the end of your billing cycle</li>
-              <li>• Cancel anytime with no long-term commitments</li>
+          <div className="bg-primary-50 rounded-lg p-4">
+            <h4 className="text-sm font-medium text-primary-800 mb-2">Billing Information:</h4>
+            <ul className="text-sm text-primary-700 space-y-1">
+              <li>&bull; All plans are billed monthly</li>
+              <li>&bull; Upgrades are prorated and take effect immediately</li>
+              <li>&bull; Downgrades take effect at the end of your billing cycle</li>
+              <li>&bull; Cancel anytime with no long-term commitments</li>
             </ul>
           </div>
         </div>
@@ -186,3 +186,4 @@ export function PlanComparisonTable({
 }
 
 export default PlanComparisonTable;
+

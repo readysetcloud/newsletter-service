@@ -29,7 +29,7 @@ export const LoadingSpinner: React.FC<LoadingSpinnerProps> = ({
   return (
     <ArrowPathIcon
       className={cn(
-        'animate-spin text-blue-600',
+        'animate-spin text-primary-600',
         sizeClasses[size],
         className
       )}
@@ -54,19 +54,19 @@ export const SkeletonLoader: React.FC<SkeletonLoaderProps> = ({
       {Array.from({ length: count }).map((_, index) => (
         <div
           key={index}
-          className="bg-white border border-gray-200 rounded-lg p-6 animate-pulse"
+          className="bg-surface border border-border rounded-lg p-6 animate-pulse"
         >
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
-              <div className="w-10 h-10 bg-gray-200 rounded-full"></div>
+              <div className="w-10 h-10 bg-muted rounded-full"></div>
               <div className="space-y-2">
-                <div className="w-48 h-4 bg-gray-200 rounded"></div>
-                <div className="w-32 h-3 bg-gray-200 rounded"></div>
+                <div className="w-48 h-4 bg-muted rounded"></div>
+                <div className="w-32 h-3 bg-muted rounded"></div>
               </div>
             </div>
             <div className="flex items-center space-x-3">
-              <div className="w-20 h-6 bg-gray-200 rounded"></div>
-              <div className="w-8 h-8 bg-gray-200 rounded"></div>
+              <div className="w-20 h-6 bg-muted rounded"></div>
+              <div className="w-8 h-8 bg-muted rounded"></div>
             </div>
           </div>
         </div>
@@ -95,26 +95,26 @@ export const ProgressIndicator: React.FC<ProgressIndicatorProps> = ({
   const getStepIcon = (status: string) => {
     switch (status) {
       case 'completed':
-        return <CheckCircleIcon className="w-5 h-5 text-green-600" />;
+        return <CheckCircleIcon className="w-5 h-5 text-success-600" />;
       case 'in-progress':
         return <LoadingSpinner size="sm" />;
       case 'failed':
-        return <ExclamationTriangleIcon className="w-5 h-5 text-red-600" />;
+        return <ExclamationTriangleIcon className="w-5 h-5 text-error-600" />;
       default:
-        return <ClockIcon className="w-5 h-5 text-gray-400" />;
+        return <ClockIcon className="w-5 h-5 text-muted-foreground" />;
     }
   };
 
   const getStepColor = (status: string) => {
     switch (status) {
       case 'completed':
-        return 'text-green-600';
+        return 'text-success-600';
       case 'in-progress':
-        return 'text-blue-600';
+        return 'text-primary-600';
       case 'failed':
-        return 'text-red-600';
+        return 'text-error-600';
       default:
-        return 'text-gray-400';
+        return 'text-muted-foreground';
     }
   };
 
@@ -130,13 +130,13 @@ export const ProgressIndicator: React.FC<ProgressIndicatorProps> = ({
               {step.label}
             </p>
             {step.description && (
-              <p className="text-xs text-gray-500 mt-1">
+              <p className="text-xs text-muted-foreground mt-1">
                 {step.description}
               </p>
             )}
           </div>
           {index < steps.length - 1 && (
-            <div className="absolute left-2.5 mt-6 w-0.5 h-4 bg-gray-200"></div>
+            <div className="absolute left-2.5 mt-6 w-0.5 h-4 bg-muted"></div>
           )}
         </div>
       ))}
@@ -170,32 +170,32 @@ export const VerificationProgress: React.FC<VerificationProgressProps> = ({
     switch (status) {
       case 'verified':
         return {
-          icon: <CheckCircleIcon className="w-6 h-6 text-green-600" />,
+          icon: <CheckCircleIcon className="w-6 h-6 text-success-600" />,
           title: `${type === 'email' ? 'Email' : 'Domain'} Verified`,
           message: `${email || domain} has been successfully verified and is ready for sending.`,
-          bgColor: 'bg-green-50',
-          borderColor: 'border-green-200',
-          textColor: 'text-green-800'
+          bgColor: 'bg-success-50',
+          borderColor: 'border-success-200',
+          textColor: 'text-success-800'
         };
       case 'failed':
         return {
-          icon: <ExclamationTriangleIcon className="w-6 h-6 text-red-600" />,
+          icon: <ExclamationTriangleIcon className="w-6 h-6 text-error-600" />,
           title: `${type === 'email' ? 'Email' : 'Domain'} Verification Failed`,
           message: type === 'email'
             ? 'Please check your email for the verification link or try again.'
             : 'Please check your DNS records and try again.',
-          bgColor: 'bg-red-50',
-          borderColor: 'border-red-200',
-          textColor: 'text-red-800'
+          bgColor: 'bg-error-50',
+          borderColor: 'border-error-200',
+          textColor: 'text-error-800'
         };
       case 'verification_timed_out':
         return {
-          icon: <ExclamationTriangleIcon className="w-6 h-6 text-orange-600" />,
+          icon: <ExclamationTriangleIcon className="w-6 h-6 text-warning-600" />,
           title: `${type === 'email' ? 'Email' : 'Domain'} Verification Expired`,
           message: 'The verification process timed out after 24 hours. You can retry verification to start the process again.',
-          bgColor: 'bg-orange-50',
-          borderColor: 'border-orange-200',
-          textColor: 'text-orange-800'
+          bgColor: 'bg-warning-50',
+          borderColor: 'border-warning-200',
+          textColor: 'text-warning-800'
         };
       default:
         return {
@@ -204,9 +204,9 @@ export const VerificationProgress: React.FC<VerificationProgressProps> = ({
           message: type === 'email'
             ? 'Check your email for a verification link.'
             : 'We\'re checking your DNS records. This may take up to 72 hours.',
-          bgColor: 'bg-blue-50',
-          borderColor: 'border-blue-200',
-          textColor: 'text-blue-800'
+          bgColor: 'bg-primary-50',
+          borderColor: 'border-primary-200',
+          textColor: 'text-primary-800'
         };
     }
   };
@@ -232,7 +232,7 @@ export const VerificationProgress: React.FC<VerificationProgressProps> = ({
             {config.message}
           </p>
           {estimatedTime && status === 'pending' && (
-            <p className="text-xs text-gray-600 mb-2">
+            <p className="text-xs text-muted-foreground mb-2">
               <InformationCircleIcon className="w-3 h-3 inline mr-1" />
               {estimatedTime}
             </p>
@@ -240,7 +240,7 @@ export const VerificationProgress: React.FC<VerificationProgressProps> = ({
           {status === 'failed' && onRetry && (
             <button
               onClick={onRetry}
-              className="text-sm font-medium text-blue-600 hover:text-blue-700 underline"
+              className="text-sm font-medium text-primary-600 hover:text-primary-700 underline"
             >
               Try Again
             </button>
@@ -271,10 +271,10 @@ export const LoadingOverlay: React.FC<LoadingOverlayProps> = ({
     <div className={cn('relative', className)}>
       {children}
       {isLoading && (
-        <div className="absolute inset-0 bg-white bg-opacity-75 flex items-center justify-center z-10 rounded-lg">
+        <div className="absolute inset-0 bg-surface bg-opacity-75 flex items-center justify-center z-10 rounded-lg">
           <div className="flex flex-col items-center space-y-3">
             <LoadingSpinner size="lg" />
-            <p className="text-sm text-gray-600 font-medium">{message}</p>
+            <p className="text-sm text-muted-foreground font-medium">{message}</p>
           </div>
         </div>
       )}
@@ -308,7 +308,7 @@ export const InlineLoading: React.FC<InlineLoadingProps> = ({
     <div className={cn('flex items-center space-x-2', className)}>
       <LoadingSpinner size={size} />
       {loadingText && (
-        <span className="text-sm text-gray-600">{loadingText}</span>
+        <span className="text-sm text-muted-foreground">{loadingText}</span>
       )}
     </div>
   );
@@ -344,7 +344,7 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
 
   return (
     <div className={cn(
-      'text-center py-12 bg-white border border-gray-200 rounded-lg',
+      'text-center py-12 bg-surface border border-border rounded-lg',
       className
     )}>
       {icon && (
@@ -352,13 +352,13 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
           {icon}
         </div>
       )}
-      <h3 className="text-lg font-medium text-gray-900 mb-2">{title}</h3>
-      <p className="text-gray-600 mb-6 max-w-md mx-auto">{description}</p>
+      <h3 className="text-lg font-medium text-foreground mb-2">{title}</h3>
+      <p className="text-muted-foreground mb-6 max-w-md mx-auto">{description}</p>
       {action && (
         <button
           onClick={action.onClick}
           disabled={action.isLoading}
-          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {action.isLoading ? (
             <>

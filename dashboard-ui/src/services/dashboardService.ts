@@ -65,34 +65,34 @@ export class DashboardService {
       issue_sent: {
         label: 'Issue Sent',
         icon: '📧',
-        color: 'text-blue-600',
-        bgColor: 'bg-blue-50',
+        color: 'text-primary-600',
+        bgColor: 'bg-primary-50',
       },
       subscriber_added: {
         label: 'New Subscriber',
         icon: '👤',
-        color: 'text-green-600',
-        bgColor: 'bg-green-50',
+        color: 'text-success-600',
+        bgColor: 'bg-success-50',
       },
       api_key_created: {
         label: 'API Key Created',
         icon: '🔑',
-        color: 'text-purple-600',
-        bgColor: 'bg-purple-50',
+        color: 'text-primary-600',
+        bgColor: 'bg-primary-50',
       },
       brand_updated: {
         label: 'Brand Updated',
         icon: '🏢',
-        color: 'text-orange-600',
-        bgColor: 'bg-orange-50',
+        color: 'text-warning-600',
+        bgColor: 'bg-warning-50',
       },
     };
 
     return activityTypes[type as keyof typeof activityTypes] || {
       label: 'Activity',
       icon: '📝',
-      color: 'text-gray-600',
-      bgColor: 'bg-gray-50',
+      color: 'text-muted-foreground',
+      bgColor: 'bg-background',
     };
   }
 
@@ -111,16 +111,16 @@ export class DashboardService {
 
     if (score >= 80) {
       level = 'excellent';
-      color = 'text-green-600';
+      color = 'text-success-600';
     } else if (score >= 60) {
       level = 'high';
-      color = 'text-blue-600';
+      color = 'text-primary-600';
     } else if (score >= 40) {
       level = 'medium';
-      color = 'text-yellow-600';
+      color = 'text-warning-600';
     } else {
       level = 'low';
-      color = 'text-red-600';
+      color = 'text-error-600';
     }
 
     return { score: Math.round(score), level, color };

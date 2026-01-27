@@ -44,7 +44,7 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
     try {
       await signIn(email, password);
       onSuccess?.();
-    } catch (error) {
+    } catch {
       // Error is handled by the AuthContext
     }
   };
@@ -69,16 +69,16 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
 
   return (
     <div className="w-full max-w-md mx-auto">
-      <div className="bg-white shadow-lg rounded-lg px-8 py-6">
+      <div className="bg-surface shadow-lg rounded-lg px-8 py-6">
         <div className="mb-6 text-center">
-          <h2 className="text-2xl font-bold text-gray-900">Sign In</h2>
-          <p className="text-gray-600 mt-2">Access your newsletter dashboard</p>
+          <h2 className="text-2xl font-bold text-foreground">Sign In</h2>
+          <p className="text-muted-foreground mt-2">Access your newsletter dashboard</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Email Field */}
           <div>
-            <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="email" className="block text-sm font-medium text-muted-foreground mb-1">
               Email Address
             </label>
             <input
@@ -86,20 +86,20 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
               type="email"
               value={email}
               onChange={(e) => handleInputChange('email', e.target.value)}
-              className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
-                formErrors.email ? 'border-red-300' : 'border-gray-300'
+              className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-primary-500 ${
+                formErrors.email ? 'border-error-300' : 'border-border'
               }`}
               placeholder="Enter your email"
               disabled={isLoading}
             />
             {formErrors.email && (
-              <p className="mt-1 text-sm text-red-600">{formErrors.email}</p>
+              <p className="mt-1 text-sm text-error-600">{formErrors.email}</p>
             )}
           </div>
 
           {/* Password Field */}
           <div>
-            <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="password" className="block text-sm font-medium text-muted-foreground mb-1">
               Password
             </label>
             <div className="relative">
@@ -108,8 +108,8 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
                 type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => handleInputChange('password', e.target.value)}
-                className={`w-full px-3 py-2 pr-10 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
-                  formErrors.password ? 'border-red-300' : 'border-gray-300'
+                className={`w-full px-3 py-2 pr-10 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-primary-500 ${
+                  formErrors.password ? 'border-error-300' : 'border-border'
                 }`}
                 placeholder="Enter your password"
                 disabled={isLoading}
@@ -121,21 +121,21 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
                 disabled={isLoading}
               >
                 {showPassword ? (
-                  <EyeSlashIcon className="h-5 w-5 text-gray-400" />
+                  <EyeSlashIcon className="h-5 w-5 text-muted-foreground" />
                 ) : (
-                  <EyeIcon className="h-5 w-5 text-gray-400" />
+                  <EyeIcon className="h-5 w-5 text-muted-foreground" />
                 )}
               </button>
             </div>
             {formErrors.password && (
-              <p className="mt-1 text-sm text-red-600">{formErrors.password}</p>
+              <p className="mt-1 text-sm text-error-600">{formErrors.password}</p>
             )}
           </div>
 
           {/* Global Error */}
           {error && (
-            <div className="bg-red-50 border border-red-200 rounded-md p-3">
-              <p className="text-sm text-red-600">{error}</p>
+            <div className="bg-error-50 border border-error-200 rounded-md p-3">
+              <p className="text-sm text-error-600">{error}</p>
             </div>
           )}
 
@@ -143,7 +143,7 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isLoading ? (
               <div className="flex items-center">

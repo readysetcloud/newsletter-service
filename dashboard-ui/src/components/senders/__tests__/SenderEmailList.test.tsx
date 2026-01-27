@@ -1,7 +1,8 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import * as userEvent from '@testing-library/user-event';
 import { SenderEmailList } from '../SenderEmailList';
 import { senderService } from '@/services/senderService';
+import { useConfirmationDialog } from '@/components/ui/ConfirmationDialog';
 import type { TierLimits, SenderEmail } from '@/types';
 
 // Mock dependencies
@@ -234,7 +235,7 @@ describe('SenderEmailList', () => {
     const mockShowConfirmation = vi.fn();
 
     // Mock the confirmation dialog hook
-    vi.mocked(require('@/components/ui/ConfirmationDialog').useConfirmationDialog).mockReturnValue({
+    vi.mocked(useConfirmationDialog).mockReturnValue({
       showConfirmation: mockShowConfirmation,
       ConfirmationDialog: () => <div data-testid="confirmation-dialog" />
     });
@@ -272,7 +273,7 @@ describe('SenderEmailList', () => {
   it('disables buttons during loading states', async () => {
     const user = userEvent.setup();
     let resolveUpdate: () => void;
-    const updatePromise = new Promise<any>((resolve) => {
+    const updatePromise = new Promise<unknown>((resolve) => {
       resolveUpdate = () => resolve({
         success: true,
         data: { ...mockSenders[1], isDefault: true }
@@ -334,13 +335,13 @@ describe('SenderEmailList', () => {
     render(<SenderEmailList {...defaultProps} />);
 
     const verifiedBadge = screen.getByText('Verified');
-    expect(verifiedBadge).toHaveClass('bg-green-100', 'text-green-800');
+    expect(verifiedBadge).toHaveClass('bg-success-100', 'text-success-800');
 
     const pendingBadge = screen.getByText('Pending verification');
-    expect(pendingBadge).toHaveClass('bg-yellow-100', 'text-yellow-800');
+    expect(pendingBadge).toHaveClass('bg-warning-100', 'text-warning-800');
 
     const failedBadge = screen.getByText('Verification failed');
-    expect(failedBadge).toHaveClass('bg-red-100', 'text-red-800');
+    expect(failedBadge).toHaveClass('bg-error-100', 'text-error-800');
   });
 
   it('shows email as title when no name provided', () => {
@@ -363,10 +364,10 @@ describe('SenderEmailList', () => {
 
     // Verified sender should have green styling
     const verifiedCard = screen.getByText('Verified Sender').closest('div');
-    expect(verifiedCard).toHaveClass('border-green-200', 'bg-green-50/30');
+    expect(verifiedCard).toHaveClass('border-success-200', 'bg-success-50/30');
 
     // Failed sender should have red styling
     const failedCard = screen.getByText('failed@example.com').closest('div');
-    expect(failedCard).toHaveClass('border-red-200', 'bg-red-50/30');
+    expect(failedCard).toHaveClass('border-error-200', 'bg-error-50/30');
   });
 });

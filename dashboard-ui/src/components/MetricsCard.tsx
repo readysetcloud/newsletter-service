@@ -16,27 +16,27 @@ export default function MetricsCard({ title, value, change, format = 'number', i
   };
 
   const getTrendIcon = () => {
-    if (change && change > 0) return <TrendingUp className="w-4 h-4 text-green-500" />;
-    if (change && change < 0) return <TrendingDown className="w-4 h-4 text-red-500" />;
-    return <Minus className="w-4 h-4 text-gray-400" />;
+    if (change && change > 0) return <TrendingUp className="w-4 h-4 text-success-500" />;
+    if (change && change < 0) return <TrendingDown className="w-4 h-4 text-error-500" />;
+    return <Minus className="w-4 h-4 text-muted-foreground" />;
   };
 
   const getTrendColor = () => {
-    if (change && change > 0) return 'text-green-600';
-    if (change && change < 0) return 'text-red-600';
-    return 'text-gray-500';
+    if (change && change > 0) return 'text-success-600';
+    if (change && change < 0) return 'text-error-600';
+    return 'text-muted-foreground';
   };
 
   return (
-    <div className="bg-white rounded-lg shadow p-4 sm:p-6">
+    <div className="bg-surface rounded-lg shadow p-4 sm:p-6">
       <div className="flex items-center justify-between">
         <div className="min-w-0 flex-1">
-          <p className="text-xs sm:text-sm font-medium text-gray-600 truncate">{title}</p>
-          <p className="text-xl sm:text-2xl font-semibold text-gray-900 mt-1">{formatValue(value)}</p>
+          <p className="text-xs sm:text-sm font-medium text-muted-foreground truncate">{title}</p>
+          <p className="text-xl sm:text-2xl font-semibold text-foreground mt-1">{formatValue(value)}</p>
         </div>
         {Icon && (
-          <div className="p-2 sm:p-3 bg-blue-50 rounded-full flex-shrink-0 ml-3">
-            <Icon className="w-5 h-5 sm:w-6 sm:h-6 text-blue-600" />
+          <div className="p-2 sm:p-3 bg-primary-50 rounded-full flex-shrink-0 ml-3">
+            <Icon className="w-5 h-5 sm:w-6 sm:h-6 text-primary-600" />
           </div>
         )}
       </div>

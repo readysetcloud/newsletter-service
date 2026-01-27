@@ -3,8 +3,6 @@ import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSenderStatus } from '../../hooks/useSenderStatus';
 import { LogoutButton } from '../auth/LogoutButton';
-import { NotificationDropdown } from '../notifications/NotificationDropdown';
-import { SenderStatusIndicator } from '../senders/SenderStatusIndicator';
 import { ariaPatterns, keyboardUtils, responsiveA11y } from '../../utils/accessibility';
 import { preloadRoute } from '../../utils/lazyImports';
 import {
@@ -78,6 +76,7 @@ export const MobileNavigation: React.FC = () => {
 
   // Close menu when route changes
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     closeMenu();
   }, [location.pathname]);
 
@@ -87,7 +86,7 @@ export const MobileNavigation: React.FC = () => {
       <button
         ref={buttonRef}
         type="button"
-        className={`md:hidden inline-flex items-center justify-center p-2 rounded-md text-gray-400 hover:text-gray-500 hover:bg-gray-100 ${responsiveA11y.focusRing.className} ${responsiveA11y.touchTarget.className}`}
+        className={`md:hidden inline-flex items-center justify-center p-2 rounded-md text-muted-foreground hover:text-muted-foreground hover:bg-muted ${responsiveA11y.focusRing.className} ${responsiveA11y.touchTarget.className}`}
         onClick={toggleMenu}
         aria-expanded={isOpen}
         aria-controls="mobile-menu"
@@ -116,7 +115,7 @@ export const MobileNavigation: React.FC = () => {
         ref={menuRef}
         id="mobile-menu"
         className={cn(
-          'fixed top-0 right-0 z-50 h-full w-80 max-w-sm bg-white shadow-xl transform transition-transform duration-300 ease-in-out md:hidden',
+          'fixed top-0 right-0 z-50 h-full w-80 max-w-sm bg-surface shadow-xl transform transition-transform duration-300 ease-in-out md:hidden',
           isOpen ? 'translate-x-0' : 'translate-x-full'
         )}
         {...ariaPatterns.navigation('Mobile navigation menu')}
@@ -124,14 +123,14 @@ export const MobileNavigation: React.FC = () => {
       >
         <div className="flex flex-col h-full">
           {/* Header */}
-          <div className="flex items-center justify-between p-4 border-b border-gray-200">
+          <div className="flex items-center justify-between p-4 border-b border-border">
             <div>
-              <h2 className="text-lg font-semibold text-gray-900">Menu</h2>
-              <p className="text-sm text-gray-500">{user?.email}</p>
+              <h2 className="text-lg font-semibold text-foreground">Menu</h2>
+              <p className="text-sm text-muted-foreground">{user?.email}</p>
             </div>
             <button
               type="button"
-              className={`p-2 rounded-md text-gray-400 hover:text-gray-500 hover:bg-gray-100 ${responsiveA11y.focusRing.className} ${responsiveA11y.touchTarget.className}`}
+              className={`p-2 rounded-md text-muted-foreground hover:text-muted-foreground hover:bg-muted ${responsiveA11y.focusRing.className} ${responsiveA11y.touchTarget.className}`}
               onClick={closeMenu}
               aria-label="Close menu"
             >
@@ -157,23 +156,20 @@ export const MobileNavigation: React.FC = () => {
                     responsiveA11y.focusRing.className,
                     responsiveA11y.touchTarget.className,
                     isActive
-                      ? 'bg-blue-50 text-blue-700 border-l-4 border-blue-700'
-                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                      ? 'bg-primary-50 text-primary-700 border-l-4 border-primary-700'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-background'
                   )}
                   {...ariaPatterns.link(`Navigate to ${item.name}`, isActive)}
                 >
                   <Icon className="w-6 h-6 mr-3" aria-hidden="true" />
                   {item.name}
-                  {item.name === 'Sender Emails' && !senderStatus.loading && (
-                    <SenderStatusIndicator
-                      verifiedCount={senderStatus.verifiedCount}
-                      pendingCount={senderStatus.pendingCount}
-                      failedCount={senderStatus.failedCount}
-                      timedOutCount={senderStatus.timedOutCount}
-                      totalCount={senderStatus.totalCount}
-                      size="sm"
-                      className="ml-auto"
-                    />
+                  {item.name === 'Sender Emails' && !senderStatus.loading && senderStatus.totalCount > 0 && (
+                    <span
+                      className="ml-auto inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+                      aria-label={`${senderStatus.verifiedCount} verified, ${senderStatus.pendingCount} pending, ${senderStatus.failedCount} failed, ${senderStatus.timedOutCount} expired`}
+                    >
+                      {senderStatus.verifiedCount}/{senderStatus.totalCount}
+                    </span>
                   )}
                 </Link>
               );
@@ -181,19 +177,17 @@ export const MobileNavigation: React.FC = () => {
           </nav>
 
           {/* Footer */}
-          <div className="border-t border-gray-200 p-4 space-y-4">
+          <div className="border-t border-border p-4 space-y-4">
             {/* User role badge */}
             {user?.role && (
               <div className="flex justify-center">
-                <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
+                <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-primary-100 text-primary-800">
                   {user.role}
                 </span>
               </div>
             )}
 
-            {/* Notifications and logout */}
-            <div className="flex items-center justify-between">
-              <NotificationDropdown />
+            <div className="flex items-center justify-end">
               <LogoutButton />
             </div>
           </div>

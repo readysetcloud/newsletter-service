@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { EnhancedInput } from '../EnhancedInput';
 
@@ -38,7 +38,7 @@ describe('EnhancedInput', () => {
     );
 
     expect(screen.getByText('This field is required')).toBeInTheDocument();
-    expect(screen.getByText('This field is required')).toHaveClass('text-red-600');
+    expect(screen.getByText('This field is required')).toHaveClass('text-error-600');
 
     // Success state
     rerender(
@@ -53,7 +53,7 @@ describe('EnhancedInput', () => {
 
     // Should show success styling
     const input = screen.getByDisplayValue('Valid input');
-    expect(input).toHaveClass('border-green-300');
+    expect(input).toHaveClass('border-success-300');
   });
 
   it('handles password toggle functionality', async () => {
@@ -132,7 +132,7 @@ describe('EnhancedInput', () => {
     );
 
     expect(screen.getByText('This is a warning')).toBeInTheDocument();
-    expect(screen.getByText('This is a warning')).toHaveClass('text-amber-600');
+    expect(screen.getByText('This is a warning')).toHaveClass('text-warning-600');
   });
 
   it('handles disabled state', () => {
@@ -145,7 +145,7 @@ describe('EnhancedInput', () => {
 
     const input = screen.getByLabelText('Test Input');
     expect(input).toBeDisabled();
-    expect(input).toHaveClass('disabled:bg-slate-50');
+    expect(input).toHaveClass('disabled:bg-background');
   });
 
   it('shows validating state with spinner', () => {

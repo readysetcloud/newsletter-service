@@ -67,7 +67,10 @@ export class ApiKeyService {
     const response = await this.getApiKey(keyId);
 
     if (!response.success || !response.data) {
-      return response as ApiResponse<any>;
+      return {
+        success: false,
+        error: response.error || 'Failed to fetch API key stats',
+      };
     }
 
     const { apiKey } = response.data;

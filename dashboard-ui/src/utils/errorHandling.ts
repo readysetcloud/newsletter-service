@@ -13,11 +13,14 @@ export interface ErrorInfo {
 /**
  * Parse and categorize errors from API respons
  */
-export function parseApiError(error: any): ErrorInfo {
+export function parseApiError(error: unknown): ErrorInfo {
+  const errorMessage = getErrorMessage(error);
+  const errorName = getErrorName(error);
+
   // Handle network errors
-  if (error?.name === 'TypeError' || error?.message?.includes('fetch')) {
+  if (errorName === 'TypeError' || errorMessage?.includes('fetch')) {
     return {
-      message: error.message || 'Network error',
+      message: errorMessage || 'Network error',
       type: 'network',
       retryable: true,
       userFriendly: 'Unable to connect to the server. Please check your internet connection and try again.',
@@ -25,9 +28,9 @@ export function parseApiError(error: any): ErrorInfo {
   }
 
   // Handle timeout errors
-  if (error?.name === 'AbortError' || error?.message?.includes('timeout')) {
+  if (errorName === 'AbortError' || errorMessage?.includes('timeout')) {
     return {
-      message: error.message || 'Request timeout',
+      message: errorMessage || 'Request timeout',
       type: 'network',
       retryable: true,
       userFriendly: 'The request took too long to complete. Please try again.',
@@ -35,9 +38,9 @@ export function parseApiError(error: any): ErrorInfo {
   }
 
   // Handle authentication errors
-  if (error?.message?.includes('Authentication required') || error?.message?.includes('401')) {
+  if (errorMessage?.includes('Authentication required') || errorMessage?.includes('401')) {
     return {
-      message: error.message,
+      message: errorMessage,
       type: 'authentication',
       retryable: false,
       userFriendly: 'Your session has expired. Please sign in again.',
@@ -45,9 +48,9 @@ export function parseApiError(error: any): ErrorInfo {
   }
 
   // Handle authorization errors
-  if (error?.message?.includes('Access denied') || error?.message?.includes('403')) {
+  if (errorMessage?.includes('Access denied') || errorMessage?.includes('403')) {
     return {
-      message: error.message,
+      message: errorMessage,
       type: 'authorization',
       retryable: false,
       userFriendly: 'You do not have permission to perform this action.',
@@ -55,9 +58,9 @@ export function parseApiError(error: any): ErrorInfo {
   }
 
   // Handle validation errors
-  if (error?.message?.includes('validation') || error?.message?.includes('400')) {
+  if (errorMessage?.includes('validation') || errorMessage?.includes('400')) {
     return {
-      message: error.message,
+      message: errorMessage,
       type: 'validation',
       retryable: false,
       userFriendly: 'Please check your input and try again.',
@@ -65,9 +68,9 @@ export function parseApiError(error: any): ErrorInfo {
   }
 
   // Handle server errors
-  if (error?.message?.includes('500') || error?.message?.includes('Server error')) {
+  if (errorMessage?.includes('500') || errorMessage?.includes('Server error')) {
     return {
-      message: error.message,
+      message: errorMessage,
       type: 'server',
       retryable: true,
       userFriendly: 'Something went wrong on our end. Please try again in a few moments.',
@@ -75,9 +78,9 @@ export function parseApiError(error: any): ErrorInfo {
   }
 
   // Handle resource not found
-  if (error?.message?.includes('404') || error?.message?.includes('not found')) {
+  if (errorMessage?.includes('404') || errorMessage?.includes('not found')) {
     return {
-      message: error.message,
+      message: errorMessage,
       type: 'unknown',
       retryable: false,
       userFriendly: 'The requested resource was not found.',
@@ -86,7 +89,7 @@ export function parseApiError(error: any): ErrorInfo {
 
   // Default unknown error
   return {
-    message: error?.message || 'An unexpected error occurred',
+    message: errorMessage || 'An unexpected error occurred',
     type: 'unknown',
     retryable: false,
     userFriendly: 'Something unexpected happened. Please try again or contact support if the problem persists.',
@@ -96,7 +99,7 @@ export function parseApiError(error: any): ErrorInfo {
 /**
  * Get user-friendly error message based on error type and context
  */
-export function getUserFriendlyErrorMessage(error: any, context?: string): string {
+export function getUserFriendlyErrorMessage(error: unknown, context?: string): string {
   const errorInfo = parseApiError(error);
 
   if (context) {
@@ -138,10 +141,11 @@ export function getUserFriendlyErrorMessage(error: any, context?: string): strin
 /**
  * Get sender-specific error messages
  */
-function getSenderErrorMessage(error: any, errorInfo: ErrorInfo): string {
+function getSenderErrorMessage(error: unknown, errorInfo: ErrorInfo): string {
   // Handle specific sender error codes
-  if (error?.errorCode) {
-    switch (error.errorCode) {
+  if (typeof error === 'object' && error !== null && 'errorCode' in error) {
+    const errorCode = (error as { errorCode?: string }).errorCode;
+    switch (errorCode) {
       case 'INVALID_EMAIL':
         return 'Please enter a valid email address (e.g., newsletter@yourdomain.com)';
       case 'INVALID_DOMAIN':
@@ -199,7 +203,7 @@ function getSenderErrorMessage(error: any, errorInfo: ErrorInfo): string {
 /**
  * Determine if an error should trigger a retry
  */
-export function shouldRetryError(error: any): boolean {
+export function shouldRetryError(error: unknown): boolean {
   const errorInfo = parseApiError(error);
   return errorInfo.retryable;
 }
@@ -214,7 +218,7 @@ export function getRetryDelay(attemptNumber: number, baseDelay: number = 1000): 
 /**
  * Format error for logging (includes more technical details)
  */
-export function formatErrorForLogging(error: any, context?: string): string {
+export function formatErrorForLogging(error: unknown, context?: string): string {
   const timestamp = new Date().toISOString();
   const contextStr = context ? `[${context}] ` : '';
 
@@ -228,12 +232,12 @@ export function formatErrorForLogging(error: any, context?: string): string {
 /**
  * Error boundary helper for React components
  */
-export function handleComponentError(error: Error, errorInfo: any): void {
+export function handleComponentError(error: Error, errorInfo: unknown): void {
   console.error('Component Error:', formatErrorForLogging(error, 'Component'));
   console.error('Error Info:', errorInfo);
 
   // In production, you might want to send this to an error reporting service
-  if (process.env.NODE_ENV === 'production') {
+  if (import.meta.env.PROD) {
     // Example: sendToErrorReporting(error, errorInfo);
   }
 }
@@ -241,13 +245,16 @@ export function handleComponentError(error: Error, errorInfo: any): void {
 /**
  * Validation error helpers
  */
-export function extractValidationErrors(error: any): Record<string, string> {
+export function extractValidationErrors(error: unknown): Record<string, string> {
   const errors: Record<string, string> = {};
 
-  if (error?.details && typeof error.details === 'object') {
-    Object.entries(error.details).forEach(([field, message]) => {
-      errors[field] = typeof message === 'string' ? message : 'Invalid value';
-    });
+  if (typeof error === 'object' && error !== null && 'details' in error) {
+    const details = (error as { details?: Record<string, unknown> }).details;
+    if (details && typeof details === 'object') {
+      Object.entries(details).forEach(([field, message]) => {
+        errors[field] = typeof message === 'string' ? message : 'Invalid value';
+      });
+    }
   }
 
   return errors;
@@ -267,7 +274,7 @@ export function createErrorResponse(message: string, code?: string): { success: 
 /**
  * Toast notification helpers for different error types
  */
-export function getErrorToastConfig(error: any, context?: string) {
+export function getErrorToastConfig(error: unknown, context?: string) {
   const errorInfo = parseApiError(error);
 
   return {
@@ -294,4 +301,29 @@ function getErrorTitle(errorType: ErrorInfo['type']): string {
     default:
       return 'Error';
   }
+}
+
+function getErrorMessage(error: unknown): string | undefined {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    return typeof message === 'string' ? message : undefined;
+  }
+  return undefined;
+}
+
+function getErrorName(error: unknown): string | undefined {
+  if (error instanceof Error) {
+    return error.name;
+  }
+  if (typeof error === 'object' && error !== null && 'name' in error) {
+    const name = (error as { name?: unknown }).name;
+    return typeof name === 'string' ? name : undefined;
+  }
+  return undefined;
 }

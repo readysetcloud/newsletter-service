@@ -93,7 +93,7 @@ export const Loading: React.FC<LoadingProps> = ({
       <div className="flex flex-col items-center space-y-2">
         {renderVariant()}
         {text && (
-          <p className="text-sm text-slate-500 animate-pulse">{text}</p>
+          <p className="text-sm text-muted-foreground animate-pulse">{text}</p>
         )}
       </div>
     </div>
@@ -109,14 +109,14 @@ export const LoadingSkeleton: React.FC<LoadingSkeletonProps> = ({
     <div className={cn('animate-pulse', className)}>
       <div className="flex items-start space-x-4">
         {avatar && (
-          <div className="rounded-full bg-slate-200 h-10 w-10" />
+          <div className="rounded-full bg-muted h-10 w-10" />
         )}
         <div className="flex-1 space-y-2">
           {Array.from({ length: lines }).map((_, i) => (
             <div
               key={i}
               className={cn(
-                'h-4 bg-slate-200 rounded',
+                'h-4 bg-muted rounded',
                 i === lines - 1 ? 'w-3/4' : 'w-full'
               )}
             />

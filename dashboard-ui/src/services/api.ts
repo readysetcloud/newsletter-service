@@ -82,8 +82,16 @@ class ApiClient {
 
         // Try to get error message from response
         try {
-          const errorData = await response.json();
-          throw new Error(errorData.message || `HTTP ${response.status}: ${response.statusText}`);
+          const errorData: unknown = await response.json();
+          if (
+            typeof errorData === 'object' &&
+            errorData !== null &&
+            'message' in errorData &&
+            typeof (errorData as { message?: unknown }).message === 'string'
+          ) {
+            throw new Error((errorData as { message: string }).message);
+          }
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         } catch {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
@@ -115,7 +123,7 @@ class ApiClient {
     }
   }
 
-  private shouldRetry(error: any): boolean {
+  private shouldRetry(error: unknown): boolean {
     return shouldRetryError(error);
   }
 
@@ -127,11 +135,11 @@ class ApiClient {
     return this.request<T>(endpoint, { ...config, method: 'GET' });
   }
 
-  async post<T>(endpoint: string, data?: any, config?: RequestConfig): Promise<ApiResponse<T>> {
+  async post<T>(endpoint: string, data?: unknown, config?: RequestConfig): Promise<ApiResponse<T>> {
     return this.request<T>(endpoint, { ...config, method: 'POST', body: data });
   }
 
-  async put<T>(endpoint: string, data?: any, config?: RequestConfig): Promise<ApiResponse<T>> {
+  async put<T>(endpoint: string, data?: unknown, config?: RequestConfig): Promise<ApiResponse<T>> {
     return this.request<T>(endpoint, { ...config, method: 'PUT', body: data });
   }
 
@@ -139,7 +147,7 @@ class ApiClient {
     return this.request<T>(endpoint, { ...config, method: 'DELETE' });
   }
 
-  async patch<T>(endpoint: string, data?: any, config?: RequestConfig): Promise<ApiResponse<T>> {
+  async patch<T>(endpoint: string, data?: unknown, config?: RequestConfig): Promise<ApiResponse<T>> {
     return this.request<T>(endpoint, { ...config, method: 'PATCH', body: data });
   }
 }

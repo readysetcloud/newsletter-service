@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import PropTypes from 'prop-types';
 import { AuthService } from '../utils/auth';
 
 export default function Login({ onLogin }) {
@@ -60,20 +61,20 @@ export default function Login({ onLogin }) {
 
   if (needsNewPassword) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+      <div className="min-h-screen flex items-center justify-center bg-background py-12 px-4 sm:px-6 lg:px-8">
         <div className="max-w-md w-full space-y-8">
           <div>
-            <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
+            <h2 className="mt-6 text-center text-3xl font-extrabold text-foreground">
               Set New Password
             </h2>
-            <p className="mt-2 text-center text-sm text-gray-600">
+            <p className="mt-2 text-center text-sm text-muted-foreground">
               Please set a new password for your account
             </p>
           </div>
           <form className="mt-8 space-y-6" onSubmit={handleNewPassword}>
             <div className="space-y-4">
               <div>
-                <label htmlFor="new-password" className="block text-sm font-medium text-gray-700">
+                <label htmlFor="new-password" className="block text-sm font-medium text-muted-foreground">
                   New Password
                 </label>
                 <input
@@ -81,14 +82,14 @@ export default function Login({ onLogin }) {
                   name="new-password"
                   type="password"
                   required
-                  className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
+                  className="mt-1 appearance-none relative block w-full px-3 py-2 border border-border placeholder-muted-foreground text-foreground rounded-md focus:outline-none focus:ring-ring focus:border-primary-500 focus:z-10 sm:text-sm"
                   placeholder="Enter new password"
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                 />
               </div>
               <div>
-                <label htmlFor="confirm-password" className="block text-sm font-medium text-gray-700">
+                <label htmlFor="confirm-password" className="block text-sm font-medium text-muted-foreground">
                   Confirm Password
                 </label>
                 <input
@@ -96,7 +97,7 @@ export default function Login({ onLogin }) {
                   name="confirm-password"
                   type="password"
                   required
-                  className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
+                  className="mt-1 appearance-none relative block w-full px-3 py-2 border border-border placeholder-muted-foreground text-foreground rounded-md focus:outline-none focus:ring-ring focus:border-primary-500 focus:z-10 sm:text-sm"
                   placeholder="Confirm new password"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
@@ -105,7 +106,7 @@ export default function Login({ onLogin }) {
             </div>
 
             {error && (
-              <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
+              <div className="bg-error-50 border border-error-200 text-error-700 px-4 py-3 rounded">
                 {error}
               </div>
             )}
@@ -114,7 +115,7 @@ export default function Login({ onLogin }) {
               <button
                 type="submit"
                 disabled={loading}
-                className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+                className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ring disabled:opacity-50"
               >
                 {loading ? 'Setting Password...' : 'Set Password'}
               </button>
@@ -126,20 +127,22 @@ export default function Login({ onLogin }) {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen flex items-center justify-center bg-background py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         <div>
-          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-            Newsletter Admin
-          </h2>
-          <p className="mt-2 text-center text-sm text-gray-600">
+          <img
+            src="/logo-full.svg"
+            alt="Outboxed"
+            className="mx-auto h-10 sm:h-12"
+          />
+          <p className="mt-2 text-center text-sm text-muted-foreground">
             Sign in to your account
           </p>
         </div>
         <form className="mt-8 space-y-6" onSubmit={handleLogin}>
           <div className="space-y-4">
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="email" className="block text-sm font-medium text-muted-foreground">
                 Email address
               </label>
               <input
@@ -148,14 +151,14 @@ export default function Login({ onLogin }) {
                 type="email"
                 autoComplete="email"
                 required
-                className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
+                className="mt-1 appearance-none relative block w-full px-3 py-2 border border-border placeholder-muted-foreground text-foreground rounded-md focus:outline-none focus:ring-ring focus:border-primary-500 focus:z-10 sm:text-sm"
                 placeholder="Enter your email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
               />
             </div>
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="password" className="block text-sm font-medium text-muted-foreground">
                 Password
               </label>
               <input
@@ -164,7 +167,7 @@ export default function Login({ onLogin }) {
                 type="password"
                 autoComplete="current-password"
                 required
-                className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
+                className="mt-1 appearance-none relative block w-full px-3 py-2 border border-border placeholder-muted-foreground text-foreground rounded-md focus:outline-none focus:ring-ring focus:border-primary-500 focus:z-10 sm:text-sm"
                 placeholder="Enter your password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -173,7 +176,7 @@ export default function Login({ onLogin }) {
           </div>
 
           {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
+            <div className="bg-error-50 border border-error-200 text-error-700 px-4 py-3 rounded">
               {error}
             </div>
           )}
@@ -182,7 +185,7 @@ export default function Login({ onLogin }) {
             <button
               type="submit"
               disabled={loading}
-              className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+              className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ring disabled:opacity-50"
             >
               {loading ? 'Signing in...' : 'Sign in'}
             </button>
@@ -192,3 +195,7 @@ export default function Login({ onLogin }) {
     </div>
   );
 }
+
+Login.propTypes = {
+  onLogin: PropTypes.func.isRequired
+};

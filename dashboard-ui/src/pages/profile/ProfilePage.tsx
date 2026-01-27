@@ -161,41 +161,41 @@ export function ProfilePage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-background flex items-center justify-center">
         <Loading size="lg" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-background">
       <AppHeader />
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
         <div className="px-4 py-6 sm:px-0">
           {error ? (
-            <div className="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
-              <h2 className="text-lg font-semibold text-red-800 mb-2">Error Loading Profile</h2>
-              <p className="text-red-600 mb-4">{error}</p>
+            <div className="bg-error-50 border border-error-200 rounded-lg p-6 text-center">
+              <h2 className="text-lg font-semibold text-error-800 mb-2">Error Loading Profile</h2>
+              <p className="text-error-600 mb-4">{error}</p>
               <button
                 onClick={loadProfile}
-                className="bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 transition-colors"
+                className="bg-error-600 text-white px-4 py-2 rounded-md hover:bg-error-700 transition-colors"
               >
                 Try Again
               </button>
             </div>
           ) : !profile ? (
-            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
-              <h2 className="text-lg font-semibold text-yellow-800 mb-2">No Profile Data</h2>
-              <p className="text-yellow-600">Unable to load profile information.</p>
+            <div className="bg-warning-50 border border-warning-200 rounded-lg p-6 text-center">
+              <h2 className="text-lg font-semibold text-warning-800 mb-2">No Profile Data</h2>
+              <p className="text-warning-600">Unable to load profile information.</p>
             </div>
           ) : (
             <>
               {/* Page Header */}
               <div className="mb-6 sm:mb-8">
-                <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Profile Settings</h1>
-                <p className="text-gray-600 mt-2 text-sm sm:text-base">
+                <h1 className="text-2xl sm:text-3xl font-bold text-foreground">Profile Settings</h1>
+                <p className="text-muted-foreground mt-2 text-sm sm:text-base">
                   Manage your personal information, social links, and account preferences.
                 </p>
               </div>

@@ -6,11 +6,9 @@ import { AppHeader } from '../../components/layout/AppHeader';
 import { BrandFormData } from '../../schemas/brandSchema';
 import { BrandInfo, UserProfile } from '../../types';
 import { profileService } from '../../services/profileService';
-import { useAuth } from '../../contexts/AuthContext';
 import { BuildingOfficeIcon, CheckCircleIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 
 export const BrandPage: React.FC = () => {
-  const { } = useAuth();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -136,13 +134,13 @@ export const BrandPage: React.FC = () => {
     return (
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="animate-pulse">
-          <div className="h-8 bg-slate-200 rounded w-1/4 mb-6"></div>
+          <div className="h-8 bg-muted rounded w-1/4 mb-6"></div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             <div className="space-y-4">
-              <div className="h-64 bg-slate-200 rounded"></div>
+              <div className="h-64 bg-muted rounded"></div>
             </div>
             <div className="space-y-4">
-              <div className="h-64 bg-slate-200 rounded"></div>
+              <div className="h-64 bg-muted rounded"></div>
             </div>
           </div>
         </div>
@@ -151,19 +149,19 @@ export const BrandPage: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-background">
       <AppHeader />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       {/* Header */}
       <div className="mb-8">
         <div className="flex items-center space-x-3 mb-2">
-          <BuildingOfficeIcon className="h-8 w-8 text-blue-600" />
-          <h1 className="text-3xl font-bold text-slate-900">
+          <BuildingOfficeIcon className="h-8 w-8 text-primary-600" />
+          <h1 className="text-3xl font-bold text-foreground">
             {profile?.brand?.brandId ? 'Manage Brand' : 'Create Your Brand'}
           </h1>
         </div>
-        <p className="text-slate-600">
+        <p className="text-muted-foreground">
           {profile?.brand?.brandId
             ? 'Update your brand information and settings'
             : 'Set up your newsletter brand to get started'
@@ -173,19 +171,19 @@ export const BrandPage: React.FC = () => {
 
       {/* Success/Error Messages */}
       {success && (
-        <div className="mb-6 bg-green-50 border border-green-200 rounded-md p-4">
+        <div className="mb-6 bg-success-50 border border-success-200 rounded-md p-4">
           <div className="flex items-center">
-            <CheckCircleIcon className="h-5 w-5 text-green-400 mr-2" />
-            <p className="text-sm text-green-800">{success}</p>
+            <CheckCircleIcon className="h-5 w-5 text-success-400 mr-2" />
+            <p className="text-sm text-success-800">{success}</p>
           </div>
         </div>
       )}
 
       {error && (
-        <div className="mb-6 bg-red-50 border border-red-200 rounded-md p-4">
+        <div className="mb-6 bg-error-50 border border-error-200 rounded-md p-4">
           <div className="flex items-center">
-            <ExclamationTriangleIcon className="h-5 w-5 text-red-400 mr-2" />
-            <p className="text-sm text-red-800">{error}</p>
+            <ExclamationTriangleIcon className="h-5 w-5 text-error-400 mr-2" />
+            <p className="text-sm text-error-800">{error}</p>
           </div>
         </div>
       )}

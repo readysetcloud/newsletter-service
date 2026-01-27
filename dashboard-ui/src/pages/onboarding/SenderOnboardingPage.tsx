@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { OnboardingLayout } from '@/components/onboarding/OnboardingLayout';
 import { OnboardingSenderStep } from '@/components/onboarding/OnboardingSenderStep';
@@ -7,9 +7,9 @@ import { useToast } from '@/components/ui/Toast';
 
 export function SenderOnboardingPage() {
   const navigate = useNavigate();
-  const { user, refreshUser } = useAuth();
+  const { refreshUser } = useAuth();
   const { addToast } = useToast();
-  const [isCompleting, setIsCompleting] = useState(false);
+  const [, setIsCompleting] = useState(false);
 
   const handleComplete = async () => {
     console.log('=== Sender Onboarding Complete ===');
@@ -85,16 +85,16 @@ export function SenderOnboardingPage() {
       />
 
       {/* Additional help text */}
-      <div className="mt-8 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-        <h4 className="text-sm font-medium text-blue-900 mb-2">Why set up a sender email?</h4>
-        <ul className="text-sm text-blue-800 space-y-1">
+      <div className="mt-8 p-4 bg-primary-50 border border-primary-200 rounded-lg">
+        <h4 className="text-sm font-medium text-primary-900 mb-2">Why set up a sender email?</h4>
+        <ul className="text-sm text-primary-800 space-y-1">
           <li>• Better email deliverability and trust</li>
           <li>• Professional branding with your own domain</li>
-          <li>• Avoid generic "noreply" sender addresses</li>
+          <li>• Avoid generic &quot;noreply&quot; sender addresses</li>
           <li>• Build stronger relationships with subscribers</li>
         </ul>
-        <p className="text-xs text-blue-700 mt-3">
-          Don't worry - you can always set this up later from your dashboard settings.
+        <p className="text-xs text-primary-700 mt-3">
+          Don&apos;t worry - you can always set this up later from your dashboard settings.
         </p>
       </div>
     </OnboardingLayout>

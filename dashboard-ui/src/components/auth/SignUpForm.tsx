@@ -82,7 +82,7 @@ export function SignUpForm({ onSuccess, onNeedConfirmation }: SignUpFormProps) {
         // Need email confirmation
         onNeedConfirmation?.(formData.email);
       }
-    } catch (error) {
+    } catch {
       // Error is handled by the AuthContext
     }
   };
@@ -101,17 +101,17 @@ export function SignUpForm({ onSuccess, onNeedConfirmation }: SignUpFormProps) {
 
   return (
     <div className="w-full max-w-md mx-auto">
-      <div className="bg-white shadow-lg rounded-lg px-8 py-6">
+      <div className="bg-surface shadow-lg rounded-lg px-8 py-6">
         <div className="mb-6 text-center">
-          <h2 className="text-2xl font-bold text-gray-900">Create Account</h2>
-          <p className="text-gray-600 mt-2">Start managing your newsletter</p>
+          <h2 className="text-2xl font-bold text-foreground">Create Account</h2>
+          <p className="text-muted-foreground mt-2">Start managing your newsletter</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Name Fields */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label htmlFor="firstName" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="firstName" className="block text-sm font-medium text-muted-foreground mb-1">
                 First Name
               </label>
               <input
@@ -119,19 +119,19 @@ export function SignUpForm({ onSuccess, onNeedConfirmation }: SignUpFormProps) {
                 type="text"
                 value={formData.firstName}
                 onChange={(e) => handleInputChange('firstName', e.target.value)}
-                className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
-                  formErrors.firstName ? 'border-red-300' : 'border-gray-300'
+                className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-primary-500 ${
+                  formErrors.firstName ? 'border-error-300' : 'border-border'
                 }`}
                 placeholder="First name"
                 disabled={isLoading}
               />
               {formErrors.firstName && (
-                <p className="mt-1 text-sm text-red-600">{formErrors.firstName}</p>
+                <p className="mt-1 text-sm text-error-600">{formErrors.firstName}</p>
               )}
             </div>
 
             <div>
-              <label htmlFor="lastName" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="lastName" className="block text-sm font-medium text-muted-foreground mb-1">
                 Last Name
               </label>
               <input
@@ -139,21 +139,21 @@ export function SignUpForm({ onSuccess, onNeedConfirmation }: SignUpFormProps) {
                 type="text"
                 value={formData.lastName}
                 onChange={(e) => handleInputChange('lastName', e.target.value)}
-                className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
-                  formErrors.lastName ? 'border-red-300' : 'border-gray-300'
+                className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-primary-500 ${
+                  formErrors.lastName ? 'border-error-300' : 'border-border'
                 }`}
                 placeholder="Last name"
                 disabled={isLoading}
               />
               {formErrors.lastName && (
-                <p className="mt-1 text-sm text-red-600">{formErrors.lastName}</p>
+                <p className="mt-1 text-sm text-error-600">{formErrors.lastName}</p>
               )}
             </div>
           </div>
 
           {/* Email Field */}
           <div>
-            <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="email" className="block text-sm font-medium text-muted-foreground mb-1">
               Email Address
             </label>
             <input
@@ -161,20 +161,20 @@ export function SignUpForm({ onSuccess, onNeedConfirmation }: SignUpFormProps) {
               type="email"
               value={formData.email}
               onChange={(e) => handleInputChange('email', e.target.value)}
-              className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
-                formErrors.email ? 'border-red-300' : 'border-gray-300'
+              className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-primary-500 ${
+                formErrors.email ? 'border-error-300' : 'border-border'
               }`}
               placeholder="Enter your email"
               disabled={isLoading}
             />
             {formErrors.email && (
-              <p className="mt-1 text-sm text-red-600">{formErrors.email}</p>
+              <p className="mt-1 text-sm text-error-600">{formErrors.email}</p>
             )}
           </div>
 
           {/* Password Field */}
           <div>
-            <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="password" className="block text-sm font-medium text-muted-foreground mb-1">
               Password
             </label>
             <div className="relative">
@@ -183,8 +183,8 @@ export function SignUpForm({ onSuccess, onNeedConfirmation }: SignUpFormProps) {
                 type={showPassword ? 'text' : 'password'}
                 value={formData.password}
                 onChange={(e) => handleInputChange('password', e.target.value)}
-                className={`w-full px-3 py-2 pr-10 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
-                  formErrors.password ? 'border-red-300' : 'border-gray-300'
+                className={`w-full px-3 py-2 pr-10 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-primary-500 ${
+                  formErrors.password ? 'border-error-300' : 'border-border'
                 }`}
                 placeholder="Create a password"
                 disabled={isLoading}
@@ -196,20 +196,20 @@ export function SignUpForm({ onSuccess, onNeedConfirmation }: SignUpFormProps) {
                 disabled={isLoading}
               >
                 {showPassword ? (
-                  <EyeSlashIcon className="h-5 w-5 text-gray-400" />
+                  <EyeSlashIcon className="h-5 w-5 text-muted-foreground" />
                 ) : (
-                  <EyeIcon className="h-5 w-5 text-gray-400" />
+                  <EyeIcon className="h-5 w-5 text-muted-foreground" />
                 )}
               </button>
             </div>
             {formErrors.password && (
-              <p className="mt-1 text-sm text-red-600">{formErrors.password}</p>
+              <p className="mt-1 text-sm text-error-600">{formErrors.password}</p>
             )}
           </div>
 
           {/* Confirm Password Field */}
           <div>
-            <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="confirmPassword" className="block text-sm font-medium text-muted-foreground mb-1">
               Confirm Password
             </label>
             <div className="relative">
@@ -218,8 +218,8 @@ export function SignUpForm({ onSuccess, onNeedConfirmation }: SignUpFormProps) {
                 type={showConfirmPassword ? 'text' : 'password'}
                 value={formData.confirmPassword}
                 onChange={(e) => handleInputChange('confirmPassword', e.target.value)}
-                className={`w-full px-3 py-2 pr-10 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
-                  formErrors.confirmPassword ? 'border-red-300' : 'border-gray-300'
+                className={`w-full px-3 py-2 pr-10 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-primary-500 ${
+                  formErrors.confirmPassword ? 'border-error-300' : 'border-border'
                 }`}
                 placeholder="Confirm your password"
                 disabled={isLoading}
@@ -231,21 +231,21 @@ export function SignUpForm({ onSuccess, onNeedConfirmation }: SignUpFormProps) {
                 disabled={isLoading}
               >
                 {showConfirmPassword ? (
-                  <EyeSlashIcon className="h-5 w-5 text-gray-400" />
+                  <EyeSlashIcon className="h-5 w-5 text-muted-foreground" />
                 ) : (
-                  <EyeIcon className="h-5 w-5 text-gray-400" />
+                  <EyeIcon className="h-5 w-5 text-muted-foreground" />
                 )}
               </button>
             </div>
             {formErrors.confirmPassword && (
-              <p className="mt-1 text-sm text-red-600">{formErrors.confirmPassword}</p>
+              <p className="mt-1 text-sm text-error-600">{formErrors.confirmPassword}</p>
             )}
           </div>
 
           {/* Global Error */}
           {error && (
-            <div className="bg-red-50 border border-red-200 rounded-md p-3">
-              <p className="text-sm text-red-600">{error}</p>
+            <div className="bg-error-50 border border-error-200 rounded-md p-3">
+              <p className="text-sm text-error-600">{error}</p>
             </div>
           )}
 
@@ -253,7 +253,7 @@ export function SignUpForm({ onSuccess, onNeedConfirmation }: SignUpFormProps) {
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isLoading ? (
               <div className="flex items-center">
@@ -270,7 +270,7 @@ export function SignUpForm({ onSuccess, onNeedConfirmation }: SignUpFormProps) {
         </form>
 
         {/* Password Requirements */}
-        <div className="mt-4 text-xs text-gray-500">
+        <div className="mt-4 text-xs text-muted-foreground">
           <p className="font-medium mb-1">Password requirements:</p>
           <ul className="list-disc list-inside space-y-1">
             <li>At least 8 characters long</li>

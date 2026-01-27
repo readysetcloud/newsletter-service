@@ -1,7 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { useSenderStatus } from '@/hooks/useSenderStatus';
-import { SenderStatusIndicator } from './SenderStatusIndicator';
 import { Loading } from '@/components/ui/Loading';
 import {
   EnvelopeIcon,
@@ -91,35 +90,35 @@ export const SenderStatusWidget: React.FC<SenderStatusWidgetProps> = ({
   const getStatusIcon = () => {
     switch (statusInfo.priority) {
       case 'error':
-        return <ExclamationTriangleIcon className="w-6 h-6 text-red-500" />;
+        return <ExclamationTriangleIcon className="w-6 h-6 text-error-500" />;
       case 'warning':
-        return <ClockIcon className="w-6 h-6 text-amber-500" />;
+        return <ClockIcon className="w-6 h-6 text-warning-500" />;
       case 'success':
-        return <CheckCircleIcon className="w-6 h-6 text-green-500" />;
+        return <CheckCircleIcon className="w-6 h-6 text-primary-600" />;
       default:
-        return <EnvelopeIcon className="w-6 h-6 text-gray-400" />;
+        return <EnvelopeIcon className="w-6 h-6 text-muted-foreground" />;
     }
   };
 
   const getStatusColor = () => {
     switch (statusInfo.priority) {
       case 'error':
-        return 'border-red-200 bg-red-50';
+        return 'border-border bg-surface';
       case 'warning':
-        return 'border-amber-200 bg-amber-50';
+        return 'border-border bg-surface';
       case 'success':
-        return 'border-green-200 bg-green-50';
+        return 'border-primary-200 bg-primary-50';
       default:
-        return 'border-gray-200 bg-white';
+        return 'border-border bg-surface';
     }
   };
 
   if (senderStatus.loading) {
     return (
-      <div className={cn('bg-white rounded-lg shadow p-6', className)}>
+      <div className={cn('bg-surface rounded-lg shadow p-6', className)}>
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-medium text-gray-900">Sender Emails</h3>
-          <EnvelopeIcon className="w-6 h-6 text-gray-400" />
+          <h3 className="text-lg font-medium text-foreground">Sender Emails</h3>
+          <EnvelopeIcon className="w-6 h-6 text-muted-foreground" />
         </div>
         <div className="flex items-center justify-center py-8">
           <Loading size="sm" />
@@ -130,17 +129,17 @@ export const SenderStatusWidget: React.FC<SenderStatusWidgetProps> = ({
 
   if (senderStatus.error) {
     return (
-      <div className={cn('bg-white rounded-lg shadow p-6', className)}>
+      <div className={cn('bg-surface rounded-lg shadow p-6', className)}>
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-medium text-gray-900">Sender Emails</h3>
-          <EnvelopeIcon className="w-6 h-6 text-gray-400" />
+          <h3 className="text-lg font-medium text-foreground">Sender Emails</h3>
+          <EnvelopeIcon className="w-6 h-6 text-muted-foreground" />
         </div>
         <div className="text-center py-8">
-          <ExclamationTriangleIcon className="w-8 h-8 text-red-400 mx-auto mb-2" />
-          <p className="text-sm text-gray-600">Failed to load sender status</p>
+          <ExclamationTriangleIcon className="w-8 h-8 text-error-400 mx-auto mb-2" />
+          <p className="text-sm text-muted-foreground">Failed to load sender status</p>
           <button
             onClick={senderStatus.refresh}
-            className="mt-2 text-sm text-blue-600 hover:text-blue-500"
+            className="mt-2 text-sm text-primary-600 hover:text-primary-500"
           >
             Try again
           </button>
@@ -150,22 +149,14 @@ export const SenderStatusWidget: React.FC<SenderStatusWidgetProps> = ({
   }
 
   return (
-    <div className={cn('bg-white rounded-lg shadow p-6', className)}>
+    <div className={cn('bg-surface rounded-lg shadow p-6', className)}>
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-medium text-gray-900">Sender Emails</h3>
+        <h3 className="text-lg font-medium text-foreground">Sender Emails</h3>
         <div className="flex items-center gap-2">
-          <SenderStatusIndicator
-            verifiedCount={senderStatus.verifiedCount}
-            pendingCount={senderStatus.pendingCount}
-            failedCount={senderStatus.failedCount}
-            timedOutCount={senderStatus.timedOutCount}
-            totalCount={senderStatus.totalCount}
-            size="md"
-          />
           <Link
             to="/senders"
-            className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+            className="p-1 text-muted-foreground hover:text-muted-foreground transition-colors"
             title="Manage sender emails"
           >
             <CogIcon className="w-5 h-5" />
@@ -180,10 +171,10 @@ export const SenderStatusWidget: React.FC<SenderStatusWidgetProps> = ({
             {getStatusIcon()}
           </div>
           <div className="flex-1 min-w-0">
-            <h4 className="text-sm font-medium text-gray-900 mb-1">
+            <h4 className="text-sm font-medium text-foreground mb-1">
               {statusInfo.title}
             </h4>
-            <p className="text-sm text-gray-600">
+            <p className="text-sm text-muted-foreground">
               {statusInfo.description}
             </p>
           </div>
@@ -194,28 +185,28 @@ export const SenderStatusWidget: React.FC<SenderStatusWidgetProps> = ({
       {senderStatus.totalCount > 0 && (
         <div className="grid grid-cols-4 gap-3 mb-4">
           <div className="text-center">
-            <div className="text-lg font-semibold text-green-600">
+            <div className="text-lg font-semibold text-primary-600">
               {senderStatus.verifiedCount}
             </div>
-            <div className="text-xs text-gray-500">Verified</div>
+            <div className="text-xs text-muted-foreground">Verified</div>
           </div>
           <div className="text-center">
-            <div className="text-lg font-semibold text-amber-600">
+            <div className="text-lg font-semibold text-muted-foreground">
               {senderStatus.pendingCount}
             </div>
-            <div className="text-xs text-gray-500">Pending</div>
+            <div className="text-xs text-muted-foreground">Pending</div>
           </div>
           <div className="text-center">
-            <div className="text-lg font-semibold text-red-600">
+            <div className="text-lg font-semibold text-muted-foreground">
               {senderStatus.failedCount}
             </div>
-            <div className="text-xs text-gray-500">Failed</div>
+            <div className="text-xs text-muted-foreground">Failed</div>
           </div>
           <div className="text-center">
-            <div className="text-lg font-semibold text-orange-600">
+            <div className="text-lg font-semibold text-muted-foreground">
               {senderStatus.timedOutCount}
             </div>
-            <div className="text-xs text-gray-500">Expired</div>
+            <div className="text-xs text-muted-foreground">Expired</div>
           </div>
         </div>
       )}
@@ -227,12 +218,12 @@ export const SenderStatusWidget: React.FC<SenderStatusWidgetProps> = ({
           className={cn(
             'flex-1 inline-flex items-center justify-center px-3 py-2 border border-transparent text-sm font-medium rounded-md transition-colors',
             statusInfo.priority === 'error'
-              ? 'text-red-700 bg-red-100 hover:bg-red-200'
+              ? 'text-error-700 bg-error-100 hover:bg-error-200'
               : statusInfo.priority === 'warning'
-              ? 'text-amber-700 bg-amber-100 hover:bg-amber-200'
+              ? 'text-warning-700 bg-warning-100 hover:bg-warning-200'
               : statusInfo.priority === 'success'
-              ? 'text-green-700 bg-green-100 hover:bg-green-200'
-              : 'text-blue-700 bg-blue-100 hover:bg-blue-200'
+              ? 'text-primary-700 bg-primary-100 hover:bg-primary-200'
+              : 'text-primary-700 bg-primary-100 hover:bg-primary-200'
           )}
         >
           {statusInfo.action}
@@ -243,7 +234,7 @@ export const SenderStatusWidget: React.FC<SenderStatusWidgetProps> = ({
          senderStatus.totalCount < senderStatus.tierLimits.maxSenders && (
           <Link
             to="/senders"
-            className="inline-flex items-center justify-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 transition-colors"
+            className="inline-flex items-center justify-center px-3 py-2 border border-border text-sm font-medium rounded-md text-muted-foreground bg-surface hover:bg-background transition-colors"
             title="Add new sender email"
           >
             <PlusIcon className="w-4 h-4" />
@@ -253,8 +244,8 @@ export const SenderStatusWidget: React.FC<SenderStatusWidgetProps> = ({
 
       {/* Tier Info */}
       {senderStatus.tierLimits && (
-        <div className="mt-4 pt-4 border-t border-gray-200">
-          <div className="flex justify-between items-center text-xs text-gray-500">
+        <div className="mt-4 pt-4 border-t border-border">
+          <div className="flex justify-between items-center text-xs text-muted-foreground">
             <span>
               {senderStatus.totalCount} of {senderStatus.tierLimits.maxSenders} senders used
             </span>
@@ -263,9 +254,9 @@ export const SenderStatusWidget: React.FC<SenderStatusWidgetProps> = ({
             </span>
           </div>
           {senderStatus.totalCount < senderStatus.tierLimits.maxSenders && (
-            <div className="mt-1 w-full bg-gray-200 rounded-full h-1">
+            <div className="mt-1 w-full bg-muted rounded-full h-1">
               <div
-                className="bg-blue-600 h-1 rounded-full transition-all duration-300"
+                className="bg-primary-600 h-1 rounded-full transition-all duration-300"
                 style={{
                   width: `${(senderStatus.totalCount / senderStatus.tierLimits.maxSenders) * 100}%`,
                 }}

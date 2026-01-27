@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import React, { useState, useCallback } from 'react';
 import {
   Modal,
@@ -55,9 +56,17 @@ export const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
   const [isConfirming, setIsConfirming] = useState(false);
   const [textConfirmation, setTextConfirmation] = useState('');
   const [showDetails, setShowDetails] = useState(false);
+  const confirmationInputId = React.useId();
 
   const isTextConfirmationValid = !requireTextConfirmation ||
     textConfirmation.trim() === confirmationText;
+
+  const handleClose = useCallback(() => {
+    if (isConfirming) return;
+    setTextConfirmation('');
+    setShowDetails(false);
+    onClose();
+  }, [isConfirming, onClose]);
 
   const handleConfirm = useCallback(async () => {
     if (!isTextConfirmationValid) return;
@@ -71,43 +80,36 @@ export const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
     } finally {
       setIsConfirming(false);
     }
-  }, [isTextConfirmationValid, onConfirm]);
-
-  const handleClose = useCallback(() => {
-    if (isConfirming) return;
-    setTextConfirmation('');
-    setShowDetails(false);
-    onClose();
-  }, [isConfirming, onClose]);
+  }, [handleClose, isTextConfirmationValid, onConfirm]);
 
   const getTypeStyles = () => {
     switch (type) {
       case 'danger':
         return {
-          iconColor: 'text-red-600',
-          bgColor: 'bg-red-50',
-          borderColor: 'border-red-200',
+          iconColor: 'text-error-600',
+          bgColor: 'bg-error-50',
+          borderColor: 'border-error-200',
           buttonVariant: 'destructive' as const
         };
       case 'warning':
         return {
-          iconColor: 'text-amber-600',
-          bgColor: 'bg-amber-50',
-          borderColor: 'border-amber-200',
+          iconColor: 'text-warning-600',
+          bgColor: 'bg-warning-50',
+          borderColor: 'border-warning-200',
           buttonVariant: 'primary' as const
         };
       case 'info':
         return {
-          iconColor: 'text-blue-600',
-          bgColor: 'bg-blue-50',
-          borderColor: 'border-blue-200',
+          iconColor: 'text-primary-600',
+          bgColor: 'bg-primary-50',
+          borderColor: 'border-primary-200',
           buttonVariant: 'primary' as const
         };
       default:
         return {
-          iconColor: 'text-slate-600',
-          bgColor: 'bg-slate-50',
-          borderColor: 'border-slate-200',
+          iconColor: 'text-muted-foreground',
+          bgColor: 'bg-background',
+          borderColor: 'border-border',
           buttonVariant: 'primary' as const
         };
     }
@@ -151,18 +153,18 @@ export const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
               </div>
               <div>
                 <h3 className={cn('text-sm font-medium',
-                  type === 'danger' ? 'text-red-800' :
-                  type === 'warning' ? 'text-amber-800' : 'text-blue-800'
+                  type === 'danger' ? 'text-error-800' :
+                  type === 'warning' ? 'text-warning-800' : 'text-primary-800'
                 )}>
                   {type === 'danger' ? 'This action cannot be undone' : 'Please confirm this action'}
                 </h3>
                 {consequences.length > 0 && (
                   <div className={cn('text-sm mt-1 space-y-1',
-                    type === 'danger' ? 'text-red-700' :
-                    type === 'warning' ? 'text-amber-700' : 'text-blue-700'
+                    type === 'danger' ? 'text-error-700' :
+                    type === 'warning' ? 'text-warning-700' : 'text-primary-700'
                   )}>
                     {consequences.map((consequence, index) => (
-                      <p key={index}>• {consequence}</p>
+                      <p key={index}>- {consequence}</p>
                     ))}
                   </div>
                 )}
@@ -172,13 +174,13 @@ export const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
 
           {/* Details Section */}
           {details.length > 0 && (
-            <div className="bg-slate-50 border border-slate-200 rounded-md p-4">
+            <div className="bg-background border border-border rounded-md p-4">
               <div className="flex items-center justify-between mb-3">
-                <h4 className="text-sm font-medium text-slate-900">Details</h4>
+                <h4 className="text-sm font-medium text-foreground">Details</h4>
                 <button
                   type="button"
                   onClick={() => setShowDetails(!showDetails)}
-                  className="text-sm text-blue-600 hover:text-blue-500"
+                  className="text-sm text-primary-600 hover:text-primary-500"
                 >
                   {showDetails ? 'Hide' : 'Show'} details
                 </button>
@@ -188,8 +190,8 @@ export const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
                 <div className="space-y-2 text-sm">
                   {details.map((detail, index) => (
                     <div key={index} className="flex justify-between">
-                      <span className="text-slate-600">{detail.label}:</span>
-                      <span className="font-medium text-slate-900 text-right max-w-xs truncate">
+                      <span className="text-muted-foreground">{detail.label}:</span>
+                      <span className="font-medium text-foreground text-right max-w-xs truncate">
                         {detail.value}
                       </span>
                     </div>
@@ -202,10 +204,11 @@ export const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
           {/* Text Confirmation */}
           {requireTextConfirmation && (
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-slate-700">
-                Type <code className="bg-slate-100 px-1 py-0.5 rounded text-xs font-mono">{confirmationText}</code> to confirm:
+              <label htmlFor={confirmationInputId} className="block text-sm font-medium text-muted-foreground">
+                Type <code className="bg-muted px-1 py-0.5 rounded text-xs font-mono">{confirmationText}</code> to confirm:
               </label>
               <EnhancedInput
+                id={confirmationInputId}
                 value={textConfirmation}
                 onChange={(e) => setTextConfirmation(e.target.value)}
                 placeholder={`Type "${confirmationText}" here`}
@@ -225,7 +228,7 @@ export const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
 
           {/* Final Confirmation */}
           <div className="text-center">
-            <p className="text-sm text-slate-600">
+            <p className="text-sm text-muted-foreground">
               {requireTextConfirmation
                 ? `Please confirm by typing "${confirmationText}" above.`
                 : 'Are you sure you want to proceed?'
@@ -380,3 +383,4 @@ export const confirmationPresets = {
     ]
   })
 };
+

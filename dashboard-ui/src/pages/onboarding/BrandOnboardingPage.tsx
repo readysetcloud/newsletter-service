@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { OnboardingLayout } from '@/components/onboarding/OnboardingLayout';
 import { BrandForm } from '@/components/forms/BrandForm';
@@ -6,16 +6,17 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/ui/Toast';
 import { updateBrand } from '@/services/brandService';
 import { profileService } from '@/services/profileService';
+import type { BrandFormData } from '@/schemas/brandSchema';
 
 export function BrandOnboardingPage() {
   const navigate = useNavigate();
-  const { user, refreshUser } = useAuth();
+  const { refreshUser } = useAuth();
   const { addToast } = useToast();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
 
 
-  const handleBrandSubmit = async (brandData: any, logoFile?: File) => {
+  const handleBrandSubmit = async (brandData: BrandFormData, logoFile?: File) => {
     console.log('=== Brand Submit Started ===');
     console.log('Brand data received:', brandData);
     console.log('Logo file received:', logoFile);
@@ -119,7 +120,7 @@ export function BrandOnboardingPage() {
         <button
           type="button"
           onClick={() => navigate('/dashboard')}
-          className="text-sm text-gray-500 hover:text-gray-700"
+          className="text-sm text-muted-foreground hover:text-muted-foreground"
         >
           Skip for now (not recommended)
         </button>

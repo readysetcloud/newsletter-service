@@ -1,18 +1,12 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useReducer, type ReactNode } from 'react';
-import type { AppState, UserState, NotificationState, UIState } from '@/types';
+import type { AppState, UserState, UIState } from '@/types';
 
 // Initial state
 const initialUserState: UserState = {
   isAuthenticated: false,
   isLoading: false,
   profile: null,
-  error: null,
-};
-
-const initialNotificationState: NotificationState = {
-  notifications: [],
-  unreadCount: 0,
-  isLoading: false,
   error: null,
 };
 
@@ -25,7 +19,6 @@ const initialUIState: UIState = {
 
 const initialState: AppState = {
   user: initialUserState,
-  notifications: initialNotificationState,
   ui: initialUIState,
 };
 

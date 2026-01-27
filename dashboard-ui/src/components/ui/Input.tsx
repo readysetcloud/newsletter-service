@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useId } from 'react';
 import { cn } from '../../utils/cn';
 
 export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
@@ -12,49 +12,50 @@ export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> 
 export const Input = React.forwardRef<HTMLInputElement, InputProps>(
   ({ label, error, helperText, leftIcon, rightIcon, className, id, ...props }, ref) => {
     const hasError = !!error;
-    const inputId = id || `input-${Math.random().toString(36).substr(2, 9)}`;
+    const generatedId = useId();
+    const inputId = id || `input-${generatedId}`;
 
     return (
       <div className="w-full">
         {label && (
-          <label htmlFor={inputId} className="block text-sm font-medium text-slate-700 mb-1">
+          <label htmlFor={inputId} className="block text-sm font-medium text-muted-foreground mb-1">
             {label}
           </label>
         )}
         <div className="relative">
           {leftIcon && (
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-              <div className="h-5 w-5 text-slate-400">{leftIcon}</div>
+              <div className="h-5 w-5 text-muted-foreground">{leftIcon}</div>
             </div>
           )}
           <input
             ref={ref}
             id={inputId}
             className={cn(
-              'block w-full rounded-md border-slate-300 shadow-sm',
-              'focus:border-blue-500 focus:ring-blue-500',
-              'disabled:bg-slate-50 disabled:text-slate-500',
-              'placeholder:text-slate-400',
+              'block w-full rounded-md border-border shadow-sm',
+              'focus:border-primary-500 focus:ring-ring',
+              'disabled:bg-background disabled:text-muted-foreground',
+              'placeholder:text-muted-foreground',
               'min-h-[44px] px-3 py-2.5 text-base sm:text-sm', // Better mobile touch targets
               'touch-manipulation', // Improves touch responsiveness
               leftIcon && 'pl-10',
               rightIcon && 'pr-10',
-              hasError && 'border-red-300 focus:border-red-500 focus:ring-red-500',
+              hasError && 'border-error-300 focus:border-error-500 focus:ring-error-500',
               className
             )}
             {...props}
           />
           {rightIcon && (
             <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
-              <div className="h-5 w-5 text-slate-400">{rightIcon}</div>
+              <div className="h-5 w-5 text-muted-foreground">{rightIcon}</div>
             </div>
           )}
         </div>
         {error && (
-          <p className="mt-1 text-sm text-red-600">{error}</p>
+          <p className="mt-1 text-sm text-error-600">{error}</p>
         )}
         {helperText && !error && (
-          <p className="mt-1 text-sm text-slate-500">{helperText}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{helperText}</p>
         )}
       </div>
     );

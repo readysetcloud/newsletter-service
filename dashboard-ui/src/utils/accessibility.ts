@@ -1,4 +1,5 @@
 // Accessibility utilities and ARIA helpers
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 
 export interface AriaAttributes {
   'aria-label'?: string;
@@ -209,8 +210,8 @@ export const keyboardUtils = {
 
   // Handle keyboard events for custom interactive elements
   handleKeyDown: (
-    event: React.KeyboardEvent,
-    handlers: Partial<Record<string, (event: React.KeyboardEvent) => void>>
+    event: ReactKeyboardEvent,
+    handlers: Partial<Record<string, (event: ReactKeyboardEvent) => void>>
   ) => {
     const handler = handlers[event.key];
     if (handler) {
@@ -258,7 +259,7 @@ export const keyboardUtils = {
 // Color contrast utilities
 export const contrastUtils = {
   // Check if color combination meets WCAG AA standards
-  meetsWCAGAA: (foreground: string, background: string): boolean => {
+  meetsWCAGAA: (_foreground: string, _background: string): boolean => {
     // This is a simplified check - in production you'd use a proper contrast calculation
     // For now, we'll assume our design system colors meet WCAG AA
     return true;
@@ -343,11 +344,11 @@ export const responsiveA11y = {
 
   // Focus indicators
   focusRing: {
-    className: 'focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2',
+    className: 'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
   },
 
   // Skip links for keyboard navigation
   skipLink: {
-    className: 'sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 bg-blue-600 text-white px-4 py-2 rounded z-50',
+    className: 'sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 bg-primary-600 text-white px-4 py-2 rounded z-50',
   },
 };

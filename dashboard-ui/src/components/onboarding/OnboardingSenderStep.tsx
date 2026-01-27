@@ -3,9 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { useToast } from '@/components/ui/Toast';
-import { AddSenderForm, SenderEmailList, type SenderEmail, type TierLimits, type GetSendersResponse } from '@/components/senders';
+import { AddSenderForm, SenderEmailList, type SenderEmail, type TierLimits } from '@/components/senders';
 import { senderService } from '@/services/senderService';
-import { useAuth } from '@/contexts/AuthContext';
 import {
   EnvelopeIcon,
   ArrowRightIcon,
@@ -25,7 +24,6 @@ export const OnboardingSenderStep: React.FC<OnboardingSenderStepProps> = ({
   className
 }) => {
   const navigate = useNavigate();
-  const { user } = useAuth();
   const { addToast } = useToast();
 
   const [senders, setSenders] = useState<SenderEmail[]>([]);
@@ -131,8 +129,8 @@ export const OnboardingSenderStep: React.FC<OnboardingSenderStepProps> = ({
     return (
       <Card className={cn('p-8', className)}>
         <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading sender configuration...</p>
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600 mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Loading sender configuration...</p>
         </div>
       </Card>
     );
@@ -143,14 +141,14 @@ export const OnboardingSenderStep: React.FC<OnboardingSenderStepProps> = ({
       {/* Header */}
       <div className="text-center">
         <div className="flex justify-center mb-4">
-          <div className="p-3 bg-blue-100 rounded-full">
-            <EnvelopeIcon className="w-8 h-8 text-blue-600" />
+          <div className="p-3 bg-primary-100 rounded-full">
+            <EnvelopeIcon className="w-8 h-8 text-primary-600" />
           </div>
         </div>
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">
+        <h2 className="text-2xl font-bold text-foreground mb-2">
           Set Up Your Sender Email
         </h2>
-        <p className="text-gray-600 max-w-2xl mx-auto">
+        <p className="text-muted-foreground max-w-2xl mx-auto">
           Configure a verified email address to send newsletters from your own domain instead of a generic system address.
           This step is optional but recommended for better deliverability and branding.
         </p>
@@ -160,9 +158,9 @@ export const OnboardingSenderStep: React.FC<OnboardingSenderStepProps> = ({
       {senders.length > 0 && (
         <Card className="p-6">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold text-gray-900">Your Sender Emails</h3>
+            <h3 className="text-lg font-semibold text-foreground">Your Sender Emails</h3>
             {hasVerifiedSender && (
-              <div className="flex items-center space-x-2 text-green-600">
+              <div className="flex items-center space-x-2 text-success-600">
                 <CheckCircleIcon className="w-5 h-5" />
                 <span className="text-sm font-medium">Ready to send</span>
               </div>
@@ -192,10 +190,10 @@ export const OnboardingSenderStep: React.FC<OnboardingSenderStepProps> = ({
       {/* Add Sender Button */}
       {!showAddForm && canAddSender && (
         <Card className="p-6 text-center">
-          <h3 className="text-lg font-semibold text-gray-900 mb-2">
+          <h3 className="text-lg font-semibold text-foreground mb-2">
             {senders.length === 0 ? 'Add Your First Sender Email' : 'Add Another Sender Email'}
           </h3>
-          <p className="text-gray-600 mb-4">
+          <p className="text-muted-foreground mb-4">
             {senders.length === 0
               ? 'Set up a verified email address to send newsletters from your own domain.'
               : `You can add ${tierLimits.maxSenders - tierLimits.currentCount} more sender email${tierLimits.maxSenders - tierLimits.currentCount !== 1 ? 's' : ''} on your ${tierLimits.tier.replace('-', ' ')} plan.`
@@ -212,12 +210,12 @@ export const OnboardingSenderStep: React.FC<OnboardingSenderStepProps> = ({
 
       {/* Tier Limit Reached */}
       {!canAddSender && senders.length === 0 && (
-        <Card className="p-6 text-center border-amber-200 bg-amber-50">
-          <h3 className="text-lg font-semibold text-amber-900 mb-2">
+        <Card className="p-6 text-center border-warning-200 bg-warning-50">
+          <h3 className="text-lg font-semibold text-warning-900 mb-2">
             Upgrade to Add Sender Emails
           </h3>
-          <p className="text-amber-800 mb-4">
-            Your current plan doesn't include custom sender emails. You can still send newsletters using our system address, or upgrade to use your own email address.
+          <p className="text-warning-800 mb-4">
+            Your current plan doesn&apos;t include custom sender emails. You can still send newsletters using our system address, or upgrade to use your own email address.
           </p>
           <Button
             variant="outline"
@@ -237,11 +235,11 @@ export const OnboardingSenderStep: React.FC<OnboardingSenderStepProps> = ({
 
       {/* Advanced Setup Link */}
       {senders.length > 0 && (
-        <Card className="p-4 bg-gray-50">
+        <Card className="p-4 bg-background">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-900">Need more advanced setup?</p>
-              <p className="text-xs text-gray-600">Access the full sender management page for domain verification and advanced options.</p>
+              <p className="text-sm font-medium text-foreground">Need more advanced setup?</p>
+              <p className="text-xs text-muted-foreground">Access the full sender management page for domain verification and advanced options.</p>
             </div>
             <Button
               variant="ghost"
@@ -257,12 +255,12 @@ export const OnboardingSenderStep: React.FC<OnboardingSenderStepProps> = ({
       )}
 
       {/* Action Buttons */}
-      <div className="flex justify-between pt-6 border-t border-gray-200">
+      <div className="flex justify-between pt-6 border-t border-border">
         <Button
           variant="ghost"
           onClick={handleSkip}
           disabled={isSubmitting}
-          className="text-gray-600 hover:text-gray-800"
+          className="text-muted-foreground hover:text-foreground"
         >
           Skip for now
         </Button>

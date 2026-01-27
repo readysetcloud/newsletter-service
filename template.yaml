@@ -40,6 +40,14 @@ Parameters:
     Type: String
     Default: ""
     Description: Verified SES email address for custom verification emails (must be pre-verified in SES)
+  FrontendCustomDomain:
+    Type: String
+    Default: ""
+    Description: Optional custom subdomain for frontend (e.g., dashboard.example.com)
+  FrontendHostedZoneId:
+    Type: String
+    Default: ""
+    Description: Route 53 Hosted Zone ID for frontend custom domain (optional)
 
 Metadata:
   esbuild-properties: &esbuild-properties
@@ -69,6 +77,11 @@ Conditions:
     - !Condition HasHostedZoneId
   HasRedirectCustomDomain: !Not [!Equals [!Ref RedirectCustomDomain, ""]]
   HasVerifiedFromEmail: !Not [!Equals [!Ref VerifiedFromEmail, ""]]
+  HasFrontendCustomDomain: !Not [!Equals [!Ref FrontendCustomDomain, ""]]
+  HasFrontendHostedZoneId: !Not [!Equals [!Ref FrontendHostedZoneId, ""]]
+  DeployFrontendCustomDomain: !And
+    - !Condition HasFrontendCustomDomain
+    - !Condition HasFrontendHostedZoneId
 
 Globals:
   Api:
@@ -379,6 +392,136 @@ Resources:
             Transitions:
               - StorageClass: STANDARD_IA
                 TransitionInDays: 30
+
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-frontend-${Environment}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 30
+
+  CloudFrontOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-oac"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${FrontendBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${FrontendDistribution}"
+
+  SecurityHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "${AWS::StackName}-security-headers"
+        SecurityHeadersConfig:
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 63072000
+            IncludeSubdomains: true
+            Override: true
+          ContentTypeOptions:
+            Override: true
+          FrameOptions:
+            FrameOption: DENY
+            Override: true
+          XSSProtection:
+            ModeBlock: true
+            Protection: true
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+
+  FrontendDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        HttpVersion: http2
+        DefaultRootObject: index.html
+        Aliases: !If
+          - DeployFrontendCustomDomain
+          - [!Ref FrontendCustomDomain]
+          - !Ref AWS::NoValue
+        ViewerCertificate: !If
+          - DeployFrontendCustomDomain
+          - AcmCertificateArn: !Ref FrontendCertificate
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - CloudFrontDefaultCertificate: true
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            OriginAccessControlId: !Ref CloudFrontOriginAccessControl
+            S3OriginConfig: {}
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          ResponseHeadersPolicyId: !Ref SecurityHeadersPolicy
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+        PriceClass: PriceClass_100
+
+  FrontendCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Condition: DeployFrontendCustomDomain
+    Properties:
+      DomainName: !Ref FrontendCustomDomain
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref FrontendCustomDomain
+          HostedZoneId: !Ref FrontendHostedZoneId
+
+  FrontendDNSRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: DeployFrontendCustomDomain
+    Properties:
+      HostedZoneId: !Ref FrontendHostedZoneId
+      Name: !Ref FrontendCustomDomain
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt FrontendDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+        EvaluateTargetHealth: false
 
   TenantRoutingFunction:
     Type: AWS::Lambda::Function
@@ -1776,6 +1919,7 @@ Resources:
       Runtime: nodejs22.x
       CodeUri: functions
       Handler: send-email-v2.handler
+      Timeout: 900
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -1792,7 +1936,9 @@ Resources:
               Action: iam:PassRole
               Resource: !GetAtt SchedulerExecutionRole.Arn
             - Effect: Allow
-              Action: dynamodb:UpdateItem
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:Query
               Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
               Action: dynamodb:Query
@@ -3439,6 +3585,10 @@ Resources:
               Action:
                 - scheduler:CreateSchedule
               Resource: "*"
+            - Effect: Allow
+              Action:
+                - iam:PassRole
+              Resource: !GetAtt SchedulerExecutionRole.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
@@ -3614,3 +3764,26 @@ Outputs:
       - HasRedirectCustomDomain
       - !Sub "https://${RedirectCustomDomain}/r"
       - !Sub "https://${RedirectCFDistribution.DomainName}/r"
+
+  FrontendBucketName:
+    Description: S3 bucket name for frontend assets
+    Value: !Ref FrontendBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-FrontendBucket"
+
+  FrontendDistributionId:
+    Description: CloudFront distribution ID for frontend
+    Value: !Ref FrontendDistribution
+    Export:
+      Name: !Sub "${AWS::StackName}-FrontendDistributionId"
+
+  FrontendCloudFrontURL:
+    Description: CloudFront distribution URL for frontend
+    Value: !GetAtt FrontendDistribution.DomainName
+
+  FrontendURL:
+    Description: Frontend application URL
+    Value: !If
+      - DeployFrontendCustomDomain
+      - !Sub "https://${FrontendCustomDomain}"
+      - !Sub "https://${FrontendDistribution.DomainName}"

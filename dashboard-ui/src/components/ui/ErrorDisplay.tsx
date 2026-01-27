@@ -51,34 +51,34 @@ const getErrorConfig = (severity: ErrorSeverity): ErrorConfig => {
     case 'info':
       return {
         icon: <InformationCircleIcon className="w-5 h-5" />,
-        bgColor: 'bg-blue-50',
-        borderColor: 'border-blue-200',
-        textColor: 'text-blue-800',
-        iconColor: 'text-blue-600'
+        bgColor: 'bg-primary-50',
+        borderColor: 'border-primary-200',
+        textColor: 'text-primary-800',
+        iconColor: 'text-primary-600'
       };
     case 'warning':
       return {
         icon: <ExclamationTriangleIcon className="w-5 h-5" />,
-        bgColor: 'bg-yellow-50',
-        borderColor: 'border-yellow-200',
-        textColor: 'text-yellow-800',
-        iconColor: 'text-yellow-600'
+        bgColor: 'bg-warning-50',
+        borderColor: 'border-warning-200',
+        textColor: 'text-warning-800',
+        iconColor: 'text-warning-600'
       };
     case 'critical':
       return {
         icon: <ShieldExclamationIcon className="w-5 h-5" />,
-        bgColor: 'bg-red-50',
-        borderColor: 'border-red-300',
-        textColor: 'text-red-900',
-        iconColor: 'text-red-700'
+        bgColor: 'bg-error-50',
+        borderColor: 'border-error-300',
+        textColor: 'text-error-900',
+        iconColor: 'text-error-700'
       };
     default: // error
       return {
         icon: <XCircleIcon className="w-5 h-5" />,
-        bgColor: 'bg-red-50',
-        borderColor: 'border-red-200',
-        textColor: 'text-red-800',
-        iconColor: 'text-red-600'
+        bgColor: 'bg-error-50',
+        borderColor: 'border-error-200',
+        textColor: 'text-error-800',
+        iconColor: 'text-error-600'
       };
   }
 };
@@ -167,7 +167,7 @@ export const ErrorDisplay: React.FC<ErrorDisplayProps> = ({
                 {title}
               </h3>
               {errorCode && (
-                <p className="text-xs text-gray-500 mt-1">
+                <p className="text-xs text-muted-foreground mt-1">
                   Error Code: {errorCode}
                 </p>
               )}
@@ -255,7 +255,7 @@ export const InlineError: React.FC<InlineErrorProps> = ({
   className
 }) => {
   return (
-    <p className={cn('text-sm text-red-600 flex items-center mt-1', className)}>
+    <p className={cn('text-sm text-error-600 flex items-center mt-1', className)}>
       <ExclamationCircleIcon className="w-4 h-4 mr-1 flex-shrink-0" />
       {message}
     </p>

@@ -39,35 +39,35 @@ export function SubscriptionStatusCard({
   onManage
 }: SubscriptionStatusCardProps) {
   const getStatusIcon = () => {
-    if (!subscription) return <Clock className="w-5 h-5 text-gray-400" />;
+    if (!subscription) return <Clock className="w-5 h-5 text-muted-foreground" />;
 
     switch (subscription.status) {
       case 'active':
-        return <CheckCircle className="w-5 h-5 text-green-500" />;
+        return <CheckCircle className="w-5 h-5 text-success-500" />;
       case 'trialing':
-        return <Clock className="w-5 h-5 text-blue-500" />;
+        return <Clock className="w-5 h-5 text-primary-500" />;
       case 'past_due':
       case 'unpaid':
-        return <AlertTriangle className="w-5 h-5 text-yellow-500" />;
+        return <AlertTriangle className="w-5 h-5 text-warning-500" />;
       case 'cancelled':
       case 'incomplete':
       case 'incomplete_expired':
-        return <XCircle className="w-5 h-5 text-red-500" />;
+        return <XCircle className="w-5 h-5 text-error-500" />;
       default:
-        return <Clock className="w-5 h-5 text-gray-400" />;
+        return <Clock className="w-5 h-5 text-muted-foreground" />;
     }
   };
 
   const getStatusColor = () => {
-    if (!subscription) return 'text-gray-600';
+    if (!subscription) return 'text-muted-foreground';
 
     const statusInfo = SUBSCRIPTION_STATUS_INFO[subscription.status];
     switch (statusInfo.color) {
-      case 'green': return 'text-green-600';
-      case 'blue': return 'text-blue-600';
-      case 'yellow': return 'text-yellow-600';
-      case 'red': return 'text-red-600';
-      default: return 'text-gray-600';
+      case 'green': return 'text-success-600';
+      case 'blue': return 'text-primary-600';
+      case 'yellow': return 'text-warning-600';
+      case 'red': return 'text-error-600';
+      default: return 'text-muted-foreground';
     }
   };
 
@@ -87,9 +87,9 @@ export function SubscriptionStatusCard({
         </CardHeader>
         <CardContent>
           <div className="animate-pulse space-y-4">
-            <div className="h-4 bg-gray-200 rounded w-3/4"></div>
-            <div className="h-4 bg-gray-200 rounded w-1/2"></div>
-            <div className="h-8 bg-gray-200 rounded w-full"></div>
+            <div className="h-4 bg-muted rounded w-3/4"></div>
+            <div className="h-4 bg-muted rounded w-1/2"></div>
+            <div className="h-8 bg-muted rounded w-full"></div>
           </div>
         </CardContent>
       </Card>
@@ -108,10 +108,10 @@ export function SubscriptionStatusCard({
         {/* Current Plan */}
         <div>
           <div className="flex items-center justify-between mb-2">
-            <h3 className="text-lg font-semibold text-gray-900">{plan.name} Plan</h3>
-            <span className="text-2xl font-bold text-gray-900">
+            <h3 className="text-lg font-semibold text-foreground">{plan.name} Plan</h3>
+            <span className="text-2xl font-bold text-foreground">
               {formatPrice(plan.price)}
-              {plan.price > 0 && <span className="text-sm font-normal text-gray-500">/month</span>}
+              {plan.price > 0 && <span className="text-sm font-normal text-muted-foreground">/month</span>}
             </span>
           </div>
 
@@ -120,8 +120,8 @@ export function SubscriptionStatusCard({
               <span className={`text-sm font-medium ${getStatusColor()}`}>
                 {SUBSCRIPTION_STATUS_INFO[subscription.status].label}
               </span>
-              <span className="text-sm text-gray-500">
-                • {SUBSCRIPTION_STATUS_INFO[subscription.status].description}
+              <span className="text-sm text-muted-foreground">
+                &bull; {SUBSCRIPTION_STATUS_INFO[subscription.status].description}
               </span>
             </div>
           )}
@@ -131,12 +131,12 @@ export function SubscriptionStatusCard({
         {subscription && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="flex items-center gap-3">
-              <Calendar className="w-4 h-4 text-gray-400" />
+              <Calendar className="w-4 h-4 text-muted-foreground" />
               <div>
-                <p className="text-sm font-medium text-gray-900">
+                <p className="text-sm font-medium text-foreground">
                   {subscription.cancelAtPeriodEnd ? 'Expires' : 'Next billing'}
                 </p>
-                <p className="text-sm text-gray-500">
+                <p className="text-sm text-muted-foreground">
                   {formatDate(subscription.currentPeriodEnd)}
                 </p>
               </div>
@@ -144,11 +144,11 @@ export function SubscriptionStatusCard({
 
             {billingInfo?.paymentMethod && (
               <div className="flex items-center gap-3">
-                <CreditCard className="w-4 h-4 text-gray-400" />
+                <CreditCard className="w-4 h-4 text-muted-foreground" />
                 <div>
-                  <p className="text-sm font-medium text-gray-900">Payment method</p>
-                  <p className="text-sm text-gray-500">
-                    {billingInfo.paymentMethod.card.brand.toUpperCase()} ••••{billingInfo.paymentMethod.card.last4}
+                  <p className="text-sm font-medium text-foreground">Payment method</p>
+                  <p className="text-sm text-muted-foreground">
+                    {billingInfo.paymentMethod.card.brand.toUpperCase()} &bull;&bull;&bull;&bull;{billingInfo.paymentMethod.card.last4}
                   </p>
                 </div>
               </div>
@@ -159,23 +159,23 @@ export function SubscriptionStatusCard({
         {/* Usage Summary */}
         {usage && (
           <div className="border-t pt-4">
-            <h4 className="text-sm font-medium text-gray-900 mb-3">Current Usage</h4>
+            <h4 className="text-sm font-medium text-foreground mb-3">Current Usage</h4>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="flex items-center gap-3">
-                <Users className="w-4 h-4 text-gray-400" />
+                <Users className="w-4 h-4 text-muted-foreground" />
                 <div>
-                  <p className="text-sm font-medium text-gray-900">Subscribers</p>
-                  <p className="text-sm text-gray-500">
+                  <p className="text-sm font-medium text-foreground">Subscribers</p>
+                  <p className="text-sm text-muted-foreground">
                     {usage.subscribers.current.toLocaleString()} / {usage.subscribers.limit.toLocaleString()}
                   </p>
                 </div>
               </div>
 
               <div className="flex items-center gap-3">
-                <Mail className="w-4 h-4 text-gray-400" />
+                <Mail className="w-4 h-4 text-muted-foreground" />
                 <div>
-                  <p className="text-sm font-medium text-gray-900">Monthly emails</p>
-                  <p className="text-sm text-gray-500">
+                  <p className="text-sm font-medium text-foreground">Monthly emails</p>
+                  <p className="text-sm text-muted-foreground">
                     {usage.monthlyEmails.current.toLocaleString()} / {usage.monthlyEmails.limit.toLocaleString()}
                   </p>
                 </div>
@@ -217,16 +217,16 @@ export function SubscriptionStatusCard({
 
         {/* Cancellation Notice */}
         {subscription?.cancelAtPeriodEnd && (
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+          <div className="bg-warning-50 border border-warning-200 rounded-lg p-4">
             <div className="flex items-start gap-3">
-              <AlertTriangle className="w-5 h-5 text-yellow-600 mt-0.5" />
+              <AlertTriangle className="w-5 h-5 text-warning-600 mt-0.5" />
               <div>
-                <h4 className="text-sm font-medium text-yellow-800">
+                <h4 className="text-sm font-medium text-warning-800">
                   Subscription Cancelled
                 </h4>
-                <p className="text-sm text-yellow-700 mt-1">
+                <p className="text-sm text-warning-700 mt-1">
                   Your subscription will end on {formatDate(subscription.currentPeriodEnd)}.
-                  You'll continue to have access to premium features until then.
+                  You&apos;ll continue to have access to premium features until then.
                 </p>
               </div>
             </div>
@@ -238,3 +238,4 @@ export function SubscriptionStatusCard({
 }
 
 export default SubscriptionStatusCard;
+

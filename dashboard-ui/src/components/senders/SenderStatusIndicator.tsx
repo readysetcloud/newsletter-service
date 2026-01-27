@@ -41,8 +41,8 @@ export const SenderStatusIndicator: React.FC<SenderStatusIndicatorProps> = ({
     if (failedCount > 0) {
       return {
         icon: ExclamationTriangleIcon,
-        color: 'text-red-500',
-        bgColor: 'bg-red-100',
+        color: 'text-error-500',
+        bgColor: 'bg-error-100',
         text: `${failedCount} failed`,
         priority: 'error' as const,
       };
@@ -51,8 +51,8 @@ export const SenderStatusIndicator: React.FC<SenderStatusIndicatorProps> = ({
     if (timedOutCount > 0) {
       return {
         icon: ExclamationTriangleIcon,
-        color: 'text-orange-500',
-        bgColor: 'bg-orange-100',
+        color: 'text-warning-500',
+        bgColor: 'bg-warning-100',
         text: `${timedOutCount} expired`,
         priority: 'warning' as const,
       };
@@ -61,8 +61,8 @@ export const SenderStatusIndicator: React.FC<SenderStatusIndicatorProps> = ({
     if (pendingCount > 0) {
       return {
         icon: ClockIcon,
-        color: 'text-amber-500',
-        bgColor: 'bg-amber-100',
+        color: 'text-warning-500',
+        bgColor: 'bg-warning-100',
         text: `${pendingCount} pending`,
         priority: 'warning' as const,
       };
@@ -71,8 +71,8 @@ export const SenderStatusIndicator: React.FC<SenderStatusIndicatorProps> = ({
     if (verifiedCount === totalCount) {
       return {
         icon: CheckCircleIcon,
-        color: 'text-green-500',
-        bgColor: 'bg-green-100',
+        color: 'text-primary-600',
+        bgColor: 'bg-primary-100',
         text: 'All verified',
         priority: 'success' as const,
       };

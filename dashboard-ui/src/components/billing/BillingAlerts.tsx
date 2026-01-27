@@ -20,24 +20,24 @@ function AlertItem({ alert, onDismiss, onAction }: AlertItemProps) {
   const getAlertIcon = () => {
     switch (alert.type) {
       case 'payment_failed':
-        return <CreditCard className="w-5 h-5 text-red-500" />;
+        return <CreditCard className="w-5 h-5 text-error-500" />;
       case 'usage_limit':
-        return <AlertTriangle className="w-5 h-5 text-yellow-500" />;
+        return <AlertTriangle className="w-5 h-5 text-warning-500" />;
       case 'subscription_cancelled':
-        return <XCircle className="w-5 h-5 text-gray-500" />;
+        return <XCircle className="w-5 h-5 text-muted-foreground" />;
       case 'trial_ending':
-        return <Clock className="w-5 h-5 text-blue-500" />;
+        return <Clock className="w-5 h-5 text-primary-500" />;
       default:
-        return <AlertTriangle className="w-5 h-5 text-gray-500" />;
+        return <AlertTriangle className="w-5 h-5 text-muted-foreground" />;
     }
   };
 
   const getAlertBorderColor = () => {
     switch (alert.severity) {
-      case 'error': return 'border-red-200 bg-red-50';
-      case 'warning': return 'border-yellow-200 bg-yellow-50';
-      case 'info': return 'border-blue-200 bg-blue-50';
-      default: return 'border-gray-200 bg-gray-50';
+      case 'error': return 'border-error-200 bg-error-50';
+      case 'warning': return 'border-warning-200 bg-warning-50';
+      case 'info': return 'border-primary-200 bg-primary-50';
+      default: return 'border-border bg-background';
     }
   };
 
@@ -66,19 +66,19 @@ function AlertItem({ alert, onDismiss, onAction }: AlertItemProps) {
         <div className="flex-1 min-w-0">
           <div className="flex items-start justify-between gap-2">
             <div className="flex-1">
-              <h4 className="text-sm font-medium text-gray-900">
+              <h4 className="text-sm font-medium text-foreground">
                 {alert.title}
               </h4>
-              <p className="text-sm text-gray-700 mt-1">
+              <p className="text-sm text-muted-foreground mt-1">
                 {alert.message}
               </p>
-              <p className="text-xs text-gray-500 mt-2">
+              <p className="text-xs text-muted-foreground mt-2">
                 {formatDate(alert.createdAt)}
               </p>
             </div>
             <button
               onClick={() => onDismiss(alert.id)}
-              className="text-gray-400 hover:text-gray-600 transition-colors"
+              className="text-muted-foreground hover:text-muted-foreground transition-colors"
               aria-label="Dismiss alert"
             >
               <X className="w-4 h-4" />
@@ -122,10 +122,10 @@ export function BillingAlerts({ alerts, onDismiss, onAction }: BillingAlertsProp
     <Card>
       <CardContent className="p-0">
         <div className="p-4 border-b">
-          <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-            <AlertTriangle className="w-5 h-5 text-yellow-500" />
+          <h3 className="text-lg font-semibold text-foreground flex items-center gap-2">
+            <AlertTriangle className="w-5 h-5 text-warning-500" />
             Billing Alerts
-            <span className="text-sm font-normal text-gray-500">
+            <span className="text-sm font-normal text-muted-foreground">
               ({alerts.length})
             </span>
           </h3>

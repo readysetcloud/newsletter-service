@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { OnboardingLayout } from '@/components/onboarding/OnboardingLayout';
 import { PersonalInfoForm } from '@/components/forms/PersonalInfoForm';
@@ -7,15 +7,16 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/ui/Toast';
 import { profileService } from '@/services/profileService';
 import type { SocialLink } from '@/types/api';
+import type { PersonalInfoFormData } from '@/schemas/profileSchema';
 
 export function ProfileOnboardingPage() {
   const navigate = useNavigate();
-  const { user, refreshUser } = useAuth();
+  const { refreshUser } = useAuth();
   const { addToast } = useToast();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [currentSection, setCurrentSection] = useState<'personal' | 'social'>('personal');
 
-  const handlePersonalInfoSubmit = async (personalData: any) => {
+  const handlePersonalInfoSubmit = async (personalData: PersonalInfoFormData) => {
     console.log('=== Personal Info Submit Started ===');
     console.log('Personal data received:', personalData);
 
@@ -164,7 +165,7 @@ export function ProfileOnboardingPage() {
             <button
               type="button"
               onClick={() => setCurrentSection('social')}
-              className="text-sm text-gray-500 hover:text-gray-700"
+              className="text-sm text-muted-foreground hover:text-muted-foreground"
               disabled={isSubmitting}
             >
               Skip personal info for now
@@ -184,7 +185,7 @@ export function ProfileOnboardingPage() {
             <button
               type="button"
               onClick={() => setCurrentSection('personal')}
-              className="text-sm text-gray-500 hover:text-gray-700"
+              className="text-sm text-muted-foreground hover:text-muted-foreground"
               disabled={isSubmitting}
             >
               ← Back to Personal Info
@@ -193,7 +194,7 @@ export function ProfileOnboardingPage() {
             <button
               type="button"
               onClick={handleSkipSocialLinks}
-              className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+              className="text-sm text-primary-600 hover:text-primary-700 font-medium"
               disabled={isSubmitting}
             >
               Skip & Complete Setup

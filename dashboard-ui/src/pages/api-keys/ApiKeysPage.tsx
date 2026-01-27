@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/Card';
 import { Loading } from '@/components/ui/Loading';
@@ -22,11 +22,7 @@ export const ApiKeysPage: React.FC = () => {
   const [keyToDelete, setKeyToDelete] = useState<{ key: Omit<ApiKey, 'keyValue'>; isRevoke: boolean } | null>(null);
   const { addToast } = useToast();
 
-  useEffect(() => {
-    loadApiKeys();
-  }, []);
-
-  const loadApiKeys = async () => {
+  const loadApiKeys = useCallback(async () => {
     try {
       setIsLoading(true);
       const response = await apiKeyService.listApiKeys();
@@ -42,7 +38,11 @@ export const ApiKeysPage: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [addToast]);
+
+  useEffect(() => {
+    loadApiKeys();
+  }, [loadApiKeys]);
 
   const handleCreateApiKey = async (data: { name: string; description?: string; expiresAt?: string }) => {
     try {
@@ -108,7 +108,7 @@ export const ApiKeysPage: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-50">
+      <div className="min-h-screen bg-background">
         <AppHeader />
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div className="flex items-center justify-center min-h-96">
@@ -120,17 +120,17 @@ export const ApiKeysPage: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-background">
       <AppHeader />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
         <div className="mb-8">
           <div className="flex items-center space-x-3 mb-2">
-            <KeyIcon className="h-8 w-8 text-blue-600" />
-            <h1 className="text-3xl font-bold text-slate-900">API Keys</h1>
+            <KeyIcon className="h-8 w-8 text-primary-600" />
+            <h1 className="text-3xl font-bold text-foreground">API Keys</h1>
           </div>
-          <p className="text-slate-600">
+          <p className="text-muted-foreground">
             Manage your API keys for accessing the newsletter service programmatically
           </p>
         </div>
@@ -151,11 +151,11 @@ export const ApiKeysPage: React.FC = () => {
           {apiKeys.length === 0 ? (
             <Card>
               <CardContent className="text-center py-12">
-                <div className="mx-auto w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mb-4">
-                  <KeyIcon className="w-6 h-6 text-gray-400" />
+                <div className="mx-auto w-12 h-12 bg-muted rounded-full flex items-center justify-center mb-4">
+                  <KeyIcon className="w-6 h-6 text-muted-foreground" />
                 </div>
-                <h3 className="text-lg font-medium text-gray-900 mb-2">No API keys yet</h3>
-                <p className="text-gray-500 mb-6">
+                <h3 className="text-lg font-medium text-foreground mb-2">No API keys yet</h3>
+                <p className="text-muted-foreground mb-6">
                   Create your first API key to start integrating with the newsletter service
                 </p>
                 <Button onClick={() => setIsCreateModalOpen(true)}>

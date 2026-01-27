@@ -24,7 +24,7 @@ jobs:
     environment: prod
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - name: Install Rust toolchain with Cargo Lambda
         uses: moonrepo/setup-rust@v1
         with:
@@ -47,11 +47,22 @@ jobs:
           npm ci
 
           sam --info
-          sam build --parallel --beta-features
+          sam build --beta-features
 
           sam deploy \
           --stack-name newsletter-service \
           --resolve-s3 \
           --no-fail-on-empty-changeset \
           --capabilities CAPABILITY_IAM \
-          --parameter-overrides Environment=production EncryptionKey=${{secrets.ENCRYPTION_KEY}} RedirectCustomDomain=rdyset.click VerifiedFromEmail=${{vars.VERIFIED_FROM_EMAIL}}
+          --parameter-overrides Environment=production EncryptionKey=${{secrets.ENCRYPTION_KEY}} RedirectCustomDomain=rdyset.click VerifiedFromEmail=${{vars.VERIFIED_FROM_EMAIL}} FrontendCustomDomain=${{vars.FRONTEND_CUSTOM_DOMAIN}} FrontendHostedZoneId=${{vars.FRONTEND_HOSTED_ZONE_ID}}
+
+      - name: Setup Node.js for Frontend
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: dashboard-ui/package-lock.json
+
+      - name: Deploy Frontend
+        run: |
+          node scripts/deploy-ui.mjs --ci --stack-name newsletter-service --region us-east-1

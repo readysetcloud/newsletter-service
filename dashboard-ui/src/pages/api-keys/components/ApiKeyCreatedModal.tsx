@@ -55,7 +55,7 @@ export const ApiKeyCreatedModal: React.FC<ApiKeyCreatedModalProps> = ({
     <Modal isOpen={isOpen} onClose={handleClose} size="lg" closeOnOverlayClick={false}>
       <ModalHeader>
         <ModalTitle className="flex items-center">
-          <CheckIcon className="w-6 h-6 text-green-600 mr-2" />
+          <CheckIcon className="w-6 h-6 text-success-600 mr-2" />
           API Key Created Successfully
         </ModalTitle>
         <ModalDescription>
@@ -66,15 +66,15 @@ export const ApiKeyCreatedModal: React.FC<ApiKeyCreatedModalProps> = ({
       <ModalContent>
         <div className="space-y-6">
           {/* Warning Banner */}
-          <div className="bg-yellow-50 border border-yellow-200 rounded-md p-4">
+          <div className="bg-warning-50 border border-warning-200 rounded-md p-4">
             <div className="flex">
-              <ExclamationTriangleIcon className="w-5 h-5 text-yellow-400 mr-3 mt-0.5 flex-shrink-0" />
+              <ExclamationTriangleIcon className="w-5 h-5 text-warning-400 mr-3 mt-0.5 flex-shrink-0" />
               <div>
-                <h3 className="text-sm font-medium text-yellow-800">
+                <h3 className="text-sm font-medium text-warning-800">
                   Important: Save this API key now
                 </h3>
-                <p className="text-sm text-yellow-700 mt-1">
-                  This is the only time you'll be able to see the full API key value.
+                <p className="text-sm text-warning-700 mt-1">
+                  This is the only time you&apos;ll be able to see the full API key value.
                   Make sure to copy it and store it securely.
                 </p>
               </div>
@@ -84,42 +84,42 @@ export const ApiKeyCreatedModal: React.FC<ApiKeyCreatedModalProps> = ({
           {/* API Key Details */}
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <div className="block text-sm font-medium text-muted-foreground mb-1">
                 Name
-              </label>
-              <p className="text-sm text-gray-900 bg-gray-50 px-3 py-2 rounded border">
+              </div>
+              <p className="text-sm text-foreground bg-background px-3 py-2 rounded border">
                 {apiKey.name}
               </p>
             </div>
 
             {apiKey.description && (
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <div className="block text-sm font-medium text-muted-foreground mb-1">
                   Description
-                </label>
-                <p className="text-sm text-gray-900 bg-gray-50 px-3 py-2 rounded border">
+                </div>
+                <p className="text-sm text-foreground bg-background px-3 py-2 rounded border">
                   {apiKey.description}
                 </p>
               </div>
             )}
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <div className="block text-sm font-medium text-muted-foreground mb-1">
                 API Key Value
-              </label>
+              </div>
               <div className="flex items-center gap-2">
-                <code className="flex-1 bg-gray-900 text-green-400 px-4 py-3 rounded font-mono text-sm break-all">
+                <code className="flex-1 bg-foreground text-success-300 px-4 py-3 rounded font-mono text-sm break-all">
                   {apiKey.keyValue}
                 </code>
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={handleCopyToClipboard}
-                  className={isCopied ? 'border-green-300 bg-green-50' : ''}
+                  className={isCopied ? 'border-success-300 bg-success-50' : ''}
                 >
                   {isCopied ? (
                     <>
-                      <CheckIcon className="w-4 h-4 mr-1 text-green-600" />
+                      <CheckIcon className="w-4 h-4 mr-1 text-success-600" />
                       Copied
                     </>
                   ) : (
@@ -135,10 +135,10 @@ export const ApiKeyCreatedModal: React.FC<ApiKeyCreatedModalProps> = ({
             {/* Additional Info */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <div className="block text-sm font-medium text-muted-foreground mb-1">
                   Created
-                </label>
-                <p className="text-gray-900">
+                </div>
+                <p className="text-foreground">
                   {new Date(apiKey.createdAt).toLocaleDateString('en-US', {
                     year: 'numeric',
                     month: 'long',
@@ -150,10 +150,10 @@ export const ApiKeyCreatedModal: React.FC<ApiKeyCreatedModalProps> = ({
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <div className="block text-sm font-medium text-muted-foreground mb-1">
                   Expires
-                </label>
-                <p className="text-gray-900">
+                </div>
+                <p className="text-foreground">
                   {apiKey.expiresAt
                     ? new Date(apiKey.expiresAt).toLocaleDateString('en-US', {
                       year: 'numeric',
@@ -170,13 +170,13 @@ export const ApiKeyCreatedModal: React.FC<ApiKeyCreatedModalProps> = ({
           </div>
 
           {/* Usage Instructions */}
-          <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
-            <h4 className="text-sm font-medium text-blue-900 mb-2">
+          <div className="bg-primary-50 border border-primary-200 rounded-md p-4">
+            <h4 className="text-sm font-medium text-primary-900 mb-2">
               How to use this API key
             </h4>
-            <div className="text-sm text-blue-800 space-y-2 text-wrap">
+            <div className="text-sm text-primary-800 space-y-2 text-wrap">
               <p>Include this API key in your requests using the Authorization header:</p>
-              <code className="block bg-blue-100 px-3 py-2 rounded text-xs font-mono text-wrap">
+              <code className="block bg-primary-100 px-3 py-2 rounded text-xs font-mono text-wrap">
                 Authorization: {apiKey.keyValue}
               </code>
               <p className="text-xs">
@@ -189,7 +189,7 @@ export const ApiKeyCreatedModal: React.FC<ApiKeyCreatedModalProps> = ({
 
       <ModalFooter>
         <Button onClick={handleClose} className="w-full">
-          I've saved the API key
+          I&apos;ve saved the API key
         </Button>
       </ModalFooter>
     </Modal>

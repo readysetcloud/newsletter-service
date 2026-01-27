@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import React, { useState, useCallback, useRef } from 'react';
 import { cn } from '../../utils/cn';
 import { Button } from './Button';
@@ -11,10 +12,10 @@ export interface FormSubmissionState {
   progress?: number;
 }
 
-export interface EnhancedFormProps extends React.FormHTMLAttributes<HTMLFormElement> {
-  onSubmit: (data: FormData | any) => Promise<void>;
+export interface EnhancedFormProps extends Omit<React.FormHTMLAttributes<HTMLFormElement>, 'onSubmit'> {
+  onSubmit: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
   onSuccess?: () => void;
-  onError?: (error: any) => void;
+  onError?: (error: unknown) => void;
   submitButtonText?: string;
   submitButtonLoadingText?: string;
   showProgress?: boolean;
@@ -67,8 +68,6 @@ export const EnhancedForm: React.FC<EnhancedFormProps> = ({
       return;
     }
 
-    const formData = new FormData(event.currentTarget);
-
     try {
       // Start submission
       setSubmissionState({
@@ -88,14 +87,14 @@ export const EnhancedForm: React.FC<EnhancedFormProps> = ({
         }, 200);
 
         try {
-          await onSubmit(formData);
+          await onSubmit(event);
           clearInterval(progressInterval);
         } catch (error) {
           clearInterval(progressInterval);
           throw error;
         }
       } else {
-        await onSubmit(formData);
+        await onSubmit(event);
       }
 
       // Success state
@@ -190,9 +189,9 @@ export const EnhancedForm: React.FC<EnhancedFormProps> = ({
 
         {/* Progress Bar */}
         {showProgress && submissionState.progress !== undefined && (
-          <div className="w-full bg-slate-200 rounded-full h-2">
+          <div className="w-full bg-muted rounded-full h-2">
             <div
-              className="bg-blue-600 h-2 rounded-full transition-all duration-300 ease-out"
+              className="bg-primary-600 h-2 rounded-full transition-all duration-300 ease-out"
               style={{ width: `${submissionState.progress}%` }}
             />
           </div>
@@ -200,16 +199,16 @@ export const EnhancedForm: React.FC<EnhancedFormProps> = ({
 
         {/* Error Message */}
         {submissionState.error && (
-          <div className="bg-red-50 border border-red-200 rounded-md p-4">
+          <div className="bg-error-50 border border-error-200 rounded-md p-4">
             <div className="flex">
-              <ExclamationTriangleIcon className="h-5 w-5 text-red-400 mr-3 mt-0.5 flex-shrink-0" />
+              <ExclamationTriangleIcon className="h-5 w-5 text-error-400 mr-3 mt-0.5 flex-shrink-0" />
               <div>
-                <h3 className="text-sm font-medium text-red-800">Submission Error</h3>
-                <p className="text-sm text-red-700 mt-1">{submissionState.error}</p>
+                <h3 className="text-sm font-medium text-error-800">Submission Error</h3>
+                <p className="text-sm text-error-700 mt-1">{submissionState.error}</p>
                 <button
                   type="button"
                   onClick={resetForm}
-                  className="text-sm text-red-600 hover:text-red-500 mt-2 underline"
+                  className="text-sm text-error-600 hover:text-error-500 mt-2 underline"
                 >
                   Try again
                 </button>
@@ -221,14 +220,14 @@ export const EnhancedForm: React.FC<EnhancedFormProps> = ({
         {/* Success Message */}
         {submissionState.isSuccess && (
           <div className={cn(
-            'bg-green-50 border border-green-200 rounded-md p-4 transition-all duration-300',
+            'bg-success-50 border border-success-200 rounded-md p-4 transition-all duration-300',
             showSuccessAnimation && 'scale-105'
           )}>
             <div className="flex">
-              <CheckCircleIcon className="h-5 w-5 text-green-400 mr-3 mt-0.5 flex-shrink-0" />
+              <CheckCircleIcon className="h-5 w-5 text-success-400 mr-3 mt-0.5 flex-shrink-0" />
               <div>
-                <h3 className="text-sm font-medium text-green-800">Success!</h3>
-                <p className="text-sm text-green-700 mt-1">{successMessage}</p>
+                <h3 className="text-sm font-medium text-success-800">Success!</h3>
+                <p className="text-sm text-success-700 mt-1">{successMessage}</p>
               </div>
             </div>
           </div>
@@ -242,7 +241,7 @@ export const EnhancedForm: React.FC<EnhancedFormProps> = ({
             disabled={disabled || submissionState.isSubmitting}
             className={cn(
               'transition-all duration-200',
-              submissionState.isSuccess && 'bg-green-600 hover:bg-green-700'
+              submissionState.isSuccess && 'bg-success-600 hover:bg-success-700'
             )}
           >
             {submissionState.isSubmitting
@@ -257,10 +256,10 @@ export const EnhancedForm: React.FC<EnhancedFormProps> = ({
 
       {/* Loading Overlay for Optimistic Updates */}
       {optimisticUpdate && submissionState.isSubmitting && (
-        <div className="absolute inset-0 bg-white bg-opacity-50 flex items-center justify-center rounded-md">
-          <div className="bg-white rounded-lg shadow-lg p-4 flex items-center space-x-3">
-            <div className="animate-spin h-5 w-5 border-2 border-blue-500 border-t-transparent rounded-full" />
-            <span className="text-sm text-slate-700">Processing...</span>
+        <div className="absolute inset-0 bg-surface bg-opacity-50 flex items-center justify-center rounded-md">
+          <div className="bg-surface rounded-lg shadow-lg p-4 flex items-center space-x-3">
+            <div className="animate-spin h-5 w-5 border-2 border-primary-500 border-t-transparent rounded-full" />
+            <span className="text-sm text-muted-foreground">Processing...</span>
           </div>
         </div>
       )}
@@ -348,8 +347,9 @@ export const FormValidationProvider: React.FC<FormValidationProviderProps> = ({ 
   const setFieldError = useCallback((field: string, error: string | null) => {
     setErrors(prev => {
       if (error === null) {
-        const { [field]: _, ...rest } = prev;
-        return rest;
+        const next = { ...prev };
+        delete next[field];
+        return next;
       }
       return { ...prev, [field]: error };
     });

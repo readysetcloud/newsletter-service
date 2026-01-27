@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { cn } from '../../utils/cn';
 
@@ -41,6 +42,10 @@ export const ToastProvider: React.FC<ToastProviderProps> = ({
 }) => {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
+  const removeToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((toast) => toast.id !== id));
+  }, []);
+
   const addToast = useCallback((toast: Omit<Toast, 'id'>) => {
     const id = Math.random().toString(36).substr(2, 9);
     const newToast: Toast = {
@@ -60,11 +65,7 @@ export const ToastProvider: React.FC<ToastProviderProps> = ({
         removeToast(id);
       }, newToast.duration);
     }
-  }, [maxToasts]);
-
-  const removeToast = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((toast) => toast.id !== id));
-  }, []);
+  }, [maxToasts, removeToast]);
 
   const clearToasts = useCallback(() => {
     setToasts([]);
@@ -113,30 +114,30 @@ const ToastItem: React.FC<ToastItemProps> = ({ toast }) => {
     const baseStyles = 'border-l-4';
     switch (toast.type) {
       case 'success':
-        return `${baseStyles} border-green-500 bg-green-50`;
+        return `${baseStyles} border-success-500 bg-success-50`;
       case 'error':
-        return `${baseStyles} border-red-500 bg-red-50`;
+        return `${baseStyles} border-error-500 bg-error-50`;
       case 'warning':
-        return `${baseStyles} border-amber-500 bg-amber-50`;
+        return `${baseStyles} border-warning-500 bg-warning-50`;
       case 'info':
-        return `${baseStyles} border-blue-500 bg-blue-50`;
+        return `${baseStyles} border-primary-500 bg-primary-50`;
       default:
-        return `${baseStyles} border-slate-500 bg-slate-50`;
+        return `${baseStyles} border-border bg-background`;
     }
   };
 
   const getIconColor = () => {
     switch (toast.type) {
       case 'success':
-        return 'text-green-500';
+        return 'text-success-500';
       case 'error':
-        return 'text-red-500';
+        return 'text-error-500';
       case 'warning':
-        return 'text-amber-500';
+        return 'text-warning-500';
       case 'info':
-        return 'text-blue-500';
+        return 'text-primary-500';
       default:
-        return 'text-slate-500';
+        return 'text-muted-foreground';
     }
   };
 
@@ -189,11 +190,11 @@ const ToastItem: React.FC<ToastItemProps> = ({ toast }) => {
             {getIcon()}
           </div>
           <div className="ml-3 flex-1">
-            <p className="text-sm font-medium text-slate-900">
+            <p className="text-sm font-medium text-foreground">
               {toast.title}
             </p>
             {toast.message && (
-              <p className="mt-1 text-sm text-slate-600">
+              <p className="mt-1 text-sm text-muted-foreground">
                 {toast.message}
               </p>
             )}
@@ -201,7 +202,7 @@ const ToastItem: React.FC<ToastItemProps> = ({ toast }) => {
               <div className="mt-2">
                 <button
                   onClick={toast.action.onClick}
-                  className="text-sm font-medium text-blue-600 hover:text-blue-500"
+                  className="text-sm font-medium text-primary-600 hover:text-primary-500"
                 >
                   {toast.action.label}
                 </button>
@@ -211,7 +212,7 @@ const ToastItem: React.FC<ToastItemProps> = ({ toast }) => {
           <div className="ml-4 flex-shrink-0">
             <button
               onClick={handleClose}
-              className="text-slate-400 hover:text-slate-600 transition-colors"
+              className="text-muted-foreground hover:text-muted-foreground transition-colors"
             >
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />

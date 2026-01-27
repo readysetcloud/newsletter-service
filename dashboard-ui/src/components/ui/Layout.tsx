@@ -34,7 +34,7 @@ export const Layout: React.FC<LayoutProps> = ({
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
-    <div className={cn('min-h-screen bg-slate-50', className)}>
+    <div className={cn('min-h-screen bg-background', className)}>
       {header && (
         <Header className="sticky top-0 z-40">
           {header}
@@ -63,7 +63,7 @@ export const Header: React.FC<HeaderProps> = ({ children, className }) => {
   return (
     <header
       className={cn(
-        'bg-white border-b border-slate-200 shadow-sm',
+        'bg-surface border-b border-border shadow-sm',
         className
       )}
     >
@@ -89,15 +89,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div
           className="fixed inset-0 z-40 lg:hidden"
           onClick={onToggle}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              onToggle?.();
+            }
+          }}
+          role="button"
+          tabIndex={0}
+          aria-label="Close sidebar overlay"
         >
-          <div className="fixed inset-0 bg-slate-600 bg-opacity-75" />
+          <div className="fixed inset-0 bg-foreground/60" />
         </div>
       )}
 
       {/* Sidebar */}
       <div
         className={cn(
-          'fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-slate-200 transform transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:inset-0',
+          'fixed inset-y-0 left-0 z-50 w-64 bg-surface border-r border-border transform transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:inset-0',
           isOpen ? 'translate-x-0' : '-translate-x-full',
           className
         )}
@@ -107,7 +116,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div className="flex items-center justify-end p-4 lg:hidden">
             <button
               onClick={onToggle}
-              className="text-slate-400 hover:text-slate-600"
+              className="text-muted-foreground hover:text-muted-foreground"
             >
               <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -168,15 +177,15 @@ export const NavigationItem: React.FC<NavigationItemProps> = ({
   const baseClasses = cn(
     'group flex items-center px-2 py-2 text-sm font-medium rounded-md transition-colors',
     active
-      ? 'bg-blue-100 text-blue-900'
-      : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900',
+      ? 'bg-primary-100 text-primary-900'
+      : 'text-muted-foreground hover:bg-background hover:text-foreground',
     className
   );
 
   const content = (
     <>
       {icon && (
-        <div className={cn('mr-3 h-5 w-5', active ? 'text-blue-500' : 'text-slate-400 group-hover:text-slate-500')}>
+        <div className={cn('mr-3 h-5 w-5', active ? 'text-primary-500' : 'text-muted-foreground group-hover:text-muted-foreground')}>
           {icon}
         </div>
       )}

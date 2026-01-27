@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import * as userEvent from '@testing-library/user-event';
 import { AddSenderForm } from '../AddSenderForm';
 import { senderService } from '@/services/senderService';
@@ -99,15 +99,15 @@ describe('AddSenderForm', () => {
     expect(screen.getByText(/domain verification/i)).toBeInTheDocument();
 
     // DNS verification should be disabled for free tier
-    const domainOption = screen.getByText(/domain verification/i).closest('div');
+    const domainOption = screen.getByRole('button', { name: /domain verification/i });
     expect(domainOption).toHaveClass('cursor-not-allowed', 'opacity-60');
   });
 
   it('enables both verification types for creator tier', () => {
     render(<AddSenderForm {...defaultProps} tierLimits={mockCreatorTierLimits} />);
 
-    const emailOption = screen.getByText(/email verification/i).closest('div');
-    const domainOption = screen.getByText(/domain verification/i).closest('div');
+    const emailOption = screen.getByRole('button', { name: /email verification/i });
+    const domainOption = screen.getByRole('button', { name: /domain verification/i });
 
     expect(emailOption).not.toHaveClass('cursor-not-allowed', 'opacity-60');
     expect(domainOption).not.toHaveClass('cursor-not-allowed', 'opacity-60');
@@ -175,8 +175,8 @@ describe('AddSenderForm', () => {
     const user = userEvent.setup();
     render(<AddSenderForm {...defaultProps} />);
 
-    const emailOption = screen.getByText(/email verification/i).closest('div');
-    await user.click(emailOption!);
+    const emailOption = screen.getByRole('button', { name: /email verification/i });
+    await user.click(emailOption);
 
     expect(screen.getByTestId('check-circle-icon')).toBeInTheDocument();
   });
@@ -193,8 +193,8 @@ describe('AddSenderForm', () => {
     await user.type(nameInput, 'Test Sender');
 
     // Select verification type
-    const emailOption = screen.getByText(/email verification/i).closest('div');
-    await user.click(emailOption!);
+    const emailOption = screen.getByRole('button', { name: /email verification/i });
+    await user.click(emailOption);
 
     // Submit form
     const submitButton = screen.getByRole('button', { name: /add sender email/i });
@@ -214,7 +214,7 @@ describe('AddSenderForm', () => {
   it('shows loading state during submission', async () => {
     const user = userEvent.setup();
     let resolveCreate: () => void;
-    const createPromise = new Promise<any>((resolve) => {
+    const createPromise = new Promise<unknown>((resolve) => {
       resolveCreate = () => resolve({
         success: true,
         data: {
@@ -241,8 +241,8 @@ describe('AddSenderForm', () => {
     const emailInput = screen.getByLabelText(/email address/i);
     await user.type(emailInput, 'test@example.com');
 
-    const emailOption = screen.getByText(/email verification/i).closest('div');
-    await user.click(emailOption!);
+    const emailOption = screen.getByRole('button', { name: /email verification/i });
+    await user.click(emailOption);
 
     const submitButton = screen.getByRole('button', { name: /add sender email/i });
     await user.click(submitButton);
@@ -322,8 +322,8 @@ describe('AddSenderForm', () => {
     const emailInput = screen.getByLabelText(/email address/i);
     await user.type(emailInput, 'test@example.com');
 
-    const domainOption = screen.getByText(/domain verification/i).closest('div');
-    await user.click(domainOption!);
+    const domainOption = screen.getByRole('button', { name: /domain verification/i });
+    await user.click(domainOption);
 
     await waitFor(() => {
       expect(screen.getByText(/you'll verify the domain "example.com"/i)).toBeInTheDocument();
@@ -351,8 +351,8 @@ describe('AddSenderForm', () => {
     await user.type(emailInput, 'test@example.com');
     await user.type(nameInput, 'Test Sender');
 
-    const emailOption = screen.getByText(/email verification/i).closest('div');
-    await user.click(emailOption!);
+    const emailOption = screen.getByRole('button', { name: /email verification/i });
+    await user.click(emailOption);
 
     // Submit form
     const submitButton = screen.getByRole('button', { name: /add sender email/i });
@@ -370,7 +370,7 @@ describe('AddSenderForm', () => {
   it('disables form fields when submitting', async () => {
     const user = userEvent.setup();
     let resolveCreate: () => void;
-    const createPromise = new Promise<any>((resolve) => {
+    const createPromise = new Promise<unknown>((resolve) => {
       resolveCreate = () => resolve({
         success: true,
         data: {

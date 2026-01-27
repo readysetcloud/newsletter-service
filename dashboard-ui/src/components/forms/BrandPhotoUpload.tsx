@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { PhotoIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { Button } from '../ui/Button';
 import { cn } from '../../utils/cn';
@@ -21,13 +21,8 @@ export const BrandPhotoUpload: React.FC<BrandPhotoUploadProps> = ({
   className
 }) => {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [isCurrentPhotoRemoved, setIsCurrentPhotoRemoved] = useState(false);
+  const [removedPhoto, setRemovedPhoto] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Reset removal state when currentPhoto changes
-  useEffect(() => {
-    setIsCurrentPhotoRemoved(false);
-  }, [currentPhoto]);
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -46,7 +41,7 @@ export const BrandPhotoUpload: React.FC<BrandPhotoUploadProps> = ({
     // Create preview URL
     const url = URL.createObjectURL(file);
     setPreviewUrl(url);
-    setIsCurrentPhotoRemoved(false); // Reset removal state when new file is selected
+    setRemovedPhoto(null); // Reset removal state when new file is selected
     onPhotoChange(file);
   };
 
@@ -55,8 +50,7 @@ export const BrandPhotoUpload: React.FC<BrandPhotoUploadProps> = ({
       URL.revokeObjectURL(previewUrl);
       setPreviewUrl(null);
     }
-    // Mark current photo as removed
-    setIsCurrentPhotoRemoved(true);
+    setRemovedPhoto(currentPhoto ?? null);
     onPhotoRemove();
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -73,16 +67,20 @@ export const BrandPhotoUpload: React.FC<BrandPhotoUploadProps> = ({
     if (file && file.type.startsWith('image/')) {
       const url = URL.createObjectURL(file);
       setPreviewUrl(url);
-      setIsCurrentPhotoRemoved(false); // Reset removal state when new file is dropped
+      setRemovedPhoto(null); // Reset removal state when new file is dropped
       onPhotoChange(file);
     }
   };
 
-  const displayImage = previewUrl || (isCurrentPhotoRemoved ? null : currentPhoto);
+  const isCurrentPhotoHidden = currentPhoto && removedPhoto === currentPhoto;
+  const displayImage = previewUrl || (isCurrentPhotoHidden ? null : currentPhoto);
 
   return (
     <div className={cn('w-full', className)}>
-      <label className="block text-sm font-medium text-slate-700 mb-2">
+      <label
+        htmlFor="brand-logo-upload"
+        className="block text-sm font-medium text-muted-foreground mb-2"
+      >
         Brand Logo
       </label>
 
@@ -92,36 +90,36 @@ export const BrandPhotoUpload: React.FC<BrandPhotoUploadProps> = ({
             <img
               src={displayImage}
               alt="Brand logo preview"
-              className="h-32 w-32 object-cover rounded-lg border border-slate-200"
+              className="h-32 w-32 object-cover rounded-lg border border-border"
             />
             <button
               type="button"
               onClick={handleRemovePhoto}
               disabled={isUploading}
-              className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 hover:bg-red-600 disabled:opacity-50 z-10 shadow-lg"
+              className="absolute -top-2 -right-2 bg-error-500 text-white rounded-full p-1 hover:bg-error-600 disabled:opacity-50 z-10 shadow-lg"
             >
               <XMarkIcon className="h-4 w-4" />
             </button>
           </div>
         ) : (
           <div
-            className="border-2 border-dashed border-slate-300 rounded-lg p-6 text-center hover:border-slate-400 transition-colors"
+            className="border-2 border-dashed border-border rounded-lg p-6 text-center hover:border-primary-400 transition-colors"
             onDragOver={handleDragOver}
             onDrop={handleDrop}
           >
-            <PhotoIcon className="mx-auto h-12 w-12 text-slate-400" />
+            <PhotoIcon className="mx-auto h-12 w-12 text-muted-foreground" />
             <div className="mt-4">
-              <p className="text-sm text-slate-600">
+              <p className="text-sm text-muted-foreground">
                 Drag and drop your logo here, or{' '}
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  className="text-blue-600 hover:text-blue-500 font-medium"
+                  className="text-primary-600 hover:text-primary-500 font-medium"
                 >
                   browse
                 </button>
               </p>
-              <p className="text-xs text-slate-500 mt-1">
+              <p className="text-xs text-muted-foreground mt-1">
                 PNG, JPG, GIF up to 5MB
               </p>
             </div>
@@ -129,6 +127,7 @@ export const BrandPhotoUpload: React.FC<BrandPhotoUploadProps> = ({
         )}
 
         <input
+          id="brand-logo-upload"
           ref={fileInputRef}
           type="file"
           accept="image/*"
@@ -148,14 +147,14 @@ export const BrandPhotoUpload: React.FC<BrandPhotoUploadProps> = ({
         )}
 
         {isUploading && (
-          <div className="flex items-center space-x-2 text-sm text-slate-600">
-            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+          <div className="flex items-center space-x-2 text-sm text-muted-foreground">
+            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-600"></div>
             <span>Uploading...</span>
           </div>
         )}
 
         {error && (
-          <p className="text-sm text-red-600">{error}</p>
+          <p className="text-sm text-error-600">{error}</p>
         )}
       </div>
     </div>

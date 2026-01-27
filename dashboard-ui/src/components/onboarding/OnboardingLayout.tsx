@@ -1,7 +1,6 @@
 import React from 'react';
 import { useOnboardingStatus } from '@/hooks/useOnboardingStatus';
 import { CheckCircleIcon } from '@heroicons/react/24/solid';
-import { XCircleIcon } from '@heroicons/react/24/outline';
 
 interface OnboardingLayoutProps {
   children: React.ReactNode;
@@ -16,7 +15,7 @@ export function OnboardingLayout({
   title,
   description
 }: OnboardingLayoutProps) {
-  const { needsBrandSetup, needsProfileSetup, needsSenderSetup } = useOnboardingStatus();
+  const { needsBrandSetup, needsProfileSetup } = useOnboardingStatus();
 
   const steps = [
     {
@@ -44,21 +43,21 @@ export function OnboardingLayout({
   ];
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-background">
       {/* Header */}
-      <div className="bg-white shadow">
+      <div className="bg-surface shadow">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="py-6">
             <div className="flex items-center justify-between">
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">
-                  Welcome to Newsletter Admin
+                <h1 className="text-2xl font-bold text-foreground">
+                  Welcome to Outboxed
                 </h1>
-                <p className="mt-1 text-sm text-gray-600">
-                  Let's get your account set up
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Let&apos;s get your account set up
                 </p>
               </div>
-              <div className="text-sm text-gray-500">
+              <div className="text-sm text-muted-foreground">
                 Step {currentStep === 'brand' ? '1' : currentStep === 'profile' ? '2' : '3'} of 3
               </div>
             </div>
@@ -77,10 +76,10 @@ export function OnboardingLayout({
                     <div
                       className={`flex h-8 w-8 items-center justify-center rounded-full ${
                         step.completed
-                          ? 'bg-green-600'
+                          ? 'bg-success-600'
                           : step.current
-                          ? 'bg-blue-600'
-                          : 'bg-gray-300'
+                          ? 'bg-primary-600'
+                          : 'bg-border'
                       }`}
                     >
                       {step.completed ? (
@@ -88,7 +87,7 @@ export function OnboardingLayout({
                       ) : (
                         <span
                           className={`text-sm font-medium ${
-                            step.current ? 'text-white' : 'text-gray-600'
+                            step.current ? 'text-white' : 'text-muted-foreground'
                           }`}
                         >
                           {stepIdx + 1}
@@ -98,20 +97,20 @@ export function OnboardingLayout({
                     <div className="text-left">
                       <p
                         className={`text-sm font-medium ${
-                          step.current ? 'text-blue-600' : 'text-gray-900'
+                          step.current ? 'text-primary-600' : 'text-foreground'
                         }`}
                       >
                         {step.name}
                         {step.optional && (
-                          <span className="text-xs text-gray-400 ml-1">(optional)</span>
+                          <span className="text-xs text-muted-foreground ml-1">(optional)</span>
                         )}
                       </p>
-                      <p className="text-xs text-gray-500">{step.description}</p>
+                      <p className="text-xs text-muted-foreground">{step.description}</p>
                     </div>
                   </div>
                 </div>
                 {stepIdx < steps.length - 1 && (
-                  <div className="ml-8 h-px w-16 bg-gray-300" />
+                  <div className="ml-8 h-px w-16 bg-border" />
                 )}
               </li>
             ))}
@@ -120,11 +119,11 @@ export function OnboardingLayout({
 
         {/* Main Content */}
         <div className="max-w-2xl mx-auto">
-          <div className="bg-white shadow rounded-lg">
+          <div className="bg-surface shadow rounded-lg">
             <div className="px-6 py-8">
               <div className="text-center mb-8">
-                <h2 className="text-xl font-semibold text-gray-900">{title}</h2>
-                <p className="mt-2 text-gray-600">{description}</p>
+                <h2 className="text-xl font-semibold text-foreground">{title}</h2>
+                <p className="mt-2 text-muted-foreground">{description}</p>
               </div>
               {children}
             </div>

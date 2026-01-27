@@ -10,7 +10,6 @@ import {
   ModalFooter,
 } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
-import { Input } from '@/components/ui/Input';
 import { EnhancedInput } from '@/components/ui/EnhancedInput';
 import { TextArea } from '@/components/ui/TextArea';
 import { useToast } from '@/components/ui/Toast';
@@ -135,7 +134,7 @@ export const CreateApiKeyModal: React.FC<CreateApiKeyModalProps> = ({
 
             {/* Description Field */}
             <div>
-              <label htmlFor="description" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="description" className="block text-sm font-medium text-muted-foreground mb-1">
                 Description
               </label>
               <TextArea

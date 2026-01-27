@@ -3,6 +3,218 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    --background: 248 250 252;
+    --surface: 255 255 255;
+    --foreground: 15 23 42;
+    --muted: 241 245 249;
+    --muted-foreground: 71 85 105;
+    --border: 226 232 240;
+    --ring: 53 103 245;
+
+    --primary-50: 238 245 255;
+    --primary-100: 216 230 255;
+    --primary-200: 179 204 255;
+    --primary-300: 134 173 255;
+    --primary-400: 90 139 255;
+    --primary-500: 53 103 245;
+    --primary-600: 31 79 214;
+    --primary-700: 26 65 173;
+    --primary-800: 23 54 133;
+    --primary-900: 19 45 106;
+    --primary-950: 11 26 61;
+
+    --secondary-50: 248 250 252;
+    --secondary-100: 241 245 249;
+    --secondary-200: 226 232 240;
+    --secondary-300: 203 213 225;
+    --secondary-400: 148 163 184;
+    --secondary-500: 100 116 139;
+    --secondary-600: 71 85 105;
+    --secondary-700: 51 65 85;
+    --secondary-800: 30 41 59;
+    --secondary-900: 15 23 42;
+    --secondary-950: 2 6 23;
+
+    --success-50: 236 253 248;
+    --success-100: 209 250 239;
+    --success-200: 167 243 223;
+    --success-300: 110 231 207;
+    --success-400: 52 211 191;
+    --success-500: 20 184 166;
+    --success-600: 15 143 127;
+    --success-700: 15 107 94;
+    --success-800: 15 83 72;
+    --success-900: 14 64 56;
+    --success-950: 7 39 35;
+
+    --warning-50: 255 247 237;
+    --warning-100: 255 237 213;
+    --warning-200: 254 215 170;
+    --warning-300: 253 186 116;
+    --warning-400: 251 146 60;
+    --warning-500: 249 115 22;
+    --warning-600: 234 88 12;
+    --warning-700: 194 65 12;
+    --warning-800: 154 52 18;
+    --warning-900: 124 45 18;
+    --warning-950: 67 20 7;
+
+    --error-50: 255 241 242;
+    --error-100: 255 228 230;
+    --error-200: 254 205 211;
+    --error-300: 253 164 175;
+    --error-400: 251 113 133;
+    --error-500: 244 63 94;
+    --error-600: 225 29 72;
+    --error-700: 190 18 60;
+    --error-800: 159 18 57;
+    --error-900: 136 19 55;
+    --error-950: 76 5 25;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) {
+      --background: 2 6 23;
+      --surface: 15 23 42;
+      --foreground: 226 232 240;
+      --muted: 30 41 59;
+      --muted-foreground: 148 163 184;
+      --border: 51 65 85;
+      --ring: 90 139 255;
+
+      --primary-50: 11 26 61;
+      --primary-100: 19 45 106;
+      --primary-200: 23 54 133;
+      --primary-300: 26 65 173;
+      --primary-400: 31 79 214;
+      --primary-500: 53 103 245;
+      --primary-600: 90 139 255;
+      --primary-700: 134 173 255;
+      --primary-800: 179 204 255;
+      --primary-900: 216 230 255;
+      --primary-950: 238 245 255;
+
+      --secondary-50: 2 6 23;
+      --secondary-100: 15 23 42;
+      --secondary-200: 30 41 59;
+      --secondary-300: 51 65 85;
+      --secondary-400: 71 85 105;
+      --secondary-500: 100 116 139;
+      --secondary-600: 148 163 184;
+      --secondary-700: 203 213 225;
+      --secondary-800: 226 232 240;
+      --secondary-900: 241 245 249;
+      --secondary-950: 248 250 252;
+
+      --success-50: 7 39 35;
+      --success-100: 14 64 56;
+      --success-200: 15 83 72;
+      --success-300: 15 107 94;
+      --success-400: 15 143 127;
+      --success-500: 20 184 166;
+      --success-600: 52 211 191;
+      --success-700: 110 231 207;
+      --success-800: 167 243 223;
+      --success-900: 209 250 239;
+      --success-950: 236 253 248;
+
+      --warning-50: 67 20 7;
+      --warning-100: 124 45 18;
+      --warning-200: 154 52 18;
+      --warning-300: 194 65 12;
+      --warning-400: 234 88 12;
+      --warning-500: 249 115 22;
+      --warning-600: 251 146 60;
+      --warning-700: 253 186 116;
+      --warning-800: 254 215 170;
+      --warning-900: 255 237 213;
+      --warning-950: 255 247 237;
+
+      --error-50: 76 5 25;
+      --error-100: 136 19 55;
+      --error-200: 159 18 57;
+      --error-300: 190 18 60;
+      --error-400: 225 29 72;
+      --error-500: 244 63 94;
+      --error-600: 251 113 133;
+      --error-700: 253 164 175;
+      --error-800: 254 205 211;
+      --error-900: 255 228 230;
+      --error-950: 255 241 242;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --background: 2 6 23;
+    --surface: 15 23 42;
+    --foreground: 226 232 240;
+    --muted: 30 41 59;
+    --muted-foreground: 148 163 184;
+    --border: 51 65 85;
+    --ring: 90 139 255;
+
+    --primary-50: 11 26 61;
+    --primary-100: 19 45 106;
+    --primary-200: 23 54 133;
+    --primary-300: 26 65 173;
+    --primary-400: 31 79 214;
+    --primary-500: 53 103 245;
+    --primary-600: 90 139 255;
+    --primary-700: 134 173 255;
+    --primary-800: 179 204 255;
+    --primary-900: 216 230 255;
+    --primary-950: 238 245 255;
+
+    --secondary-50: 2 6 23;
+    --secondary-100: 15 23 42;
+    --secondary-200: 30 41 59;
+    --secondary-300: 51 65 85;
+    --secondary-400: 71 85 105;
+    --secondary-500: 100 116 139;
+    --secondary-600: 148 163 184;
+    --secondary-700: 203 213 225;
+    --secondary-800: 226 232 240;
+    --secondary-900: 241 245 249;
+    --secondary-950: 248 250 252;
+
+    --success-50: 7 39 35;
+    --success-100: 14 64 56;
+    --success-200: 15 83 72;
+    --success-300: 15 107 94;
+    --success-400: 15 143 127;
+    --success-500: 20 184 166;
+    --success-600: 52 211 191;
+    --success-700: 110 231 207;
+    --success-800: 167 243 223;
+    --success-900: 209 250 239;
+    --success-950: 236 253 248;
+
+    --warning-50: 67 20 7;
+    --warning-100: 124 45 18;
+    --warning-200: 154 52 18;
+    --warning-300: 194 65 12;
+    --warning-400: 234 88 12;
+    --warning-500: 249 115 22;
+    --warning-600: 251 146 60;
+    --warning-700: 253 186 116;
+    --warning-800: 254 215 170;
+    --warning-900: 255 237 213;
+    --warning-950: 255 247 237;
+
+    --error-50: 76 5 25;
+    --error-100: 136 19 55;
+    --error-200: 159 18 57;
+    --error-300: 190 18 60;
+    --error-400: 225 29 72;
+    --error-500: 244 63 94;
+    --error-600: 251 113 133;
+    --error-700: 253 164 175;
+    --error-800: 254 205 211;
+    --error-900: 255 228 230;
+    --error-950: 255 241 242;
+  }
+
   html {
     font-family: 'Inter', system-ui, sans-serif;
     /* Prevent horizontal scroll on mobile */
@@ -10,7 +222,7 @@
   }
 
   body {
-    @apply bg-gray-50 text-gray-900 antialiased;
+    @apply bg-background text-foreground antialiased;
     /* Prevent horizontal scroll on mobile */
     overflow-x: hidden;
     /* Improve text rendering on mobile */
@@ -19,7 +231,7 @@
   }
 
   * {
-    @apply border-gray-200;
+    @apply border-border;
   }
 
   /* Improve touch targets on mobile */
@@ -75,7 +287,7 @@
   }
 
   .input {
-    @apply block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:bg-gray-50 disabled:text-gray-500;
+    @apply block w-full rounded-lg border border-border px-3 py-2 text-sm placeholder-secondary-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:bg-muted disabled:text-muted-foreground;
   }
 
   .input-error {
@@ -83,11 +295,11 @@
   }
 
   .card {
-    @apply bg-white rounded-xl shadow-soft border border-gray-200;
+    @apply bg-surface rounded-xl shadow-soft border border-border;
   }
 
   .card-header {
-    @apply px-6 py-4 border-b border-gray-200;
+    @apply px-6 py-4 border-b border-border;
   }
 
   .card-body {
@@ -95,7 +307,7 @@
   }
 
   .card-footer {
-    @apply px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-xl;
+    @apply px-6 py-4 border-t border-border bg-muted rounded-b-xl;
   }
 }
 

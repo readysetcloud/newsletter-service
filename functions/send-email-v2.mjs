@@ -22,9 +22,20 @@ const sendWithRetry = async (sendFn, maxRetries = 3) => {
     try {
       return await sendFn();
     } catch (err) {
-      if (err.name === 'Throttling' || err.name === 'TooManyRequestsException') {
+      const errorName = err?.name || err?.Code || err?.code;
+      const statusCode = err?.$metadata?.httpStatusCode;
+      const message = err?.message || '';
+      const isThrottling = [
+        'Throttling',
+        'ThrottlingException',
+        'TooManyRequestsException',
+        'RequestLimitExceeded',
+        'SlowDown'
+      ].includes(errorName) || statusCode === 429 || message.includes('Rate exceeded');
+
+      if (isThrottling) {
         const delay = Math.pow(2, attempt) * 1000; // Exponential backoff
-        console.log(`Throttled, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`);
+        console.log(`Throttled (${errorName || statusCode || 'unknown'}), retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`);
         await new Promise(resolve => setTimeout(resolve, delay));
       } else {
         throw err;

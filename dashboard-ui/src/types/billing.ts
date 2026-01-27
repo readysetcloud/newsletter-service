@@ -154,7 +154,7 @@ export interface BillingPreferencesFormData {
 }
 
 // API Response Types
-export interface BillingApiResponse<T = any> {
+export interface BillingApiResponse<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;
@@ -166,7 +166,7 @@ export interface BillingError {
   code: string;
   message: string;
   type: 'validation' | 'payment' | 'subscription' | 'system';
-  details?: Record<string, any>;
+  details?: Record<string, unknown>;
 }
 
 // Loading States

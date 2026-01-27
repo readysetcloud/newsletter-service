@@ -10,19 +10,19 @@ interface LazyLoaderProps {
 const DefaultLoadingFallback: React.FC = () => (
   <div className="flex items-center justify-center min-h-[400px]" role="status" aria-label="Loading">
     <div className="flex flex-col items-center gap-3">
-      <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
-      <p className="text-sm text-gray-600">Loading...</p>
+      <Loader2 className="h-8 w-8 animate-spin text-primary-600" />
+      <p className="text-sm text-muted-foreground">Loading...</p>
     </div>
   </div>
 );
 
 const PageLoadingFallback: React.FC = () => (
-  <div className="min-h-screen bg-gray-50 flex items-center justify-center" role="status" aria-label="Loading page">
+  <div className="min-h-screen bg-background flex items-center justify-center" role="status" aria-label="Loading page">
     <div className="flex flex-col items-center gap-4">
-      <Loader2 className="h-12 w-12 animate-spin text-blue-600" />
+      <Loader2 className="h-12 w-12 animate-spin text-primary-600" />
       <div className="text-center">
-        <p className="text-lg font-medium text-gray-900">Loading page...</p>
-        <p className="text-sm text-gray-600 mt-1">Please wait a moment</p>
+        <p className="text-lg font-medium text-foreground">Loading page...</p>
+        <p className="text-sm text-muted-foreground mt-1">Please wait a moment</p>
       </div>
     </div>
   </div>

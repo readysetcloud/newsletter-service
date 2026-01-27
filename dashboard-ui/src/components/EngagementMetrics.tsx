@@ -6,6 +6,26 @@ interface EngagementMetricsProps {
   performanceOverview: PerformanceOverview;
 }
 
+type TooltipPayloadItem = {
+  name?: string;
+  value?: number;
+};
+
+function CustomTooltip({ active, payload }: { active?: boolean; payload?: TooltipPayloadItem[] }) {
+  if (active && Array.isArray(payload) && payload.length > 0) {
+    const item = payload[0];
+    const label = item?.name ?? 'Value';
+    const value = typeof item?.value === 'number' ? item.value : 0;
+    return (
+      <div className="bg-surface p-3 border border-border rounded-lg shadow-lg">
+        <p className="font-medium text-foreground">{label}</p>
+        <p className="text-sm text-muted-foreground">{value.toFixed(1)}%</p>
+      </div>
+    );
+  }
+  return null;
+}
+
 export function EngagementMetrics({ performanceOverview }: EngagementMetricsProps) {
   const data = [
     {
@@ -30,22 +50,9 @@ export function EngagementMetrics({ performanceOverview }: EngagementMetricsProp
     }
   ].filter(item => item.value > 0);
 
-  const CustomTooltip = ({ active, payload }: any) => {
-    if (active && payload && payload.length) {
-      const data = payload[0];
-      return (
-        <div className="bg-white p-3 border border-gray-200 rounded-lg shadow-lg">
-          <p className="font-medium text-gray-900">{data.name}</p>
-          <p className="text-sm text-gray-600">{data.value.toFixed(1)}%</p>
-        </div>
-      );
-    }
-    return null;
-  };
-
   return (
-    <div className="bg-white rounded-lg shadow p-6">
-      <h3 className="text-lg font-medium text-gray-900 mb-4">Engagement Breakdown</h3>
+    <div className="bg-surface rounded-lg shadow p-6">
+      <h3 className="text-lg font-medium text-foreground mb-4">Engagement Breakdown</h3>
       <div className="h-64">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
@@ -62,11 +69,11 @@ export function EngagementMetrics({ performanceOverview }: EngagementMetricsProp
                 <Cell key={`cell-${index}`} fill={entry.color} />
               ))}
             </Pie>
-            <Tooltip content={<CustomTooltip />} />
+            <Tooltip content={CustomTooltip} />
             <Legend
               verticalAlign="bottom"
               height={36}
-              formatter={(value, entry: any) => (
+              formatter={(value, entry: { color?: string }) => (
                 <span style={{ color: entry.color }}>{value}</span>
               )}
             />

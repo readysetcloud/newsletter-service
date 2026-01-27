@@ -6,29 +6,30 @@
     <!-- Favicon and app icons -->
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
-    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
-    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+    <link rel="icon" type="image/svg+xml" href="/logo.svg" media="(prefers-color-scheme: light)">
+    <link rel="icon" type="image/svg+xml" href="/logo-dark.svg" media="(prefers-color-scheme: dark)">
 
     <!-- Viewport and responsive design -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes" />
+    <meta name="color-scheme" content="light dark" />
 
     <!-- SEO and meta information -->
-    <title>Newsletter Admin Dashboard</title>
-    <meta name="description" content="Manage your newsletter brands, API keys, and view analytics with the Newsletter Admin Dashboard." />
+    <title>Outboxed Dashboard</title>
+    <meta name="description" content="Manage your newsletter brands, API keys, and view analytics with the Outboxed Dashboard." />
     <meta name="keywords" content="newsletter, admin, dashboard, analytics, API management" />
     <meta name="author" content="Newsletter Service" />
 
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://admin.newsletter.example.com/" />
-    <meta property="og:title" content="Newsletter Admin Dashboard" />
+    <meta property="og:title" content="Outboxed Dashboard" />
     <meta property="og:description" content="Manage your newsletter brands, API keys, and view analytics." />
     <meta property="og:image" content="/og-image.png" />
 
     <!-- Twitter -->
     <meta property="twitter:card" content="summary_large_image" />
     <meta property="twitter:url" content="https://admin.newsletter.example.com/" />
-    <meta property="twitter:title" content="Newsletter Admin Dashboard" />
+    <meta property="twitter:title" content="Outboxed Dashboard" />
     <meta property="twitter:description" content="Manage your newsletter brands, API keys, and view analytics." />
     <meta property="twitter:image" content="/twitter-image.png" />
 
@@ -44,7 +45,7 @@
       style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
       font-src 'self' https://fonts.gstatic.com;
       img-src 'self' data: https: blob:;
-      connect-src 'self' https://*.amazonaws.com https://*.momentohq.com;
+      connect-src 'self' https://*.amazonaws.com;
       frame-src 'none';
       object-src 'none';
       base-uri 'self';
@@ -120,7 +121,7 @@
   </head>
   <body>
     <!-- Skip to main content link for screen readers -->
-    <a href="#main-content" class="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 bg-blue-600 text-white px-4 py-2 rounded z-50">
+    <a href="#main-content" class="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 bg-primary-600 text-white px-4 py-2 rounded z-50">
       Skip to main content
     </a>
 
@@ -129,7 +130,7 @@
       <!-- Loading state for initial app load -->
       <div class="loading-spinner" aria-label="Loading application"></div>
       <div class="sr-only" aria-live="polite" id="loading-status">
-        Loading Newsletter Admin Dashboard...
+        Loading Outboxed Dashboard...
       </div>
     </div>
 

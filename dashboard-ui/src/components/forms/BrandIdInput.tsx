@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { CheckCircleIcon, XCircleIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import { CheckCircleIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import { EnhancedInput } from '../ui/EnhancedInput';
-import { generateBrandId, isValidBrandId, generateAlternativeBrandIds } from '../../utils/brandUtils';
+import { generateBrandId, isValidBrandId } from '../../utils/brandUtils';
 import { checkBrandIdAvailability } from '../../services/brandService';
 import { useDebounce } from '../../hooks/useDebounce';
 
@@ -26,7 +26,6 @@ export const BrandIdInput: React.FC<BrandIdInputProps> = ({
   const [availabilityStatus, setAvailabilityStatus] = useState<'idle' | 'available' | 'taken' | 'invalid'>('idle');
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [hasUserModified, setHasUserModified] = useState(false);
-  const [hasBlurred, setHasBlurred] = useState(false);
   const [shouldCheck, setShouldCheck] = useState(false);
 
   const debouncedValue = useDebounce(value, 1000); // Increased debounce time
@@ -58,7 +57,6 @@ export const BrandIdInput: React.FC<BrandIdInputProps> = ({
       if (!value) {
         // If field is empty, allow auto-generation again
         setHasUserModified(false);
-        setHasBlurred(false);
         setShouldCheck(false);
       } else if (brandName) {
         const generated = generateBrandId(brandName);
@@ -124,7 +122,6 @@ export const BrandIdInput: React.FC<BrandIdInputProps> = ({
   }, [onChange]);
 
   const handleInputBlur = useCallback(() => {
-    setHasBlurred(true);
     setShouldCheck(true);
   }, []);
 
@@ -178,11 +175,11 @@ export const BrandIdInput: React.FC<BrandIdInputProps> = ({
 
       {/* Suggestions */}
       {!disabled && suggestions.length > 0 && availabilityStatus === 'taken' && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+        <div className="bg-warning-50 border border-warning-200 rounded-lg p-4">
           <div className="flex items-start">
-            <ExclamationTriangleIcon className="h-5 w-5 text-yellow-400 mt-0.5 mr-2 flex-shrink-0" />
+            <ExclamationTriangleIcon className="h-5 w-5 text-warning-400 mt-0.5 mr-2 flex-shrink-0" />
             <div className="flex-1">
-              <h4 className="text-sm font-medium text-yellow-800 mb-2">
+              <h4 className="text-sm font-medium text-warning-800 mb-2">
                 Brand ID not available. Try these alternatives:
               </h4>
               <div className="flex flex-wrap gap-2">
@@ -191,7 +188,7 @@ export const BrandIdInput: React.FC<BrandIdInputProps> = ({
                     key={suggestion}
                     type="button"
                     onClick={() => handleSuggestionClick(suggestion)}
-                    className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 hover:bg-yellow-200 transition-colors"
+                    className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-warning-100 text-warning-800 hover:bg-warning-200 transition-colors"
                   >
                     {suggestion}
                   </button>
@@ -204,10 +201,10 @@ export const BrandIdInput: React.FC<BrandIdInputProps> = ({
 
       {/* Auto-generation notice */}
       {!disabled && !hasUserModified && brandName && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+        <div className="bg-primary-50 border border-primary-200 rounded-lg p-3">
           <div className="flex items-start">
-            <CheckCircleIcon className="h-4 w-4 text-blue-400 mt-0.5 mr-2 flex-shrink-0" />
-            <p className="text-xs text-blue-700">
+            <CheckCircleIcon className="h-4 w-4 text-primary-400 mt-0.5 mr-2 flex-shrink-0" />
+            <p className="text-xs text-primary-700">
               Brand ID auto-generated from your brand name. You can edit it if needed.
             </p>
           </div>

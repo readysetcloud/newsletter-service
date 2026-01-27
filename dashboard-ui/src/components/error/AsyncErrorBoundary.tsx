@@ -33,20 +33,20 @@ const AsyncErrorFallback: React.FC<{ onRetry?: () => void }> = ({ onRetry }) => 
   };
 
   return (
-    <div className="flex flex-col items-center justify-center p-8 bg-white rounded-lg shadow-sm border border-gray-200">
+    <div className="flex flex-col items-center justify-center p-8 bg-surface rounded-lg shadow-sm border border-border">
       <div className="flex justify-center mb-4">
         {isOnline ? (
-          <RefreshCw className="h-12 w-12 text-blue-500" />
+          <RefreshCw className="h-12 w-12 text-primary-500" />
         ) : (
-          <WifiOff className="h-12 w-12 text-red-500" />
+          <WifiOff className="h-12 w-12 text-error-500" />
         )}
       </div>
 
-      <h3 className="text-lg font-semibold text-gray-900 mb-2">
+      <h3 className="text-lg font-semibold text-foreground mb-2">
         {isOnline ? 'Loading Error' : 'Connection Lost'}
       </h3>
 
-      <p className="text-gray-600 text-center mb-6 max-w-md">
+      <p className="text-muted-foreground text-center mb-6 max-w-md">
         {isOnline
           ? 'There was an error loading this content. This might be a temporary issue with the server.'
           : 'Please check your internet connection and try again.'
@@ -55,11 +55,11 @@ const AsyncErrorFallback: React.FC<{ onRetry?: () => void }> = ({ onRetry }) => 
 
       <div className="flex items-center gap-2 mb-4">
         {isOnline ? (
-          <Wifi className="h-4 w-4 text-green-500" />
+          <Wifi className="h-4 w-4 text-success-500" />
         ) : (
-          <WifiOff className="h-4 w-4 text-red-500" />
+          <WifiOff className="h-4 w-4 text-error-500" />
         )}
-        <span className="text-sm text-gray-500">
+        <span className="text-sm text-muted-foreground">
           {isOnline ? 'Connected' : 'Offline'}
         </span>
       </div>
@@ -89,7 +89,7 @@ export const AsyncErrorBoundary: React.FC<AsyncErrorBoundaryProps> = ({
         console.error('Async Error:', error, errorInfo);
 
         // In production, categorize and send async errors
-        if (process.env.NODE_ENV === 'production') {
+        if (import.meta.env.PROD) {
           // Example: Send to error reporting service with async context
           // errorReportingService.captureException(error, {
           //   tags: { errorType: 'async' },

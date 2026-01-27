@@ -2,6 +2,7 @@ import { apiClient } from './api';
 import type {
   ApiResponse,
   UserProfile,
+  BrandInfo,
   BrandUpdateRequest,
   BrandPhotoUploadRequest,
   BrandPhotoUploadResponse,
@@ -35,15 +36,15 @@ export class ProfileService {
   /**
    * Update the user's personal profile information
    */
-  async updateProfile(data: ProfileUpdateRequest): Promise<ApiResponse<{ message: string; profile: any }>> {
-    return apiClient.put<{ message: string; profile: any }>('/me/profile', data);
+  async updateProfile(data: ProfileUpdateRequest): Promise<ApiResponse<{ message: string; profile: UserProfile }>> {
+    return apiClient.put<{ message: string; profile: UserProfile }>('/me/profile', data);
   }
 
   /**
    * Update the user's brand information
    */
-  async updateBrand(data: BrandUpdateRequest): Promise<ApiResponse<{ message: string; brand: any }>> {
-    return apiClient.put<{ message: string; brand: any }>('/me/brand', data);
+  async updateBrand(data: BrandUpdateRequest): Promise<ApiResponse<{ message: string; brand: BrandInfo }>> {
+    return apiClient.put<{ message: string; brand: BrandInfo }>('/me/brand', data);
   }
 
   /**

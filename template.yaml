@@ -78,6 +78,10 @@ Conditions:
   HasRedirectCustomDomain: !Not [!Equals [!Ref RedirectCustomDomain, ""]]
   HasVerifiedFromEmail: !Not [!Equals [!Ref VerifiedFromEmail, ""]]
   HasFrontendCustomDomain: !Not [!Equals [!Ref FrontendCustomDomain, ""]]
+  HasFrontendHostedZoneId: !Not [!Equals [!Ref FrontendHostedZoneId, ""]]
+  DeployFrontendCustomDomain: !And
+    - !Condition HasFrontendCustomDomain
+    - !Condition HasFrontendHostedZoneId
 
 Globals:
   Api:
@@ -461,11 +465,11 @@ Resources:
         HttpVersion: http2
         DefaultRootObject: index.html
         Aliases: !If
-          - HasFrontendCustomDomain
+          - DeployFrontendCustomDomain
           - [!Ref FrontendCustomDomain]
           - !Ref AWS::NoValue
         ViewerCertificate: !If
-          - HasFrontendCustomDomain
+          - DeployFrontendCustomDomain
           - AcmCertificateArn: !Ref FrontendCertificate
             SslSupportMethod: sni-only
             MinimumProtocolVersion: TLSv1.2_2021
@@ -499,7 +503,7 @@ Resources:
 
   FrontendCertificate:
     Type: AWS::CertificateManager::Certificate
-    Condition: HasFrontendCustomDomain
+    Condition: DeployFrontendCustomDomain
     Properties:
       DomainName: !Ref FrontendCustomDomain
       ValidationMethod: DNS
@@ -509,7 +513,7 @@ Resources:
 
   FrontendDNSRecord:
     Type: AWS::Route53::RecordSet
-    Condition: HasFrontendCustomDomain
+    Condition: DeployFrontendCustomDomain
     Properties:
       HostedZoneId: !Ref FrontendHostedZoneId
       Name: !Ref FrontendCustomDomain
@@ -3780,6 +3784,6 @@ Outputs:
   FrontendURL:
     Description: Frontend application URL
     Value: !If
-      - HasFrontendCustomDomain
+      - DeployFrontendCustomDomain
       - !Sub "https://${FrontendCustomDomain}"
       - !Sub "https://${FrontendDistribution.DomainName}"

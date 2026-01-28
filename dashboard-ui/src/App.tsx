@@ -15,6 +15,9 @@ import {
   LazyApiKeysPage,
   LazySenderEmailSetupPage,
   LazyBillingPage,
+  LazyIssuesListPage,
+  LazyIssueDetailPage,
+  LazyIssueFormPage,
   preloadCriticalRoutes
 } from '@/utils/lazyImports';
 import { BrandOnboardingPage, ProfileOnboardingPage, SenderOnboardingPage } from '@/pages/onboarding';
@@ -185,6 +188,62 @@ function App() {
                           <OnboardingGuard>
                             <PageLoader>
                               <LazyBillingPage />
+                            </PageLoader>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/issues"
+                    element={
+                      <RouteErrorBoundary routeName="Issues">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <PageLoader>
+                              <LazyIssuesListPage />
+                            </PageLoader>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/issues/new"
+                    element={
+                      <RouteErrorBoundary routeName="Create Issue">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <PageLoader>
+                              <LazyIssueFormPage />
+                            </PageLoader>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/issues/:id"
+                    element={
+                      <RouteErrorBoundary routeName="Issue Details">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <PageLoader>
+                              <LazyIssueDetailPage />
+                            </PageLoader>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/issues/:id/edit"
+                    element={
+                      <RouteErrorBoundary routeName="Edit Issue">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <PageLoader>
+                              <LazyIssueFormPage />
                             </PageLoader>
                           </OnboardingGuard>
                         </ProtectedRoute>

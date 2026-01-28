@@ -2,3 +2,16 @@
 export * from './api';
 export * from './app';
 export * from './billing';
+
+// Export issues types with explicit names to avoid conflicts
+export type {
+  IssueStatus,
+  IssueListItem,
+  IssueStats,
+  Issue as IssueDetail,
+  TopPerformer,
+  TrendsData,
+  CreateIssueRequest,
+  UpdateIssueRequest,
+  ListIssuesParams
+} from './issues';

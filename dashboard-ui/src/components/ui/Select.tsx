@@ -20,6 +20,8 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
     const hasError = !!error;
     const generatedId = useId();
     const selectId = id || `select-${generatedId}`;
+    const errorId = `${selectId}-error`;
+    const descriptionId = `${selectId}-description`;
 
     return (
       <div className="w-full">
@@ -32,6 +34,8 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
           <select
             ref={ref}
             id={selectId}
+            aria-describedby={error ? errorId : helperText ? descriptionId : undefined}
+            aria-invalid={hasError}
             className={cn(
               'block w-full rounded-md border-border shadow-sm',
               'focus:border-primary-500 focus:ring-ring',
@@ -55,14 +59,18 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
             ))}
           </select>
           <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
-            <ChevronDownIcon className="h-5 w-5 text-muted-foreground" />
+            <ChevronDownIcon className="h-5 w-5 text-muted-foreground" aria-hidden="true" />
           </div>
         </div>
         {error && (
-          <p className="mt-1 text-sm text-error-600">{error}</p>
+          <p className="mt-1 text-sm text-error-600" id={errorId} role="alert">
+            {error}
+          </p>
         )}
         {helperText && !error && (
-          <p className="mt-1 text-sm text-muted-foreground">{helperText}</p>
+          <p className="mt-1 text-sm text-muted-foreground" id={descriptionId}>
+            {helperText}
+          </p>
         )}
       </div>
     );

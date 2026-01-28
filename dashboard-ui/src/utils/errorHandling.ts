@@ -87,6 +87,16 @@ export function parseApiError(error: unknown): ErrorInfo {
     };
   }
 
+  // Handle conflict errors (409)
+  if (errorMessage?.includes('409') || errorMessage?.includes('Conflict')) {
+    return {
+      message: errorMessage,
+      type: 'validation',
+      retryable: false,
+      userFriendly: 'This action cannot be completed due to a conflict with the current state.',
+    };
+  }
+
   // Default unknown error
   return {
     message: errorMessage || 'An unexpected error occurred',
@@ -130,12 +140,46 @@ export function getUserFriendlyErrorMessage(error: unknown, context?: string): s
       case 'sender':
         return getSenderErrorMessage(error, errorInfo);
 
+      case 'issue':
+        return getIssueErrorMessage(error, errorInfo);
+
       default:
         return errorInfo.userFriendly;
     }
   }
 
   return errorInfo.userFriendly;
+}
+
+/**
+ * Get issue-specific error messages
+ */
+function getIssueErrorMessage(error: unknown, errorInfo: ErrorInfo): string {
+  const errorMessage = getErrorMessage(error);
+
+  // Handle 409 Conflict for issues
+  if (errorMessage?.includes('409') || errorMessage?.includes('Conflict') || errorMessage?.includes('cannot be modified')) {
+    return 'This issue cannot be edited or deleted because it has already been published or scheduled.';
+  }
+
+  // Handle 404 for issues
+  if (errorMessage?.includes('404') || errorMessage?.includes('not found')) {
+    return 'The issue you are looking for was not found. It may have been deleted.';
+  }
+
+  // Handle by error type for issue context
+  switch (errorInfo.type) {
+    case 'validation':
+      return 'Please check your issue information and try again.';
+    case 'authorization':
+      return 'You don\'t have permission to manage this issue.';
+    case 'network':
+      return 'Unable to connect to the server. Please check your internet connection and try again.';
+    case 'server':
+      return 'Our service is temporarily unavailable. Please try again in a few moments.';
+    default:
+      return `Issue operation failed: ${errorInfo.userFriendly}`;
+  }
 }
 
 /**

@@ -15,6 +15,7 @@ import {
   Bars3Icon,
   XMarkIcon
 } from '@heroicons/react/24/outline';
+import { FileText } from 'lucide-react';
 import { cn } from '../../utils/cn';
 
 export const MobileNavigation: React.FC = () => {
@@ -27,6 +28,7 @@ export const MobileNavigation: React.FC = () => {
 
   const baseNavigation = [
     { name: 'Dashboard', href: '/dashboard', icon: ChartBarIcon, preloadKey: 'dashboard' },
+    { name: 'Issues', href: '/issues', icon: FileText, preloadKey: 'issues' },
     { name: 'Brand', href: '/brand', icon: BuildingOfficeIcon, preloadKey: 'brand' },
     { name: 'Profile', href: '/profile', icon: UserIcon, preloadKey: 'profile' },
     { name: 'Sender Emails', href: '/senders', icon: EnvelopeIcon, preloadKey: 'senders' },
@@ -141,7 +143,9 @@ export const MobileNavigation: React.FC = () => {
           {/* Navigation */}
           <nav className="flex-1 px-4 py-6 space-y-2" role="navigation" aria-label="Mobile navigation">
             {navigation.map((item) => {
-              const isActive = location.pathname === item.href;
+              const isActive = item.href === '/issues'
+                ? location.pathname.startsWith('/issues')
+                : location.pathname === item.href;
               const Icon = item.icon;
 
               return (

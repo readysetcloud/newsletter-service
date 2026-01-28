@@ -14,6 +14,8 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
     const hasError = !!error;
     const generatedId = useId();
     const inputId = id || `input-${generatedId}`;
+    const errorId = `${inputId}-error`;
+    const descriptionId = `${inputId}-description`;
 
     return (
       <div className="w-full">
@@ -31,6 +33,8 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
           <input
             ref={ref}
             id={inputId}
+            aria-describedby={error ? errorId : helperText ? descriptionId : undefined}
+            aria-invalid={hasError}
             className={cn(
               'block w-full rounded-md border-border shadow-sm',
               'focus:border-primary-500 focus:ring-ring',
@@ -52,10 +56,14 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
           )}
         </div>
         {error && (
-          <p className="mt-1 text-sm text-error-600">{error}</p>
+          <p className="mt-1 text-sm text-error-600" id={errorId} role="alert">
+            {error}
+          </p>
         )}
         {helperText && !error && (
-          <p className="mt-1 text-sm text-muted-foreground">{helperText}</p>
+          <p className="mt-1 text-sm text-muted-foreground" id={descriptionId}>
+            {helperText}
+          </p>
         )}
       </div>
     );

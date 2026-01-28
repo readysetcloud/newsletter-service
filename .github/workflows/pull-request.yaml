@@ -26,7 +26,7 @@ jobs:
     environment: stage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install Rust toolchain with Cargo Lambda
         uses: moonrepo/setup-rust@v1
         with:
@@ -58,7 +58,7 @@ jobs:
           --capabilities CAPABILITY_IAM \
           --parameter-overrides Environment=stage EncryptionKey=${{secrets.ENCRYPTION_KEY}} VerifiedFromEmail=${{vars.VERIFIED_FROM_EMAIL}}
       - name: Setup Node.js for Frontend
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: 'npm'
@@ -76,7 +76,7 @@ jobs:
       pull-requests: write
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install Rust toolchain with Cargo Lambda
         uses: moonrepo/setup-rust@v1
         with:
@@ -108,7 +108,7 @@ jobs:
           --capabilities CAPABILITY_IAM \
           --parameter-overrides Environment=stage EncryptionKey=${{secrets.ENCRYPTION_KEY}} VerifiedFromEmail=${{vars.VERIFIED_FROM_EMAIL}}
       - name: Setup Node.js for Frontend
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: 'npm'
@@ -129,7 +129,7 @@ jobs:
       - name: Dependabot metadata
         id: dependabot-metadata
         uses: dependabot/fetch-metadata@v2
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Approve a PR if not already approved
         if: ${{ steps.dependabot-metadata.outputs.update-type == 'version-update:semver-minor' || steps.dependabot-metadata.outputs.update-type == 'version-update:semver-patch' || steps.dependabot-metadata.outputs.package-ecosystem == 'github_actions' }}
         env:

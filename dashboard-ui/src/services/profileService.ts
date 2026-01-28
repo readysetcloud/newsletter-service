@@ -30,21 +30,21 @@ export class ProfileService {
    * Get the current user's complete profile
    */
   async getProfile(): Promise<ApiResponse<UserProfile>> {
-    return apiClient.get<UserProfile>('/admin/me');
+    return apiClient.get<UserProfile>('/me');
   }
 
   /**
    * Update the user's personal profile information
    */
   async updateProfile(data: ProfileUpdateRequest): Promise<ApiResponse<{ message: string; profile: UserProfile }>> {
-    return apiClient.put<{ message: string; profile: UserProfile }>('/admin/me/profile', data);
+    return apiClient.put<{ message: string; profile: UserProfile }>('/me', data);
   }
 
   /**
    * Update the user's brand information
    */
   async updateBrand(data: BrandUpdateRequest): Promise<ApiResponse<{ message: string; brand: BrandInfo }>> {
-    return apiClient.put<{ message: string; brand: BrandInfo }>('/admin/me/brand', data);
+    return apiClient.put<{ message: string; brand: BrandInfo }>('/me/brand', data);
   }
 
   /**

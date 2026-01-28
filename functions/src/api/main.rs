@@ -1,10 +1,10 @@
 use lambda_http::{run, service_fn, Body, Error, Request, Response};
-use newsletter_lambdas::senders::error::AppError;
-use newsletter_lambdas::senders::response::format_error_response;
+use newsletter::admin::error::AppError as AdminError;
+use newsletter::admin::format_error_response;
+use newsletter::senders::error::AppError as SendersError;
 
-mod domain;
+mod controllers;
 mod router;
-mod senders;
 
 async fn function_handler(event: Request) -> Result<Response<Body>, Error> {
     router::route_request(event).await
@@ -23,10 +23,15 @@ async fn main() -> Result<(), Error> {
             Err(e) => {
                 tracing::error!(error = %e, "Request handling failed");
 
-                if let Some(app_err) = e.downcast_ref::<AppError>() {
-                    Ok(format_error_response(app_err))
+                // Try to downcast to known error types
+                if let Some(admin_err) = e.downcast_ref::<AdminError>() {
+                    Ok(format_error_response(admin_err))
+                } else if let Some(senders_err) = e.downcast_ref::<SendersError>() {
+                    Ok(newsletter::senders::response::format_error_response(
+                        senders_err,
+                    ))
                 } else {
-                    Ok(format_error_response(&AppError::InternalError(
+                    Ok(format_error_response(&AdminError::InternalError(
                         e.to_string(),
                     )))
                 }

@@ -447,9 +447,8 @@ async fn delete_api_key(
         .await
         .map_err(|err| ManageApiKeysError::Other(format!("DynamoDB delete failed: {}", err)))?;
 
-    Response::builder()
-        .status(204)
-        .body(Body::Empty)
+    // Use format_response to ensure CORS headers are included
+    format_response(204, json!({}))
         .map_err(|err| ManageApiKeysError::Other(format!("Response build failed: {}", err)))
 }
 

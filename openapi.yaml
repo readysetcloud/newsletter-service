@@ -18,33 +18,6 @@ info:
     - Shared authentication and authorization logic
   version: 1.0.0
 
-x-amazon-apigateway-request-validators:
-  Validate All:
-    validateRequestParameters: true
-    validateRequestBody: true
-x-amazon-apigateway-gateway-responses:
-  BAD_REQUEST_BODY:
-    statusCode: 400
-    responseTemplates:
-      application/json: '{ "message": "$context.error.validationErrorString" }'
-    responseParameters:
-      gatewayresponse.header.Access-Control-Allow-Origin:
-        Fn::Sub: "'${Origin}'"
-      gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
-      gatewayresponse.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-  DEFAULT_4XX:
-    responseParameters:
-      gatewayresponse.header.Access-Control-Allow-Origin:
-        Fn::Sub: "'${Origin}'"
-      gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
-      gatewayresponse.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-  DEFAULT_5XX:
-    responseParameters:
-      gatewayresponse.header.Access-Control-Allow-Origin:
-        Fn::Sub: "'${Origin}'"
-      gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
-      gatewayresponse.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-
 tags:
   - name: API Keys
   - name: Profile
@@ -55,22 +28,16 @@ paths:
     get:
       summary: Dashboard
       responses:
-        200:
+        "200":
           description: Load summary data for a dashboard
           content:
             application/json:
               schema:
                 type: object
-        404:
+        "404":
           $ref: "#/components/responses/NotFound"
-        500:
+        "500":
           $ref: "#/components/responses/UnknownError"
-      x-amazon-apigateway-request-validator: Validate All
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetDashboardDataFunction.Arn}/invocations
-        httpMethod: POST
-        type: aws_proxy
 
   /me:
     get:
@@ -79,7 +46,7 @@ paths:
       tags:
         - Profile
       responses:
-        200:
+        "200":
           description: Complete user profile
           content:
             application/json:
@@ -159,17 +126,12 @@ paths:
                     type: string
                     format: date-time
                     nullable: true
-        403:
+        "403":
           $ref: "#/components/responses/Forbidden"
-        404:
+        "404":
           $ref: "#/components/responses/NotFound"
-        500:
+        "500":
           $ref: "#/components/responses/UnknownError"
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminFunction.Arn}/invocations
-        httpMethod: POST
-        type: aws_proxy
 
   /profiles/{userId}:
     parameters:
@@ -185,7 +147,7 @@ paths:
       tags:
         - Profile
       responses:
-        200:
+        "200":
           description: Public user profile
           content:
             application/json:
@@ -237,17 +199,12 @@ paths:
                   lastModified:
                     type: string
                     format: date-time
-        403:
+        "403":
           $ref: "#/components/responses/Forbidden"
-        404:
+        "404":
           $ref: "#/components/responses/NotFound"
-        500:
+        "500":
           $ref: "#/components/responses/UnknownError"
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminFunction.Arn}/invocations
-        httpMethod: POST
-        type: aws_proxy
 
   /brand/logo:
     post:
@@ -282,7 +239,7 @@ paths:
                   description: MIME type of the image file
               additionalProperties: false
       responses:
-        200:
+        "200":
           description: Presigned URL generated successfully
           content:
             application/json:
@@ -304,18 +261,12 @@ paths:
                   publicUrl:
                     type: string
                     description: Public URL where the file will be accessible
-        400:
+        "400":
           $ref: "#/components/responses/BadRequest"
-        403:
+        "403":
           $ref: "#/components/responses/Forbidden"
-        500:
+        "500":
           $ref: "#/components/responses/UnknownError"
-      x-amazon-apigateway-request-validator: Validate All
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminFunction.Arn}/invocations
-        httpMethod: POST
-        type: aws_proxy
 
     put:
       summary: Confirm brand photo upload
@@ -339,7 +290,7 @@ paths:
                   description: Original file name
               additionalProperties: false
       responses:
-        200:
+        "200":
           description: Brand photo confirmed and tenant record updated
           content:
             application/json:
@@ -354,20 +305,14 @@ paths:
                   key:
                     type: string
                     description: S3 key of the uploaded file
-        400:
+        "400":
           $ref: "#/components/responses/BadRequest"
-        403:
+        "403":
           $ref: "#/components/responses/Forbidden"
-        404:
+        "404":
           $ref: "#/components/responses/NotFound"
-        500:
+        "500":
           $ref: "#/components/responses/UnknownError"
-      x-amazon-apigateway-request-validator: Validate All
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminFunction.Arn}/invocations
-        httpMethod: POST
-        type: aws_proxy
 
   /brand/validate:
     get:
@@ -384,7 +329,7 @@ paths:
             pattern: "^[a-z]+$"
           description: The brand ID to validate for availability
       responses:
-        200:
+        "200":
           description: Brand ID availability check result
           content:
             application/json:
@@ -405,17 +350,12 @@ paths:
                   error:
                     type: string
                     description: Error message if brand ID format is invalid
-        400:
+        "400":
           $ref: "#/components/responses/BadRequest"
-        403:
+        "403":
           $ref: "#/components/responses/Forbidden"
-        500:
+        "500":
           $ref: "#/components/responses/UnknownError"
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminFunction.Arn}/invocations
-        httpMethod: POST
-        type: aws_proxy
 
   /me/brand:
     put:
@@ -467,7 +407,7 @@ paths:
               additionalProperties: false
               minProperties: 1
       responses:
-        200:
+        "200":
           description: Brand details updated successfully
           content:
             application/json:
@@ -502,20 +442,14 @@ paths:
                       updatedAt:
                         type: string
                         format: date-time
-        400:
+        "400":
           $ref: "#/components/responses/BadRequest"
-        403:
+        "403":
           $ref: "#/components/responses/Forbidden"
-        404:
+        "404":
           $ref: "#/components/responses/NotFound"
-        500:
+        "500":
           $ref: "#/components/responses/UnknownError"
-      x-amazon-apigateway-request-validator: Validate All
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminFunction.Arn}/invocations
-        httpMethod: POST
-        type: aws_proxy
 
   /me/profile:
     put:
@@ -564,7 +498,7 @@ paths:
               additionalProperties: false
               minProperties: 1
       responses:
-        200:
+        "200":
           description: Personal profile updated successfully
           content:
             application/json:
@@ -601,20 +535,14 @@ paths:
                       updatedAt:
                         type: string
                         format: date-time
-        400:
+        "400":
           $ref: "#/components/responses/BadRequest"
-        403:
+        "403":
           $ref: "#/components/responses/Forbidden"
-        404:
+        "404":
           $ref: "#/components/responses/NotFound"
-        500:
+        "500":
           $ref: "#/components/responses/UnknownError"
-      x-amazon-apigateway-request-validator: Validate All
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminFunction.Arn}/invocations
-        httpMethod: POST
-        type: aws_proxy
 
   /api-keys:
     post:
@@ -645,7 +573,7 @@ paths:
                   description: Optional expiration date (ISO 8601 format)
               additionalProperties: false
       responses:
-        201:
+        "201":
           description: API key created successfully
           content:
             application/json:
@@ -680,18 +608,12 @@ paths:
                         nullable: true
                       status:
                         type: string
-        400:
+        "400":
           $ref: "#/components/responses/BadRequest"
-        403:
+        "403":
           $ref: "#/components/responses/Forbidden"
-        500:
+        "500":
           $ref: "#/components/responses/UnknownError"
-      x-amazon-apigateway-request-validator: Validate All
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminFunction.Arn}/invocations
-        httpMethod: POST
-        type: aws_proxy
 
     get:
       summary: List API keys
@@ -699,7 +621,7 @@ paths:
       tags:
         - API Keys
       responses:
-        200:
+        "200":
           description: List of API keys
           content:
             application/json:
@@ -745,15 +667,10 @@ paths:
                           nullable: true
                   count:
                     type: number
-        403:
+        "403":
           $ref: "#/components/responses/Forbidden"
-        500:
+        "500":
           $ref: "#/components/responses/UnknownError"
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminFunction.Arn}/invocations
-        httpMethod: POST
-        type: aws_proxy
 
   /api-keys/{keyId}:
     parameters:
@@ -769,7 +686,7 @@ paths:
       tags:
         - API Keys
       responses:
-        200:
+        "200":
           description: API key details
           content:
             application/json:
@@ -811,17 +728,12 @@ paths:
                         type: string
                         format: date-time
                         nullable: true
-        403:
+        "403":
           $ref: "#/components/responses/Forbidden"
-        404:
+        "404":
           $ref: "#/components/responses/NotFound"
-        500:
+        "500":
           $ref: "#/components/responses/UnknownError"
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminFunction.Arn}/invocations
-        httpMethod: POST
-        type: aws_proxy
 
     delete:
       summary: Delete or revoke API key
@@ -836,7 +748,7 @@ paths:
             type: boolean
           description: If true, revokes the API key instead of deleting it
       responses:
-        200:
+        "200":
           description: API key deleted or revoked successfully
           content:
             application/json:
@@ -854,21 +766,16 @@ paths:
                     type: string
                     format: date-time
                     description: Only present when revoking
-        204:
+        "204":
           description: API key deleted successfully (no content)
-        400:
+        "400":
           $ref: "#/components/responses/BadRequest"
-        403:
+        "403":
           $ref: "#/components/responses/Forbidden"
-        404:
+        "404":
           $ref: "#/components/responses/NotFound"
-        500:
+        "500":
           $ref: "#/components/responses/UnknownError"
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminFunction.Arn}/invocations
-        httpMethod: POST
-        type: aws_proxy
 
   /senders:
     get:
@@ -876,7 +783,7 @@ paths:
       tags:
         - Senders
       responses:
-        200:
+        "200":
           description: List of sender emails with tier limits
           content:
             application/json:
@@ -889,15 +796,11 @@ paths:
                       $ref: "#/components/schemas/SenderEmail"
                   tierLimits:
                     $ref: "#/components/schemas/TierLimits"
-        403:
+        "403":
           $ref: "#/components/responses/Forbidden"
-        500:
+        "500":
           $ref: "#/components/responses/UnknownError"
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetSendersFunction.Arn}/invocations
-        httpMethod: POST
-        type: aws_proxy
+
     post:
       summary: Create a new sender email
       tags:
@@ -909,17 +812,17 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateSenderRequest"
       responses:
-        201:
+        "201":
           description: Sender email created successfully
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/SenderEmail"
-        400:
+        "400":
           $ref: "#/components/responses/BadRequest"
-        403:
+        "403":
           $ref: "#/components/responses/Forbidden"
-        409:
+        "409":
           description: Tier limit exceeded or email already exists
           content:
             application/json:
@@ -930,13 +833,8 @@ paths:
                     type: string
                   tierLimits:
                     $ref: "#/components/schemas/TierLimits"
-        500:
+        "500":
           $ref: "#/components/responses/UnknownError"
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CreateSenderFunction.Arn}/invocations
-        httpMethod: POST
-        type: aws_proxy
 
   /senders/{senderId}:
     parameters:
@@ -951,7 +849,7 @@ paths:
       tags:
         - Senders
       responses:
-        200:
+        "200":
           description: Current sender verification status
           content:
             application/json:
@@ -997,17 +895,13 @@ paths:
                   lastChecked:
                     type: string
                     format: date-time
-        403:
+        "403":
           $ref: "#/components/responses/Forbidden"
-        404:
+        "404":
           $ref: "#/components/responses/NotFound"
-        500:
+        "500":
           $ref: "#/components/responses/UnknownError"
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetSenderStatusFunction.Arn}/invocations
-        httpMethod: POST
-        type: aws_proxy
+
     put:
       summary: Update sender email
       tags:
@@ -1019,43 +913,34 @@ paths:
             schema:
               $ref: "#/components/schemas/UpdateSenderRequest"
       responses:
-        200:
+        "200":
           description: Sender email updated successfully
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/SenderEmail"
-        400:
+        "400":
           $ref: "#/components/responses/BadRequest"
-        403:
+        "403":
           $ref: "#/components/responses/Forbidden"
-        404:
+        "404":
           $ref: "#/components/responses/NotFound"
-        500:
+        "500":
           $ref: "#/components/responses/UnknownError"
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UpdateSenderFunction.Arn}/invocations
-        httpMethod: POST
-        type: aws_proxy
+
     delete:
       summary: Delete sender email
       tags:
         - Senders
       responses:
-        204:
+        "204":
           description: Sender email deleted successfully
-        403:
+        "403":
           $ref: "#/components/responses/Forbidden"
-        404:
+        "404":
           $ref: "#/components/responses/NotFound"
-        500:
+        "500":
           $ref: "#/components/responses/UnknownError"
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DeleteSenderFunction.Arn}/invocations
-        httpMethod: POST
-        type: aws_proxy
 
   /senders/{senderId}/status:
     parameters:
@@ -1071,7 +956,7 @@ paths:
       tags:
         - Senders
       responses:
-        200:
+        "200":
           description: Current sender verification status
           content:
             application/json:
@@ -1133,17 +1018,12 @@ paths:
                   lastChecked:
                     type: string
                     format: date-time
-        403:
+        "403":
           $ref: "#/components/responses/Forbidden"
-        404:
+        "404":
           $ref: "#/components/responses/NotFound"
-        500:
+        "500":
           $ref: "#/components/responses/UnknownError"
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetSenderStatusFunction.Arn}/invocations
-        httpMethod: POST
-        type: aws_proxy
 
   /senders/verify-domain:
     post:
@@ -1157,25 +1037,20 @@ paths:
             schema:
               $ref: "#/components/schemas/VerifyDomainRequest"
       responses:
-        201:
+        "201":
           description: Domain verification initiated
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/DomainVerification"
-        400:
+        "400":
           $ref: "#/components/responses/BadRequest"
-        403:
+        "403":
           $ref: "#/components/responses/Forbidden"
-        409:
+        "409":
           description: Domain already verified or verification in progress
-        500:
+        "500":
           $ref: "#/components/responses/UnknownError"
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${VerifyDomainFunction.Arn}/invocations
-        httpMethod: POST
-        type: aws_proxy
 
   /senders/domain-verification/{domain}:
     parameters:
@@ -1190,23 +1065,18 @@ paths:
       tags:
         - Senders
       responses:
-        200:
+        "200":
           description: Domain verification details
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/DomainVerification"
-        403:
+        "403":
           $ref: "#/components/responses/Forbidden"
-        404:
+        "404":
           $ref: "#/components/responses/NotFound"
-        500:
+        "500":
           $ref: "#/components/responses/UnknownError"
-      x-amazon-apigateway-integration:
-        uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetDomainVerificationFunction.Arn}/invocations
-        httpMethod: POST
-        type: aws_proxy
 
 components:
   parameters:

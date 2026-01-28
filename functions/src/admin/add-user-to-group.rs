@@ -1,5 +1,5 @@
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
-use newsletter_lambdas::admin::{aws_clients, AppError};
+use newsletter::admin::{aws_clients, AppError};
 use serde::Deserialize;
 use serde_json::Value;
 

@@ -1,6 +1,6 @@
 use aws_sdk_dynamodb::types::AttributeValue;
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
-use newsletter_lambdas::ai::{
+use newsletter::ai::{
     bedrock::converse,
     error::FunctionError,
     models::{ErrorResponse, GenerateSocialPostEvent, GenerateSocialPostResponse},

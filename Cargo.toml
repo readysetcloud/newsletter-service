@@ -1,5 +1,5 @@
 [package]
-name = "newsletter-lambdas"
+name = "newsletter"
 version = "0.1.0"
 edition = "2021"
 
@@ -49,8 +49,8 @@ name = "add-user-to-group"
 path = "functions/src/admin/add-user-to-group.rs"
 
 [[bin]]
-name = "admin-router"
-path = "functions/src/admin/main.rs"
+name = "api-router"
+path = "functions/src/api/main.rs"
 
 [[bin]]
 name = "unsubscribe-log-processor"
@@ -75,10 +75,6 @@ path = "functions/src/ai/generate-insights.rs"
 [[bin]]
 name = "generate-social-post"
 path = "functions/src/ai/generate-social-post.rs"
-
-[[bin]]
-name = "senders-router"
-path = "functions/src/senders/main.rs"
 
 [[bin]]
 name = "bootstrap-verification-template"

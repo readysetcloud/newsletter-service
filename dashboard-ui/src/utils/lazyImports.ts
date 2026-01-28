@@ -65,6 +65,30 @@ export const LazyBillingPage = lazy(() =>
     })
 );
 
+export const LazyIssuesListPage = lazy(() =>
+  import('@/pages/issues').then(module => ({ default: module.IssuesListPage }))
+    .catch(error => {
+      console.error('Failed to load IssuesListPage:', error);
+      throw error;
+    })
+);
+
+export const LazyIssueDetailPage = lazy(() =>
+  import('@/pages/issues').then(module => ({ default: module.IssueDetailPage }))
+    .catch(error => {
+      console.error('Failed to load IssueDetailPage:', error);
+      throw error;
+    })
+);
+
+export const LazyIssueFormPage = lazy(() =>
+  import('@/pages/issues').then(module => ({ default: module.IssueFormPage }))
+    .catch(error => {
+      console.error('Failed to load IssueFormPage:', error);
+      throw error;
+    })
+);
+
 // Preload critical routes
 export const preloadCriticalRoutes = () => {
   // Preload dashboard since it's the default route
@@ -101,6 +125,9 @@ export const preloadRoute = (routeName: string) => {
       break;
     case 'billing':
       import('@/pages/billing');
+      break;
+    case 'issues':
+      import('@/pages/issues');
       break;
     case 'login':
       import('@/pages/auth/LoginPage');

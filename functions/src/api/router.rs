@@ -1,7 +1,7 @@
 use lambda_http::{http::Method, Body, Error, Request, Response};
 use serde_json::json;
 
-use crate::controllers::{api_keys, brand, domain, profile, senders};
+use crate::controllers::{api_keys, brand, domain, issues, profile, senders};
 
 pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
     let method = event.method();
@@ -69,6 +69,23 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
             domain::get_domain_verification(event, domain_param).await
         }
 
+        // Issues endpoints
+        (&Method::GET, "/issues") => issues::list_issues(event).await,
+        (&Method::GET, "/issues/trends") => issues::get_trends(event).await,
+        (&Method::POST, "/issues") => issues::create_issue(event).await,
+        (&Method::GET, path) if path.starts_with("/issues/") => {
+            let issue_id = extract_path_param(path, "/issues/");
+            issues::get_issue(event, issue_id).await
+        }
+        (&Method::PUT, path) if path.starts_with("/issues/") => {
+            let issue_id = extract_path_param(path, "/issues/");
+            issues::update_issue(event, issue_id).await
+        }
+        (&Method::DELETE, path) if path.starts_with("/issues/") => {
+            let issue_id = extract_path_param(path, "/issues/");
+            issues::delete_issue(event, issue_id).await
+        }
+
         // Method not allowed for valid paths
         (_, path) if is_valid_api_path(path) => Ok(format_method_not_allowed()),
 
@@ -98,6 +115,10 @@ fn is_valid_api_path(path: &str) -> bool {
         || path.starts_with("/senders/")
         || path == "/senders/domain"
         || path.starts_with("/senders/domain/")
+        // Issues paths
+        || path == "/issues"
+        || path == "/issues/trends"
+        || path.starts_with("/issues/")
 }
 
 fn extract_path_param(path: &str, prefix: &str) -> Option<String> {
@@ -221,6 +242,14 @@ mod tests {
     }
 
     #[test]
+    fn test_is_valid_api_path_issues() {
+        assert!(is_valid_api_path("/issues"));
+        assert!(is_valid_api_path("/issues/trends"));
+        assert!(is_valid_api_path("/issues/issue-123"));
+        assert!(is_valid_api_path("/issues/tenant-456#789"));
+    }
+
+    #[test]
     fn test_is_valid_api_path_invalid() {
         assert!(!is_valid_api_path("/invalid"));
         assert!(!is_valid_api_path("/api/profile"));
@@ -260,6 +289,28 @@ mod tests {
         // Senders has special handling for /status suffix
         assert!(is_valid_api_path("/senders/sender-123/status"));
         assert!(is_valid_api_path("/senders/domain"));
+    }
+
+    #[test]
+    fn test_route_matching_issues_paths() {
+        // Issues paths
+        assert!(is_valid_api_path("/issues"));
+        assert!(is_valid_api_path("/issues/trends"));
+        assert!(is_valid_api_path("/issues/issue-123"));
+        assert!(is_valid_api_path("/issues/tenant-abc#456"));
+    }
+
+    #[test]
+    fn test_extract_issue_id_from_path() {
+        // Test issue ID extraction using existing extract_path_param
+        let result = extract_path_param("/issues/issue-123", "/issues/");
+        assert_eq!(result, Some("issue-123".to_string()));
+
+        let result = extract_path_param("/issues/tenant-abc#456", "/issues/");
+        assert_eq!(result, Some("tenant-abc#456".to_string()));
+
+        let result = extract_path_param("/issues/", "/issues/");
+        assert_eq!(result, None);
     }
 
     #[test]
@@ -335,6 +386,14 @@ mod tests {
         // Domain: POST verify, GET status
         assert!(is_valid_api_path("/senders/domain"));
         assert!(is_valid_api_path("/senders/domain/example.com"));
+    }
+
+    #[test]
+    fn test_method_validation_issues_endpoints() {
+        // Issues: GET list, GET trends, GET single, POST create, PUT update, DELETE
+        assert!(is_valid_api_path("/issues"));
+        assert!(is_valid_api_path("/issues/trends"));
+        assert!(is_valid_api_path("/issues/issue-123"));
     }
 
     // CORS handling tests

@@ -27,6 +27,9 @@ pub enum AppError {
     #[error("Permission denied: {0}")]
     Forbidden(String),
 
+    #[error("Operation not allowed: {0}")]
+    Conflict(String),
+
     #[error("AWS service error: {0}")]
     AwsError(String),
 
@@ -41,6 +44,7 @@ impl AppError {
             AppError::BadRequest(_) => 400,
             AppError::NotFound(_) => 404,
             AppError::Forbidden(_) => 403,
+            AppError::Conflict(_) => 409,
             AppError::AwsError(_) => 500,
             AppError::InternalError(_) => 500,
         }

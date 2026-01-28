@@ -1145,6 +1145,10 @@ Resources:
                 - !Sub "${NewsletterTable.Arn}/index/*"
             - Effect: Allow
               Action:
+                - events:PutEvents
+              Resource: !Sub "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
+            - Effect: Allow
+              Action:
                 - cognito-idp:AdminGetUser
                 - cognito-idp:AdminUpdateUserAttributes
                 - cognito-idp:ListUsers

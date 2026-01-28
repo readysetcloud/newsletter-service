@@ -1,11 +1,13 @@
 use aws_sdk_cognitoidentityprovider::Client as CognitoClient;
 use aws_sdk_dynamodb::Client as DynamoDbClient;
+use aws_sdk_eventbridge::Client as EventBridgeClient;
 use aws_sdk_s3::Client as S3Client;
 use tokio::sync::OnceCell;
 
 static DYNAMODB_CLIENT: OnceCell<DynamoDbClient> = OnceCell::const_new();
 static COGNITO_CLIENT: OnceCell<CognitoClient> = OnceCell::const_new();
 static S3_CLIENT: OnceCell<S3Client> = OnceCell::const_new();
+static EVENTBRIDGE_CLIENT: OnceCell<EventBridgeClient> = OnceCell::const_new();
 
 pub async fn get_dynamodb_client() -> &'static DynamoDbClient {
     DYNAMODB_CLIENT
@@ -30,6 +32,15 @@ pub async fn get_s3_client() -> &'static S3Client {
         .get_or_init(|| async {
             let config = aws_config::load_from_env().await;
             S3Client::new(&config)
+        })
+        .await
+}
+
+pub async fn get_eventbridge_client() -> &'static EventBridgeClient {
+    EVENTBRIDGE_CLIENT
+        .get_or_init(|| async {
+            let config = aws_config::load_from_env().await;
+            EventBridgeClient::new(&config)
         })
         .await
 }

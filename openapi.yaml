@@ -22,6 +22,7 @@ tags:
   - name: API Keys
   - name: Profile
   - name: Senders
+  - name: Issues
 
 paths:
   /dashboard:
@@ -1078,6 +1079,174 @@ paths:
         "500":
           $ref: "#/components/responses/UnknownError"
 
+  /issues:
+    get:
+      summary: List all issues
+      description: Retrieves a paginated list of newsletter issues for the authenticated user's tenant
+      tags:
+        - Issues
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          description: Maximum number of issues to return (default 20, max 100)
+        - name: nextToken
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Pagination token from previous response
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [draft, scheduled, published, failed]
+          description: Filter issues by status
+      responses:
+        "200":
+          description: List of issues
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListIssuesResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+    post:
+      summary: Create a new issue
+      description: Creates a new draft newsletter issue
+      tags:
+        - Issues
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateIssueRequest"
+      responses:
+        "201":
+          description: Issue created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateIssueResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /issues/trends:
+    get:
+      summary: Get issue performance trends
+      description: Retrieves aggregated performance metrics and trends across all issues
+      tags:
+        - Issues
+      parameters:
+        - name: timeRange
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [7d, 30d, 90d, all]
+            default: 30d
+          description: Time range for trend analysis (7 days, 30 days, 90 days, or all time)
+      responses:
+        "200":
+          description: Issue trends and performance metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrendsResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /issues/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The issue ID (format: tenantId#issueNumber)
+    get:
+      summary: Get a single issue
+      description: Retrieves detailed information about a specific issue including content and statistics
+      tags:
+        - Issues
+      responses:
+        "200":
+          description: Issue details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetIssueResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+    put:
+      summary: Update an issue
+      description: Updates an existing draft issue (published/scheduled issues cannot be updated)
+      tags:
+        - Issues
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateIssueRequest"
+      responses:
+        "200":
+          description: Issue updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetIssueResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+    delete:
+      summary: Delete an issue
+      description: Permanently deletes a draft issue (published/scheduled issues cannot be deleted)
+      tags:
+        - Issues
+      responses:
+        "204":
+          description: Issue deleted successfully
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
 components:
   parameters:
     Tenant:
@@ -1141,6 +1310,19 @@ components:
                 type: string
                 description: The requested entity was not found
                 example: Vote not found
+    Conflict:
+      description: The request conflicts with the current state of the resource
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - message
+            properties:
+              message:
+                type: string
+                description: Explanation of the conflict
+                example: Cannot modify published issues
     UnknownError:
       description: An unexpected error occurred on the server.
       content:
@@ -1327,3 +1509,273 @@ components:
         domain:
           type: string
           description: Domain name to verify
+
+    ListIssuesResponse:
+      type: object
+      required:
+        - issues
+      properties:
+        issues:
+          type: array
+          items:
+            $ref: "#/components/schemas/IssueListItem"
+          description: List of issues
+        nextToken:
+          type: string
+          description: Pagination token for next page (only present if more results available)
+
+    IssueListItem:
+      type: object
+      required:
+        - id
+        - issueNumber
+        - title
+        - slug
+        - status
+        - createdAt
+      properties:
+        id:
+          type: string
+          description: Issue identifier (format: tenantId#issueNumber)
+        issueNumber:
+          type: integer
+          description: Sequential issue number
+        title:
+          type: string
+          description: Issue title
+        slug:
+          type: string
+          description: URL-friendly slug
+        status:
+          type: string
+          enum: [draft, scheduled, published, failed]
+          description: Current issue status
+        createdAt:
+          type: string
+          format: date-time
+          description: When the issue was created
+        publishedAt:
+          type: string
+          format: date-time
+          description: When the issue was published (only for published issues)
+        scheduledAt:
+          type: string
+          format: date-time
+          description: When the issue is scheduled to be published (only for scheduled issues)
+
+    CreateIssueRequest:
+      type: object
+      required:
+        - title
+        - content
+        - slug
+      properties:
+        title:
+          type: string
+          maxLength: 200
+          description: Issue title
+        content:
+          type: string
+          description: Issue content in markdown format
+        slug:
+          type: string
+          maxLength: 100
+          pattern: "^[a-z0-9-]+$"
+          description: URL-friendly slug (lowercase, numbers, hyphens only)
+        metadata:
+          type: object
+          description: Optional metadata for the issue
+
+    CreateIssueResponse:
+      type: object
+      required:
+        - id
+        - issueNumber
+        - title
+        - slug
+        - status
+        - content
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          description: Issue identifier (format: tenantId#issueNumber)
+        issueNumber:
+          type: integer
+          description: Sequential issue number
+        title:
+          type: string
+          description: Issue title
+        slug:
+          type: string
+          description: URL-friendly slug
+        status:
+          type: string
+          enum: [draft]
+          description: Issue status (always 'draft' for new issues)
+        content:
+          type: string
+          description: Issue content in markdown format
+        createdAt:
+          type: string
+          format: date-time
+          description: When the issue was created
+        updatedAt:
+          type: string
+          format: date-time
+          description: When the issue was last updated
+
+    GetIssueResponse:
+      type: object
+      required:
+        - id
+        - issueNumber
+        - title
+        - slug
+        - status
+        - content
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          description: Issue identifier (format: tenantId#issueNumber)
+        issueNumber:
+          type: integer
+          description: Sequential issue number
+        title:
+          type: string
+          description: Issue title
+        slug:
+          type: string
+          description: URL-friendly slug
+        status:
+          type: string
+          enum: [draft, scheduled, published, failed]
+          description: Current issue status
+        content:
+          type: string
+          description: Issue content in markdown format
+        createdAt:
+          type: string
+          format: date-time
+          description: When the issue was created
+        updatedAt:
+          type: string
+          format: date-time
+          description: When the issue was last updated
+        publishedAt:
+          type: string
+          format: date-time
+          description: When the issue was published (only for published issues)
+        scheduledAt:
+          type: string
+          format: date-time
+          description: When the issue is scheduled to be published (only for scheduled issues)
+        metadata:
+          type: object
+          description: Optional metadata for the issue
+        stats:
+          $ref: "#/components/schemas/IssueStats"
+
+    UpdateIssueRequest:
+      type: object
+      minProperties: 1
+      properties:
+        title:
+          type: string
+          maxLength: 200
+          description: Issue title
+        content:
+          type: string
+          description: Issue content in markdown format
+        slug:
+          type: string
+          maxLength: 100
+          pattern: "^[a-z0-9-]+$"
+          description: URL-friendly slug (lowercase, numbers, hyphens only)
+        scheduledAt:
+          type: string
+          format: date-time
+          description: When to schedule the issue for publishing
+        metadata:
+          type: object
+          description: Optional metadata for the issue
+
+    IssueStats:
+      type: object
+      required:
+        - opens
+        - clicks
+        - deliveries
+        - bounces
+        - complaints
+      properties:
+        opens:
+          type: integer
+          description: Number of email opens
+        clicks:
+          type: integer
+          description: Number of link clicks
+        deliveries:
+          type: integer
+          description: Number of successful deliveries
+        bounces:
+          type: integer
+          description: Number of bounced emails
+        complaints:
+          type: integer
+          description: Number of spam complaints
+
+    TrendsResponse:
+      type: object
+      required:
+        - totalIssues
+        - publishedCount
+        - avgOpenRate
+        - avgClickRate
+        - topPerformers
+      properties:
+        totalIssues:
+          type: integer
+          description: Total number of issues
+        publishedCount:
+          type: integer
+          description: Number of published issues
+        avgOpenRate:
+          type: number
+          format: double
+          description: Average open rate across all published issues
+        avgClickRate:
+          type: number
+          format: double
+          description: Average click rate across all published issues
+        topPerformers:
+          type: array
+          items:
+            $ref: "#/components/schemas/TopPerformer"
+          description: Top performing issues by engagement
+
+    TopPerformer:
+      type: object
+      required:
+        - id
+        - title
+        - openRate
+        - clickRate
+      properties:
+        id:
+          type: string
+          description: Issue identifier
+        title:
+          type: string
+          description: Issue title
+        openRate:
+          type: number
+          format: double
+          description: Open rate for this issue
+        clickRate:
+          type: number
+          format: double
+          description: Click rate for this issue

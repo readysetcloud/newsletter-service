@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useId } from 'react';
 import { cn } from '../../utils/cn';
 
 export interface TextAreaProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {
@@ -8,18 +8,25 @@ export interface TextAreaProps extends React.TextareaHTMLAttributes<HTMLTextArea
 }
 
 export const TextArea = React.forwardRef<HTMLTextAreaElement, TextAreaProps>(
-  ({ label, error, helperText, className, ...props }, ref) => {
+  ({ label, error, helperText, className, id, ...props }, ref) => {
     const hasError = !!error;
+    const generatedId = useId();
+    const textareaId = id || `textarea-${generatedId}`;
+    const errorId = `${textareaId}-error`;
+    const descriptionId = `${textareaId}-description`;
 
     return (
       <div className="w-full">
         {label && (
-          <label className="block text-sm font-medium text-muted-foreground mb-1">
+          <label htmlFor={textareaId} className="block text-sm font-medium text-muted-foreground mb-1">
             {label}
           </label>
         )}
         <textarea
           ref={ref}
+          id={textareaId}
+          aria-describedby={error ? errorId : helperText ? descriptionId : undefined}
+          aria-invalid={hasError}
           className={cn(
             'block w-full rounded-md border-border shadow-sm',
             'focus:border-primary-500 focus:ring-ring',
@@ -33,10 +40,14 @@ export const TextArea = React.forwardRef<HTMLTextAreaElement, TextAreaProps>(
           {...props}
         />
         {error && (
-          <p className="mt-1 text-sm text-error-600">{error}</p>
+          <p className="mt-1 text-sm text-error-600" id={errorId} role="alert">
+            {error}
+          </p>
         )}
         {helperText && !error && (
-          <p className="mt-1 text-sm text-muted-foreground">{helperText}</p>
+          <p className="mt-1 text-sm text-muted-foreground" id={descriptionId}>
+            {helperText}
+          </p>
         )}
       </div>
     );

@@ -69,18 +69,8 @@ class ApiClient {
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        // Handle specific HTTP status codes
-        if (response.status === 401) {
-          throw new Error('Authentication required. Please sign in again.');
-        } else if (response.status === 403) {
-          throw new Error('Access denied. You do not have permission to perform this action.');
-        } else if (response.status === 404) {
-          throw new Error('Resource not found.');
-        } else if (response.status >= 500) {
-          throw new Error('Server error. Please try again later.');
-        }
-
         // Try to get error message from response
+        let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
         try {
           const errorData: unknown = await response.json();
           if (
@@ -89,12 +79,28 @@ class ApiClient {
             'message' in errorData &&
             typeof (errorData as { message?: unknown }).message === 'string'
           ) {
-            throw new Error((errorData as { message: string }).message);
+            errorMessage = (errorData as { message: string }).message;
           }
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         } catch {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          // Use default error message
         }
+
+        // Handle specific HTTP status codes
+        if (response.status === 401) {
+          // Redirect to login page
+          window.location.href = '/login';
+          throw new Error('Authentication required. Please sign in again.');
+        } else if (response.status === 403) {
+          throw new Error('Access denied. You do not have permission to perform this action.');
+        } else if (response.status === 404) {
+          throw new Error('Resource not found.');
+        } else if (response.status === 409) {
+          throw new Error(errorMessage || 'Conflict. The resource cannot be modified in its current state.');
+        } else if (response.status >= 500) {
+          throw new Error('Server error. Please try again later.');
+        }
+
+        throw new Error(errorMessage);
       }
       if (response.status == 204) {
         return { success: true };

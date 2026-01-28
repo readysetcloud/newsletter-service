@@ -182,12 +182,12 @@ export class StructuredLogger {
     }
 
     /**
-     * Log Momento token generation attempt
-     * @param {string} operation - Token generation operation (start/success/failure)
+     * Log generic operation attempt
+     * @param {string} operation - Operation status (start/success/failure)
      * @param {Object} context - Additional context
      */
-    momentoTokenGeneration(operation, context = {}) {
-        const message = `Momento token generation ${operation}`;
+    operationAttempt(operation, context = {}) {
+        const message = `Operation ${operation}`;
 
         if (operation === 'failure') {
             this.error(message, context.error, context);

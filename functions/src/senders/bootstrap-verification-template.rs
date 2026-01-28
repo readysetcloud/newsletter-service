@@ -7,6 +7,7 @@ use std::collections::HashMap;
 #[serde(rename_all = "PascalCase")]
 struct CloudFormationEvent {
     request_type: String,
+    #[serde(rename = "ResponseURL")]
     response_url: String,
     stack_id: String,
     request_id: String,
@@ -295,6 +296,27 @@ mod tests {
     }
 
     #[test]
+    fn test_template_content_has_required_elements() {
+        let content = generate_template_content();
+        // Verify key messaging elements
+        assert!(content.contains("adding a new sender address"));
+        assert!(content.contains("confirm ownership"));
+        assert!(content.contains("return to your dashboard"));
+        // Verify HTML structure is valid
+        assert_eq!(content.matches("<html>").count(), 1);
+        assert_eq!(content.matches("</html>").count(), 1);
+        assert_eq!(content.matches("<body>").count(), 1);
+        assert_eq!(content.matches("</body>").count(), 1);
+    }
+
+    #[test]
+    fn test_template_content_is_not_empty() {
+        let content = generate_template_content();
+        assert!(!content.is_empty());
+        assert!(content.len() > 100); // Should be substantial HTML
+    }
+
+    #[test]
     fn test_cfn_response_serialization() {
         let response = CloudFormationResponse {
             status: "SUCCESS".to_string(),
@@ -327,5 +349,86 @@ mod tests {
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("FAILED"));
         assert!(!json.contains("Data"));
+    }
+
+    #[test]
+    fn test_cfn_response_success_format() {
+        let mut data = HashMap::new();
+        data.insert("TemplateName".to_string(), "test-template".to_string());
+        data.insert("Action".to_string(), "created".to_string());
+
+        let response = CloudFormationResponse {
+            status: "SUCCESS".to_string(),
+            reason: "Template created successfully".to_string(),
+            physical_resource_id: "test-template".to_string(),
+            stack_id: "arn:aws:cloudformation:us-east-1:123456789012:stack/test/abc".to_string(),
+            request_id: "req-123".to_string(),
+            logical_resource_id: "VerificationTemplate".to_string(),
+            data: Some(data),
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed["Status"], "SUCCESS");
+        assert_eq!(parsed["PhysicalResourceId"], "test-template");
+        assert_eq!(parsed["Data"]["TemplateName"], "test-template");
+        assert_eq!(parsed["Data"]["Action"], "created");
+    }
+
+    #[test]
+    fn test_cfn_response_failure_format() {
+        let response = CloudFormationResponse {
+            status: "FAILED".to_string(),
+            reason: "Template creation failed: Invalid email".to_string(),
+            physical_resource_id: "fallback-id".to_string(),
+            stack_id: "arn:aws:cloudformation:us-east-1:123456789012:stack/test/abc".to_string(),
+            request_id: "req-456".to_string(),
+            logical_resource_id: "VerificationTemplate".to_string(),
+            data: None,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed["Status"], "FAILED");
+        assert_eq!(parsed["Reason"], "Template creation failed: Invalid email");
+        assert!(parsed.get("Data").is_none() || parsed["Data"].is_null());
+    }
+
+    #[test]
+    fn test_cfn_event_deserialization() {
+        let json = r#"{
+            "RequestType": "Create",
+            "ResponseURL": "https://example.com/response",
+            "StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/test/abc",
+            "RequestId": "req-123",
+            "LogicalResourceId": "VerificationTemplate"
+        }"#;
+
+        let event: CloudFormationEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(event.request_type, "Create");
+        assert_eq!(event.response_url, "https://example.com/response");
+        assert_eq!(event.logical_resource_id, "VerificationTemplate");
+        assert!(event.physical_resource_id.is_none());
+    }
+
+    #[test]
+    fn test_cfn_event_with_physical_resource_id() {
+        let json = r#"{
+            "RequestType": "Update",
+            "ResponseURL": "https://example.com/response",
+            "StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/test/abc",
+            "RequestId": "req-456",
+            "LogicalResourceId": "VerificationTemplate",
+            "PhysicalResourceId": "existing-template"
+        }"#;
+
+        let event: CloudFormationEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(event.request_type, "Update");
+        assert_eq!(
+            event.physical_resource_id,
+            Some("existing-template".to_string())
+        );
     }
 }

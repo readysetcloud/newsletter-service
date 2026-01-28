@@ -24,7 +24,6 @@ hex = { workspace = true }
 jsonwebtoken = { workspace = true }
 lambda_http = { workspace = true }
 lambda_runtime = { workspace = true }
-momento = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
@@ -50,32 +49,12 @@ name = "add-user-to-group"
 path = "functions/src/admin/add-user-to-group.rs"
 
 [[bin]]
-name = "check-brand-id"
-path = "functions/src/admin/check-brand-id.rs"
-
-[[bin]]
-name = "get-profile"
-path = "functions/src/admin/get-profile.rs"
-
-[[bin]]
-name = "manage-api-keys"
-path = "functions/src/admin/manage-api-keys.rs"
+name = "admin-router"
+path = "functions/src/admin/main.rs"
 
 [[bin]]
 name = "unsubscribe-log-processor"
 path = "functions/src/admin/unsubscribe-log-processor.rs"
-
-[[bin]]
-name = "update-brand"
-path = "functions/src/admin/update-brand.rs"
-
-[[bin]]
-name = "update-profile"
-path = "functions/src/admin/update-profile.rs"
-
-[[bin]]
-name = "upload-brand-photo"
-path = "functions/src/admin/upload-brand-photo.rs"
 
 [[bin]]
 name = "cognito-post-confirmation"
@@ -98,36 +77,12 @@ name = "generate-social-post"
 path = "functions/src/ai/generate-social-post.rs"
 
 [[bin]]
-name = "get-senders"
-path = "functions/src/senders/get-senders.rs"
-
-[[bin]]
-name = "get-sender-status"
-path = "functions/src/senders/get-sender-status.rs"
-
-[[bin]]
-name = "create-sender"
-path = "functions/src/senders/create-sender.rs"
+name = "senders-router"
+path = "functions/src/senders/main.rs"
 
 [[bin]]
 name = "bootstrap-verification-template"
 path = "functions/src/senders/bootstrap-verification-template.rs"
-
-[[bin]]
-name = "update-sender"
-path = "functions/src/senders/update-sender.rs"
-
-[[bin]]
-name = "delete-sender"
-path = "functions/src/senders/delete-sender.rs"
-
-[[bin]]
-name = "verify-domain"
-path = "functions/src/senders/verify-domain.rs"
-
-[[bin]]
-name = "get-domain-verification"
-path = "functions/src/senders/get-domain-verification.rs"
 
 [[bin]]
 name = "check-sender-status-automatically"
@@ -170,5 +125,4 @@ serde_dynamo = "4"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 aws_lambda_events = "0.15"
 jsonwebtoken = "9"
-momento = "0.59.0"
 serial_test = "3"

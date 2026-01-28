@@ -1,22 +1,45 @@
 use aws_sdk_cognitoidentityprovider::operation::admin_update_user_attributes::AdminUpdateUserAttributesError;
 use aws_sdk_dynamodb::types::{AttributeValue, ReturnValue};
 use aws_sdk_eventbridge::Client as EventBridgeClient;
+use aws_sdk_s3::operation::head_object::HeadObjectError;
+use aws_sdk_s3::presigning::PresigningConfig;
+use aws_sdk_s3::types::ObjectCannedAcl;
 use chrono::Utc;
-use lambda_http::{run, service_fn, Body, Error, Request, Response};
+use lambda_http::http::Method;
+use lambda_http::{Body, Error, Request, RequestExt, Response};
 use newsletter_lambdas::admin::{aws_clients, format_response, get_user_context};
 use rand::RngCore;
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::env;
+use std::time::Duration;
 use tokio::sync::OnceCell;
 
 static EVENTBRIDGE_CLIENT: OnceCell<EventBridgeClient> = OnceCell::const_new();
+
+#[derive(Serialize)]
+struct ValidationResult {
+    is_valid: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
 
 #[derive(Debug)]
 enum UpdateBrandError {
     Unauthorized,
     Conflict(String),
     NotFound(String),
+    Internal(String),
+}
+
+#[derive(Debug)]
+enum UploadBrandPhotoError {
+    Unauthorized,
+    BadRequest(String),
+    Forbidden(String),
+    NotFound(String),
+    MethodNotAllowed,
     Internal(String),
 }
 
@@ -61,17 +84,190 @@ impl BrandData {
     }
 }
 
-async fn function_handler(event: Request) -> Result<Response<Body>, Error> {
-    match handle_request(event).await {
+pub async fn check_brand_id(event: Request) -> Result<Response<Body>, Error> {
+    let _user_context = get_user_context(&event)?;
+
+    let query_params = event.query_string_parameters();
+    let brand_id = match query_params.first("brandId") {
+        Some(value) => value,
+        None => {
+            return Ok(format_response(
+                400,
+                json!({ "message": "brandId parameter is required" }),
+            )?);
+        }
+    };
+
+    let validation_result = validate_brand_id(brand_id);
+    if !validation_result.is_valid {
+        return Ok(format_response(
+            200,
+            json!({
+                "available": false,
+                "brandId": brand_id,
+                "error": validation_result.error,
+                "suggestions": generate_suggestions(brand_id),
+            }),
+        )?);
+    }
+
+    let is_available = check_brand_id_availability(brand_id).await;
+    let mut response = json!({
+        "available": is_available,
+        "brandId": brand_id,
+    });
+
+    if !is_available {
+        response["suggestions"] = json!(generate_suggestions(brand_id));
+    }
+
+    Ok(format_response(200, response)?)
+}
+
+pub async fn update_brand(event: Request) -> Result<Response<Body>, Error> {
+    match handle_update_request(event).await {
         Ok(response) => Ok(response),
         Err(err) => {
             tracing::error!(error = ?err, "Update brand error");
-            Ok(format_error_response(err))
+            Ok(format_update_error_response(err))
         }
     }
 }
 
-async fn handle_request(event: Request) -> Result<Response<Body>, UpdateBrandError> {
+pub async fn upload_photo(event: Request) -> Result<Response<Body>, Error> {
+    match handle_upload_request(event).await {
+        Ok(response) => Ok(response),
+        Err(err) => {
+            tracing::error!(error = ?err, "Brand photo upload error");
+            Ok(format_upload_error_response(err))
+        }
+    }
+}
+
+fn validate_brand_id(brand_id: &str) -> ValidationResult {
+    if brand_id.len() < 3 || brand_id.len() > 50 {
+        return ValidationResult {
+            is_valid: false,
+            error: Some("Brand ID must be between 3 and 50 characters".to_string()),
+        };
+    }
+
+    if !brand_id.chars().all(|c| c.is_ascii_lowercase()) {
+        return ValidationResult {
+            is_valid: false,
+            error: Some("Brand ID can only contain lowercase letters".to_string()),
+        };
+    }
+
+    let reserved_words = [
+        "admin",
+        "api",
+        "www",
+        "mail",
+        "email",
+        "support",
+        "help",
+        "blog",
+        "news",
+        "app",
+        "mobile",
+        "web",
+        "ftp",
+        "cdn",
+        "assets",
+        "static",
+        "dev",
+        "test",
+        "staging",
+        "prod",
+        "production",
+        "beta",
+        "alpha",
+        "dashboard",
+        "console",
+        "panel",
+        "login",
+        "signup",
+        "register",
+        "auth",
+        "oauth",
+        "sso",
+        "security",
+        "privacy",
+        "terms",
+        "legal",
+    ];
+
+    let normalized = brand_id.to_lowercase();
+    if reserved_words.contains(&normalized.as_str()) {
+        return ValidationResult {
+            is_valid: false,
+            error: Some("This brand ID is reserved and cannot be used".to_string()),
+        };
+    }
+
+    ValidationResult {
+        is_valid: true,
+        error: None,
+    }
+}
+
+async fn check_brand_id_availability(brand_id: &str) -> bool {
+    let table_name = match env::var("TABLE_NAME") {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::error!(error = %err, "TABLE_NAME not set");
+            return false;
+        }
+    };
+
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+    let result = ddb_client
+        .get_item()
+        .table_name(table_name)
+        .key("pk", AttributeValue::S(brand_id.to_string()))
+        .key("sk", AttributeValue::S("tenant".to_string()))
+        .send()
+        .await;
+
+    match result {
+        Ok(output) => output.item().is_none(),
+        Err(err) => {
+            tracing::error!(error = %err, "Error checking brand ID in DynamoDB");
+            false
+        }
+    }
+}
+
+fn generate_suggestions(base_brand_id: &str) -> Vec<String> {
+    let mut suggestions = Vec::new();
+    let clean_base: String = base_brand_id
+        .chars()
+        .filter(|c| c.is_ascii_lowercase())
+        .take(45)
+        .collect();
+
+    let suffixes = ["co", "inc", "corp", "ltd", "llc"];
+    for suffix in suffixes {
+        let suggestion = format!("{}{}", clean_base, suffix);
+        if suggestion.len() <= 50 {
+            suggestions.push(suggestion);
+        }
+    }
+
+    for i in 0..5 {
+        let letter = (b'a' + i) as char;
+        let suggestion = format!("{}{}", clean_base, letter);
+        if suggestion.len() <= 50 {
+            suggestions.push(suggestion);
+        }
+    }
+
+    suggestions.truncate(5);
+    suggestions
+}
+
+async fn handle_update_request(event: Request) -> Result<Response<Body>, UpdateBrandError> {
     let user_context = get_user_context(&event).map_err(|_| UpdateBrandError::Unauthorized)?;
     let user_id = user_context.user_id;
     let email = user_context.email;
@@ -120,16 +316,6 @@ async fn handle_request(event: Request) -> Result<Response<Body>, UpdateBrandErr
     .await;
 
     format_empty_response()
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Error> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .json()
-        .init();
-
-    run(service_fn(function_handler)).await
 }
 
 fn parse_body(event: &Request) -> Result<Value, UpdateBrandError> {
@@ -239,33 +425,6 @@ async fn update_brand_info(
     }
 
     Ok(())
-}
-
-async fn check_brand_id_availability(brand_id: &str) -> bool {
-    let table_name = match env::var("TABLE_NAME") {
-        Ok(value) => value,
-        Err(err) => {
-            tracing::error!(error = %err, "TABLE_NAME not set");
-            return false;
-        }
-    };
-
-    let ddb_client = aws_clients::get_dynamodb_client().await;
-    let response = ddb_client
-        .get_item()
-        .table_name(table_name)
-        .key("pk", AttributeValue::S(brand_id.to_string()))
-        .key("sk", AttributeValue::S("tenant".to_string()))
-        .send()
-        .await;
-
-    match response {
-        Ok(output) => output.item().is_none(),
-        Err(err) => {
-            tracing::error!(error = %err, "Error checking brand ID availability");
-            false
-        }
-    }
 }
 
 async fn create_tenant_with_brand_data(
@@ -612,7 +771,7 @@ fn format_empty_response() -> Result<Response<Body>, UpdateBrandError> {
         .map_err(|err| UpdateBrandError::Internal(format!("Response build failed: {}", err)))
 }
 
-fn format_error_response(err: UpdateBrandError) -> Response<Body> {
+fn format_update_error_response(err: UpdateBrandError) -> Response<Body> {
     let (status, message) = match err {
         UpdateBrandError::Unauthorized => (403, "Authentication required".to_string()),
         UpdateBrandError::Conflict(message) => (409, message),
@@ -645,9 +804,320 @@ async fn get_eventbridge_client() -> &'static EventBridgeClient {
         .await
 }
 
+async fn handle_upload_request(event: Request) -> Result<Response<Body>, UploadBrandPhotoError> {
+    let user_context = get_user_context(&event).map_err(|_| UploadBrandPhotoError::Unauthorized)?;
+    let tenant_id = user_context.tenant_id.ok_or_else(|| {
+        UploadBrandPhotoError::BadRequest(
+            "Tenant ID is required. Please complete brand setup first.".to_string(),
+        )
+    })?;
+
+    let body = parse_upload_body(&event)?;
+
+    match *event.method() {
+        Method::POST => generate_upload_url(&tenant_id, &body).await,
+        Method::PUT => confirm_upload(&tenant_id, &body).await,
+        _ => Err(UploadBrandPhotoError::MethodNotAllowed),
+    }
+}
+
+fn parse_upload_body(event: &Request) -> Result<Value, UploadBrandPhotoError> {
+    match event.body() {
+        Body::Text(text) => serde_json::from_str(text)
+            .map_err(|err| UploadBrandPhotoError::Internal(format!("Invalid JSON body: {}", err))),
+        Body::Binary(bytes) => serde_json::from_slice(bytes)
+            .map_err(|err| UploadBrandPhotoError::Internal(format!("Invalid JSON body: {}", err))),
+        Body::Empty => Ok(json!({})),
+    }
+}
+
+async fn generate_upload_url(
+    tenant_id: &str,
+    body: &Value,
+) -> Result<Response<Body>, UploadBrandPhotoError> {
+    let file_name = body
+        .get("fileName")
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            UploadBrandPhotoError::BadRequest(
+                "\"fileName\" is required and must be a non-empty string".to_string(),
+            )
+        })?;
+
+    let content_type = body
+        .get("contentType")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| {
+            UploadBrandPhotoError::BadRequest(
+                "\"contentType\" is required and must be a string".to_string(),
+            )
+        })?
+        .to_lowercase();
+
+    let allowed_types = [
+        "image/jpeg",
+        "image/jpg",
+        "image/png",
+        "image/gif",
+        "image/webp",
+    ];
+    if !allowed_types.contains(&content_type.as_str()) {
+        return Err(UploadBrandPhotoError::BadRequest(
+            "Only image files are allowed (JPEG, PNG, GIF, WebP)".to_string(),
+        ));
+    }
+
+    let file_name_lower = file_name.to_lowercase();
+    let file_extension = file_name_lower.split('.').next_back().unwrap_or("");
+
+    let valid_extensions: HashMap<&str, Vec<&str>> = HashMap::from([
+        ("image/jpeg", vec!["jpg", "jpeg"]),
+        ("image/jpg", vec!["jpg", "jpeg"]),
+        ("image/png", vec!["png"]),
+        ("image/gif", vec!["gif"]),
+        ("image/webp", vec!["webp"]),
+    ]);
+
+    let valid_for_type = valid_extensions
+        .get(content_type.as_str())
+        .map(|values| values.contains(&file_extension))
+        .unwrap_or(false);
+
+    if !valid_for_type {
+        return Err(UploadBrandPhotoError::BadRequest(
+            "File extension does not match content type".to_string(),
+        ));
+    }
+
+    let timestamp = Utc::now().timestamp_millis();
+    let sanitized = sanitize_filename(file_name);
+    let key = format!("brand-logos/{}/{}-{}", tenant_id, timestamp, sanitized);
+
+    let bucket_name = std::env::var("HOSTING_BUCKET_NAME").map_err(|err| {
+        UploadBrandPhotoError::Internal(format!("HOSTING_BUCKET_NAME not set: {}", err))
+    })?;
+
+    let s3_client = aws_clients::get_s3_client().await;
+    let request = s3_client
+        .put_object()
+        .bucket(&bucket_name)
+        .key(&key)
+        .content_type(content_type)
+        .acl(ObjectCannedAcl::PublicRead)
+        .metadata("tenantId", tenant_id)
+        .metadata("uploadedAt", Utc::now().to_rfc3339());
+
+    let presigned = request
+        .presigned(
+            PresigningConfig::expires_in(Duration::from_secs(300)).map_err(|err| {
+                UploadBrandPhotoError::Internal(format!("Presign config error: {}", err))
+            })?,
+        )
+        .await
+        .map_err(|err| UploadBrandPhotoError::Internal(format!("Presign failed: {}", err)))?;
+
+    format_response(
+        200,
+        json!({
+            "uploadUrl": presigned.uri().to_string(),
+            "key": key,
+            "expiresIn": 300,
+            "maxSize": 2 * 1024 * 1024,
+            "publicUrl": format!("https://{}.s3.amazonaws.com/{}", bucket_name, key)
+        }),
+    )
+    .map_err(|err| UploadBrandPhotoError::Internal(err.to_string()))
+}
+
+async fn confirm_upload(
+    tenant_id: &str,
+    body: &Value,
+) -> Result<Response<Body>, UploadBrandPhotoError> {
+    let key = body
+        .get("key")
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            UploadBrandPhotoError::BadRequest(
+                "\"key\" is required and must be a non-empty string".to_string(),
+            )
+        })?;
+
+    if !key.starts_with(&format!("brand-logos/{}/", tenant_id)) {
+        return Err(UploadBrandPhotoError::Forbidden(
+            "Invalid logo key for this tenant".to_string(),
+        ));
+    }
+
+    let bucket_name = std::env::var("HOSTING_BUCKET_NAME").map_err(|err| {
+        UploadBrandPhotoError::Internal(format!("HOSTING_BUCKET_NAME not set: {}", err))
+    })?;
+    let s3_client = aws_clients::get_s3_client().await;
+
+    let head_result = s3_client
+        .head_object()
+        .bucket(&bucket_name)
+        .key(key)
+        .send()
+        .await;
+
+    if let Err(err) = head_result {
+        let is_not_found = err
+            .as_service_error()
+            .map(|service_error| matches!(service_error, HeadObjectError::NotFound(_)))
+            .unwrap_or(false);
+
+        if is_not_found {
+            return Err(UploadBrandPhotoError::NotFound(
+                "Photo not found in storage. Upload may have failed.".to_string(),
+            ));
+        }
+
+        return Err(UploadBrandPhotoError::Internal(format!(
+            "S3 head failed: {}",
+            err
+        )));
+    }
+
+    let public_url = format!("https://{}.s3.amazonaws.com/{}", bucket_name, key);
+    let updated_at = Utc::now().to_rfc3339();
+
+    let table_name = std::env::var("TABLE_NAME")
+        .map_err(|err| UploadBrandPhotoError::Internal(format!("TABLE_NAME not set: {}", err)))?;
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+
+    ddb_client
+        .update_item()
+        .table_name(&table_name)
+        .key("pk", AttributeValue::S(tenant_id.to_string()))
+        .key("sk", AttributeValue::S("tenant".to_string()))
+        .update_expression("SET brandPhoto = :photo, brandPhotoKey = :key, updatedAt = :updatedAt")
+        .expression_attribute_values(":photo", AttributeValue::S(public_url.clone()))
+        .expression_attribute_values(":key", AttributeValue::S(key.to_string()))
+        .expression_attribute_values(":updatedAt", AttributeValue::S(updated_at))
+        .send()
+        .await
+        .map_err(|err| {
+            UploadBrandPhotoError::Internal(format!("DynamoDB update failed: {}", err))
+        })?;
+
+    format_response(
+        200,
+        json!({
+            "message": "Brand logo updated successfully",
+            "photoUrl": public_url,
+            "key": key
+        }),
+    )
+    .map_err(|err| UploadBrandPhotoError::Internal(err.to_string()))
+}
+
+fn sanitize_filename(file_name: &str) -> String {
+    file_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn format_upload_error_response(err: UploadBrandPhotoError) -> Response<Body> {
+    let (status, message) = match err {
+        UploadBrandPhotoError::Unauthorized => (403, "Authentication required".to_string()),
+        UploadBrandPhotoError::BadRequest(message) => (400, message),
+        UploadBrandPhotoError::Forbidden(message) => (403, message),
+        UploadBrandPhotoError::NotFound(message) => (404, message),
+        UploadBrandPhotoError::MethodNotAllowed => (405, "Method not allowed".to_string()),
+        UploadBrandPhotoError::Internal(message) => {
+            tracing::error!(error = %message, "Internal brand photo error");
+            (500, "Something went wrong".to_string())
+        }
+    };
+
+    format_response(status, json!({ "message": message }))
+        .unwrap_or_else(|_| Response::builder().status(500).body(Body::Empty).unwrap())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validate_brand_id_rejects_length() {
+        let too_short = validate_brand_id("ab");
+        assert!(!too_short.is_valid);
+        assert_eq!(
+            too_short.error.as_deref(),
+            Some("Brand ID must be between 3 and 50 characters")
+        );
+
+        let too_long = "a".repeat(51);
+        let result = validate_brand_id(&too_long);
+        assert!(!result.is_valid);
+        assert_eq!(
+            result.error.as_deref(),
+            Some("Brand ID must be between 3 and 50 characters")
+        );
+    }
+
+    #[test]
+    fn validate_brand_id_rejects_non_lowercase() {
+        let result = validate_brand_id("Brand");
+        assert!(!result.is_valid);
+        assert_eq!(
+            result.error.as_deref(),
+            Some("Brand ID can only contain lowercase letters")
+        );
+
+        let result = validate_brand_id("brand123");
+        assert!(!result.is_valid);
+        assert_eq!(
+            result.error.as_deref(),
+            Some("Brand ID can only contain lowercase letters")
+        );
+    }
+
+    #[test]
+    fn validate_brand_id_rejects_reserved_words() {
+        let result = validate_brand_id("admin");
+        assert!(!result.is_valid);
+        assert_eq!(
+            result.error.as_deref(),
+            Some("This brand ID is reserved and cannot be used")
+        );
+    }
+
+    #[test]
+    fn validate_brand_id_accepts_valid() {
+        let result = validate_brand_id("newsletter");
+        assert!(result.is_valid);
+        assert!(result.error.is_none());
+    }
+
+    #[test]
+    fn generate_suggestions_sanitizes_and_limits() {
+        let suggestions = generate_suggestions("brand-123");
+        assert!(!suggestions.is_empty());
+        assert!(suggestions.len() <= 5);
+        assert!(suggestions
+            .iter()
+            .all(|s| s.chars().all(|c| c.is_ascii_lowercase())));
+    }
+
+    #[test]
+    fn generate_suggestions_truncates_base() {
+        let base = "a".repeat(60);
+        let suggestions = generate_suggestions(&base);
+        assert!(suggestions.len() <= 5);
+        assert!(suggestions.iter().all(|s| s.len() <= 50));
+    }
 
     #[test]
     fn extract_brand_data_tracks_fields() {
@@ -688,5 +1158,19 @@ mod tests {
         let url = "https://bucket.s3.amazonaws.com/brand-logos/tenant/logo.png?versionId=1";
         let key = extract_s3_key(url).expect("key");
         assert_eq!(key, "brand-logos/tenant/logo.png");
+    }
+
+    #[test]
+    fn sanitize_filename_replaces_invalid_chars() {
+        let input = "my logo@2024#.png";
+        let output = sanitize_filename(input);
+        assert_eq!(output, "my_logo_2024_.png");
+    }
+
+    #[test]
+    fn sanitize_filename_allows_alnum_dot_dash() {
+        let input = "brand-Logo.01.png";
+        let output = sanitize_filename(input);
+        assert_eq!(output, "brand-Logo.01.png");
     }
 }

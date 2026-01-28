@@ -1,9 +1,8 @@
 use aws_sdk_dynamodb::types::AttributeValue;
 use base64::Engine;
 use chrono::{DateTime, Utc};
-use lambda_http::http::Method;
-use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
-use newsletter_lambdas::admin::{aws_clients, format_response, get_user_context};
+use lambda_http::{Body, Error, Request, RequestExt, Response};
+use newsletter_lambdas::admin::{aws_clients, format_response};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -46,54 +45,101 @@ struct ApiKeyRecordInput<'a> {
     ttl: Option<i64>,
 }
 
-async fn function_handler(event: Request) -> Result<Response<Body>, Error> {
-    match handle_request(event).await {
+pub async fn list_keys(event: Request) -> Result<Response<Body>, Error> {
+    match handle_list_keys(event).await {
         Ok(response) => Ok(response),
         Err(err) => {
-            tracing::error!(error = ?err, "API key management error");
+            tracing::error!(error = ?err, "List API keys error");
             Ok(format_error(err))
         }
     }
 }
 
-async fn handle_request(event: Request) -> Result<Response<Body>, ManageApiKeysError> {
-    let user_context = get_user_context(&event).map_err(|_| ManageApiKeysError::Unauthorized)?;
+pub async fn create_key(event: Request) -> Result<Response<Body>, Error> {
+    match handle_create_key(event).await {
+        Ok(response) => Ok(response),
+        Err(err) => {
+            tracing::error!(error = ?err, "Create API key error");
+            Ok(format_error(err))
+        }
+    }
+}
+
+pub async fn get_key(event: Request, key_id: Option<String>) -> Result<Response<Body>, Error> {
+    match handle_get_key(event, key_id).await {
+        Ok(response) => Ok(response),
+        Err(err) => {
+            tracing::error!(error = ?err, "Get API key error");
+            Ok(format_error(err))
+        }
+    }
+}
+
+pub async fn delete_key(event: Request, key_id: Option<String>) -> Result<Response<Body>, Error> {
+    match handle_delete_key(event, key_id).await {
+        Ok(response) => Ok(response),
+        Err(err) => {
+            tracing::error!(error = ?err, "Delete API key error");
+            Ok(format_error(err))
+        }
+    }
+}
+
+async fn handle_list_keys(event: Request) -> Result<Response<Body>, ManageApiKeysError> {
+    let user_context = newsletter_lambdas::admin::get_user_context(&event)
+        .map_err(|_| ManageApiKeysError::Unauthorized)?;
+    let tenant_id = &user_context.tenant_id;
+
+    list_api_keys(tenant_id).await
+}
+
+async fn handle_create_key(event: Request) -> Result<Response<Body>, ManageApiKeysError> {
+    let user_context = newsletter_lambdas::admin::get_user_context(&event)
+        .map_err(|_| ManageApiKeysError::Unauthorized)?;
     let tenant_id = user_context.tenant_id.clone();
     let user_id = user_context.user_id.clone();
 
-    let method = event.method();
-    let path_params = event.path_parameters();
+    let body = parse_body(&event)?;
+    create_api_key(&user_id, &tenant_id, body).await
+}
 
-    match *method {
-        Method::POST => {
-            let body = parse_body(&event)?;
-            create_api_key(&user_id, &tenant_id, body).await
-        }
-        Method::GET => {
-            if let Some(key_id) = path_params.first("keyId") {
-                get_api_key(&tenant_id, key_id).await
-            } else {
-                list_api_keys(&tenant_id).await
-            }
-        }
-        Method::DELETE => {
-            let key_id = path_params.first("keyId").unwrap_or_default();
-            let should_revoke = event
-                .query_string_parameters()
-                .first("revoke")
-                .map(|value| value == "true")
-                .unwrap_or(false);
+async fn handle_get_key(
+    event: Request,
+    key_id: Option<String>,
+) -> Result<Response<Body>, ManageApiKeysError> {
+    let user_context = newsletter_lambdas::admin::get_user_context(&event)
+        .map_err(|_| ManageApiKeysError::Unauthorized)?;
+    let tenant_id = &user_context.tenant_id;
 
-            if should_revoke {
-                revoke_api_key(&tenant_id, key_id).await
-            } else {
-                delete_api_key(&tenant_id, key_id).await
-            }
-        }
-        _ => Ok(
-            format_response(405, json!({ "message": "Method not allowed" }))
-                .map_err(|err| ManageApiKeysError::Other(err.to_string()))?,
-        ),
+    let key_id = key_id
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| ManageApiKeysError::Other("\"keyId\" is required".to_string()))?;
+
+    get_api_key(tenant_id, &key_id).await
+}
+
+async fn handle_delete_key(
+    event: Request,
+    key_id: Option<String>,
+) -> Result<Response<Body>, ManageApiKeysError> {
+    let user_context = newsletter_lambdas::admin::get_user_context(&event)
+        .map_err(|_| ManageApiKeysError::Unauthorized)?;
+    let tenant_id = &user_context.tenant_id;
+
+    let key_id = key_id
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| ManageApiKeysError::Other("\"keyId\" is required".to_string()))?;
+
+    let should_revoke = event
+        .query_string_parameters()
+        .first("revoke")
+        .map(|value| value == "true")
+        .unwrap_or(false);
+
+    if should_revoke {
+        revoke_api_key(tenant_id, &key_id).await
+    } else {
+        delete_api_key(tenant_id, &key_id).await
     }
 }
 
@@ -606,16 +652,6 @@ fn api_key_to_detail(
 
     response["createdBy"] = json!(created_by);
     Ok(response)
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Error> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .json()
-        .init();
-
-    run(service_fn(function_handler)).await
 }
 
 #[cfg(test)]

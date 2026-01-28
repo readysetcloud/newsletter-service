@@ -2,6 +2,7 @@ import { DynamoDBClient, QueryCommand } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import { formatResponse, getTenant } from './utils/helpers.mjs';
 import { getUserContext, formatAuthError } from './auth/get-user-context.mjs';
+import { corsResponse } from './utils/cors-headers.mjs';
 
 const ddb = new DynamoDBClient();
 
@@ -12,14 +13,14 @@ export const handler = async (event) => {
     const { tenantId } = userContext;
 
     if (!tenantId) {
-      return formatResponse(400, 'Tenant ID is required');
+      return corsResponse(400, { message: 'Tenant ID is required' });
     }
 
     const { timeframe = '30d' } = event.queryStringParameters || {};
 
     const tenant = await getTenant(tenantId);
     if (!tenant) {
-      return formatResponse(404, 'Tenant not found');
+      return corsResponse(404, { message: 'Tenant not found' });
     }
 
     // Get recent newsletter issues
@@ -31,7 +32,7 @@ export const handler = async (event) => {
     // Get performance overview
     const performanceOverview = getPerformanceOverview(issues);
 
-    return formatResponse(200, {
+    return corsResponse(200, {
       tenant: {
         name: tenant.name,
         subscribers: tenant.subscribers,
@@ -45,7 +46,7 @@ export const handler = async (event) => {
 
   } catch (err) {
     console.error('Dashboard data error:', err);
-    return formatResponse(500, 'Failed to load dashboard data');
+    return corsResponse(500, { message: 'Failed to load dashboard data' });
   }
 };
 

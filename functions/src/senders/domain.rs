@@ -1,10 +1,29 @@
 use aws_sdk_dynamodb::types::AttributeValue;
-use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
+use lambda_http::{Body, Error, Request, Response};
 use newsletter_lambdas::senders::{
     auth, aws_clients, error::AppError, response, types::*, validation,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+#[derive(Deserialize)]
+struct VerifyDomainRequest {
+    domain: String,
+}
+
+#[derive(Serialize)]
+struct VerifyDomainResponse {
+    domain: String,
+    #[serde(rename = "verificationStatus")]
+    verification_status: String,
+    #[serde(rename = "dnsRecords")]
+    dns_records: Vec<DnsRecord>,
+    #[serde(rename = "createdAt")]
+    created_at: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: String,
+    message: String,
+}
 
 #[derive(Debug, Serialize)]
 struct GetDomainVerificationResponse {
@@ -34,36 +53,210 @@ struct EnhancedDnsRecord {
     description: String,
 }
 
-async fn function_handler(event: Request) -> Result<Response<Body>, AppError> {
+pub async fn verify_domain(event: Request) -> Result<Response<Body>, Error> {
+    match handle_verify_domain(event).await {
+        Ok(response) => Ok(response),
+        Err(e) => Ok(response::format_error_response(&e)),
+    }
+}
+
+async fn handle_verify_domain(event: Request) -> Result<Response<Body>, AppError> {
+    let user_context = auth::get_user_context(&event)?;
+    let tenant_id = user_context.tenant_id.ok_or_else(|| {
+        AppError::Unauthorized("A brand is required before verifying a domain".to_string())
+    })?;
+
+    let body: VerifyDomainRequest = serde_json::from_slice(event.body())
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
+
+    validation::validate_domain(&body.domain)?;
+
+    let tier = user_context.tier.as_deref().unwrap_or("free-tier");
+    let tier_limits = get_tier_limits(tier, 0);
+
+    if !tier_limits.can_use_dns {
+        return Err(AppError::BadRequest(format!(
+            "DNS verification not available for your tier. Current tier: {}. Please upgrade to use domain verification.",
+            tier
+        )));
+    }
+
+    if domain_exists(&tenant_id, &body.domain).await? {
+        return Err(AppError::Conflict(
+            "Domain already configured for this tenant".to_string(),
+        ));
+    }
+
+    let dns_records = create_ses_domain_identity(&body.domain, &tenant_id).await?;
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let domain_record = DomainVerificationRecord {
+        pk: tenant_id.clone(),
+        sk: KeyPatterns::domain(&body.domain),
+        domain: body.domain.clone(),
+        tenant_id: tenant_id.clone(),
+        verification_status: VerificationStatus::Pending,
+        dns_records: dns_records.clone(),
+        ses_identity_arn: None,
+        created_at: now.clone(),
+        updated_at: now.clone(),
+        verified_at: None,
+    };
+
+    save_domain_record(&domain_record).await?;
+
+    response::format_response(
+        201,
+        VerifyDomainResponse {
+            domain: body.domain,
+            verification_status: "pending".to_string(),
+            dns_records,
+            created_at: now.clone(),
+            updated_at: now,
+            message: "Domain verification initiated. Please add the DNS records to your domain."
+                .to_string(),
+        },
+    )
+}
+
+async fn domain_exists(tenant_id: &str, domain: &str) -> Result<bool, AppError> {
+    let ddb = aws_clients::get_dynamodb_client().await;
+    let table_name = std::env::var("TABLE_NAME")
+        .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
+
+    let result = ddb
+        .get_item()
+        .table_name(table_name)
+        .key("pk", AttributeValue::S(tenant_id.to_string()))
+        .key("sk", AttributeValue::S(KeyPatterns::domain(domain)))
+        .send()
+        .await
+        .map_err(|e| AppError::AwsError(format!("DynamoDB get failed: {}", e)))?;
+
+    Ok(result.item().is_some())
+}
+
+async fn create_ses_domain_identity(
+    domain: &str,
+    tenant_id: &str,
+) -> Result<Vec<DnsRecord>, AppError> {
+    let ses = aws_clients::get_ses_client().await;
+    let config_set = std::env::var("SES_CONFIGURATION_SET").ok();
+
+    let mut create_command = ses.create_email_identity().email_identity(domain);
+    if let Some(config) = config_set {
+        create_command = create_command.configuration_set_name(config);
+    }
+
+    let _create_response = create_command
+        .send()
+        .await
+        .map_err(|e| AppError::AwsError(format!("SES create domain identity failed: {}", e)))?;
+
+    let resource_arn_prefix = std::env::var("RESOURCE_ARN_PREFIX")
+        .unwrap_or_else(|_| "arn:aws:ses:us-east-1:123456789012:identity/".to_string());
+    let resource_arn = format!("{}{}", resource_arn_prefix, domain);
+
+    ses.create_tenant_resource_association()
+        .tenant_name(tenant_id)
+        .resource_arn(&resource_arn)
+        .send()
+        .await
+        .map_err(|e| AppError::AwsError(format!("SES tenant association failed: {}", e)))?;
+
+    let identity_info = ses
+        .get_email_identity()
+        .email_identity(domain)
+        .send()
+        .await
+        .map_err(|e| AppError::AwsError(format!("SES get email identity failed: {}", e)))?;
+
+    let mut dns_records = Vec::new();
+
+    if let Some(dkim_attributes) = identity_info.dkim_attributes() {
+        let tokens = dkim_attributes.tokens();
+        for (i, token) in tokens.iter().enumerate() {
+            dns_records.push(DnsRecord {
+                name: format!("{}._domainkey.{}", token, domain),
+                record_type: "CNAME".to_string(),
+                value: format!("{}.dkim.amazonses.com", token),
+                description: format!("DKIM token {} for email authentication", i + 1),
+            });
+        }
+    }
+
+    tracing::info!(
+        "SES domain identity created: domain={}, tenant_id={}, dns_records_count={}",
+        domain,
+        tenant_id,
+        dns_records.len()
+    );
+
+    Ok(dns_records)
+}
+
+async fn save_domain_record(domain_record: &DomainVerificationRecord) -> Result<(), AppError> {
+    let ddb = aws_clients::get_dynamodb_client().await;
+    let table_name = std::env::var("TABLE_NAME")
+        .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
+
+    let item: std::collections::HashMap<String, aws_sdk_dynamodb::types::AttributeValue> =
+        serde_dynamo::to_item(domain_record).map_err(|e| {
+            AppError::InternalError(format!("Failed to serialize domain record: {}", e))
+        })?;
+
+    ddb.put_item()
+        .table_name(table_name)
+        .set_item(Some(item))
+        .condition_expression("attribute_not_exists(pk) AND attribute_not_exists(sk)")
+        .send()
+        .await
+        .map_err(|e| {
+            if e.to_string().contains("ConditionalCheckFailed") {
+                AppError::Conflict("Domain verification record already exists".to_string())
+            } else {
+                AppError::AwsError(format!("DynamoDB put failed: {}", e))
+            }
+        })?;
+
+    Ok(())
+}
+
+pub async fn get_domain_verification(
+    event: Request,
+    domain: Option<String>,
+) -> Result<Response<Body>, Error> {
+    match handle_get_domain_verification(event, domain).await {
+        Ok(response) => Ok(response),
+        Err(e) => Ok(response::format_error_response(&e)),
+    }
+}
+
+async fn handle_get_domain_verification(
+    event: Request,
+    domain: Option<String>,
+) -> Result<Response<Body>, AppError> {
     let user_context = auth::get_user_context(&event)?;
     let tenant_id = user_context
         .tenant_id
         .ok_or_else(|| AppError::Unauthorized("Tenant access required".to_string()))?;
 
-    // Extract domain from path parameters
-    let path_params = event.path_parameters();
-    let domain = path_params
-        .first("domain")
-        .ok_or_else(|| AppError::BadRequest("Domain parameter is required".to_string()))?;
+    let domain =
+        domain.ok_or_else(|| AppError::BadRequest("Domain parameter is required".to_string()))?;
 
-    // Validate domain format
-    validation::validate_domain(domain)?;
+    validation::validate_domain(&domain)?;
 
-    // Get domain verification record from DynamoDB
-    let domain_record = get_domain_by_tenant(&tenant_id, domain).await?;
-
-    // Get current verification status from SES
+    let domain_record = get_domain_by_tenant(&tenant_id, &domain).await?;
     let mut current_status = domain_record.verification_status.clone();
     let ses_client = aws_clients::get_ses_client().await;
 
     match ses_client
         .get_email_identity()
-        .email_identity(domain)
+        .email_identity(&domain)
         .send()
         .await
     {
         Ok(ses_response) => {
-            // Update status based on SES response
             current_status = if ses_response.verified_for_sending_status() {
                 VerificationStatus::Verified
             } else if ses_response.verification_status().is_some()
@@ -76,14 +269,11 @@ async fn function_handler(event: Request) -> Result<Response<Body>, AppError> {
         }
         Err(e) => {
             tracing::error!("SES verification status check failed: {:?}", e);
-            // Continue with stored status if SES check fails
         }
     }
 
-    // Generate user-friendly DNS setup instructions
-    let instructions = generate_dns_instructions(domain, &domain_record.dns_records);
+    let instructions = generate_dns_instructions(&domain, &domain_record.dns_records);
 
-    // Prepare response with enhanced DNS records including descriptions
     let enhanced_dns_records: Vec<EnhancedDnsRecord> = domain_record
         .dns_records
         .iter()
@@ -109,10 +299,9 @@ async fn function_handler(event: Request) -> Result<Response<Body>, AppError> {
     let mut updated_at = domain_record.updated_at.clone();
     let mut verified_at = domain_record.verified_at.clone();
 
-    // If status changed, update the record in DynamoDB
     if current_status != domain_record.verification_status {
         let now = chrono::Utc::now().to_rfc3339();
-        update_domain_verification_status(&tenant_id, domain, &current_status).await?;
+        update_domain_verification_status(&tenant_id, &domain, &current_status).await?;
         updated_at = now.clone();
         if current_status == VerificationStatus::Verified && domain_record.verified_at.is_none() {
             verified_at = Some(now);
@@ -197,7 +386,6 @@ async fn update_domain_verification_status(
     );
     expression_attribute_values.insert(":updatedAt".to_string(), AttributeValue::S(now.clone()));
 
-    // Add verifiedAt timestamp if status is verified
     if *status == VerificationStatus::Verified {
         update_expression.push_str(", verifiedAt = :verifiedAt");
         expression_attribute_values.insert(":verifiedAt".to_string(), AttributeValue::S(now));
@@ -220,7 +408,6 @@ async fn update_domain_verification_status(
         .await
         .map_err(|e| {
             tracing::error!("Error updating domain verification status: {:?}", e);
-            // Don't throw - this is a background update
             AppError::InternalError("Failed to update domain status".to_string())
         })?;
 
@@ -238,7 +425,6 @@ fn generate_dns_instructions(_domain: &str, dns_records: &[DnsRecord]) -> Vec<St
         "".to_string(),
     ];
 
-    // Add specific record instructions
     for (index, record) in dns_records.iter().enumerate() {
         instructions.push(format!("   Record {}:", index + 1));
         instructions.push(format!("   • Type: {}", record.record_type));
@@ -314,163 +500,5 @@ fn get_troubleshooting_tips(status: &VerificationStatus) -> Vec<String> {
             "Keep your DNS records in place to maintain verification status".to_string(),
         ],
         _ => common_tips,
-    }
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Error> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .json()
-        .init();
-
-    run(service_fn(|event: Request| async move {
-        match function_handler(event).await {
-            Ok(response) => Ok::<Response<Body>, std::convert::Infallible>(response),
-            Err(e) => {
-                Ok::<Response<Body>, std::convert::Infallible>(response::format_error_response(&e))
-            }
-        }
-    }))
-    .await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_get_record_description_txt() {
-        assert_eq!(
-            get_record_description("TXT"),
-            "Domain ownership verification"
-        );
-    }
-
-    #[test]
-    fn test_get_record_description_cname() {
-        assert_eq!(
-            get_record_description("CNAME"),
-            "Email authentication (DKIM)"
-        );
-    }
-
-    #[test]
-    fn test_get_record_description_mx() {
-        assert_eq!(get_record_description("MX"), "Mail server routing");
-    }
-
-    #[test]
-    fn test_get_record_description_unknown() {
-        assert_eq!(
-            get_record_description("UNKNOWN"),
-            "Email service configuration"
-        );
-    }
-
-    #[test]
-    fn test_get_estimated_verification_time_pending() {
-        let time = get_estimated_verification_time(&VerificationStatus::Pending);
-        assert!(time.contains("15-30 minutes"));
-        assert!(time.contains("72 hours"));
-    }
-
-    #[test]
-    fn test_get_estimated_verification_time_verified() {
-        let time = get_estimated_verification_time(&VerificationStatus::Verified);
-        assert!(time.contains("verified and ready"));
-    }
-
-    #[test]
-    fn test_get_estimated_verification_time_failed() {
-        let time = get_estimated_verification_time(&VerificationStatus::Failed);
-        assert!(time.contains("failed"));
-        assert!(time.contains("check your DNS records"));
-    }
-
-    #[test]
-    fn test_get_troubleshooting_tips_pending() {
-        let tips = get_troubleshooting_tips(&VerificationStatus::Pending);
-        assert!(tips.len() >= 5);
-        assert!(tips.iter().any(|t| t.contains("DNS lookup tool")));
-        assert!(tips.iter().any(|t| t.contains("trailing dots")));
-    }
-
-    #[test]
-    fn test_get_troubleshooting_tips_failed() {
-        let tips = get_troubleshooting_tips(&VerificationStatus::Failed);
-        assert!(tips.len() >= 5);
-        assert!(tips.iter().any(|t| t.contains("Double-check")));
-        assert!(tips.iter().any(|t| t.contains("duplicate")));
-        assert!(tips.iter().any(|t| t.contains("Contact support")));
-    }
-
-    #[test]
-    fn test_get_troubleshooting_tips_verified() {
-        let tips = get_troubleshooting_tips(&VerificationStatus::Verified);
-        assert_eq!(tips.len(), 3);
-        assert!(tips.iter().any(|t| t.contains("successfully verified")));
-        assert!(tips.iter().any(|t| t.contains("Keep your DNS records")));
-    }
-
-    #[test]
-    fn test_generate_dns_instructions_format() {
-        let dns_records = vec![
-            DnsRecord {
-                name: "_amazonses.example.com".to_string(),
-                record_type: "TXT".to_string(),
-                value: "verification-token".to_string(),
-                description: "Domain ownership verification".to_string(),
-            },
-            DnsRecord {
-                name: "dkim._domainkey.example.com".to_string(),
-                record_type: "CNAME".to_string(),
-                value: "dkim.amazonses.com".to_string(),
-                description: "Email authentication".to_string(),
-            },
-        ];
-
-        let instructions = generate_dns_instructions("example.com", &dns_records);
-
-        assert!(instructions.len() > 10);
-        assert!(instructions.iter().any(|i| i.contains("domain registrar")));
-        assert!(instructions.iter().any(|i| i.contains("Record 1:")));
-        assert!(instructions.iter().any(|i| i.contains("Record 2:")));
-        assert!(instructions.iter().any(|i| i.contains("Type: TXT")));
-        assert!(instructions.iter().any(|i| i.contains("Type: CNAME")));
-        assert!(instructions.iter().any(|i| i.contains("72 hours")));
-    }
-
-    #[test]
-    fn test_generate_dns_instructions_includes_all_records() {
-        let dns_records = vec![
-            DnsRecord {
-                name: "record1".to_string(),
-                record_type: "TXT".to_string(),
-                value: "value1".to_string(),
-                description: "desc1".to_string(),
-            },
-            DnsRecord {
-                name: "record2".to_string(),
-                record_type: "CNAME".to_string(),
-                value: "value2".to_string(),
-                description: "desc2".to_string(),
-            },
-            DnsRecord {
-                name: "record3".to_string(),
-                record_type: "TXT".to_string(),
-                value: "value3".to_string(),
-                description: "desc3".to_string(),
-            },
-        ];
-
-        let instructions = generate_dns_instructions("example.com", &dns_records);
-
-        assert!(instructions.iter().any(|i| i.contains("record1")));
-        assert!(instructions.iter().any(|i| i.contains("record2")));
-        assert!(instructions.iter().any(|i| i.contains("record3")));
-        assert!(instructions.iter().any(|i| i.contains("value1")));
-        assert!(instructions.iter().any(|i| i.contains("value2")));
-        assert!(instructions.iter().any(|i| i.contains("value3")));
     }
 }

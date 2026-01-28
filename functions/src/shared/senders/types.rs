@@ -197,4 +197,48 @@ mod tests {
         assert!(!limits.can_use_dns);
         assert!(limits.can_use_mailbox);
     }
+
+    #[test]
+    fn test_key_pattern_sender_with_uuid() {
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let pattern = KeyPatterns::sender(uuid);
+        assert_eq!(pattern, format!("sender#{}", uuid));
+        assert!(pattern.starts_with("sender#"));
+    }
+
+    #[test]
+    fn test_key_pattern_domain_with_subdomain() {
+        let domain = "mail.example.com";
+        let pattern = KeyPatterns::domain(domain);
+        assert_eq!(pattern, "domain#mail.example.com");
+        assert!(pattern.starts_with("domain#"));
+    }
+
+    #[test]
+    fn test_key_pattern_sender_gsi1pk_format() {
+        let tenant_id = "tenant-123-abc";
+        let pattern = KeyPatterns::sender_gsi1pk(tenant_id);
+        assert_eq!(pattern, "sender#tenant-123-abc");
+        assert!(pattern.starts_with("sender#"));
+        assert!(pattern.contains(tenant_id));
+    }
+
+    #[test]
+    fn test_key_pattern_sender_empty_string() {
+        let pattern = KeyPatterns::sender("");
+        assert_eq!(pattern, "sender#");
+    }
+
+    #[test]
+    fn test_key_pattern_domain_empty_string() {
+        let pattern = KeyPatterns::domain("");
+        assert_eq!(pattern, "domain#");
+    }
+
+    #[test]
+    fn test_key_pattern_sender_with_special_chars() {
+        let sender_id = "sender-123_abc.def";
+        let pattern = KeyPatterns::sender(sender_id);
+        assert_eq!(pattern, "sender#sender-123_abc.def");
+    }
 }

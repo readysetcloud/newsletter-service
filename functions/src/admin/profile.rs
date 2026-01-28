@@ -1,11 +1,14 @@
+use aws_sdk_cognitoidentityprovider::operation::admin_update_user_attributes::AdminUpdateUserAttributesError;
 use aws_sdk_cognitoidentityprovider::types::AttributeType;
 use aws_sdk_dynamodb::types::AttributeValue;
 use aws_smithy_types::DateTime;
-use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
+use chrono::Utc;
+use lambda_http::{Body, Error, Request, Response};
 use newsletter_lambdas::admin::{
-    aws_clients, dynamodb_utils, format_error_response, format_response, get_user_context, AppError,
+    aws_clients, dynamodb_utils, format_response, get_user_context, AppError,
 };
 use serde::Serialize;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 
 #[derive(Serialize)]
@@ -56,11 +59,24 @@ struct ProfileData {
 }
 
 #[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
 struct PreferencesData {
     #[serde(skip_serializing_if = "Option::is_none")]
     timezone: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     locale: Option<String>,
+}
+
+#[derive(Debug)]
+struct TenantRecord {
+    name: Option<String>,
+    brand_name: Option<String>,
+    website: Option<String>,
+    industry: Option<String>,
+    brand_description: Option<String>,
+    brand_logo: Option<String>,
+    tags: Option<Vec<String>>,
+    updated_at: String,
 }
 
 #[derive(Serialize)]
@@ -73,17 +89,6 @@ struct PublicProfileResponse {
     last_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     links: Option<Vec<String>>,
-}
-
-struct TenantRecord {
-    name: Option<String>,
-    brand_name: Option<String>,
-    website: Option<String>,
-    industry: Option<String>,
-    brand_description: Option<String>,
-    brand_logo: Option<String>,
-    tags: Option<Vec<String>>,
-    updated_at: String,
 }
 
 impl TenantRecord {
@@ -145,27 +150,53 @@ impl CognitoUserAttributes {
     }
 }
 
-async fn function_handler(event: Request) -> Result<Response<Body>, Error> {
+pub async fn get_own_profile(event: Request) -> Result<Response<Body>, Error> {
     let user_context = get_user_context(&event)?;
     let user_id = user_context.user_id.clone();
     let current_user_email = user_context.email.clone();
     let tenant_id = user_context.tenant_id.clone();
 
-    let path_params = event.path_parameters();
-    let requested_user_id = path_params.first("userId");
-    let is_own_profile = requested_user_id.is_none();
+    let cognito_client = aws_clients::get_cognito_client().await;
+    let user_pool_id = std::env::var("USER_POOL_ID")
+        .map_err(|_| AppError::InternalError("USER_POOL_ID not set".to_string()))?;
 
-    let target_email = if is_own_profile {
-        current_user_email
-    } else {
-        match find_user_email_by_sub(requested_user_id.unwrap()).await {
-            Some(email) => email,
-            None => {
-                return Ok(format_response(
-                    404,
-                    serde_json::json!({"message": "User not found"}),
-                )?)
-            }
+    let user_result = cognito_client
+        .admin_get_user()
+        .user_pool_id(&user_pool_id)
+        .username(&current_user_email)
+        .send()
+        .await?;
+
+    let attributes =
+        CognitoUserAttributes::from_cognito_attributes(user_result.user_attributes().to_vec());
+
+    let profile = serde_json::to_value(
+        build_own_profile(
+            &user_id,
+            &attributes,
+            user_result.user_last_modified_date(),
+            &tenant_id,
+        )
+        .await?,
+    )?;
+
+    Ok(format_response(200, profile)?)
+}
+
+pub async fn get_user_profile(
+    _event: Request,
+    user_id: Option<String>,
+) -> Result<Response<Body>, Error> {
+    let requested_user_id =
+        user_id.ok_or_else(|| AppError::BadRequest("userId parameter required".to_string()))?;
+
+    let target_email = match find_user_email_by_sub(&requested_user_id).await {
+        Some(email) => email,
+        None => {
+            return Ok(format_response(
+                404,
+                serde_json::json!({"message": "User not found"}),
+            )?)
         }
     };
 
@@ -183,21 +214,19 @@ async fn function_handler(event: Request) -> Result<Response<Body>, Error> {
     let attributes =
         CognitoUserAttributes::from_cognito_attributes(user_result.user_attributes().to_vec());
 
-    let profile = if is_own_profile {
-        serde_json::to_value(
-            build_own_profile(
-                &user_id,
-                &attributes,
-                user_result.user_last_modified_date(),
-                &tenant_id,
-            )
-            .await?,
-        )?
-    } else {
-        serde_json::to_value(build_public_profile(&attributes).await?)?
-    };
+    let profile = serde_json::to_value(build_public_profile(&attributes).await?)?;
 
     Ok(format_response(200, profile)?)
+}
+
+pub async fn update_profile(event: Request) -> Result<Response<Body>, Error> {
+    match handle_update_request(event).await {
+        Ok(response) => Ok(response),
+        Err(err) => {
+            tracing::error!(error = ?err, "Update profile error");
+            Ok(format_update_error_response(err))
+        }
+    }
 }
 
 async fn find_user_email_by_sub(user_id: &str) -> Option<String> {
@@ -323,30 +352,203 @@ async fn fetch_brand_data(tenant_id: &str) -> BrandData {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Error> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .json()
-        .init();
+#[derive(Debug)]
+enum UpdateProfileError {
+    Unauthorized,
+    BadRequest(String),
+    NotFound(String),
+    Internal(String),
+}
 
-    run(service_fn(|event: Request| async move {
-        match function_handler(event).await {
-            Ok(response) => Ok::<Response<Body>, std::convert::Infallible>(response),
-            Err(e) => {
-                tracing::error!(error = %e, "Function execution failed");
+#[derive(Default)]
+struct UpdateProfileData {
+    first_name: Option<Value>,
+    last_name: Option<Value>,
+    timezone: Option<Value>,
+    locale: Option<Value>,
+    links: Option<Value>,
+    provided_fields: usize,
+}
 
-                if let Some(app_err) = e.downcast_ref::<AppError>() {
-                    Ok(format_error_response(app_err))
-                } else {
-                    Ok(format_error_response(&AppError::InternalError(
-                        e.to_string(),
-                    )))
-                }
-            }
+async fn handle_update_request(event: Request) -> Result<Response<Body>, UpdateProfileError> {
+    let user_context = get_user_context(&event).map_err(|_| UpdateProfileError::Unauthorized)?;
+    let email = user_context.email;
+
+    let body = parse_body(&event)?;
+    let profile_data = extract_profile_data(&body);
+
+    if profile_data.provided_fields == 0 {
+        return Err(UpdateProfileError::BadRequest(
+            "At least one field must be provided for an update".to_string(),
+        ));
+    }
+
+    let updated_profile = update_personal_info(&email, &profile_data).await?;
+
+    format_response(
+        200,
+        json!({
+            "message": "Profile updated successfully",
+            "profile": updated_profile
+        }),
+    )
+    .map_err(|err| UpdateProfileError::Internal(err.to_string()))
+}
+
+fn parse_body(event: &Request) -> Result<Value, UpdateProfileError> {
+    match event.body() {
+        Body::Text(text) => serde_json::from_str(text)
+            .map_err(|err| UpdateProfileError::Internal(format!("Invalid JSON body: {}", err))),
+        Body::Binary(bytes) => serde_json::from_slice(bytes)
+            .map_err(|err| UpdateProfileError::Internal(format!("Invalid JSON body: {}", err))),
+        Body::Empty => Ok(json!({})),
+    }
+}
+
+fn extract_profile_data(body: &Value) -> UpdateProfileData {
+    let mut data = UpdateProfileData::default();
+    let Value::Object(map) = body else {
+        return data;
+    };
+
+    let fields = [
+        ("firstName", &mut data.first_name),
+        ("lastName", &mut data.last_name),
+        ("timezone", &mut data.timezone),
+        ("locale", &mut data.locale),
+        ("links", &mut data.links),
+    ];
+
+    for (key, target) in fields {
+        if map.contains_key(key) {
+            *target = Some(map.get(key).cloned().unwrap_or(Value::Null));
+            data.provided_fields += 1;
         }
+    }
+
+    data
+}
+
+async fn update_personal_info(
+    email: &str,
+    profile_data: &UpdateProfileData,
+) -> Result<Value, UpdateProfileError> {
+    let mut user_attributes = Vec::new();
+
+    if let Some(value) = profile_data.first_name.as_ref().and_then(non_empty_string) {
+        user_attributes.push(build_attribute("given_name", value)?);
+    }
+    if let Some(value) = profile_data.last_name.as_ref().and_then(non_empty_string) {
+        user_attributes.push(build_attribute("family_name", value)?);
+    }
+    if let Some(value) = profile_data.timezone.as_ref().and_then(non_empty_string) {
+        user_attributes.push(build_attribute("zoneinfo", value)?);
+    }
+    if let Some(value) = profile_data.locale.as_ref().and_then(non_empty_string) {
+        user_attributes.push(build_attribute("locale", value)?);
+    }
+    if let Some(value) = profile_data.links.as_ref() {
+        if !value.is_null() {
+            let links_json = serde_json::to_string(value)
+                .map_err(|err| UpdateProfileError::Internal(format!("Invalid links: {}", err)))?;
+            user_attributes.push(build_attribute("custom:profile_links", &links_json)?);
+        }
+    }
+
+    let updated_at = Utc::now().to_rfc3339();
+    user_attributes.push(build_attribute("custom:profile_updated_at", &updated_at)?);
+
+    let user_pool_id = std::env::var("USER_POOL_ID")
+        .map_err(|err| UpdateProfileError::Internal(format!("USER_POOL_ID not set: {}", err)))?;
+    let cognito_client = aws_clients::get_cognito_client().await;
+
+    let result = cognito_client
+        .admin_update_user_attributes()
+        .user_pool_id(user_pool_id)
+        .username(email)
+        .set_user_attributes(Some(user_attributes))
+        .send()
+        .await;
+
+    if let Err(err) = result {
+        let is_user_not_found = err
+            .as_service_error()
+            .map(|service_error| {
+                matches!(
+                    service_error,
+                    AdminUpdateUserAttributesError::UserNotFoundException(_)
+                )
+            })
+            .unwrap_or(false);
+
+        if is_user_not_found {
+            return Err(UpdateProfileError::NotFound("User not found".to_string()));
+        }
+
+        return Err(UpdateProfileError::Internal(format!(
+            "Cognito update failed: {}",
+            err
+        )));
+    }
+
+    Ok(json!({
+        "firstName": normalize_string_response(profile_data.first_name.as_ref()),
+        "lastName": normalize_string_response(profile_data.last_name.as_ref()),
+        "timezone": normalize_string_response(profile_data.timezone.as_ref()),
+        "locale": normalize_string_response(profile_data.locale.as_ref()),
+        "links": normalize_links_response(profile_data.links.as_ref()),
+        "updatedAt": updated_at
     }))
-    .await
+}
+
+fn build_attribute(name: &str, value: &str) -> Result<AttributeType, UpdateProfileError> {
+    AttributeType::builder()
+        .name(name)
+        .value(value)
+        .build()
+        .map_err(|err| UpdateProfileError::Internal(format!("Invalid attribute: {}", err)))
+}
+
+fn non_empty_string(value: &Value) -> Option<&str> {
+    match value {
+        Value::String(s) if !s.trim().is_empty() => Some(s.as_str()),
+        _ => None,
+    }
+}
+
+fn normalize_string_response(value: Option<&Value>) -> Option<String> {
+    value.and_then(|value| value.as_str()).and_then(|s| {
+        if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        }
+    })
+}
+
+fn normalize_links_response(value: Option<&Value>) -> Option<Value> {
+    match value {
+        Some(Value::Null) | None => None,
+        Some(other) => Some(other.clone()),
+    }
+}
+
+fn format_update_error_response(err: UpdateProfileError) -> Response<Body> {
+    let (status, message) = match err {
+        UpdateProfileError::Unauthorized => (403, "Authentication required".to_string()),
+        UpdateProfileError::BadRequest(message) => (400, message),
+        UpdateProfileError::NotFound(message) => {
+            tracing::warn!(error = %message, "Update profile not found");
+            (404, "User not found".to_string())
+        }
+        UpdateProfileError::Internal(message) => {
+            tracing::error!(error = %message, "Update profile internal error");
+            (500, "Failed to update profile".to_string())
+        }
+    };
+
+    format_response(status, json!({ "message": message }))
+        .unwrap_or_else(|_| Response::builder().status(500).body(Body::Empty).unwrap())
 }
 
 #[cfg(test)]
@@ -354,7 +556,6 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    // Feature: rust-lambda-migration, Property 1: Functional Equivalence for Profile Operations
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(100))]
 
@@ -504,5 +705,33 @@ mod tests {
         let parsed = CognitoUserAttributes::from_cognito_attributes(attrs);
         let parsed_links = parsed.parse_profile_links();
         assert!(parsed_links.is_none(), "empty string should return None");
+    }
+
+    #[test]
+    fn test_extract_profile_data_counts_fields() {
+        let body = json!({
+            "firstName": "Ada",
+            "timezone": "UTC",
+            "links": ["https://example.com"]
+        });
+
+        let data = extract_profile_data(&body);
+        assert_eq!(data.provided_fields, 3);
+        assert!(data.first_name.is_some());
+        assert!(data.timezone.is_some());
+        assert!(data.links.is_some());
+    }
+
+    #[test]
+    fn test_extract_profile_data_handles_empty_body() {
+        let body = json!({});
+        let data = extract_profile_data(&body);
+        assert_eq!(data.provided_fields, 0);
+    }
+
+    #[test]
+    fn test_normalize_string_response_drops_empty() {
+        let value = Value::String("".to_string());
+        assert!(normalize_string_response(Some(&value)).is_none());
     }
 }

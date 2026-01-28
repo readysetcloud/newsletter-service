@@ -13,28 +13,28 @@ export class ApiKeyService {
    * Create a new API key
    */
   async createApiKey(data: CreateApiKeyRequest): Promise<ApiResponse<{ id: string; value: string }>> {
-    return apiClient.post<{ id: string; value: string }>('/api-keys', data);
+    return apiClient.post<{ id: string; value: string }>('/admin/api-keys', data);
   }
 
   /**
    * List all API keys for the current user
    */
   async listApiKeys(): Promise<ApiResponse<{ apiKeys: Omit<ApiKey, 'keyValue'>[]; count: number }>> {
-    return apiClient.get<{ apiKeys: Omit<ApiKey, 'keyValue'>[]; count: number }>('/api-keys');
+    return apiClient.get<{ apiKeys: Omit<ApiKey, 'keyValue'>[]; count: number }>('/admin/api-keys');
   }
 
   /**
    * Get details of a specific API key (without the key value)
    */
   async getApiKey(keyId: string): Promise<ApiResponse<{ apiKey: Omit<ApiKey, 'keyValue'> }>> {
-    return apiClient.get<{ apiKey: Omit<ApiKey, 'keyValue'> }>(`/api-keys/${keyId}`);
+    return apiClient.get<{ apiKey: Omit<ApiKey, 'keyValue'> }>(`/admin/api-keys/${keyId}`);
   }
 
   /**
    * Delete an API key permanently
    */
   async deleteApiKey(keyId: string): Promise<ApiResponse<void>> {
-    return apiClient.delete<void>(`/api-keys/${keyId}`);
+    return apiClient.delete<void>(`/admin/api-keys/${keyId}`);
   }
 
   /**
@@ -51,7 +51,7 @@ export class ApiKeyService {
       keyId: string;
       status: string;
       revokedAt: string;
-    }>(`/api-keys/${keyId}?revoke=true`);
+    }>(`/admin/api-keys/${keyId}?revoke=true`);
   }
 
   /**

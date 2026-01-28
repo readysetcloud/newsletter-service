@@ -3,6 +3,19 @@ info:
   title: Newsletter Dashboard
   description: |
     Used to manage your newsletter account, profile, API keys, and sender emails.
+
+    ## Architecture Notes
+
+    Admin endpoints (profile, brand, API keys) are handled by a consolidated Lambda function
+    using a proxy routing pattern. All admin routes are routed through `/admin/{proxy+}` to
+    the AdminFunction, which internally routes requests to the appropriate handler based on
+    HTTP method and path.
+
+    This architecture provides:
+    - Reduced cold start overhead (single function vs multiple functions)
+    - Simplified deployment and maintenance
+    - Consistent error handling and logging
+    - Shared authentication and authorization logic
   version: 1.0.0
 
 x-amazon-apigateway-request-validators:
@@ -154,7 +167,7 @@ paths:
           $ref: "#/components/responses/UnknownError"
       x-amazon-apigateway-integration:
         uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetProfileFunction.Arn}/invocations
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminFunction.Arn}/invocations
         httpMethod: POST
         type: aws_proxy
 
@@ -232,7 +245,7 @@ paths:
           $ref: "#/components/responses/UnknownError"
       x-amazon-apigateway-integration:
         uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetProfileFunction.Arn}/invocations
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminFunction.Arn}/invocations
         httpMethod: POST
         type: aws_proxy
 
@@ -300,7 +313,7 @@ paths:
       x-amazon-apigateway-request-validator: Validate All
       x-amazon-apigateway-integration:
         uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UploadBrandPhotoFunction.Arn}/invocations
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminFunction.Arn}/invocations
         httpMethod: POST
         type: aws_proxy
 
@@ -352,7 +365,7 @@ paths:
       x-amazon-apigateway-request-validator: Validate All
       x-amazon-apigateway-integration:
         uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UploadBrandPhotoFunction.Arn}/invocations
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminFunction.Arn}/invocations
         httpMethod: POST
         type: aws_proxy
 
@@ -400,7 +413,7 @@ paths:
           $ref: "#/components/responses/UnknownError"
       x-amazon-apigateway-integration:
         uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CheckBrandIdFunction.Arn}/invocations
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminFunction.Arn}/invocations
         httpMethod: POST
         type: aws_proxy
 
@@ -500,7 +513,7 @@ paths:
       x-amazon-apigateway-request-validator: Validate All
       x-amazon-apigateway-integration:
         uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UpdateBrandFunction.Arn}/invocations
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminFunction.Arn}/invocations
         httpMethod: POST
         type: aws_proxy
 
@@ -599,7 +612,7 @@ paths:
       x-amazon-apigateway-request-validator: Validate All
       x-amazon-apigateway-integration:
         uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UpdateProfileFunction.Arn}/invocations
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminFunction.Arn}/invocations
         httpMethod: POST
         type: aws_proxy
 
@@ -676,7 +689,7 @@ paths:
       x-amazon-apigateway-request-validator: Validate All
       x-amazon-apigateway-integration:
         uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ManageApiKeysFunction.Arn}/invocations
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminFunction.Arn}/invocations
         httpMethod: POST
         type: aws_proxy
 
@@ -738,7 +751,7 @@ paths:
           $ref: "#/components/responses/UnknownError"
       x-amazon-apigateway-integration:
         uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ManageApiKeysFunction.Arn}/invocations
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminFunction.Arn}/invocations
         httpMethod: POST
         type: aws_proxy
 
@@ -806,7 +819,7 @@ paths:
           $ref: "#/components/responses/UnknownError"
       x-amazon-apigateway-integration:
         uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ManageApiKeysFunction.Arn}/invocations
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminFunction.Arn}/invocations
         httpMethod: POST
         type: aws_proxy
 
@@ -853,7 +866,7 @@ paths:
           $ref: "#/components/responses/UnknownError"
       x-amazon-apigateway-integration:
         uri:
-          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ManageApiKeysFunction.Arn}/invocations
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdminFunction.Arn}/invocations
         httpMethod: POST
         type: aws_proxy
 

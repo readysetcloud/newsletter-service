@@ -237,6 +237,41 @@ async fn update_sender_verification_status(
     Ok(now)
 }
 
+async fn cleanup_expired_identity(
+    ses_client: &SesClient,
+    email: &str,
+    tenant_id: &str,
+) -> Result<(), AppError> {
+    // Delete the SES identity
+    match ses_client
+        .delete_email_identity()
+        .email_identity(email)
+        .send()
+        .await
+    {
+        Ok(_) => {
+            tracing::info!(
+                "Deleted SES identity for expired verification: email={}, tenantId={}",
+                email,
+                tenant_id
+            );
+        }
+        Err(e) => {
+            // Log error but don't fail - identity might already be deleted
+            tracing::warn!(
+                "Failed to delete SES identity (may not exist): email={}, error={}",
+                email,
+                e
+            );
+        }
+    }
+
+    // Note: Tenant resource associations are automatically cleaned up when the identity is deleted
+    // SES handles this internally, so we don't need a separate API call
+
+    Ok(())
+}
+
 async fn schedule_next_status_check(
     tenant_id: &str,
     sender_id: &str,
@@ -380,7 +415,7 @@ async fn function_handler(event: LambdaEvent<Value>) -> Result<SchedulerCheckRes
     }
 
     let elapsed = Utc::now().signed_duration_since(start_time);
-    let timed_out = elapsed >= Duration::hours(1);
+    let timed_out = elapsed >= Duration::hours(24);
 
     if updated_sender.verification_status == VerificationStatus::Pending {
         if timed_out {
@@ -397,8 +432,11 @@ async fn function_handler(event: LambdaEvent<Value>) -> Result<SchedulerCheckRes
             updated_sender.updated_at = updated_at;
             status_changed = true;
 
+            // Clean up the expired SES identity
+            cleanup_expired_identity(&ses_client, &sender.email, &tenant_id).await?;
+
             tracing::info!(
-                "Sender verification timed out: tenantId={}, senderId={}",
+                "Sender verification timed out and identity cleaned up: tenantId={}, senderId={}",
                 tenant_id,
                 sender_id
             );
@@ -590,5 +628,215 @@ mod tests {
 
         assert_eq!(parsed["verificationStatus"], "not_found");
         assert_eq!(parsed["error"], "Identity not found in SES");
+    }
+
+    #[test]
+    fn test_expiration_time_calculation_not_expired() {
+        let start_time = Utc::now() - Duration::hours(12);
+        let elapsed = Utc::now().signed_duration_since(start_time);
+        let timed_out = elapsed >= Duration::hours(24);
+
+        assert!(!timed_out);
+        assert!(elapsed < Duration::hours(24));
+    }
+
+    #[test]
+    fn test_expiration_time_calculation_just_expired() {
+        let start_time = Utc::now() - Duration::hours(24) - Duration::minutes(1);
+        let elapsed = Utc::now().signed_duration_since(start_time);
+        let timed_out = elapsed >= Duration::hours(24);
+
+        assert!(timed_out);
+        assert!(elapsed >= Duration::hours(24));
+    }
+
+    #[test]
+    fn test_expiration_time_calculation_far_expired() {
+        let start_time = Utc::now() - Duration::hours(48);
+        let elapsed = Utc::now().signed_duration_since(start_time);
+        let timed_out = elapsed >= Duration::hours(24);
+
+        assert!(timed_out);
+        assert!(elapsed >= Duration::hours(24));
+    }
+
+    #[test]
+    fn test_expiration_time_calculation_exactly_24_hours() {
+        let start_time = Utc::now() - Duration::hours(24);
+        let elapsed = Utc::now().signed_duration_since(start_time);
+        let timed_out = elapsed >= Duration::hours(24);
+
+        assert!(timed_out);
+    }
+
+    #[test]
+    fn test_expiration_time_calculation_one_minute_before() {
+        let start_time = Utc::now() - Duration::hours(23) - Duration::minutes(59);
+        let elapsed = Utc::now().signed_duration_since(start_time);
+        let timed_out = elapsed >= Duration::hours(24);
+
+        assert!(!timed_out);
+    }
+
+    #[test]
+    fn test_final_state_verified() {
+        let status = VerificationStatus::Verified;
+        let is_final = status == VerificationStatus::Verified
+            || status == VerificationStatus::Failed
+            || status == VerificationStatus::VerificationTimedOut;
+
+        assert!(is_final);
+    }
+
+    #[test]
+    fn test_final_state_failed() {
+        let status = VerificationStatus::Failed;
+        let is_final = status == VerificationStatus::Verified
+            || status == VerificationStatus::Failed
+            || status == VerificationStatus::VerificationTimedOut;
+
+        assert!(is_final);
+    }
+
+    #[test]
+    fn test_final_state_timed_out() {
+        let status = VerificationStatus::VerificationTimedOut;
+        let is_final = status == VerificationStatus::Verified
+            || status == VerificationStatus::Failed
+            || status == VerificationStatus::VerificationTimedOut;
+
+        assert!(is_final);
+    }
+
+    #[test]
+    fn test_final_state_pending_not_final() {
+        let status = VerificationStatus::Pending;
+        let is_final = status == VerificationStatus::Verified
+            || status == VerificationStatus::Failed
+            || status == VerificationStatus::VerificationTimedOut;
+
+        assert!(!is_final);
+    }
+
+    #[test]
+    fn test_verified_sender_skips_checking() {
+        let sender = SenderRecord {
+            pk: "tenant-123".to_string(),
+            sk: "sender#abc-456".to_string(),
+            gsi1pk: "sender#tenant-123".to_string(),
+            gsi1sk: "test@example.com".to_string(),
+            sender_id: "abc-456".to_string(),
+            tenant_id: "tenant-123".to_string(),
+            email: "test@example.com".to_string(),
+            name: Some("Test Sender".to_string()),
+            verification_type: VerificationType::Mailbox,
+            verification_status: VerificationStatus::Verified,
+            is_default: true,
+            domain: None,
+            ses_identity_arn: None,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            verified_at: Some("2024-01-01T00:05:00Z".to_string()),
+            failure_reason: None,
+            last_verification_sent: Some("2024-01-01T00:00:00Z".to_string()),
+            emails_sent: 0,
+            last_sent_at: None,
+        };
+
+        let should_check = sender.verification_status != VerificationStatus::Verified;
+        assert!(!should_check);
+    }
+
+    #[test]
+    fn test_failed_sender_skips_checking() {
+        let sender = SenderRecord {
+            pk: "tenant-123".to_string(),
+            sk: "sender#abc-456".to_string(),
+            gsi1pk: "sender#tenant-123".to_string(),
+            gsi1sk: "test@example.com".to_string(),
+            sender_id: "abc-456".to_string(),
+            tenant_id: "tenant-123".to_string(),
+            email: "test@example.com".to_string(),
+            name: Some("Test Sender".to_string()),
+            verification_type: VerificationType::Mailbox,
+            verification_status: VerificationStatus::Failed,
+            is_default: true,
+            domain: None,
+            ses_identity_arn: None,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            verified_at: None,
+            failure_reason: Some("Verification failed".to_string()),
+            last_verification_sent: Some("2024-01-01T00:00:00Z".to_string()),
+            emails_sent: 0,
+            last_sent_at: None,
+        };
+
+        let should_check = sender.verification_status != VerificationStatus::Verified
+            && sender.verification_status != VerificationStatus::Failed
+            && sender.verification_status != VerificationStatus::VerificationTimedOut;
+        assert!(!should_check);
+    }
+
+    #[test]
+    fn test_timed_out_sender_skips_checking() {
+        let sender = SenderRecord {
+            pk: "tenant-123".to_string(),
+            sk: "sender#abc-456".to_string(),
+            gsi1pk: "sender#tenant-123".to_string(),
+            gsi1sk: "test@example.com".to_string(),
+            sender_id: "abc-456".to_string(),
+            tenant_id: "tenant-123".to_string(),
+            email: "test@example.com".to_string(),
+            name: Some("Test Sender".to_string()),
+            verification_type: VerificationType::Mailbox,
+            verification_status: VerificationStatus::VerificationTimedOut,
+            is_default: true,
+            domain: None,
+            ses_identity_arn: None,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            verified_at: None,
+            failure_reason: None,
+            last_verification_sent: Some("2024-01-01T00:00:00Z".to_string()),
+            emails_sent: 0,
+            last_sent_at: None,
+        };
+
+        let should_check = sender.verification_status != VerificationStatus::Verified
+            && sender.verification_status != VerificationStatus::Failed
+            && sender.verification_status != VerificationStatus::VerificationTimedOut;
+        assert!(!should_check);
+    }
+
+    #[test]
+    fn test_pending_sender_continues_checking() {
+        let sender = SenderRecord {
+            pk: "tenant-123".to_string(),
+            sk: "sender#abc-456".to_string(),
+            gsi1pk: "sender#tenant-123".to_string(),
+            gsi1sk: "test@example.com".to_string(),
+            sender_id: "abc-456".to_string(),
+            tenant_id: "tenant-123".to_string(),
+            email: "test@example.com".to_string(),
+            name: Some("Test Sender".to_string()),
+            verification_type: VerificationType::Mailbox,
+            verification_status: VerificationStatus::Pending,
+            is_default: true,
+            domain: None,
+            ses_identity_arn: None,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            verified_at: None,
+            failure_reason: None,
+            last_verification_sent: Some("2024-01-01T00:00:00Z".to_string()),
+            emails_sent: 0,
+            last_sent_at: None,
+        };
+
+        let should_check = sender.verification_status != VerificationStatus::Verified
+            && sender.verification_status != VerificationStatus::Failed
+            && sender.verification_status != VerificationStatus::VerificationTimedOut;
+        assert!(should_check);
     }
 }

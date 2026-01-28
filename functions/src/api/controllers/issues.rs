@@ -512,9 +512,7 @@ async fn query_issues_by_tenant(
         .filter_map(|item| parse_issue_list_item(item).ok())
         .collect();
 
-    let next_token = result
-        .last_evaluated_key()
-        .map(encode_pagination_token);
+    let next_token = result.last_evaluated_key().map(encode_pagination_token);
 
     Ok(ListIssuesResponse { issues, next_token })
 }
@@ -1268,7 +1266,6 @@ fn build_issue_response(issue: IssueRecord, stats: Option<IssueStats>) -> GetIss
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     #[test]
     fn test_parse_issue_record_complete() {

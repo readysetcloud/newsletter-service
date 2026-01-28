@@ -4,9 +4,7 @@ use aws_sdk_dynamodb::types::AttributeValue;
 use aws_smithy_types::DateTime;
 use chrono::Utc;
 use lambda_http::{Body, Error, Request, Response};
-use newsletter::admin::{
-    aws_clients, dynamodb_utils, format_response, get_user_context, AppError,
-};
+use newsletter::admin::{aws_clients, dynamodb_utils, format_response, get_user_context, AppError};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;

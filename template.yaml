@@ -30,12 +30,6 @@ Parameters:
     Default: "/stripe/api-key"
     Description: SSM Parameter Store path for Stripe API key (secure string)
 
-  MomentoApiKey:
-    Type: String
-    Description: Super user API key for Momento
-  MomentoCacheName:
-    Type: String
-    Description: Momento cache name for real-time notifications
   VerifiedFromEmail:
     Type: String
     Default: ""
@@ -285,6 +279,10 @@ Resources:
     Properties:
       TracingEnabled: true
       StageName: api
+      Cors:
+        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: !Sub "'${Origin}'"
       Auth:
         DefaultAuthorizer: LambdaAuthorizer
         AddDefaultAuthorizerToCorsPreflight: false
@@ -301,11 +299,6 @@ Resources:
           HttpMethod: "*"
           LoggingLevel: ERROR
           DataTraceEnabled: True
-      DefinitionBody:
-        Fn::Transform:
-          Name: AWS::Include
-          Parameters:
-            Location: ./openapi.yaml
 
   NewsletterTable:
     Type: AWS::DynamoDB::Table
@@ -1124,55 +1117,18 @@ Resources:
           USER_POOL_ID: !Ref NewsletterUserPool
           USER_POOL_CLIENT_ID: !Ref NewsletterUserPoolClient
 
-  GetProfileFunction:
+  AdminFunction:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: rust-cargolambda
       BuildProperties:
-        Binary: get-profile
+        Binary: admin-router
     Properties:
       CodeUri: .
       Handler: bootstrap
       Runtime: provided.al2023
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - cognito-idp:AdminGetUser
-                - cognito-idp:ListUsers
-              Resource: !GetAtt NewsletterUserPool.Arn
-            - Effect: Allow
-              Action: dynamodb:GetItem
-              Resource: !GetAtt NewsletterTable.Arn
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref NewsletterUserPool
-      Events:
-        GetMyProfile:
-          Type: Api
-          Properties:
-            RestApiId: !Ref DashboardApi
-            Path: /me
-            Method: GET
-        GetUserProfile:
-          Type: Api
-          Properties:
-            RestApiId: !Ref DashboardApi
-            Path: /profiles/{userId}
-            Method: GET
-
-  CheckBrandIdFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: rust-cargolambda
-      BuildProperties:
-        Binary: check-brand-id
-    Properties:
-      CodeUri: .
-      Handler: bootstrap
-      Runtime: provided.al2023
+      Timeout: 30
+      MemorySize: 512
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -1180,55 +1136,47 @@ Resources:
             - Effect: Allow
               Action:
                 - dynamodb:GetItem
-              Resource: !GetAtt NewsletterTable.Arn
-      Events:
-        FromApi:
-          Type: Api
-          Properties:
-            RestApiId: !Ref DashboardApi
-            Path: /brand/validate
-            Method: GET
-
-  UpdateBrandFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: rust-cargolambda
-      BuildProperties:
-        Binary: update-brand
-    Properties:
-      CodeUri: .
-      Handler: bootstrap
-      Runtime: provided.al2023
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+                - dynamodb:DeleteItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/*"
+            # Cognito permissions for user management
             - Effect: Allow
               Action:
                 - cognito-idp:AdminGetUser
                 - cognito-idp:AdminUpdateUserAttributes
+                - cognito-idp:ListUsers
               Resource: !GetAtt NewsletterUserPool.Arn
+            # S3 permissions for brand photo uploads
             - Effect: Allow
               Action:
-                - dynamodb:UpdateItem
-                - dynamodb:GetItem
-                - dynamodb:PutItem
-              Resource: !GetAtt NewsletterTable.Arn
-            - Effect: Allow
-              Action:
-                - events:PutEvents
-              Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
+                - s3:PutObject
+                - s3:PutObjectAcl
+                - s3:GetObject
+                - s3:GetObjectAttributes
+              Resource: !Sub "${HostingBucket.Arn}/*"
       Environment:
         Variables:
+          TABLE_NAME: !Ref NewsletterTable
           USER_POOL_ID: !Ref NewsletterUserPool
           HOSTING_BUCKET_NAME: !Ref HostingBucket
+          ORIGIN: !Ref Origin
       Events:
-        FromApi:
+        AdminProxy:
           Type: Api
           Properties:
+            Path: /admin/{proxy+}
+            Method: ANY
             RestApiId: !Ref DashboardApi
-            Path: /me/brand
-            Method: PUT
+        AdminBase:
+          Type: Api
+          Properties:
+            Path: /admin
+            Method: ANY
+            RestApiId: !Ref DashboardApi
 
   S3AssetCleanupFunction:
     Type: AWS::Serverless::Function
@@ -1293,126 +1241,6 @@ Resources:
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
-
-  UpdateProfileFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: rust-cargolambda
-      BuildProperties:
-        Binary: update-profile
-    Properties:
-      CodeUri: .
-      Handler: bootstrap
-      Runtime: provided.al2023
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - cognito-idp:AdminUpdateUserAttributes
-              Resource: !GetAtt NewsletterUserPool.Arn
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref NewsletterUserPool
-      Events:
-        FromApi:
-          Type: Api
-          Properties:
-            RestApiId: !Ref DashboardApi
-            Path: /me/profile
-            Method: PUT
-
-  ManageApiKeysFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: rust-cargolambda
-      BuildProperties:
-        Binary: manage-api-keys
-    Properties:
-      CodeUri: .
-      Handler: bootstrap
-      Runtime: provided.al2023
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - dynamodb:PutItem
-                - dynamodb:Query
-                - dynamodb:DeleteItem
-                - dynamodb:GetItem
-                - dynamodb:UpdateItem
-              Resource: !GetAtt NewsletterTable.Arn
-      Events:
-        CreateApiKey:
-          Type: Api
-          Properties:
-            RestApiId: !Ref DashboardApi
-            Path: /api-keys
-            Method: POST
-        ListApiKeys:
-          Type: Api
-          Properties:
-            RestApiId: !Ref DashboardApi
-            Path: /api-keys
-            Method: GET
-        GetApiKey:
-          Type: Api
-          Properties:
-            RestApiId: !Ref DashboardApi
-            Path: /api-keys/{keyId}
-            Method: GET
-        DeleteApiKey:
-          Type: Api
-          Properties:
-            RestApiId: !Ref DashboardApi
-            Path: /api-keys/{keyId}
-            Method: DELETE
-
-  UploadBrandPhotoFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: rust-cargolambda
-      BuildProperties:
-        Binary: upload-brand-photo
-    Properties:
-      CodeUri: .
-      Handler: bootstrap
-      Runtime: provided.al2023
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - s3:PutObject
-                - s3:PutObjectAcl
-                - s3:GetObject
-                - s3:GetObjectAttributes
-              Resource: !Sub "${HostingBucket.Arn}/*"
-            - Effect: Allow
-              Action:
-                - dynamodb:GetItem
-                - dynamodb:UpdateItem
-              Resource: !GetAtt NewsletterTable.Arn
-      Environment:
-        Variables:
-          HOSTING_BUCKET_NAME: !Ref HostingBucket
-      Events:
-        GenerateUploadUrl:
-          Type: Api
-          Properties:
-            RestApiId: !Ref DashboardApi
-            Path: /brand/logo
-            Method: POST
-        ConfirmUpload:
-          Type: Api
-          Properties:
-            RestApiId: !Ref DashboardApi
-            Path: /brand/logo
-            Method: PUT
 
   ImportSubscriberListFunction:
     Type: AWS::Serverless::Function
@@ -3236,44 +3064,12 @@ Resources:
             BatchSize: 5
             MaximumBatchingWindowInSeconds: 30
 
-  GetSendersFunction:
+  SendersFunction:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: rust-cargolambda
       BuildProperties:
-        Binary: get-senders
-    Properties:
-      CodeUri: .
-      Handler: bootstrap
-      Runtime: provided.al2023
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - dynamodb:Query
-              Resource:
-                - !GetAtt NewsletterTable.Arn
-                - !Sub "${NewsletterTable.Arn}/index/GSI1"
-      Environment:
-        Variables:
-          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
-          SES_CONFIGURATION_SET: !Ref ConfigurationSet
-      Events:
-        GetSenders:
-          Type: Api
-          Properties:
-            RestApiId: !Ref DashboardApi
-            Path: /senders
-            Method: GET
-
-  GetSenderStatusFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: rust-cargolambda
-      BuildProperties:
-        Binary: get-sender-status
+        Binary: senders-router
     Properties:
       CodeUri: .
       Handler: bootstrap
@@ -3285,58 +3081,30 @@ Resources:
             - Effect: Allow
               Action:
                 - dynamodb:GetItem
-                - dynamodb:UpdateItem
-              Resource:
-                - !GetAtt NewsletterTable.Arn
-            - Effect: Allow
-              Action:
-                - ses:GetEmailIdentity
-              Resource: "*"
-      Environment:
-        Variables:
-          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
-          SES_CONFIGURATION_SET: !Ref ConfigurationSet
-      Events:
-        GetSenderStatus:
-          Type: Api
-          Properties:
-            RestApiId: !Ref DashboardApi
-            Path: /senders/{senderId}/status
-            Method: GET
-
-  CreateSenderFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: rust-cargolambda
-      BuildProperties:
-        Binary: create-sender
-    Properties:
-      CodeUri: .
-      Handler: bootstrap
-      Runtime: provided.al2023
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
                 - dynamodb:PutItem
-              Resource:
-                - !GetAtt NewsletterTable.Arn
-            - Effect: Allow
-              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:DeleteItem
                 - dynamodb:Query
               Resource:
+                - !GetAtt NewsletterTable.Arn
                 - !Sub "${NewsletterTable.Arn}/index/GSI1"
             - Effect: Allow
               Action:
                 - ses:CreateEmailIdentity
+                - ses:DeleteEmailIdentity
+                - ses:GetEmailIdentity
+                - ses:PutEmailIdentityDkimSigningAttributes
                 - ses:SendCustomVerificationEmail
                 - ses:CreateTenantResourceAssociation
+                - ses:DeleteTenantResourceAssociation
+                - ses:GetIdentityVerificationAttributes
+                - ses:GetIdentityDkimAttributes
               Resource: "*"
             - Effect: Allow
               Action:
                 - scheduler:CreateSchedule
+                - scheduler:UpdateSchedule
+                - scheduler:DeleteSchedule
               Resource: !Sub "arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/default/sender-check-*"
             - Effect: Allow
               Action:
@@ -3357,12 +3125,18 @@ Resources:
           CHECK_SENDER_STATUS_FUNCTION_ARN: !GetAtt CheckSenderStatusAutomaticallyFunction.Arn
           SCHEDULER_ROLE_ARN: !GetAtt SchedulerExecutionRole.Arn
       Events:
-        CreateSender:
+        SendersProxy:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /senders/{proxy+}
+            Method: ANY
+        SendersBase:
           Type: Api
           Properties:
             RestApiId: !Ref DashboardApi
             Path: /senders
-            Method: POST
+            Method: ANY
 
   BootstrapVerificationTemplateFunction:
     Type: AWS::Serverless::Function
@@ -3399,161 +3173,6 @@ Resources:
       ServiceToken: !GetAtt BootstrapVerificationTemplateFunction.Arn
       # Force update on every deployment by including a timestamp-like value
       Version: !Sub "${AWS::StackName}-${Environment}"
-
-  UpdateSenderFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: rust-cargolambda
-      BuildProperties:
-        Binary: update-sender
-    Properties:
-      CodeUri: .
-      Handler: bootstrap
-      Runtime: provided.al2023
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - dynamodb:UpdateItem
-                - dynamodb:GetItem
-              Resource:
-                - !GetAtt NewsletterTable.Arn
-            - Effect: Allow
-              Action:
-                - dynamodb:Query
-              Resource:
-                - !Sub "${NewsletterTable.Arn}/index/GSI1"
-      Environment:
-        Variables:
-          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
-          SES_CONFIGURATION_SET: !Ref ConfigurationSet
-      Events:
-        UpdateSender:
-          Type: Api
-          Properties:
-            RestApiId: !Ref DashboardApi
-            Path: /senders/{senderId}
-            Method: PUT
-
-  DeleteSenderFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: rust-cargolambda
-      BuildProperties:
-        Binary: delete-sender
-    Properties:
-      CodeUri: .
-      Handler: bootstrap
-      Runtime: provided.al2023
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - dynamodb:DeleteItem
-                - dynamodb:GetItem
-                - dynamodb:Query
-                - dynamodb:UpdateItem
-              Resource:
-                - !GetAtt NewsletterTable.Arn
-                - !Sub "${NewsletterTable.Arn}/index/GSI1"
-            - Effect: Allow
-              Action:
-                - ses:DeleteEmailIdentity
-                - ses:DeleteTenantResourceAssociation
-              Resource: "*"
-      Environment:
-        Variables:
-          TABLE_NAME: !Ref NewsletterTable
-          RESOURCE_ARN_PREFIX: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/"
-      Events:
-        DeleteSender:
-          Type: Api
-          Properties:
-            RestApiId: !Ref DashboardApi
-            Path: /senders/{senderId}
-            Method: DELETE
-
-  VerifyDomainFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: rust-cargolambda
-      BuildProperties:
-        Binary: verify-domain
-    Properties:
-      CodeUri: .
-      Handler: bootstrap
-      Runtime: provided.al2023
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - dynamodb:PutItem
-                - dynamodb:GetItem
-              Resource: !GetAtt NewsletterTable.Arn
-            - Effect: Allow
-              Action:
-                - ses:CreateEmailIdentity
-                - ses:GetEmailIdentity
-                - ses:DeleteEmailIdentity
-                - ses:CreateTenantResourceAssociation
-              Resource: "*"
-      Environment:
-        Variables:
-          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
-          SES_CONFIGURATION_SET: !Ref ConfigurationSet
-          RESOURCE_ARN_PREFIX: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/"
-      Events:
-        VerifyDomain:
-          Type: Api
-          Properties:
-            RestApiId: !Ref DashboardApi
-            Path: /senders/verify-domain
-            Method: POST
-
-  GetDomainVerificationFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: rust-cargolambda
-      BuildProperties:
-        Binary: get-domain-verification
-    Properties:
-      CodeUri: .
-      Handler: bootstrap
-      Runtime: provided.al2023
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - dynamodb:GetItem
-              Resource: !GetAtt NewsletterTable.Arn
-            - Effect: Allow
-              Action:
-                - ses:GetIdentityVerificationAttributes
-                - ses:GetIdentityDkimAttributes
-                - dynamodb:UpdateItem
-                - dynamodb:Query
-              Resource:
-                - "*"
-                - !GetAtt NewsletterTable.Arn
-      Environment:
-        Variables:
-          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
-          SES_CONFIGURATION_SET: !Ref ConfigurationSet
-      Events:
-        GetDomainVerification:
-          Type: Api
-          Properties:
-            RestApiId: !Ref DashboardApi
-            Path: /senders/domain-verification/{domain}
-            Method: GET
 
   CheckSenderStatusAutomaticallyFunction:
     Type: AWS::Serverless::Function

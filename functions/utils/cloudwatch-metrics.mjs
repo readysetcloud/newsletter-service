@@ -13,24 +13,6 @@ const cloudwatch = new CloudWatchClient({});
  * Metric event types and their configurations
  */
 const METRIC_CONFIGS = {
-    // Momento token operations
-    'momento.token.generated': {
-        namespace: 'Newsletter/Momento',
-        metricName: 'TokenGenerationSuccess',
-        unit: 'Count',
-        value: 1
-    },
-    'momento.token.failed': {
-        namespace: 'Newsletter/Momento',
-        metricName: 'TokenGenerationFailure',
-        unit: 'Count',
-        value: 1
-    },
-    'momento.token.duration': {
-        namespace: 'Newsletter/Momento',
-        metricName: 'TokenGenerationDuration',
-        unit: 'Milliseconds'
-    },
 
     // Notification operations
     'notification.published': {
@@ -236,7 +218,7 @@ const METRIC_CONFIGS = {
 
 /**
  * Publish a metric event to CloudWatch
- * @param {string} eventType - Type of metric event (e.g., 'momento.token.generated')
+ * @param {string} eventType - Type of metric event (e.g., 'notification.published')
  * @param {Object} eventData - Event data containing value, dimensions, etc.
  * @param {string} correlationId - Correlation ID for logging
  */
@@ -369,7 +351,7 @@ export const publishMetricEvents = async (events, correlationId) => {
 
 /**
  * Convenience wrapper for timing operations and publishing duration metrics
- * @param {string} eventType - Base event type (e.g., 'momento.token')
+ * @param {string} eventType - Base event type (e.g., 'notification')
  * @param {Function} operation - Async operation to time
  * @param {Object} dimensions - Additional dimensions for the metric
  * @param {string} correlationId - Correlation ID for logging
@@ -436,34 +418,7 @@ export const createMetricsContext = (correlationId) => {
     };
 };
 
-// Backward compatibility functions (deprecated - use publishMetricEvent instead)
-/**
- * @deprecated Use publishMetricEvent('momento.token.generated', { dimensions: { TenantId: tenantId } }, correlationId)
- */
-export const publishTokenGenerationSuccess = async (tenantId, correlationId) => {
-    await publishMetricEvent('momento.token.generated', {
-        dimensions: { TenantId: tenantId }
-    }, correlationId);
-};
 
-/**
- * @deprecated Use publishMetricEvent('momento.token.failed', { dimensions: { TenantId: tenantId, ErrorType: errorType } }, correlationId)
- */
-export const publishTokenGenerationFailure = async (tenantId, errorType, correlationId) => {
-    await publishMetricEvent('momento.token.failed', {
-        dimensions: { TenantId: tenantId, ErrorType: errorType }
-    }, correlationId);
-};
-
-/**
- * @deprecated Use publishMetricEvent('momento.token.duration', { value: durationMs, dimensions: { TenantId: tenantId } }, correlationId)
- */
-export const publishTokenGenerationDuration = async (tenantId, durationMs, correlationId) => {
-    await publishMetricEvent('momento.token.duration', {
-        value: durationMs,
-        dimensions: { TenantId: tenantId }
-    }, correlationId);
-};
 
 /**
  * @deprecated Use publishMetricEvent('notification.published', { dimensions: { TenantId: tenantId, EventType: eventType } }, correlationId)
@@ -523,13 +478,13 @@ export const getMetricConfig = (eventType) => {
  * Example usage:
  *
  * // Simple event publishing
- * await publishMetricEvent('momento.token.generated', {
+ * await publishMetricEvent('notification.published', {
  *     dimensions: { TenantId: 'tenant-123' }
  * }, correlationId);
  *
  * // Timing an operation
- * const result = await timeOperation('momento.token', async () => {
- *     return await generateMomentoToken();
+ * const result = await timeOperation('notification', async () => {
+ *     return await publishNotification();
  * }, { TenantId: 'tenant-123' }, correlationId);
  *
  * // Using metrics context for batch operations

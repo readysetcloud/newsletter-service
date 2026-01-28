@@ -105,6 +105,12 @@ async fn handler(
     event: ApiGatewayCustomAuthorizerRequestTypeRequest,
     state: &AppState,
 ) -> Result<PolicyResponse, Error> {
+    // Allow OPTIONS requests through without authentication for CORS preflight
+    if event.http_method.as_ref().map(|m| m.as_str()) == Some("OPTIONS") {
+        let api_arn = get_api_arn_pattern(event.method_arn.as_deref().unwrap_or_default());
+        return Ok(generate_policy("anonymous", "Allow", &api_arn, None));
+    }
+
     match handle_authorization(&event, state).await {
         Ok(policy) => Ok(policy),
         Err(err) => {

@@ -61,3 +61,10 @@ pub fn format_error_response(error: &AppError) -> Response<Body> {
                 .unwrap()
         })
 }
+
+pub fn format_options_response() -> Result<Response<Body>, AppError> {
+    add_cors_headers(Response::builder())
+        .status(200)
+        .body(Body::Empty)
+        .map_err(|e| AppError::InternalError(format!("Failed to build response: {}", e)))
+}

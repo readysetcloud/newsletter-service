@@ -2163,6 +2163,7 @@ Resources:
           var rawU   = get('u');                 // encoded destination
           var rawCid = get('cid');               // campaign/issue id
           var src = get('src') || 'web';
+          var s = get('s') || null;              // subscriber email hash
 
           // Reliable in CloudFront Functions:
           var ip  = (event.viewer && event.viewer.ip) || null;
@@ -2207,7 +2208,7 @@ Resources:
           if (dest.length > 2048) return fallback('url_too_long');
 
           // SUCCESS: log minimal fields only, then redirect
-          try { console.log(JSON.stringify({ cid: cid || null, u: dest, src, ip })); } catch(_) {}
+          try { console.log(JSON.stringify({ cid: cid || null, u: dest, src, ip, s })); } catch(_) {}
           return redirect(dest);
         }
       FunctionConfig:

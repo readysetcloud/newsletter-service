@@ -19,7 +19,7 @@ export const handler = async (state) => {
 
     if (matches[1] && matches[1].indexOf('mailto:') === -1) {
       await initializeLinkRecord(state.tenantId, state.issueId, matches[1]);
-      updatedContent = updatedContent.replace(matches[1], `${process.env.REDIRECT_URL}?u=${encodeURI(matches[1])}&cid=${encodeURIComponent(`${state.tenantId}_${state.issueId}`)}`)
+      updatedContent = updatedContent.replace(matches[1], `${process.env.REDIRECT_URL}?u=${encodeURI(matches[1])}&cid=${encodeURIComponent(`${state.tenantId}_${state.issueId}`)}&s=__EMAIL_HASH__`)
     }
   }
 

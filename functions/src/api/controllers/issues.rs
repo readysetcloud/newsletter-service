@@ -115,7 +115,7 @@ pub struct IssueStats {
     bounces: i64,
     complaints: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    insights: Option<serde_json::Value>,
+    analytics: Option<serde_json::Value>,
 }
 
 // Response type for trends endpoint
@@ -831,7 +831,7 @@ fn parse_issue_stats(item: &HashMap<String, AttributeValue>) -> Result<IssueStat
         .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or(0);
 
-    let insights = item.get("insights").and_then(|v| {
+    let analytics = item.get("analytics").and_then(|v| {
         if let Ok(m) = v.as_m() {
             parse_insights_map(m).ok()
         } else if let Ok(s) = v.as_s() {
@@ -847,7 +847,7 @@ fn parse_issue_stats(item: &HashMap<String, AttributeValue>) -> Result<IssueStat
         deliveries,
         bounces,
         complaints,
-        insights,
+        analytics,
     })
 }
 
@@ -1480,11 +1480,11 @@ mod tests {
         assert_eq!(stats.deliveries, 0);
         assert_eq!(stats.bounces, 0);
         assert_eq!(stats.complaints, 0);
-        assert!(stats.insights.is_none());
+        assert!(stats.analytics.is_none());
     }
 
     #[test]
-    fn test_parse_issue_stats_with_insights_map() {
+    fn test_parse_issue_stats_with_analytics_map() {
         let mut item = HashMap::new();
         item.insert("opens".to_string(), AttributeValue::N("150".to_string()));
         item.insert("clicks".to_string(), AttributeValue::N("45".to_string()));
@@ -1495,7 +1495,7 @@ mod tests {
         item.insert("bounces".to_string(), AttributeValue::N("5".to_string()));
         item.insert("complaints".to_string(), AttributeValue::N("2".to_string()));
 
-        let mut insights_map = HashMap::new();
+        let mut analytics_map = HashMap::new();
         let mut current_metrics = HashMap::new();
         current_metrics.insert(
             "openRate".to_string(),
@@ -1505,27 +1505,27 @@ mod tests {
             "clickThroughRate".to_string(),
             AttributeValue::N("9.0".to_string()),
         );
-        insights_map.insert(
+        analytics_map.insert(
             "currentMetrics".to_string(),
             AttributeValue::M(current_metrics),
         );
 
-        item.insert("insights".to_string(), AttributeValue::M(insights_map));
+        item.insert("analytics".to_string(), AttributeValue::M(analytics_map));
 
         let result = parse_issue_stats(&item);
         assert!(result.is_ok());
 
         let stats = result.unwrap();
         assert_eq!(stats.opens, 150);
-        assert!(stats.insights.is_some());
+        assert!(stats.analytics.is_some());
 
-        let insights = stats.insights.unwrap();
-        assert!(insights.is_object());
-        assert!(insights.get("currentMetrics").is_some());
+        let analytics = stats.analytics.unwrap();
+        assert!(analytics.is_object());
+        assert!(analytics.get("currentMetrics").is_some());
     }
 
     #[test]
-    fn test_parse_issue_stats_with_insights_string() {
+    fn test_parse_issue_stats_with_analytics_string() {
         let mut item = HashMap::new();
         item.insert("opens".to_string(), AttributeValue::N("150".to_string()));
         item.insert("clicks".to_string(), AttributeValue::N("45".to_string()));
@@ -1536,10 +1536,10 @@ mod tests {
         item.insert("bounces".to_string(), AttributeValue::N("5".to_string()));
         item.insert("complaints".to_string(), AttributeValue::N("2".to_string()));
 
-        let insights_json = r#"{"currentMetrics":{"openRate":26.0,"clickThroughRate":9.0}}"#;
+        let analytics_json = r#"{"currentMetrics":{"openRate":26.0,"clickThroughRate":9.0}}"#;
         item.insert(
-            "insights".to_string(),
-            AttributeValue::S(insights_json.to_string()),
+            "analytics".to_string(),
+            AttributeValue::S(analytics_json.to_string()),
         );
 
         let result = parse_issue_stats(&item);
@@ -1547,15 +1547,15 @@ mod tests {
 
         let stats = result.unwrap();
         assert_eq!(stats.opens, 150);
-        assert!(stats.insights.is_some());
+        assert!(stats.analytics.is_some());
 
-        let insights = stats.insights.unwrap();
-        assert!(insights.is_object());
-        assert!(insights.get("currentMetrics").is_some());
+        let analytics = stats.analytics.unwrap();
+        assert!(analytics.is_object());
+        assert!(analytics.get("currentMetrics").is_some());
     }
 
     #[test]
-    fn test_parse_issue_stats_without_insights_backward_compatible() {
+    fn test_parse_issue_stats_without_analytics_backward_compatible() {
         let mut item = HashMap::new();
         item.insert("opens".to_string(), AttributeValue::N("150".to_string()));
         item.insert("clicks".to_string(), AttributeValue::N("45".to_string()));
@@ -1575,7 +1575,7 @@ mod tests {
         assert_eq!(stats.deliveries, 500);
         assert_eq!(stats.bounces, 5);
         assert_eq!(stats.complaints, 2);
-        assert!(stats.insights.is_none());
+        assert!(stats.analytics.is_none());
     }
 
     #[test]
@@ -1603,7 +1603,7 @@ mod tests {
             deliveries: 500,
             bounces: 5,
             complaints: 2,
-            insights: None,
+            analytics: None,
         });
 
         let response = build_issue_response(issue, stats);
@@ -2661,7 +2661,7 @@ mod tests {
             deliveries: 1000,
             bounces: 20,
             complaints: 5,
-            insights: None,
+            analytics: None,
         };
 
         let metrics = calculate_issue_metrics(&stats);
@@ -2680,7 +2680,7 @@ mod tests {
             deliveries: 0,
             bounces: 0,
             complaints: 0,
-            insights: None,
+            analytics: None,
         };
 
         let metrics = calculate_issue_metrics(&stats);
@@ -2699,7 +2699,7 @@ mod tests {
             deliveries: 1000,
             bounces: 7,
             complaints: 2,
-            insights: None,
+            analytics: None,
         };
 
         let metrics = calculate_issue_metrics(&stats);
@@ -2718,7 +2718,7 @@ mod tests {
             deliveries: 1000,
             bounces: 10,
             complaints: 1,
-            insights: None,
+            analytics: None,
         };
 
         let metrics = calculate_issue_metrics(&stats);

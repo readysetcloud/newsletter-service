@@ -16,7 +16,7 @@ export const EVENT_TYPES = {
 
 /**
  * Publishes an event to EventBridge
- * @param {string} source - Event source (e.g., 'newsletter.api')
+ * @param {string} source - Event source (e.g., 'newsletter-service')
  * @param {string} detailType - Event detail type
  * @param {Object} detail - Event detail payload
  * @param {string} correlationId - Optional correlation ID for tracing
@@ -92,7 +92,7 @@ export const publishEvent = async (source, detailType, detail, correlationId = n
  * @returns {Promise<void>}
  */
 export const publishIssueEvent = async (tenantId, userId, eventType, data, correlationId = null) => {
-  await publishEvent('newsletter.api', eventType, {
+  await publishEvent('newsletter-service', eventType, {
     tenantId,
     userId,
     type: eventType.replace(' ', '_').toUpperCase(),
@@ -110,7 +110,7 @@ export const publishIssueEvent = async (tenantId, userId, eventType, data, corre
  * @returns {Promise<void>}
  */
 export const publishSubscriberEvent = async (tenantId, userId, eventType, data, correlationId = null) => {
-  await publishEvent('newsletter.api', eventType, {
+  await publishEvent('newsletter-service', eventType, {
     tenantId,
     userId,
     type: eventType.replace(' ', '_').toUpperCase(),
@@ -128,7 +128,7 @@ export const publishSubscriberEvent = async (tenantId, userId, eventType, data, 
  * @returns {Promise<void>}
  */
 export const publishBrandEvent = async (tenantId, userId, eventType, data, correlationId = null) => {
-  await publishEvent('newsletter.api', eventType, {
+  await publishEvent('newsletter-service', eventType, {
     tenantId,
     userId,
     type: eventType.replace(' ', '_').toUpperCase(),

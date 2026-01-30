@@ -150,6 +150,14 @@ export interface EngagementType {
   returningClickers: number;
 }
 
+export interface TrafficSource {
+  clicks: {
+    email: number;
+    web: number;
+  };
+  // Note: Opens do not have traffic source attribution (not available in SES events)
+}
+
 export interface BounceReasons {
   permanent: number;
   temporary: number;
@@ -169,6 +177,7 @@ export interface IssueAnalytics {
   deviceBreakdown: DeviceBreakdown;
   timingMetrics: TimingMetrics;
   engagementType: EngagementType;
+  trafficSource: TrafficSource;
   bounceReasons: BounceReasons;
   complaintDetails: ComplaintDetail[];
 }

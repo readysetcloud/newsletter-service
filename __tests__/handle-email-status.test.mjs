@@ -35,6 +35,19 @@ const loadIsolated = async () => {
       hash: jest.fn((str) => `hash_${str}`),
     }));
 
+    jest.unstable_mockModule('../functions/utils/detect-device.mjs', () => ({
+      detectDevice: jest.fn((ua) => {
+        if (!ua) return 'unknown';
+        if (ua.includes('iPhone')) return 'mobile';
+        if (ua.includes('iPad')) return 'tablet';
+        return 'desktop';
+      }),
+    }));
+
+    jest.unstable_mockModule('ulid', () => ({
+      ulid: jest.fn(() => '01HQZX3Y4K5M6N7P8Q9R0S1T2U'),
+    }));
+
     ({ handler } = await import('../functions/handle-email-status.mjs'));
     ({ PutItemCommand, UpdateItemCommand } = await import('@aws-sdk/client-dynamodb'));
   });
@@ -51,6 +64,7 @@ describe('handle-email-status', () => {
     it('should track first open with userAgent and ipAddress', async () => {
       ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
 
       const event = {
         detail: {
@@ -59,7 +73,8 @@ describe('handle-email-status', () => {
             tags: {
               referenceNumber: ['tenant123_issue-456']
             },
-            destination: ['subscriber@example.com']
+            destination: ['subscriber@example.com'],
+            commonHeaders: {}
           },
           open: {
             timestamp: '2025-01-21T10:30:00.000Z',
@@ -72,23 +87,24 @@ describe('handle-email-status', () => {
       const result = await handler(event);
 
       expect(result).toBe(true);
-      expect(ddbSend).toHaveBeenCalledTimes(2);
+      expect(ddbSend).toHaveBeenCalledTimes(3);
 
-      const putCall = ddbSend.mock.calls[0][0];
-      expect(putCall.__type).toBe('PutItem');
-      expect(putCall.Item.pk.S).toBe('tenant123#issue-456');
-      expect(putCall.Item.sk.S).toBe('opens#subscriber@example.com');
-      expect(putCall.Item.userAgent.S).toBe('Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)');
-      expect(putCall.Item.ipAddress.S).toBe('192.0.2.1');
-      expect(putCall.Item.openedAt.S).toBe('2025-01-21T10:30:00.000Z');
-      expect(putCall.Item.createdAt.S).toBeDefined();
-      expect(putCall.Item.ttl.N).toBeDefined();
+      const trackCall = ddbSend.mock.calls[1][0];
+      expect(trackCall.__type).toBe('PutItem');
+      expect(trackCall.Item.pk.S).toBe('tenant123#issue-456');
+      expect(trackCall.Item.sk.S).toBe('opens#subscriber@example.com');
+      expect(trackCall.Item.userAgent.S).toBe('Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)');
+      expect(trackCall.Item.ipAddress.S).toBe('192.0.2.1');
+      expect(trackCall.Item.openedAt.S).toBe('2025-01-21T10:30:00.000Z');
+      expect(trackCall.Item.createdAt.S).toBeDefined();
+      expect(trackCall.Item.ttl.N).toBeDefined();
 
-      const updateCall = ddbSend.mock.calls[1][0];
+      const updateCall = ddbSend.mock.calls[2][0];
       expect(updateCall.__type).toBe('UpdateItem');
     });
 
     it('should track first open without optional fields', async () => {
+      ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
 
@@ -99,7 +115,8 @@ describe('handle-email-status', () => {
             tags: {
               referenceNumber: ['tenant123_issue-456']
             },
-            destination: ['subscriber@example.com']
+            destination: ['subscriber@example.com'],
+            commonHeaders: {}
           },
           open: {}
         }
@@ -109,16 +126,18 @@ describe('handle-email-status', () => {
 
       expect(result).toBe(true);
 
-      const putCall = ddbSend.mock.calls[0][0];
-      expect(putCall.Item.pk.S).toBe('tenant123#issue-456');
-      expect(putCall.Item.sk.S).toBe('opens#subscriber@example.com');
-      expect(putCall.Item.userAgent).toBeUndefined();
-      expect(putCall.Item.ipAddress).toBeUndefined();
-      expect(putCall.Item.openedAt).toBeUndefined();
-      expect(putCall.Item.createdAt.S).toBeDefined();
+      const trackCall = ddbSend.mock.calls[1][0];
+      expect(trackCall.Item.pk.S).toBe('tenant123#issue-456');
+      expect(trackCall.Item.sk.S).toBe('opens#subscriber@example.com');
+      expect(trackCall.Item.userAgent).toBeUndefined();
+      expect(trackCall.Item.ipAddress).toBeUndefined();
+      expect(trackCall.Item.openedAt).toBeUndefined();
+      expect(trackCall.Item.createdAt.S).toBeDefined();
     });
 
     it('should detect reopens and increment reopens stat', async () => {
+      ddbSend.mockResolvedValueOnce({});
+
       const conditionalError = new Error('ConditionalCheckFailedException');
       conditionalError.name = 'ConditionalCheckFailedException';
 
@@ -132,7 +151,8 @@ describe('handle-email-status', () => {
             tags: {
               referenceNumber: ['tenant123_issue-456']
             },
-            destination: ['subscriber@example.com']
+            destination: ['subscriber@example.com'],
+            commonHeaders: {}
           },
           open: {
             timestamp: '2025-01-21T11:30:00.000Z',
@@ -145,16 +165,520 @@ describe('handle-email-status', () => {
       const result = await handler(event);
 
       expect(result).toBe(true);
-      expect(ddbSend).toHaveBeenCalledTimes(2);
+      expect(ddbSend).toHaveBeenCalledTimes(3);
 
-      const updateCall = ddbSend.mock.calls[1][0];
+      const updateCall = ddbSend.mock.calls[2][0];
       expect(updateCall.__type).toBe('UpdateItem');
       expect(updateCall.ExpressionAttributeNames['#stat']).toBe('reopens');
     });
   });
 
-  describe('Other event types', () => {
-    it('should handle bounce events', async () => {
+  describe('Open event capture (analytics)', () => {
+    it('should capture open event with full metadata when sentAt is available', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Open',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['subscriber@example.com'],
+            commonHeaders: {
+              date: '2025-01-21T10:00:00.000Z'
+            }
+          },
+          open: {
+            timestamp: '2025-01-21T10:30:00.000Z',
+            userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)',
+            ipAddress: '192.0.2.1'
+          }
+        }
+      };
+
+      const result = await handler(event);
+
+      expect(result).toBe(true);
+      expect(ddbSend).toHaveBeenCalledTimes(3);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.__type).toBe('PutItem');
+      expect(captureCall.Item.pk.S).toBe('tenant123#issue-456');
+      expect(captureCall.Item.sk.S).toMatch(/^open#\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z#[a-f0-9]{64}#01HQZX3Y4K5M6N7P8Q9R0S1T2U$/);
+      expect(captureCall.Item.eventType.S).toBe('open');
+      expect(captureCall.Item.subscriberEmailHash.S).toMatch(/^[a-f0-9]{64}$/);
+      expect(captureCall.Item.device.S).toBe('mobile');
+      expect(captureCall.Item.country.S).toBe('unknown');
+      expect(captureCall.Item.timeToOpen.N).toBe('1800');
+      expect(captureCall.Item.ttl.N).toBeDefined();
+    });
+
+    it('should capture open event with timeToOpen as null when sentAt is missing', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Open',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['subscriber@example.com'],
+            commonHeaders: {}
+          },
+          open: {
+            userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+            ipAddress: '192.0.2.1'
+          }
+        }
+      };
+
+      const result = await handler(event);
+
+      expect(result).toBe(true);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.__type).toBe('PutItem');
+      expect(captureCall.Item.timeToOpen).toBeUndefined();
+    });
+
+    it('should use full SHA-256 hash for subscriber email', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Open',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['test@example.com'],
+            commonHeaders: {}
+          },
+          open: {}
+        }
+      };
+
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.Item.subscriberEmailHash.S).toMatch(/^[a-f0-9]{64}$/);
+      expect(captureCall.Item.subscriberEmailHash.S.length).toBe(64);
+    });
+
+    it('should detect device type from user agent', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Open',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['subscriber@example.com'],
+            commonHeaders: {}
+          },
+          open: {
+            userAgent: 'Mozilla/5.0 (iPad; CPU OS 14_0 like Mac OS X)'
+          }
+        }
+      };
+
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.Item.device.S).toBe('tablet');
+    });
+
+    it('should set device to unknown when userAgent is missing', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Open',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['subscriber@example.com'],
+            commonHeaders: {}
+          },
+          open: {}
+        }
+      };
+
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.Item.device.S).toBe('unknown');
+    });
+
+    it('should set TTL to 90 days from now', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const now = Date.now();
+      const expectedTTL = Math.floor(now / 1000) + (90 * 24 * 60 * 60);
+
+      const event = {
+        detail: {
+          eventType: 'Open',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['subscriber@example.com'],
+            commonHeaders: {}
+          },
+          open: {}
+        }
+      };
+
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      const actualTTL = parseInt(captureCall.Item.ttl.N);
+      expect(actualTTL).toBeGreaterThanOrEqual(expectedTTL - 5);
+      expect(actualTTL).toBeLessThanOrEqual(expectedTTL + 5);
+    });
+
+    it('should include ULID in sort key for uniqueness', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Open',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['subscriber@example.com'],
+            commonHeaders: {}
+          },
+          open: {}
+        }
+      };
+
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.Item.sk.S).toContain('01HQZX3Y4K5M6N7P8Q9R0S1T2U');
+    });
+  });
+
+  describe('Bounce event capture (analytics)', () => {
+    it('should capture permanent bounce event with full metadata', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Bounce',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['bounced@example.com']
+          },
+          bounce: {
+            timestamp: '2025-01-21T10:30:00.000Z',
+            bounceType: 'Permanent',
+            bounceSubType: 'General',
+            bouncedRecipients: [
+              {
+                emailAddress: 'bounced@example.com',
+                status: '5.1.1',
+                diagnosticCode: 'smtp; 550 5.1.1 user unknown'
+              }
+            ]
+          }
+        }
+      };
+
+      const result = await handler(event);
+
+      expect(result).toBe(true);
+      expect(ddbSend).toHaveBeenCalledTimes(2);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.__type).toBe('PutItem');
+      expect(captureCall.Item.pk.S).toBe('tenant123#issue-456');
+      expect(captureCall.Item.sk.S).toMatch(/^bounce#\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z#[a-f0-9]{64}#01HQZX3Y4K5M6N7P8Q9R0S1T2U$/);
+      expect(captureCall.Item.eventType.S).toBe('bounce');
+      expect(captureCall.Item.subscriberEmailHash.S).toMatch(/^[a-f0-9]{64}$/);
+      expect(captureCall.Item.bounceType.S).toBe('permanent');
+      expect(captureCall.Item.bounceReason.S).toBe('smtp; 550 5.1.1 user unknown');
+      expect(captureCall.Item.ttl.N).toBeDefined();
+    });
+
+    it('should categorize transient bounce as temporary', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Bounce',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['bounced@example.com']
+          },
+          bounce: {
+            bounceType: 'Transient',
+            bounceSubType: 'MailboxFull',
+            bouncedRecipients: [
+              {
+                emailAddress: 'bounced@example.com',
+                diagnosticCode: 'smtp; 552 mailbox full'
+              }
+            ]
+          }
+        }
+      };
+
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.Item.bounceType.S).toBe('temporary');
+      expect(captureCall.Item.bounceReason.S).toBe('smtp; 552 mailbox full');
+    });
+
+    it('should categorize suppressed bounce correctly', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Bounce',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['bounced@example.com']
+          },
+          bounce: {
+            bounceType: 'Permanent',
+            bounceSubType: 'Suppressed',
+            bouncedRecipients: [
+              {
+                emailAddress: 'bounced@example.com',
+                status: '5.1.1'
+              }
+            ]
+          }
+        }
+      };
+
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.Item.bounceType.S).toBe('suppressed');
+    });
+
+    it('should use status as bounce reason when diagnosticCode is missing', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Bounce',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['bounced@example.com']
+          },
+          bounce: {
+            bounceType: 'Permanent',
+            bouncedRecipients: [
+              {
+                emailAddress: 'bounced@example.com',
+                status: '5.1.1'
+              }
+            ]
+          }
+        }
+      };
+
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.Item.bounceReason.S).toBe('5.1.1');
+    });
+
+    it('should use bounceSubType as reason when recipient info is missing', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Bounce',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['bounced@example.com']
+          },
+          bounce: {
+            bounceType: 'Permanent',
+            bounceSubType: 'NoEmail'
+          }
+        }
+      };
+
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.Item.bounceReason.S).toBe('NoEmail');
+    });
+
+    it('should default to unknown reason when no bounce info available', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Bounce',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['bounced@example.com']
+          },
+          bounce: {}
+        }
+      };
+
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.Item.bounceReason.S).toBe('unknown');
+    });
+
+    it('should default to temporary bounce type when undetermined', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Bounce',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['bounced@example.com']
+          },
+          bounce: {
+            bounceType: 'Undetermined'
+          }
+        }
+      };
+
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.Item.bounceType.S).toBe('temporary');
+    });
+
+    it('should use full SHA-256 hash for subscriber email', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Bounce',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['test@example.com']
+          },
+          bounce: {
+            bounceType: 'Permanent'
+          }
+        }
+      };
+
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.Item.subscriberEmailHash.S).toMatch(/^[a-f0-9]{64}$/);
+      expect(captureCall.Item.subscriberEmailHash.S.length).toBe(64);
+    });
+
+    it('should set TTL to 90 days from now', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const now = Date.now();
+      const expectedTTL = Math.floor(now / 1000) + (90 * 24 * 60 * 60);
+
+      const event = {
+        detail: {
+          eventType: 'Bounce',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['bounced@example.com']
+          },
+          bounce: {
+            bounceType: 'Permanent'
+          }
+        }
+      };
+
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      const actualTTL = parseInt(captureCall.Item.ttl.N);
+      expect(actualTTL).toBeGreaterThanOrEqual(expectedTTL - 5);
+      expect(actualTTL).toBeLessThanOrEqual(expectedTTL + 5);
+    });
+
+    it('should include ULID in sort key for uniqueness', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Bounce',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['bounced@example.com']
+          },
+          bounce: {
+            bounceType: 'Permanent'
+          }
+        }
+      };
+
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.Item.sk.S).toContain('01HQZX3Y4K5M6N7P8Q9R0S1T2U');
+    });
+
+    it('should handle missing bounce event object', async () => {
+      ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
 
       const event = {
@@ -169,10 +693,328 @@ describe('handle-email-status', () => {
         }
       };
 
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.Item.bounceType.S).toBe('temporary');
+      expect(captureCall.Item.bounceReason.S).toBe('unknown');
+    });
+  });
+
+  describe('Complaint event capture (analytics)', () => {
+    it('should capture spam complaint event with full metadata', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Complaint',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['complainer@example.com']
+          },
+          complaint: {
+            timestamp: '2025-01-21T10:30:00.000Z',
+            complaintFeedbackType: 'spam'
+          }
+        }
+      };
+
       const result = await handler(event);
 
       expect(result).toBe(true);
-      expect(ddbSend).toHaveBeenCalledTimes(1);
+      expect(ddbSend).toHaveBeenCalledTimes(2);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.__type).toBe('PutItem');
+      expect(captureCall.Item.pk.S).toBe('tenant123#issue-456');
+      expect(captureCall.Item.sk.S).toMatch(/^complaint#\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z#[a-f0-9]{64}#01HQZX3Y4K5M6N7P8Q9R0S1T2U$/);
+      expect(captureCall.Item.eventType.S).toBe('complaint');
+      expect(captureCall.Item.subscriberEmailHash.S).toMatch(/^[a-f0-9]{64}$/);
+      expect(captureCall.Item.complaintType.S).toBe('spam');
+      expect(captureCall.Item.ttl.N).toBeDefined();
+    });
+
+    it('should categorize abuse complaint correctly', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Complaint',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['complainer@example.com']
+          },
+          complaint: {
+            complaintFeedbackType: 'abuse'
+          }
+        }
+      };
+
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.Item.complaintType.S).toBe('abuse');
+    });
+
+    it('should categorize fraud as abuse', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Complaint',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['complainer@example.com']
+          },
+          complaint: {
+            complaintFeedbackType: 'fraud'
+          }
+        }
+      };
+
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.Item.complaintType.S).toBe('abuse');
+    });
+
+    it('should categorize virus as abuse', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Complaint',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['complainer@example.com']
+          },
+          complaint: {
+            complaintFeedbackType: 'virus'
+          }
+        }
+      };
+
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.Item.complaintType.S).toBe('abuse');
+    });
+
+    it('should default to spam when complaintFeedbackType is missing', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Complaint',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['complainer@example.com']
+          },
+          complaint: {}
+        }
+      };
+
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.Item.complaintType.S).toBe('spam');
+    });
+
+    it('should default to spam when complaint event is missing', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Complaint',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['complainer@example.com']
+          }
+        }
+      };
+
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.Item.complaintType.S).toBe('spam');
+    });
+
+    it('should use full SHA-256 hash for subscriber email', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Complaint',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['test@example.com']
+          },
+          complaint: {
+            complaintFeedbackType: 'spam'
+          }
+        }
+      };
+
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.Item.subscriberEmailHash.S).toMatch(/^[a-f0-9]{64}$/);
+      expect(captureCall.Item.subscriberEmailHash.S.length).toBe(64);
+    });
+
+    it('should set TTL to 90 days from now', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const now = Date.now();
+      const expectedTTL = Math.floor(now / 1000) + (90 * 24 * 60 * 60);
+
+      const event = {
+        detail: {
+          eventType: 'Complaint',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['complainer@example.com']
+          },
+          complaint: {}
+        }
+      };
+
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      const actualTTL = parseInt(captureCall.Item.ttl.N);
+      expect(actualTTL).toBeGreaterThanOrEqual(expectedTTL - 5);
+      expect(actualTTL).toBeLessThanOrEqual(expectedTTL + 5);
+    });
+
+    it('should include ULID in sort key for uniqueness', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Complaint',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['complainer@example.com']
+          },
+          complaint: {}
+        }
+      };
+
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.Item.sk.S).toContain('01HQZX3Y4K5M6N7P8Q9R0S1T2U');
+    });
+
+    it('should use event request time as timestamp when complaint timestamp is missing', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Complaint',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['complainer@example.com']
+          },
+          complaint: {}
+        }
+      };
+
+      await handler(event);
+
+      const captureCall = ddbSend.mock.calls[0][0];
+      expect(captureCall.Item.timestamp.S).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    });
+  });
+
+  describe('Other event types', () => {
+    it('should handle bounce events with stats counter', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Bounce',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['bounced@example.com']
+          },
+          bounce: {
+            bounceType: 'Permanent'
+          }
+        }
+      };
+
+      const result = await handler(event);
+
+      expect(result).toBe(true);
+      expect(ddbSend).toHaveBeenCalledTimes(2);
+
+      const updateCall = ddbSend.mock.calls[1][0];
+      expect(updateCall.__type).toBe('UpdateItem');
+      expect(updateCall.ExpressionAttributeNames['#stat']).toBe('bounces');
+    });
+
+    it('should handle complaint events with stats counter', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Complaint',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['complainer@example.com']
+          },
+          complaint: {
+            complaintFeedbackType: 'spam'
+          }
+        }
+      };
+
+      const result = await handler(event);
+
+      expect(result).toBe(true);
+      expect(ddbSend).toHaveBeenCalledTimes(2);
+
+      const updateCall = ddbSend.mock.calls[1][0];
+      expect(updateCall.__type).toBe('UpdateItem');
+      expect(updateCall.ExpressionAttributeNames['#stat']).toBe('complaints');
     });
 
     it('should handle delivery events', async () => {

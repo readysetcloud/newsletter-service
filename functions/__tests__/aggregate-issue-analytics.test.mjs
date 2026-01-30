@@ -310,10 +310,10 @@ describe('aggregate-issue-analytics', () => {
   describe('calculateLinkPerformance', () => {
     test('should group clicks by linkUrl and count correctly', () => {
       const clicks = [
-        { linkUrl: 'https://example.com/article1', linkPosition: 1 },
-        { linkUrl: 'https://example.com/article1', linkPosition: 1 },
-        { linkUrl: 'https://example.com/article2', linkPosition: 2 },
-        { linkUrl: 'https://example.com/article1', linkPosition: 1 }
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, country: 'US' },
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, country: 'US' },
+        { linkUrl: 'https://example.com/article2', linkPosition: 2, country: 'GB' },
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, country: 'CA' }
       ];
 
       const result = calculateLinkPerformance(clicks);
@@ -327,10 +327,10 @@ describe('aggregate-issue-analytics', () => {
 
     test('should calculate percentOfTotal correctly', () => {
       const clicks = [
-        { linkUrl: 'https://example.com/article1', linkPosition: 1 },
-        { linkUrl: 'https://example.com/article1', linkPosition: 1 },
-        { linkUrl: 'https://example.com/article2', linkPosition: 2 },
-        { linkUrl: 'https://example.com/article3', linkPosition: 3 }
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, country: 'US' },
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, country: 'US' },
+        { linkUrl: 'https://example.com/article2', linkPosition: 2, country: 'GB' },
+        { linkUrl: 'https://example.com/article3', linkPosition: 3, country: 'CA' }
       ];
 
       const result = calculateLinkPerformance(clicks);
@@ -346,7 +346,8 @@ describe('aggregate-issue-analytics', () => {
         for (let j = 0; j < i; j++) {
           clicks.push({
             linkUrl: `https://example.com/article${i}`,
-            linkPosition: i
+            linkPosition: i,
+            country: 'US'
           });
         }
       }
@@ -356,6 +357,99 @@ describe('aggregate-issue-analytics', () => {
       expect(result).toHaveLength(20);
       expect(result[0].clicks).toBe(25);
       expect(result[19].clicks).toBe(6);
+    });
+
+    test('should include geoDistribution for each link', () => {
+      const clicks = [
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, country: 'US', subscriberEmailHash: 'hash1' },
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, country: 'US', subscriberEmailHash: 'hash1' },
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, country: 'GB', subscriberEmailHash: 'hash2' },
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, country: 'CA', subscriberEmailHash: 'hash3' },
+        { linkUrl: 'https://example.com/article2', linkPosition: 2, country: 'US', subscriberEmailHash: 'hash4' },
+        { linkUrl: 'https://example.com/article2', linkPosition: 2, country: 'GB', subscriberEmailHash: 'hash5' }
+      ];
+
+      const result = calculateLinkPerformance(clicks);
+
+      expect(result[0].geoDistribution).toBeDefined();
+      expect(result[0].geoDistribution).toHaveLength(3);
+      expect(result[0].geoDistribution[0]).toEqual({ country: 'US', clicks: 2, uniqueUsers: 1 });
+      expect(result[0].geoDistribution[1]).toEqual({ country: 'GB', clicks: 1, uniqueUsers: 1 });
+      expect(result[0].geoDistribution[2]).toEqual({ country: 'CA', clicks: 1, uniqueUsers: 1 });
+
+      expect(result[1].geoDistribution).toHaveLength(2);
+      expect(result[1].geoDistribution[0]).toEqual({ country: 'US', clicks: 1, uniqueUsers: 1 });
+      expect(result[1].geoDistribution[1]).toEqual({ country: 'GB', clicks: 1, uniqueUsers: 1 });
+    });
+
+    test('should handle missing country in clicks', () => {
+      const clicks = [
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, subscriberEmailHash: 'hash1' },
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, country: 'US', subscriberEmailHash: 'hash2' }
+      ];
+
+      const result = calculateLinkPerformance(clicks);
+
+      expect(result[0].geoDistribution).toBeDefined();
+      expect(result[0].geoDistribution).toHaveLength(2);
+      expect(result[0].geoDistribution.find(g => g.country === 'unknown')).toEqual({ country: 'unknown', clicks: 1, uniqueUsers: 1 });
+      expect(result[0].geoDistribution.find(g => g.country === 'US')).toEqual({ country: 'US', clicks: 1, uniqueUsers: 1 });
+    });
+
+    test('should sort geoDistribution by clicks descending', () => {
+      const clicks = [
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, country: 'CA', subscriberEmailHash: 'hash1' },
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, country: 'US', subscriberEmailHash: 'hash2' },
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, country: 'US', subscriberEmailHash: 'hash3' },
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, country: 'US', subscriberEmailHash: 'hash4' },
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, country: 'GB', subscriberEmailHash: 'hash5' },
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, country: 'GB', subscriberEmailHash: 'hash6' }
+      ];
+
+      const result = calculateLinkPerformance(clicks);
+
+      expect(result[0].geoDistribution[0].country).toBe('US');
+      expect(result[0].geoDistribution[0].clicks).toBe(3);
+      expect(result[0].geoDistribution[0].uniqueUsers).toBe(3);
+      expect(result[0].geoDistribution[1].country).toBe('GB');
+      expect(result[0].geoDistribution[1].clicks).toBe(2);
+      expect(result[0].geoDistribution[1].uniqueUsers).toBe(2);
+      expect(result[0].geoDistribution[2].country).toBe('CA');
+      expect(result[0].geoDistribution[2].clicks).toBe(1);
+      expect(result[0].geoDistribution[2].uniqueUsers).toBe(1);
+    });
+
+    test('should deduplicate users per country', () => {
+      const clicks = [
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, country: 'US', subscriberEmailHash: 'hash1' },
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, country: 'US', subscriberEmailHash: 'hash1' },
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, country: 'US', subscriberEmailHash: 'hash1' },
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, country: 'US', subscriberEmailHash: 'hash2' }
+      ];
+
+      const result = calculateLinkPerformance(clicks);
+
+      expect(result[0].geoDistribution[0]).toEqual({
+        country: 'US',
+        clicks: 4,
+        uniqueUsers: 2
+      });
+    });
+
+    test('should exclude unknown subscriber hashes from unique user count', () => {
+      const clicks = [
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, country: 'US', subscriberEmailHash: 'unknown' },
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, country: 'US', subscriberEmailHash: 'hash1' },
+        { linkUrl: 'https://example.com/article1', linkPosition: 1, country: 'US', subscriberEmailHash: 'hash2' }
+      ];
+
+      const result = calculateLinkPerformance(clicks);
+
+      expect(result[0].geoDistribution[0]).toEqual({
+        country: 'US',
+        clicks: 3,
+        uniqueUsers: 2
+      });
     });
   });
 
@@ -400,35 +494,35 @@ describe('aggregate-issue-analytics', () => {
   describe('calculateGeoDistribution', () => {
     test('should group clicks and opens by country', () => {
       const clicks = [
-        { country: 'US' },
-        { country: 'US' },
-        { country: 'UK' },
-        { country: 'CA' }
+        { country: 'US', subscriberEmailHash: 'hash1' },
+        { country: 'US', subscriberEmailHash: 'hash1' },
+        { country: 'UK', subscriberEmailHash: 'hash2' },
+        { country: 'CA', subscriberEmailHash: 'hash3' }
       ];
       const opens = [
-        { country: 'US' },
-        { country: 'UK' },
-        { country: 'UK' },
-        { country: 'AU' }
+        { country: 'US', subscriberEmailHash: 'hash4' },
+        { country: 'UK', subscriberEmailHash: 'hash5' },
+        { country: 'UK', subscriberEmailHash: 'hash6' },
+        { country: 'AU', subscriberEmailHash: 'hash7' }
       ];
 
       const result = calculateGeoDistribution(clicks, opens);
 
       const us = result.find(r => r.country === 'US');
-      expect(us).toEqual({ country: 'US', clicks: 2, opens: 1 });
+      expect(us).toEqual({ country: 'US', clicks: 2, opens: 1, uniqueClickUsers: 1, uniqueOpenUsers: 1 });
 
       const uk = result.find(r => r.country === 'UK');
-      expect(uk).toEqual({ country: 'UK', clicks: 1, opens: 2 });
+      expect(uk).toEqual({ country: 'UK', clicks: 1, opens: 2, uniqueClickUsers: 1, uniqueOpenUsers: 2 });
     });
 
     test('should sort by clicks descending', () => {
       const clicks = [
-        { country: 'US' },
-        { country: 'US' },
-        { country: 'US' },
-        { country: 'UK' },
-        { country: 'UK' },
-        { country: 'CA' }
+        { country: 'US', subscriberEmailHash: 'hash1' },
+        { country: 'US', subscriberEmailHash: 'hash2' },
+        { country: 'US', subscriberEmailHash: 'hash3' },
+        { country: 'UK', subscriberEmailHash: 'hash4' },
+        { country: 'UK', subscriberEmailHash: 'hash5' },
+        { country: 'CA', subscriberEmailHash: 'hash6' }
       ];
       const opens = [];
 
@@ -436,15 +530,17 @@ describe('aggregate-issue-analytics', () => {
 
       expect(result[0].country).toBe('US');
       expect(result[0].clicks).toBe(3);
+      expect(result[0].uniqueClickUsers).toBe(3);
       expect(result[1].country).toBe('UK');
       expect(result[1].clicks).toBe(2);
+      expect(result[1].uniqueClickUsers).toBe(2);
     });
 
     test('should limit to top 20 countries', () => {
       const clicks = [];
       for (let i = 1; i <= 25; i++) {
         for (let j = 0; j < i; j++) {
-          clicks.push({ country: `Country${i}` });
+          clicks.push({ country: `Country${i}`, subscriberEmailHash: `hash${i}_${j}` });
         }
       }
       const opens = [];
@@ -458,18 +554,132 @@ describe('aggregate-issue-analytics', () => {
 
     test('should handle missing country with default unknown', () => {
       const clicks = [
-        { country: 'US' },
-        { country: null },
-        {}
+        { country: 'US', subscriberEmailHash: 'hash1' },
+        { country: null, subscriberEmailHash: 'hash2' },
+        { subscriberEmailHash: 'hash3' }
       ];
       const opens = [
-        { country: undefined }
+        { country: undefined, subscriberEmailHash: 'hash4' }
       ];
 
       const result = calculateGeoDistribution(clicks, opens);
 
       const unknown = result.find(r => r.country === 'unknown');
-      expect(unknown).toEqual({ country: 'unknown', clicks: 2, opens: 1 });
+      expect(unknown).toEqual({ country: 'unknown', clicks: 2, opens: 1, uniqueClickUsers: 2, uniqueOpenUsers: 1 });
+    });
+
+    test('should aggregate all events with total count matching sum of country counts', () => {
+      const clicks = [
+        { country: 'US', subscriberEmailHash: 'hash1' },
+        { country: 'US', subscriberEmailHash: 'hash2' },
+        { country: 'UK', subscriberEmailHash: 'hash3' },
+        { country: 'CA', subscriberEmailHash: 'hash4' },
+        { country: 'unknown', subscriberEmailHash: 'hash5' }
+      ];
+      const opens = [
+        { country: 'US', subscriberEmailHash: 'hash6' },
+        { country: 'UK', subscriberEmailHash: 'hash7' },
+        { country: 'UK', subscriberEmailHash: 'hash8' },
+        { country: 'AU', subscriberEmailHash: 'hash9' },
+        { country: 'unknown', subscriberEmailHash: 'hash10' },
+        { country: 'unknown', subscriberEmailHash: 'hash11' }
+      ];
+
+      const result = calculateGeoDistribution(clicks, opens);
+
+      const totalClicks = result.reduce((sum, r) => sum + r.clicks, 0);
+      const totalOpens = result.reduce((sum, r) => sum + r.opens, 0);
+
+      expect(totalClicks).toBe(clicks.length);
+      expect(totalOpens).toBe(opens.length);
+    });
+
+    test('should handle mixed valid and unknown countries correctly', () => {
+      const clicks = [
+        { country: 'US', subscriberEmailHash: 'hash1' },
+        { country: 'US', subscriberEmailHash: 'hash2' },
+        { country: null, subscriberEmailHash: 'hash3' },
+        { country: 'UK', subscriberEmailHash: 'hash4' },
+        { subscriberEmailHash: 'hash5' }
+      ];
+      const opens = [
+        { country: 'US', subscriberEmailHash: 'hash6' },
+        { country: undefined, subscriberEmailHash: 'hash7' },
+        { country: 'CA', subscriberEmailHash: 'hash8' }
+      ];
+
+      const result = calculateGeoDistribution(clicks, opens);
+
+      const us = result.find(r => r.country === 'US');
+      expect(us).toEqual({ country: 'US', clicks: 2, opens: 1, uniqueClickUsers: 2, uniqueOpenUsers: 1 });
+
+      const uk = result.find(r => r.country === 'UK');
+      expect(uk).toEqual({ country: 'UK', clicks: 1, opens: 0, uniqueClickUsers: 1, uniqueOpenUsers: 0 });
+
+      const ca = result.find(r => r.country === 'CA');
+      expect(ca).toEqual({ country: 'CA', clicks: 0, opens: 1, uniqueClickUsers: 0, uniqueOpenUsers: 1 });
+
+      const unknown = result.find(r => r.country === 'unknown');
+      expect(unknown).toEqual({ country: 'unknown', clicks: 2, opens: 1, uniqueClickUsers: 2, uniqueOpenUsers: 1 });
+
+      const totalClicks = result.reduce((sum, r) => sum + r.clicks, 0);
+      const totalOpens = result.reduce((sum, r) => sum + r.opens, 0);
+      expect(totalClicks).toBe(5);
+      expect(totalOpens).toBe(3);
+    });
+
+    test('should deduplicate users per country for clicks', () => {
+      const clicks = [
+        { country: 'US', subscriberEmailHash: 'hash1' },
+        { country: 'US', subscriberEmailHash: 'hash1' },
+        { country: 'US', subscriberEmailHash: 'hash1' },
+        { country: 'US', subscriberEmailHash: 'hash2' },
+        { country: 'US', subscriberEmailHash: 'hash2' }
+      ];
+      const opens = [];
+
+      const result = calculateGeoDistribution(clicks, opens);
+
+      const us = result.find(r => r.country === 'US');
+      expect(us.clicks).toBe(5);
+      expect(us.uniqueClickUsers).toBe(2);
+    });
+
+    test('should deduplicate users per country for opens', () => {
+      const clicks = [];
+      const opens = [
+        { country: 'GB', subscriberEmailHash: 'hash1' },
+        { country: 'GB', subscriberEmailHash: 'hash1' },
+        { country: 'GB', subscriberEmailHash: 'hash2' },
+        { country: 'GB', subscriberEmailHash: 'hash3' },
+        { country: 'GB', subscriberEmailHash: 'hash3' }
+      ];
+
+      const result = calculateGeoDistribution(clicks, opens);
+
+      const gb = result.find(r => r.country === 'GB');
+      expect(gb.opens).toBe(5);
+      expect(gb.uniqueOpenUsers).toBe(3);
+    });
+
+    test('should exclude unknown subscriber hashes from unique user counts', () => {
+      const clicks = [
+        { country: 'US', subscriberEmailHash: 'unknown' },
+        { country: 'US', subscriberEmailHash: 'unknown' },
+        { country: 'US', subscriberEmailHash: 'hash1' }
+      ];
+      const opens = [
+        { country: 'US', subscriberEmailHash: 'unknown' },
+        { country: 'US', subscriberEmailHash: 'hash2' }
+      ];
+
+      const result = calculateGeoDistribution(clicks, opens);
+
+      const us = result.find(r => r.country === 'US');
+      expect(us.clicks).toBe(3);
+      expect(us.opens).toBe(2);
+      expect(us.uniqueClickUsers).toBe(1);
+      expect(us.uniqueOpenUsers).toBe(1);
     });
   });
 

@@ -6,6 +6,7 @@ import { profileService } from '@/services/profileService';
 import { Loading } from '@/components/ui/Loading';
 import { DashboardSkeleton } from '@/components/ui/SkeletonLoader';
 import MetricsCard from '@/components/MetricsCard';
+import { MaxMindAttribution } from '@/components/analytics';
 import type { TrendsData, UserProfile, TrendComparison, BestWorstIssues } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
 import { calculatePercentageDifference, calculateHealthStatus, calculateCompositeScore } from '@/utils/analyticsCalculations';
@@ -525,6 +526,9 @@ export function DashboardPage() {
               <div className="text-muted-foreground">No dashboard data available</div>
             </div>
           )}
+
+          {/* MaxMind Attribution */}
+          {trendsData && <MaxMindAttribution />}
         </div>
       </main>
     </div>

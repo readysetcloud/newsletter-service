@@ -1197,4 +1197,178 @@ describe('handle-email-status', () => {
       expect(result).toBe(false);
     });
   });
+
+  describe('Click event geolocation (SES)', () => {
+    let mockLookupCountry;
+
+    beforeEach(async () => {
+      jest.resetModules();
+      mockLookupCountry = jest.fn();
+
+      jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
+        DynamoDBClient: jest.fn(() => ({ send: ddbSend })),
+        PutItemCommand: jest.fn((params) => ({ __type: 'PutItem', ...params })),
+        UpdateItemCommand: jest.fn((params) => ({ __type: 'UpdateItem', ...params })),
+      }));
+
+      jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
+        marshall: (obj) => {
+          const result = {};
+          for (const [key, value] of Object.entries(obj)) {
+            if (typeof value === 'string') {
+              result[key] = { S: value };
+            } else if (typeof value === 'number') {
+              result[key] = { N: String(value) };
+            } else if (Array.isArray(value)) {
+              result[key] = { L: value.map(v => ({ S: v })) };
+            }
+          }
+          return result;
+        },
+      }));
+
+      jest.unstable_mockModule('../functions/utils/helpers.mjs', () => ({
+        hash: jest.fn((str) => `hash_${str}`),
+      }));
+
+      jest.unstable_mockModule('../functions/utils/geolocation.mjs', () => ({
+        lookupCountry: mockLookupCountry,
+      }));
+
+      ({ handler } = await import('../functions/handle-email-status.mjs'));
+    });
+
+    it('should include country when IP provided and lookup succeeds', async () => {
+      mockLookupCountry.mockResolvedValue({
+        countryCode: 'US',
+        countryName: 'United States'
+      });
+
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Click',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['clicker@example.com']
+          },
+          click: {
+            link: 'https://example.com/article',
+            ipAddress: '8.8.8.8'
+          }
+        }
+      };
+
+      await handler(event);
+
+      expect(mockLookupCountry).toHaveBeenCalledWith('8.8.8.8');
+      expect(ddbSend).toHaveBeenCalledTimes(2);
+
+      const linkUpdateCall = ddbSend.mock.calls[0][0];
+      expect(linkUpdateCall.__type).toBe('UpdateItem');
+      expect(linkUpdateCall.ExpressionAttributeValues[':country'].S).toBe('US');
+    });
+
+    it('should handle missing IP gracefully', async () => {
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Click',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['clicker@example.com']
+          },
+          click: {
+            link: 'https://example.com/article'
+          }
+        }
+      };
+
+      await handler(event);
+
+      expect(mockLookupCountry).not.toHaveBeenCalled();
+      expect(ddbSend).toHaveBeenCalledTimes(2);
+
+      const linkUpdateCall = ddbSend.mock.calls[0][0];
+      expect(linkUpdateCall.ExpressionAttributeValues[':country'].S).toBe('unknown');
+    });
+
+    it('should handle lookup failure gracefully', async () => {
+      mockLookupCountry.mockResolvedValue(null);
+
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Click',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['clicker@example.com']
+          },
+          click: {
+            link: 'https://example.com/article',
+            ipAddress: '10.0.0.1'
+          }
+        }
+      };
+
+      await handler(event);
+
+      expect(mockLookupCountry).toHaveBeenCalledWith('10.0.0.1');
+      expect(ddbSend).toHaveBeenCalledTimes(2);
+
+      const linkUpdateCall = ddbSend.mock.calls[0][0];
+      expect(linkUpdateCall.ExpressionAttributeValues[':country'].S).toBe('unknown');
+    });
+
+    it('should not store IP address in link tracking', async () => {
+      mockLookupCountry.mockResolvedValue({
+        countryCode: 'GB',
+        countryName: 'United Kingdom'
+      });
+
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Click',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['clicker@example.com']
+          },
+          click: {
+            link: 'https://example.com/article',
+            ipAddress: '8.8.4.4'
+          }
+        }
+      };
+
+      await handler(event);
+
+      const linkUpdateCall = ddbSend.mock.calls[0][0];
+      const marshalledValues = linkUpdateCall.ExpressionAttributeValues;
+
+      const hasIpField = Object.keys(marshalledValues).some(key =>
+        key.toLowerCase().includes('ip') ||
+        (marshalledValues[key].S && marshalledValues[key].S.includes('8.8.4.4'))
+      );
+
+      expect(hasIpField).toBe(false);
+      expect(linkUpdateCall.ExpressionAttributeValues[':country'].S).toBe('GB');
+    });
+  });
 });

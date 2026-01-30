@@ -2,6 +2,7 @@ import { DynamoDBClient, UpdateItemCommand, PutItemCommand, GetItemCommand } fro
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { hash } from "./utils/helpers.mjs";
 import { detectDevice } from "./utils/detect-device.mjs";
+import { lookupCountry } from "./utils/geolocation.mjs";
 import { ulid } from "ulid";
 import crypto from "crypto";
 import zlib from "zlib";
@@ -187,8 +188,10 @@ const captureClickEvent = async (msg, eventTimestamp, statsCache) => {
 
   const finalSubscriberHash = subscriberEmailHash || 'unknown';
 
+  const countryData = ip ? await lookupCountry(ip) : null;
+
   const device = detectDevice(null);
-  const country = 'unknown';
+  const country = countryData?.countryCode || 'unknown';
 
   const clickEvent = {
     pk: cid,

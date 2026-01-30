@@ -8,6 +8,7 @@ import { IssueStatusBadge } from '../../components/issues/IssueStatusBadge';
 import { MarkdownPreview } from '../../components/issues/MarkdownPreview';
 import { DeleteIssueDialog } from '../../components/issues/DeleteIssueDialog';
 import { IssueDetailSkeleton } from '../../components/ui/SkeletonLoader';
+import { MaxMindAttribution } from '../../components/analytics';
 import { issuesService } from '../../services/issuesService';
 import { dashboardService } from '../../services/dashboardService';
 import { calculateComplaintRate, isHighComplaintRate } from '../../utils/analyticsCalculations';
@@ -505,6 +506,7 @@ export const IssueDetailPage: React.FC = () => {
                   timingMetrics={analytics.timingMetrics || { medianTimeToOpen: 0, p95TimeToOpen: 0, medianTimeToClick: 0, p95TimeToClick: 0 }}
                 />
               </Suspense>
+              <MaxMindAttribution />
             </CardContent>
           </Card>
         )}

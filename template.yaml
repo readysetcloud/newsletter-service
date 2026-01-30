@@ -1310,6 +1310,8 @@ Resources:
       Runtime: nodejs22.x
       CodeUri: functions
       Handler: handle-email-status.handler
+      Layers:
+        - !Ref GeolocationLayer
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -2353,6 +2355,8 @@ Resources:
       Runtime: nodejs22.x
       CodeUri: functions
       Handler: process-link-click.handler
+      Layers:
+        - !Ref GeolocationLayer
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -3156,6 +3160,16 @@ Resources:
       CompatibleRuntimes:
         - nodejs20.x
         - nodejs22.x
+
+  GeolocationLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: geolocation-maxmind
+      Description: MaxMind GeoLite2 Country database
+      ContentUri: functions/layers/geolocation-layer.zip
+      CompatibleRuntimes:
+        - nodejs22.x
+      RetentionPolicy: Retain
 
   CreateHeroImageFunction:
     Type: AWS::Serverless::Function

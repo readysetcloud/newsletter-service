@@ -6,7 +6,6 @@ import { useAuth } from '../../contexts/AuthContext';
 import { ariaPatterns, responsiveA11y } from '../../utils/accessibility';
 import { preloadRoute } from '../../utils/lazyImports';
 import {
-  ChartBarIcon,
   BuildingOfficeIcon,
   UserIcon,
   KeyIcon,
@@ -24,7 +23,6 @@ export const AppHeader: React.FC = () => {
   const { theme, toggleTheme } = useTheme();
 
   const baseNavigation = [
-    { name: 'Dashboard', href: '/dashboard', icon: ChartBarIcon, preloadKey: 'dashboard' },
     { name: 'Issues', href: '/issues', icon: FileText, preloadKey: 'issues' },
     { name: 'Brand', href: '/brand', icon: BuildingOfficeIcon, preloadKey: 'brand' },
     { name: 'Profile', href: '/profile', icon: UserIcon, preloadKey: 'profile' },
@@ -61,7 +59,11 @@ export const AppHeader: React.FC = () => {
           {/* Left side - Logo and desktop navigation */}
           <div className="flex items-center space-x-4 md:space-x-8">
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-3">
+              <Link
+                to="/"
+                className={`flex items-center gap-3 ${responsiveA11y.focusRing.className} rounded-md`}
+                {...ariaPatterns.link('Go to home')}
+              >
                 <img
                   src="/logo.svg"
                   alt="Outboxed"
@@ -72,7 +74,7 @@ export const AppHeader: React.FC = () => {
                     Outboxed
                   </h1>
                 </div>
-              </div>
+              </Link>
             </div>
 
             {/* Desktop Navigation */}

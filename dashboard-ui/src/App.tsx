@@ -111,7 +111,7 @@ function App() {
 
                   {/* Protected Routes with Onboarding Guard */}
                   <Route
-                    path="/dashboard"
+                    path="/"
                     element={
                       <RouteErrorBoundary routeName="Dashboard">
                         <ProtectedRoute>
@@ -251,11 +251,8 @@ function App() {
                     }
                   />
 
-                  {/* Default redirect */}
-                  <Route path="/" element={<Navigate to="/dashboard" replace />} />
-
-                  {/* Catch all - redirect to dashboard */}
-                  <Route path="*" element={<Navigate to="/dashboard" replace />} />
+                  {/* Catch all - redirect to home */}
+                  <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
               </div>
               <footer className="border-t border-border bg-surface">

@@ -11,7 +11,22 @@ export type {
   Issue as IssueDetail,
   TopPerformer,
   TrendsData,
+  IssueTrendItem,
+  IssueMetrics,
+  TrendAggregates,
   CreateIssueRequest,
   UpdateIssueRequest,
-  ListIssuesParams
+  ListIssuesParams,
+  TrendComparison,
+  BestWorstIssues,
+  HealthStatus,
+  LinkPerformance,
+  ClickDecayPoint,
+  GeoData,
+  DeviceBreakdown,
+  TimingMetrics,
+  EngagementType,
+  BounceReasons,
+  ComplaintDetail,
+  IssueAnalytics
 } from './issues';

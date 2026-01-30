@@ -1,4 +1,4 @@
-import { DynamoDBClient, PutItemCommand, QueryCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import { DynamoDBClient, QueryCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 
 const ddb = new DynamoDBClient();
@@ -901,14 +901,17 @@ export const handler = async (state) => {
       clickGeography: consolidatedData.clickGeography || { totalClicks: 0, geoBreakdown: {} }
     };
 
-    await ddb.send(new PutItemCommand({
+    await ddb.send(new UpdateItemCommand({
       TableName: process.env.TABLE_NAME,
-      Item: marshall({
+      Key: marshall({
         pk: state.issue,
-        sk: 'analytics',
-        GSI1PK: `${state.issue.split('#')[0]}#analytics`,
-        GSI1SK: normalizedSentDate,
-        data: insightData
+        sk: 'stats'
+      }),
+      UpdateExpression: 'SET analytics = :analytics, statsPhase = :phase, consolidatedAt = :timestamp',
+      ExpressionAttributeValues: marshall({
+        ':analytics': insightData,
+        ':phase': 'consolidated',
+        ':timestamp': normalizedSentDate
       })
     }));
 

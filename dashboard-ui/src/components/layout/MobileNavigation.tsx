@@ -6,7 +6,6 @@ import { LogoutButton } from '../auth/LogoutButton';
 import { ariaPatterns, keyboardUtils, responsiveA11y } from '../../utils/accessibility';
 import { preloadRoute } from '../../utils/lazyImports';
 import {
-  ChartBarIcon,
   BuildingOfficeIcon,
   UserIcon,
   KeyIcon,
@@ -27,7 +26,6 @@ export const MobileNavigation: React.FC = () => {
   const buttonRef = useRef<HTMLButtonElement>(null);
 
   const baseNavigation = [
-    { name: 'Dashboard', href: '/dashboard', icon: ChartBarIcon, preloadKey: 'dashboard' },
     { name: 'Issues', href: '/issues', icon: FileText, preloadKey: 'issues' },
     { name: 'Brand', href: '/brand', icon: BuildingOfficeIcon, preloadKey: 'brand' },
     { name: 'Profile', href: '/profile', icon: UserIcon, preloadKey: 'profile' },

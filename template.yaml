@@ -1055,40 +1055,6 @@ Resources:
             Path: /{tenant}/stats/subscribers
             Method: GET
 
-  GetDashboardDataFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - get-dashboard-data.mjs
-    Properties:
-      Runtime: nodejs22.x
-      CodeUri: functions
-      Handler: get-dashboard-data.handler
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - dynamodb:GetItem
-                - dynamodb:Query
-              Resource:
-                - !GetAtt NewsletterTable.Arn
-                - !Sub "${NewsletterTable.Arn}/index/GSI1"
-      Environment:
-        Variables:
-          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
-      Events:
-        FromApi:
-          Type: Api
-          Properties:
-            RestApiId: !Ref DashboardApi
-            Path: /dashboard
-            Method: GET
-
   LambdaAuthorizerFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -3295,6 +3261,34 @@ Resources:
                 - aws.ses
               detail-type:
                 - Email Complaint Received
+
+  BackfillStatsGSIFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - backfill-stats-gsi.mjs
+    Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
+      Handler: backfill-stats-gsi.handler
+      Timeout: 300
+      MemorySize: 512
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Scan
+                - dynamodb:UpdateItem
+                - dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
 
 Outputs:
   NewsletterApiUrl:

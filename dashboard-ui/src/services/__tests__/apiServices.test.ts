@@ -300,66 +300,52 @@ describe('API Services', () => {
   });
 
   describe('DashboardService', () => {
-    it('should get dashboard data', async () => {
-      const mockDashboard = {
-        totalSubscribers: 1500,
-        recentIssues: 12,
-        openRate: 0.25,
-        clickRate: 0.05,
-        recentActivity: [
+    it('should get trends data', async () => {
+      const mockTrends = {
+        issues: [
           {
-            id: 'activity-1',
-            type: 'issue_sent',
-            title: 'Newsletter sent',
-            description: 'Weekly newsletter sent to subscribers',
-            timestamp: '2024-01-01T00:00:00Z',
-          },
+            id: 'issue-1',
+            title: 'Issue #1',
+            publishedAt: '2024-01-01T00:00:00Z',
+            metrics: {
+              openRate: 45.2,
+              clickRate: 12.5,
+              bounceRate: 2.1,
+              delivered: 1500
+            }
+          }
         ],
+        aggregates: {
+          avgOpenRate: 45.2,
+          avgClickRate: 12.5,
+          avgBounceRate: 2.1,
+          totalDelivered: 1500,
+          issueCount: 1
+        }
       };
 
       const { apiClient } = await import('../api');
       vi.mocked(apiClient.get).mockResolvedValue({
         success: true,
-        data: mockDashboard,
+        data: mockTrends,
       });
 
-      const result = await dashboardService.getDashboardData();
+      const result = await dashboardService.getTrends(10);
 
       expect(result.success).toBe(true);
-      expect(result.data).toEqual(mockDashboard);
-      expect(apiClient.get).toHaveBeenCalledWith('/dashboard?timeframe=30d');
+      expect(result.data).toEqual(mockTrends);
+      expect(apiClient.get).toHaveBeenCalledWith('/issues/trends?issueCount=10');
     });
 
-    it('should format metrics correctly', () => {
-      const mockData = {
-        tenant: {
-          name: 'Test Newsletter',
-          subscribers: 1500,
-          totalIssues: 12
-        },
-        issues: [],
-        subscriberMetrics: {
-          current: 1500,
-          growth: { '7d': 10, '30d': 50, '90d': 150 },
-          churnRate: 2.5,
-          engagementRate: 35.0
-        },
-        performanceOverview: {
-          avgOpenRate: 25.0,
-          avgClickRate: 5.0,
-          avgBounceRate: 2.0,
-          totalSent: 18000,
-          bestPerformingIssue: null
-        },
-        timeframe: '30d'
-      };
+    it('should format numbers correctly', () => {
+      expect(dashboardService.formatNumber(500)).toBe('500');
+      expect(dashboardService.formatNumber(1500)).toBe('1.5K');
+      expect(dashboardService.formatNumber(1500000)).toBe('1.5M');
+    });
 
-      const formatted = dashboardService.formatMetrics(mockData);
-
-      expect(formatted.totalSubscribers).toBe('1.5K');
-      expect(formatted.recentIssues).toBe('12');
-      expect(formatted.openRate).toBe('25.0%');
-      expect(formatted.clickRate).toBe('5.0%');
+    it('should format percentages correctly', () => {
+      expect(dashboardService.formatPercentage(0.25)).toBe('25.0%');
+      expect(dashboardService.formatPercentage(0.055)).toBe('5.5%');
     });
 
     it('should calculate engagement score', () => {

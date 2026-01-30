@@ -1,4 +1,9 @@
+import { memo } from 'react';
 import { TrendingUp, TrendingDown, Minus, LucideIcon } from 'lucide-react';
+import TrendIndicator from './analytics/TrendIndicator';
+import HealthStatusLabel from './analytics/HealthStatusLabel';
+import type { TrendComparison } from '@/types';
+import type { HealthStatusResult } from '@/utils/analyticsCalculations';
 
 interface MetricsCardProps {
   title: string;
@@ -6,9 +11,21 @@ interface MetricsCardProps {
   change?: number;
   format?: 'number' | 'percentage';
   icon?: LucideIcon;
+  trendComparison?: TrendComparison;
+  invertTrendColors?: boolean;
+  healthStatus?: HealthStatusResult;
 }
 
-export default function MetricsCard({ title, value, change, format = 'number', icon: Icon }: MetricsCardProps) {
+const MetricsCard = memo(function MetricsCard({
+  title,
+  value,
+  change,
+  format = 'number',
+  icon: Icon,
+  trendComparison,
+  invertTrendColors = false,
+  healthStatus
+}: MetricsCardProps) {
   const formatValue = (val: number) => {
     if (format === 'percentage') return `${val?.toFixed(1) || '0.0'}%`;
     if (format === 'number') return val?.toLocaleString() || '0';
@@ -49,6 +66,25 @@ export default function MetricsCard({ title, value, change, format = 'number', i
           </span>
         </div>
       )}
+
+      {trendComparison && (
+        <div className="mt-3 sm:mt-4 flex items-center gap-2">
+          <TrendIndicator
+            current={trendComparison.current}
+            previous={trendComparison.previous}
+            format={format}
+            invertColors={invertTrendColors}
+          />
+          {healthStatus && (
+            <HealthStatusLabel
+              status={healthStatus.status}
+              label={healthStatus.label}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
-}
+});
+
+export default MetricsCard;

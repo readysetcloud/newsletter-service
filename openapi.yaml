@@ -1150,18 +1150,19 @@ paths:
   /issues/trends:
     get:
       summary: Get issue performance trends
-      description: Retrieves aggregated performance metrics and trends across all issues
+      description: Retrieves performance metrics for the N most recent published issues with aggregated statistics
       tags:
         - Issues
       parameters:
-        - name: timeRange
+        - name: issueCount
           in: query
           required: false
           schema:
-            type: string
-            enum: [7d, 30d, 90d, all]
-            default: 30d
-          description: Time range for trend analysis (7 days, 30 days, 90 days, or all time)
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+          description: Number of recent published issues to return
       responses:
         "200":
           description: Issue trends and performance metrics
@@ -1731,31 +1732,92 @@ components:
     TrendsResponse:
       type: object
       required:
-        - totalIssues
-        - publishedCount
+        - issues
+        - aggregates
+      properties:
+        issues:
+          type: array
+          items:
+            $ref: "#/components/schemas/IssueTrendItem"
+          description: List of recent published issues with metrics
+        aggregates:
+          $ref: "#/components/schemas/TrendAggregates"
+          description: Aggregated statistics across all returned issues
+
+    IssueTrendItem:
+      type: object
+      required:
+        - id
+        - title
+        - publishedAt
+        - metrics
+      properties:
+        id:
+          type: string
+          description: Issue identifier
+        title:
+          type: string
+          description: Issue title
+        publishedAt:
+          type: string
+          format: date-time
+          description: Publication timestamp
+        metrics:
+          $ref: "#/components/schemas/IssueMetrics"
+
+    IssueMetrics:
+      type: object
+      required:
+        - openRate
+        - clickRate
+        - bounceRate
+        - delivered
+      properties:
+        openRate:
+          type: number
+          format: double
+          description: Open rate percentage (0-100)
+        clickRate:
+          type: number
+          format: double
+          description: Click rate percentage (0-100)
+        bounceRate:
+          type: number
+          format: double
+          description: Bounce rate percentage (0-100)
+        delivered:
+          type: integer
+          format: int64
+          description: Number of emails delivered
+
+    TrendAggregates:
+      type: object
+      required:
         - avgOpenRate
         - avgClickRate
-        - topPerformers
+        - avgBounceRate
+        - totalDelivered
+        - issueCount
       properties:
-        totalIssues:
-          type: integer
-          description: Total number of issues
-        publishedCount:
-          type: integer
-          description: Number of published issues
         avgOpenRate:
           type: number
           format: double
-          description: Average open rate across all published issues
+          description: Average open rate across all issues
         avgClickRate:
           type: number
           format: double
-          description: Average click rate across all published issues
-        topPerformers:
-          type: array
-          items:
-            $ref: "#/components/schemas/TopPerformer"
-          description: Top performing issues by engagement
+          description: Average click rate across all issues
+        avgBounceRate:
+          type: number
+          format: double
+          description: Average bounce rate across all issues
+        totalDelivered:
+          type: integer
+          format: int64
+          description: Total emails delivered across all issues
+        issueCount:
+          type: integer
+          description: Number of issues included in aggregates
 
     TopPerformer:
       type: object

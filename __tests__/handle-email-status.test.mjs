@@ -223,6 +223,80 @@ describe('handle-email-status', () => {
     });
   });
 
+  describe('GSI attributes', () => {
+    it('should add GSI attributes to stats record on first event', async () => {
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Delivery',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_42']
+            },
+            destination: ['subscriber@example.com']
+          }
+        }
+      };
+
+      const result = await handler(event);
+
+      expect(result).toBe(true);
+      expect(ddbSend).toHaveBeenCalledTimes(1);
+
+      const updateCall = ddbSend.mock.calls[0][0];
+      expect(updateCall.__type).toBe('UpdateItem');
+      expect(updateCall.UpdateExpression).toContain('GSI1PK = if_not_exists(GSI1PK, :gsi1pk)');
+      expect(updateCall.UpdateExpression).toContain('GSI1SK = if_not_exists(GSI1SK, :gsi1sk)');
+      expect(updateCall.UpdateExpression).toContain('statsPhase = if_not_exists(statsPhase, :phase)');
+      expect(updateCall.ExpressionAttributeValues[':gsi1pk'].S).toBe('tenant123#issue');
+      expect(updateCall.ExpressionAttributeValues[':gsi1sk'].S).toBe('00042');
+      expect(updateCall.ExpressionAttributeValues[':phase'].S).toBe('realtime');
+    });
+
+    it('should pad issue numbers correctly', async () => {
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Send',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant456_7']
+            },
+            destination: ['subscriber@example.com']
+          }
+        }
+      };
+
+      await handler(event);
+
+      const updateCall = ddbSend.mock.calls[0][0];
+      expect(updateCall.ExpressionAttributeValues[':gsi1sk'].S).toBe('00007');
+    });
+
+    it('should handle large issue numbers', async () => {
+      ddbSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          eventType: 'Send',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant789_12345']
+            },
+            destination: ['subscriber@example.com']
+          }
+        }
+      };
+
+      await handler(event);
+
+      const updateCall = ddbSend.mock.calls[0][0];
+      expect(updateCall.ExpressionAttributeValues[':gsi1sk'].S).toBe('12345');
+    });
+  });
+
   describe('Error handling', () => {
     it('should return early if no reference number', async () => {
       const event = {

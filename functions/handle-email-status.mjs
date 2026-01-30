@@ -4,6 +4,10 @@ import { hash } from './utils/helpers.mjs';
 
 const ddb = new DynamoDBClient();
 
+const padIssueNumber = (issueNumber) => {
+  return String(issueNumber).padStart(5, '0');
+};
+
 export const handler = async (event) => {
   try {
     const { detail } = event;
@@ -14,6 +18,7 @@ export const handler = async (event) => {
     }
 
     const issueId = referenceNumber[0].replace(/_/g, '#');
+    const [tenantId, issueNumber] = issueId.split('#');
     let stat;
     let failedEmail;
     switch (detail.eventType.toLowerCase()) {
@@ -48,7 +53,8 @@ export const handler = async (event) => {
     }
 
     if (stat) {
-      let updateExpression = `ADD #stat :val${failedEmail ? ' SET #failedAddresses = list_append(#failedAddresses, :failedAddresses)' : ''}`;
+      const updateExpression = `ADD #stat :val SET GSI1PK = if_not_exists(GSI1PK, :gsi1pk), GSI1SK = if_not_exists(GSI1SK, :gsi1sk), statsPhase = if_not_exists(statsPhase, :phase)${failedEmail ? ', #failedAddresses = list_append(if_not_exists(#failedAddresses, :emptyList), :failedAddresses)' : ''}`;
+
       await ddb.send(new UpdateItemCommand({
         TableName: process.env.TABLE_NAME,
         Key: marshall({
@@ -62,7 +68,10 @@ export const handler = async (event) => {
         },
         ExpressionAttributeValues: marshall({
           ':val': 1,
-          ...(failedEmail ? { ':failedAddresses': [failedEmail] } : {})
+          ':gsi1pk': `${tenantId}#issue`,
+          ':gsi1sk': padIssueNumber(parseInt(issueNumber)),
+          ':phase': 'realtime',
+          ...(failedEmail ? { ':failedAddresses': [failedEmail], ':emptyList': [] } : {})
         })
       }));
     }

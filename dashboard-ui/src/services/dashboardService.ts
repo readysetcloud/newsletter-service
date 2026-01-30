@@ -1,46 +1,73 @@
 import { apiClient } from './api';
+import { validateTrendsData } from '@/utils/dataValidation';
 import type {
   ApiResponse,
-  DashboardData,
+  TrendsData,
 } from '@/types';
+
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+}
 
 /**
  * Dashboard Service - Handles dashboard data operations
  */
 export class DashboardService {
+  private trendsCache: Map<number, CacheEntry<TrendsData>> = new Map();
+  private readonly CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
   /**
-   * Get dashboard data and metrics
+   * Get issue performance trends
    */
-  async getDashboardData(timeframe: string = '30d'): Promise<ApiResponse<DashboardData>> {
-    return apiClient.get<DashboardData>(`/dashboard?timeframe=${timeframe}`);
+  async getTrends(issueCount: number = 10): Promise<ApiResponse<TrendsData>> {
+    const cachedEntry = this.trendsCache.get(issueCount);
+    const now = Date.now();
+
+    if (cachedEntry && (now - cachedEntry.timestamp) < this.CACHE_TTL) {
+      return {
+        success: true,
+        data: cachedEntry.data,
+      };
+    }
+
+    const response = await apiClient.get<TrendsData>(`/issues/trends?issueCount=${issueCount}`);
+
+    if (response.success && response.data) {
+      if (!validateTrendsData(response.data)) {
+        return {
+          success: false,
+          error: 'Invalid trends data structure received from server',
+        };
+      }
+
+      this.trendsCache.set(issueCount, {
+        data: response.data,
+        timestamp: now,
+      });
+    }
+
+    return response;
   }
 
   /**
-   * Refresh dashboard data (same as getDashboardData but with cache busting)
+   * Invalidate trends cache
    */
-  async refreshDashboardData(timeframe: string = '30d'): Promise<ApiResponse<DashboardData>> {
-    // Add timestamp to prevent caching
-    const timestamp = Date.now();
-    return apiClient.get<DashboardData>(`/dashboard?timeframe=${timeframe}&_t=${timestamp}`);
+  invalidateTrendsCache(): void {
+    this.trendsCache.clear();
   }
 
   /**
-   * Format metrics for display
+   * Invalidate specific cache entry
    */
-  formatMetrics(data: DashboardData) {
-    return {
-      totalSubscribers: this.formatNumber(data.tenant.subscribers),
-      recentIssues: this.formatNumber(data.tenant.totalIssues),
-      openRate: this.formatPercentage(data.performanceOverview.avgOpenRate / 100),
-      clickRate: this.formatPercentage(data.performanceOverview.avgClickRate / 100),
-      issues: data.issues,
-    };
+  invalidateTrendsCacheEntry(issueCount: number): void {
+    this.trendsCache.delete(issueCount);
   }
 
   /**
    * Format number with appropriate suffixes (K, M, etc.)
    */
-  private formatNumber(num: number): string {
+  formatNumber(num: number): string {
     if (num >= 1000000) {
       return (num / 1000000).toFixed(1) + 'M';
     }
@@ -53,7 +80,7 @@ export class DashboardService {
   /**
    * Format percentage with proper decimal places
    */
-  private formatPercentage(rate: number): string {
+  formatPercentage(rate: number): string {
     return (rate * 100).toFixed(1) + '%';
   }
 

@@ -23,7 +23,8 @@ export const handler = async (state) => {
       });
     } else {
       const tenant = await getTenant(state.tenantId);
-      await setupIssueStats(tenant, state.data.metadata.number);
+      const publishedAt = new Date().toISOString();
+      await setupIssueStats(tenant, state.data.metadata.number, state.subject, publishedAt);
       await sendEmail({
         subject: state.subject,
         html: template,
@@ -33,17 +34,15 @@ export const handler = async (state) => {
         tenantId: state.tenantId
       });
 
-      // Publish issue published event after successful email sending
       await publishIssueEvent(
         state.tenantId,
-        state.tenant?.id || 'system', // Use tenant ID from state or fallback to system
+        state.tenant?.id || 'system',
         EVENT_TYPES.ISSUE_PUBLISHED,
         {
           issueId: `${state.tenantId}#${state.data.metadata.number}`,
           issueNumber: state.data.metadata.number,
-          title: state.data.metadata.title,
           subject: state.subject,
-          publishedAt: new Date().toISOString(),
+          publishedAt,
           subscriberCount: tenant.subscribers,
           metadata: state.data.metadata
         }
@@ -98,12 +97,20 @@ const sendEmail = async (params) => {
   }));
 };
 
-const setupIssueStats = async (tenant, slug) => {
+const padIssueNumber = (issueNumber) => {
+  return String(issueNumber).padStart(5, '0');
+};
+
+const setupIssueStats = async (tenant, slug, subject, publishedAt) => {
   await ddb.send(new PutItemCommand({
     TableName: process.env.TABLE_NAME,
     Item: marshall({
       pk: `${tenant.pk}#${slug}`,
       sk: 'stats',
+      GSI1PK: `${tenant.pk}#issue`,
+      GSI1SK: padIssueNumber(parseInt(slug)),
+      subject,
+      publishedAt,
       opens: 0,
       bounces: 0,
       rejects: 0,
@@ -111,7 +118,8 @@ const setupIssueStats = async (tenant, slug) => {
       deliveries: 0,
       sends: 0,
       subscribers: tenant.subscribers,
-      failedAddresses: []
+      failedAddresses: [],
+      statsPhase: 'realtime'
     })
   }));
 };

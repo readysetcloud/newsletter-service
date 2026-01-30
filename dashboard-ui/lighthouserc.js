@@ -1,5 +1,4 @@
 /* eslint-env node, commonjs */
-/* eslint-disable no-undef */
 module.exports = {
   ci: {
     collect: {

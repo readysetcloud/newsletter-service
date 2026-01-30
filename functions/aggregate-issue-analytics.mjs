@@ -45,11 +45,11 @@ export const handler = async (event) => {
 
     console.log(`Aggregating analytics for ${pk}: ${events.clicks.length} clicks, ${events.opens.length} opens, ${events.bounces.length} bounces, ${events.complaints.length} complaints`);
 
-    const insights = {
+    const analytics = {
       links: calculateLinkPerformance(events.clicks),
       clickDecay: calculateClickDecay(events.clicks, publishedAt),
       geoDistribution: calculateGeoDistribution(events.clicks, events.opens),
-      deviceBreakdown: calculateDeviceBreakdown(events.clicks),
+      deviceBreakdown: calculateDeviceBreakdown(events.opens),
       timingMetrics: calculateTimingMetrics(events.opens, events.clicks),
       engagementType: calculateEngagementType(events.clicks),
       trafficSource: calculateTrafficSource(events.clicks),
@@ -60,9 +60,9 @@ export const handler = async (event) => {
     await ddb.send(new UpdateItemCommand({
       TableName: process.env.TABLE_NAME,
       Key: marshall({ pk, sk }),
-      UpdateExpression: 'SET insights = :insights, statsPhase = :phase, consolidatedAt = :now, aggregationVersion = :version',
+      UpdateExpression: 'SET analytics = :analytics, statsPhase = :phase, consolidatedAt = :now, aggregationVersion = :version',
       ExpressionAttributeValues: marshall({
-        ':insights': insights,
+        ':analytics': analytics,
         ':phase': 'consolidated',
         ':now': new Date().toISOString(),
         ':version': '1.0'
@@ -230,11 +230,11 @@ export function calculateGeoDistribution(clicks, opens) {
     .slice(0, 20);
 }
 
-export function calculateDeviceBreakdown(clicks) {
+export function calculateDeviceBreakdown(opens) {
   const breakdown = { desktop: 0, mobile: 0, tablet: 0 };
 
-  for (const click of clicks) {
-    const device = click.device || 'unknown';
+  for (const open of opens) {
+    const device = open.device || 'unknown';
     if (device in breakdown) {
       breakdown[device]++;
     }
@@ -273,14 +273,16 @@ export function calculateEngagementType(clicks) {
   const clickerMap = new Map();
 
   for (const click of clicks) {
-    const clickerId = click.subscriberEmailHash;
-    clickerMap.set(clickerId, (clickerMap.get(clickerId) || 0) + 1);
+    const subscriberHash = click.subscriberEmailHash;
+    if (subscriberHash && subscriberHash !== 'unknown') {
+      clickerMap.set(subscriberHash, (clickerMap.get(subscriberHash) || 0) + 1);
+    }
   }
 
   let newClickers = 0;
   let returningClickers = 0;
 
-  for (const [clickerId, clickCount] of clickerMap.entries()) {
+  for (const clickCount of clickerMap.values()) {
     if (clickCount === 1) {
       newClickers++;
     } else {

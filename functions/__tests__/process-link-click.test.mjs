@@ -51,7 +51,37 @@ describe('process-link-click handler', () => {
   };
 
   describe('Unit Tests - Event Record Structure', () => {
-    test('should create click event with correct structure', async () => {
+    test('should create click event with subscriber hash when provided', async () => {
+      const testUrl = 'https://example.com/article';
+      const timestamp = Date.now();
+      const subscriberHash = 'abc123def456';
+      const logEvent = {
+        timestamp,
+        message: `INFO ${JSON.stringify({ cid: 'tenant123#42', u: testUrl, src: 'email', s: subscriberHash })}`
+      };
+
+      mockGetStats(new Date(timestamp - 3600000).toISOString());
+
+      await handler(createCloudWatchEvent([logEvent]));
+      const putCalls = mockSend.mock.calls.filter(call => call[0] instanceof PutItemCommand);
+      expect(putCalls.length).toBeGreaterThan(0);
+
+      const item = unmarshall(putCalls[0][0].input.Item);
+      expect(item).toMatchObject({
+        pk: 'tenant123#42',
+        eventType: 'click',
+        subscriberEmailHash: subscriberHash,
+        linkUrl: testUrl,
+        trafficSource: 'email',
+        device: 'unknown',
+        country: 'unknown'
+      });
+      expect(item.sk).toMatch(/^click#\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z#abc123def456#[a-f0-9]{8}#[A-Z0-9]{26}$/);
+      expect(typeof item.timeToClick).toBe('number');
+      expect(typeof item.ttl).toBe('number');
+    });
+
+    test('should default to unknown when subscriber hash not provided', async () => {
       const testUrl = 'https://example.com/article';
       const timestamp = Date.now();
       const logEvent = {

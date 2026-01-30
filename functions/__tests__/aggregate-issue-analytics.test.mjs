@@ -64,7 +64,7 @@ describe('aggregate-issue-analytics', () => {
       const updateValues = unmarshall(lastCall.input.ExpressionAttributeValues);
       expect(updateValues[':phase']).toBe('consolidated');
       expect(updateValues[':version']).toBe('1.0');
-      expect(updateValues[':insights']).toBeDefined();
+      expect(updateValues[':analytics']).toBeDefined();
     });
 
     test('should exit early if aggregation already in progress', async () => {
@@ -178,17 +178,17 @@ describe('aggregate-issue-analytics', () => {
 
       const finalUpdateCall = mockSend.mock.calls[5][0];
       const updateValues = unmarshall(finalUpdateCall.input.ExpressionAttributeValues);
-      const insights = updateValues[':insights'];
+      const analytics = updateValues[':analytics'];
 
-      expect(insights).toHaveProperty('links');
-      expect(insights).toHaveProperty('clickDecay');
-      expect(insights).toHaveProperty('geoDistribution');
-      expect(insights).toHaveProperty('deviceBreakdown');
-      expect(insights).toHaveProperty('timingMetrics');
-      expect(insights).toHaveProperty('engagementType');
-      expect(insights).toHaveProperty('trafficSource');
-      expect(insights).toHaveProperty('bounceReasons');
-      expect(insights).toHaveProperty('complaintDetails');
+      expect(analytics).toHaveProperty('links');
+      expect(analytics).toHaveProperty('clickDecay');
+      expect(analytics).toHaveProperty('geoDistribution');
+      expect(analytics).toHaveProperty('deviceBreakdown');
+      expect(analytics).toHaveProperty('timingMetrics');
+      expect(analytics).toHaveProperty('engagementType');
+      expect(analytics).toHaveProperty('trafficSource');
+      expect(analytics).toHaveProperty('bounceReasons');
+      expect(analytics).toHaveProperty('complaintDetails');
     });
   });
 
@@ -474,8 +474,8 @@ describe('aggregate-issue-analytics', () => {
   });
 
   describe('calculateDeviceBreakdown', () => {
-    test('should count clicks by device type', () => {
-      const clicks = [
+    test('should count opens by device type', () => {
+      const opens = [
         { device: 'desktop' },
         { device: 'desktop' },
         { device: 'mobile' },
@@ -484,7 +484,7 @@ describe('aggregate-issue-analytics', () => {
         { device: 'tablet' }
       ];
 
-      const result = calculateDeviceBreakdown(clicks);
+      const result = calculateDeviceBreakdown(opens);
 
       expect(result).toEqual({
         desktop: 2,
@@ -494,14 +494,14 @@ describe('aggregate-issue-analytics', () => {
     });
 
     test('should ignore unknown device types', () => {
-      const clicks = [
+      const opens = [
         { device: 'desktop' },
         { device: 'unknown' },
         { device: 'bot' },
         { device: 'mobile' }
       ];
 
-      const result = calculateDeviceBreakdown(clicks);
+      const result = calculateDeviceBreakdown(opens);
 
       expect(result).toEqual({
         desktop: 1,
@@ -510,7 +510,7 @@ describe('aggregate-issue-analytics', () => {
       });
     });
 
-    test('should handle empty clicks array', () => {
+    test('should handle empty opens array', () => {
       const result = calculateDeviceBreakdown([]);
 
       expect(result).toEqual({
@@ -640,6 +640,35 @@ describe('aggregate-issue-analytics', () => {
       const result = calculateEngagementType(clicks);
 
       expect(result.newClickers).toBe(3);
+      expect(result.returningClickers).toBe(0);
+    });
+
+    test('should exclude unknown subscriber hashes', () => {
+      const clicks = [
+        { subscriberEmailHash: 'hash1' },
+        { subscriberEmailHash: 'unknown' },
+        { subscriberEmailHash: 'unknown' },
+        { subscriberEmailHash: 'hash2' },
+        { subscriberEmailHash: 'hash2' },
+        { subscriberEmailHash: 'unknown' }
+      ];
+
+      const result = calculateEngagementType(clicks);
+
+      expect(result.newClickers).toBe(1);
+      expect(result.returningClickers).toBe(1);
+    });
+
+    test('should handle all unknown clicks', () => {
+      const clicks = [
+        { subscriberEmailHash: 'unknown' },
+        { subscriberEmailHash: 'unknown' },
+        { subscriberEmailHash: 'unknown' }
+      ];
+
+      const result = calculateEngagementType(clicks);
+
+      expect(result.newClickers).toBe(0);
       expect(result.returningClickers).toBe(0);
     });
 

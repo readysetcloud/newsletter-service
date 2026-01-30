@@ -149,7 +149,7 @@ const runInBatches = async (promises, batchSize) => {
 };
 
 const captureClickEvent = async (msg, eventTimestamp, statsCache) => {
-  const { cid, u: linkUrl, src, ip } = msg;
+  const { cid, u: linkUrl, src, ip, s: subscriberEmailHash } = msg;
 
   const validatedSource = (src === 'email' || src === 'web') ? src : 'web';
 
@@ -185,17 +185,17 @@ const captureClickEvent = async (msg, eventTimestamp, statsCache) => {
     ? Math.floor((clickedAt - new Date(publishedAt)) / 1000)
     : null;
 
-  const subscriberEmailHash = 'unknown';
+  const finalSubscriberHash = subscriberEmailHash || 'unknown';
 
   const device = detectDevice(null);
   const country = 'unknown';
 
   const clickEvent = {
     pk: cid,
-    sk: `click#${timestamp}#${subscriberEmailHash}#${linkId}#${eventId}`,
+    sk: `click#${timestamp}#${finalSubscriberHash}#${linkId}#${eventId}`,
     eventType: 'click',
     timestamp,
-    subscriberEmailHash,
+    subscriberEmailHash: finalSubscriberHash,
     linkUrl,
     linkPosition: null,
     trafficSource: validatedSource,

@@ -146,8 +146,17 @@ export interface TimingMetrics {
 }
 
 export interface EngagementType {
-  newClickers: number;
-  returningClickers: number;
+  uniqueClickers: number;  // Phase 1: first click in this issue
+  repeatClickers: number;  // Phase 1: multiple clicks in this issue
+  // Phase 2 will add: newClickers (first click ever), returningClickers (clicked in previous issues)
+}
+
+export interface TrafficSource {
+  clicks: {
+    email: number;
+    web: number;
+  };
+  // Note: Opens do not have traffic source attribution (not available in SES events)
 }
 
 export interface BounceReasons {
@@ -169,6 +178,7 @@ export interface IssueAnalytics {
   deviceBreakdown: DeviceBreakdown;
   timingMetrics: TimingMetrics;
   engagementType: EngagementType;
+  trafficSource: TrafficSource;
   bounceReasons: BounceReasons;
   complaintDetails: ComplaintDetail[];
 }

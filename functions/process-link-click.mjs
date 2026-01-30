@@ -1,6 +1,9 @@
-import { DynamoDBClient, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
-import { marshall } from "@aws-sdk/util-dynamodb";
+import { DynamoDBClient, UpdateItemCommand, PutItemCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
+import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { hash } from "./utils/helpers.mjs";
+import { detectDevice } from "./utils/detect-device.mjs";
+import { ulid } from "ulid";
+import crypto from "crypto";
 import zlib from "zlib";
 
 const ddb = new DynamoDBClient();
@@ -25,6 +28,8 @@ export const handler = async (event) => {
   console.log(`Processing ${events.length} log events from ${data.logGroup}`);
 
   const ops = [];
+  const statsCache = new Map();
+
   for (const e of events) {
     const jsonPart = extractJsonFromMessage(e.message);
     if (!jsonPart) {
@@ -36,11 +41,9 @@ export const handler = async (event) => {
     try {
       msg = JSON.parse(jsonPart);
     } catch {
-      // skip non-JSON lines (e.g., stray logs)
       continue;
     }
 
-    // Log only minimal, non-PII fields
     console.log({
       cid: msg.cid || null,
       uHash: msg.u ? hash(msg.u) : null,
@@ -54,7 +57,8 @@ export const handler = async (event) => {
 
     const day = isoDay(e.timestamp || Date.now());
     console.log(cid, `link#${hash(msg.u)}`)
-    const cmd = new UpdateItemCommand({
+
+    const linkUpdateCmd = new UpdateItemCommand({
       TableName: process.env.TABLE_NAME,
       Key: marshall({
         pk: cid,
@@ -73,17 +77,25 @@ export const handler = async (event) => {
       ReturnValues: "NONE",
     });
 
-    // Defer sending to control concurrency
     ops.push(async () => {
       try {
-        return await ddb.send(cmd);
+        await ddb.send(linkUpdateCmd);
       } catch (e) {
-        console.log(e)
         if (e.name === "ConditionalCheckFailedException") {
-          // link was deleted/expired; intentionally skip
           return;
         }
         throw e;
+      }
+    });
+
+    ops.push(async () => {
+      try {
+        await captureClickEvent(msg, e.timestamp, statsCache);
+      } catch (err) {
+        console.error('Click event capture failed', {
+          cid: msg.cid,
+          error: err.message
+        });
       }
     });
   }
@@ -134,4 +146,67 @@ const runInBatches = async (promises, batchSize) => {
     results.push(...settled);
   }
   return results;
+};
+
+const captureClickEvent = async (msg, eventTimestamp, statsCache) => {
+  const { cid, u: linkUrl, src, ip } = msg;
+
+  const validatedSource = (src === 'email' || src === 'web') ? src : 'web';
+
+  const clickedAt = new Date(eventTimestamp || Date.now());
+  const timestamp = clickedAt.toISOString();
+
+  const linkId = crypto.createHash('md5').update(linkUrl).digest('hex').substring(0, 8);
+  const eventId = ulid();
+
+  let publishedAt = null;
+  if (!statsCache.has(cid)) {
+    try {
+      const statsResult = await ddb.send(new GetItemCommand({
+        TableName: process.env.TABLE_NAME,
+        Key: marshall({ pk: cid, sk: 'stats' }),
+        ProjectionExpression: 'publishedAt'
+      }));
+
+      if (statsResult.Item) {
+        const stats = unmarshall(statsResult.Item);
+        publishedAt = stats.publishedAt || null;
+      }
+      statsCache.set(cid, publishedAt);
+    } catch (err) {
+      console.error('Failed to fetch publishedAt', { cid, error: err.message });
+      statsCache.set(cid, null);
+    }
+  } else {
+    publishedAt = statsCache.get(cid);
+  }
+
+  const timeToClick = publishedAt
+    ? Math.floor((clickedAt - new Date(publishedAt)) / 1000)
+    : null;
+
+  const subscriberEmailHash = 'unknown';
+
+  const device = detectDevice(null);
+  const country = 'unknown';
+
+  const clickEvent = {
+    pk: cid,
+    sk: `click#${timestamp}#${subscriberEmailHash}#${linkId}#${eventId}`,
+    eventType: 'click',
+    timestamp,
+    subscriberEmailHash,
+    linkUrl,
+    linkPosition: null,
+    trafficSource: validatedSource,
+    device,
+    country,
+    timeToClick,
+    ttl: Math.floor(Date.now() / 1000) + (90 * 24 * 60 * 60)
+  };
+
+  await ddb.send(new PutItemCommand({
+    TableName: process.env.TABLE_NAME,
+    Item: marshall(clickEvent)
+  }));
 };

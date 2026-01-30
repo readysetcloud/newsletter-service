@@ -2357,7 +2357,10 @@ Resources:
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: dynamodb:UpdateItem
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:PutItem
+                - dynamodb:GetItem
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
@@ -3289,6 +3292,86 @@ Resources:
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+
+  AggregateIssueAnalyticsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - aggregate-issue-analytics.mjs
+    Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
+      Handler: aggregate-issue-analytics.handler
+      Timeout: 120
+      MemorySize: 1024
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+
+  ScheduleAggregationFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - schedule-aggregation.mjs
+    Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
+      Handler: schedule-aggregation.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: scheduler:CreateSchedule
+              Resource: !Sub "arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/newsletter/*"
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          AGGREGATION_FUNCTION_ARN: !GetAtt AggregateIssueAnalyticsFunction.Arn
+          SCHEDULER_ROLE_ARN: !GetAtt AggregationSchedulerRole.Arn
+      Events:
+        IssuePublishedEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - newsletter-service
+              detail-type:
+                - ISSUE_PUBLISHED
+
+  AggregationSchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeLambda
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt AggregateIssueAnalyticsFunction.Arn
 
 Outputs:
   NewsletterApiUrl:

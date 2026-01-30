@@ -383,4 +383,83 @@ describe('process-link-click handler', () => {
       expect(item.timeToClick).toBeNull();
     });
   });
+
+  describe('Unit Tests - Geolocation Integration', () => {
+    test('should include country field in click event', async () => {
+      const logEvent = {
+        timestamp: Date.now(),
+        message: `INFO ${JSON.stringify({
+          cid: 'tenant123#42',
+          u: 'https://example.com/test',
+          ip: '203.0.113.1'
+        })}`
+      };
+
+      mockGetStats();
+      await handler(createCloudWatchEvent([logEvent]));
+
+      const putCalls = mockSend.mock.calls.filter(call => call[0] instanceof PutItemCommand);
+      const item = unmarshall(putCalls[0][0].input.Item);
+      expect(item).toHaveProperty('country');
+      expect(typeof item.country).toBe('string');
+    });
+
+    test('should handle missing IP with country unknown', async () => {
+      const logEvent = {
+        timestamp: Date.now(),
+        message: `INFO ${JSON.stringify({
+          cid: 'tenant123#42',
+          u: 'https://example.com/test'
+        })}`
+      };
+
+      mockGetStats();
+      await handler(createCloudWatchEvent([logEvent]));
+
+      const putCalls = mockSend.mock.calls.filter(call => call[0] instanceof PutItemCommand);
+      const item = unmarshall(putCalls[0][0].input.Item);
+      expect(item.country).toBe('unknown');
+    });
+
+    test('should not store IP address in event', async () => {
+      const logEvent = {
+        timestamp: Date.now(),
+        message: `INFO ${JSON.stringify({
+          cid: 'tenant123#42',
+          u: 'https://example.com/test',
+          ip: '8.8.8.8',
+          xff: '203.0.113.1'
+        })}`
+      };
+
+      mockGetStats();
+      await handler(createCloudWatchEvent([logEvent]));
+
+      const putCalls = mockSend.mock.calls.filter(call => call[0] instanceof PutItemCommand);
+      const item = unmarshall(putCalls[0][0].input.Item);
+
+      expect(item).not.toHaveProperty('ip');
+      expect(item).not.toHaveProperty('xff');
+      expect(JSON.stringify(item)).not.toContain('8.8.8.8');
+      expect(JSON.stringify(item)).not.toContain('203.0.113.1');
+    });
+
+    test('should handle private IP addresses gracefully', async () => {
+      const logEvent = {
+        timestamp: Date.now(),
+        message: `INFO ${JSON.stringify({
+          cid: 'tenant123#42',
+          u: 'https://example.com/test',
+          ip: '10.0.0.1'
+        })}`
+      };
+
+      mockGetStats();
+      await handler(createCloudWatchEvent([logEvent]));
+
+      const putCalls = mockSend.mock.calls.filter(call => call[0] instanceof PutItemCommand);
+      const item = unmarshall(putCalls[0][0].input.Item);
+      expect(item.country).toBe('unknown');
+    });
+  });
 });

@@ -154,7 +154,8 @@ export function calculateLinkPerformance(clicks) {
       linkMap.set(key, {
         url: click.linkUrl,
         clicks: 0,
-        positions: []
+        positions: [],
+        countries: new Map()
       });
     }
     const linkData = linkMap.get(key);
@@ -162,6 +163,16 @@ export function calculateLinkPerformance(clicks) {
 
     if (click.linkPosition != null && !linkData.positions.includes(click.linkPosition)) {
       linkData.positions.push(click.linkPosition);
+    }
+
+    const country = click.country || 'unknown';
+    if (!linkData.countries.has(country)) {
+      linkData.countries.set(country, { clicks: 0, users: new Set() });
+    }
+    const countryData = linkData.countries.get(country);
+    countryData.clicks++;
+    if (click.subscriberEmailHash && click.subscriberEmailHash !== 'unknown') {
+      countryData.users.add(click.subscriberEmailHash);
     }
   }
 
@@ -171,7 +182,14 @@ export function calculateLinkPerformance(clicks) {
       url: link.url,
       clicks: link.clicks,
       percentOfTotal: totalClicks > 0 ? (link.clicks / totalClicks) * 100 : 0,
-      position: link.positions.length > 0 ? Math.min(...link.positions) : 0
+      position: link.positions.length > 0 ? Math.min(...link.positions) : 0,
+      geoDistribution: Array.from(link.countries.entries())
+        .map(([country, data]) => ({
+          country,
+          clicks: data.clicks,
+          uniqueUsers: data.users.size
+        }))
+        .sort((a, b) => b.clicks - a.clicks)
     }))
     .sort((a, b) => b.clicks - a.clicks)
     .slice(0, 20);
@@ -212,20 +230,47 @@ export function calculateGeoDistribution(clicks, opens) {
   for (const click of clicks) {
     const country = click.country || 'unknown';
     if (!geoMap.has(country)) {
-      geoMap.set(country, { country, clicks: 0, opens: 0 });
+      geoMap.set(country, {
+        country,
+        clicks: 0,
+        opens: 0,
+        uniqueClickUsers: new Set(),
+        uniqueOpenUsers: new Set()
+      });
     }
-    geoMap.get(country).clicks++;
+    const countryData = geoMap.get(country);
+    countryData.clicks++;
+    if (click.subscriberEmailHash && click.subscriberEmailHash !== 'unknown') {
+      countryData.uniqueClickUsers.add(click.subscriberEmailHash);
+    }
   }
 
   for (const open of opens) {
     const country = open.country || 'unknown';
     if (!geoMap.has(country)) {
-      geoMap.set(country, { country, clicks: 0, opens: 0 });
+      geoMap.set(country, {
+        country,
+        clicks: 0,
+        opens: 0,
+        uniqueClickUsers: new Set(),
+        uniqueOpenUsers: new Set()
+      });
     }
-    geoMap.get(country).opens++;
+    const countryData = geoMap.get(country);
+    countryData.opens++;
+    if (open.subscriberEmailHash && open.subscriberEmailHash !== 'unknown') {
+      countryData.uniqueOpenUsers.add(open.subscriberEmailHash);
+    }
   }
 
   return Array.from(geoMap.values())
+    .map(data => ({
+      country: data.country,
+      clicks: data.clicks,
+      opens: data.opens,
+      uniqueClickUsers: data.uniqueClickUsers.size,
+      uniqueOpenUsers: data.uniqueOpenUsers.size
+    }))
     .sort((a, b) => b.clicks - a.clicks)
     .slice(0, 20);
 }

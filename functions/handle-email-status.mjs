@@ -3,7 +3,9 @@ import { marshall } from '@aws-sdk/util-dynamodb';
 import { hash } from './utils/helpers.mjs';
 import { hashEmail } from './utils/hash-email.mjs';
 import { detectDevice } from './utils/detect-device.mjs';
+import { lookupCountry } from './utils/geolocation.mjs';
 import { ulid } from 'ulid';
+import crypto from 'crypto';
 
 const ddb = new DynamoDBClient();
 
@@ -264,7 +266,9 @@ const trackUniqueOpen = async (issueId, emailAddress, openEvent) => {
 };
 
 const trackLinkClick = async (issueId, link, ipAddress) => {
-  // TODO - geo-ip tracking. need to roll this up somewhere
+  const countryData = ipAddress ? await lookupCountry(ipAddress) : null;
+  const country = countryData?.countryCode || 'unknown';
+
   const day = new Date().toISOString().slice(0, 10);
   await ddb.send(new UpdateItemCommand({
     TableName: process.env.TABLE_NAME,
@@ -272,14 +276,16 @@ const trackLinkClick = async (issueId, link, ipAddress) => {
       pk: issueId,
       sk: `link#${hash(link)}`
     }),
-    UpdateExpression: 'ADD clicks_total :one SET #by.#day = if_not_exists(#by.#day, :zero) + :one',
+    UpdateExpression: 'ADD clicks_total :one SET #by.#day = if_not_exists(#by.#day, :zero) + :one, #country = if_not_exists(#country, :country)',
     ExpressionAttributeNames: {
       '#by': 'byDay',
-      '#day': day
+      '#day': day,
+      '#country': 'country'
     },
     ExpressionAttributeValues: marshall({
       ':one': 1,
-      ':zero': 0
+      ':zero': 0,
+      ':country': country
     })
   }));
 };

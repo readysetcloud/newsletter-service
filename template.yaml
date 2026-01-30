@@ -1017,7 +1017,7 @@ Resources:
           Properties:
             Pattern:
               source:
-                - newsletter.api
+                - newsletter-service
               detail-type:
                 - Subscriber Added
 

@@ -1,6 +1,126 @@
-import { calculateScheduleTime } from '../schedule-aggregation.mjs';
+import { jest } from '@jest/globals';
+
+const { SchedulerClient, CreateScheduleCommand } = await import('@aws-sdk/client-scheduler');
+const { handler, calculateScheduleTime } = await import('../schedule-aggregation.mjs');
 
 describe('schedule-aggregation', () => {
+  let mockSend;
+  let originalEnv;
+
+  beforeEach(() => {
+    originalEnv = {
+      AGGREGATION_FUNCTION_ARN: process.env.AGGREGATION_FUNCTION_ARN,
+      SCHEDULER_ROLE_ARN: process.env.SCHEDULER_ROLE_ARN
+    };
+    process.env.AGGREGATION_FUNCTION_ARN = 'arn:aws:lambda:us-east-1:123456789012:function:aggregate';
+    process.env.SCHEDULER_ROLE_ARN = 'arn:aws:iam::123456789012:role/scheduler-role';
+    mockSend = jest.fn();
+    SchedulerClient.prototype.send = mockSend;
+    jest.clearAllMocks();
+  });
+
+  afterEach(() => {
+    process.env.AGGREGATION_FUNCTION_ARN = originalEnv.AGGREGATION_FUNCTION_ARN;
+    process.env.SCHEDULER_ROLE_ARN = originalEnv.SCHEDULER_ROLE_ARN;
+  });
+
+  describe('handler', () => {
+    test('should read issueNumber and publishedAt from event.detail.data', async () => {
+      mockSend.mockResolvedValue({});
+
+      const event = {
+        detail: {
+          tenantId: 'tenant-123',
+          userId: 'user-456',
+          type: 'ISSUE_PUBLISHED',
+          data: {
+            issueNumber: 42,
+            publishedAt: '2025-01-29T10:00:00.000Z',
+            title: 'Test Issue'
+          }
+        }
+      };
+
+      const result = await handler(event);
+
+      expect(result.success).toBe(true);
+      expect(result.scheduleName).toBe('aggregate-tenant-123-42-24h');
+      expect(mockSend).toHaveBeenCalledTimes(1);
+
+      const createScheduleCommand = mockSend.mock.calls[0][0];
+      expect(createScheduleCommand).toBeInstanceOf(CreateScheduleCommand);
+      expect(createScheduleCommand.input.Name).toBe('aggregate-tenant-123-42-24h');
+      expect(createScheduleCommand.input.GroupName).toBe('newsletter');
+    });
+
+    test('should return 400 when issueNumber is missing', async () => {
+      const event = {
+        detail: {
+          tenantId: 'tenant-123',
+          data: {
+            publishedAt: '2025-01-29T10:00:00.000Z'
+          }
+        }
+      };
+
+      const result = await handler(event);
+
+      expect(result.statusCode).toBe(400);
+      expect(JSON.parse(result.body).message).toBe('Missing required parameters');
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    test('should return 400 when publishedAt is missing', async () => {
+      const event = {
+        detail: {
+          tenantId: 'tenant-123',
+          data: {
+            issueNumber: 42
+          }
+        }
+      };
+
+      const result = await handler(event);
+
+      expect(result.statusCode).toBe(400);
+      expect(JSON.parse(result.body).message).toBe('Missing required parameters');
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    test('should return 400 when data object is missing', async () => {
+      const event = {
+        detail: {
+          tenantId: 'tenant-123'
+        }
+      };
+
+      const result = await handler(event);
+
+      expect(result.statusCode).toBe(400);
+      expect(JSON.parse(result.body).message).toBe('Missing required parameters');
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    test('should return 500 on scheduler error', async () => {
+      mockSend.mockRejectedValue(new Error('Scheduler service unavailable'));
+
+      const event = {
+        detail: {
+          tenantId: 'tenant-123',
+          data: {
+            issueNumber: 42,
+            publishedAt: '2025-01-29T10:00:00.000Z'
+          }
+        }
+      };
+
+      const result = await handler(event);
+
+      expect(result.statusCode).toBe(500);
+      expect(JSON.parse(result.body).message).toBe('Failed to create schedule');
+    });
+  });
+
   describe('calculateScheduleTime', () => {
     test('should calculate 24h schedule time correctly', () => {
       const publishedAt = '2025-01-29T10:00:00.000Z';

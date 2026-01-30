@@ -622,7 +622,7 @@ async fn publish_brand_event(
         .put_events()
         .entries(
             aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
-                .source("newsletter.api")
+                .source("newsletter-service")
                 .detail_type("Brand Updated")
                 .detail(detail.to_string())
                 .build(),

@@ -4,7 +4,8 @@ const scheduler = new SchedulerClient();
 
 export const handler = async (event) => {
   try {
-    const { tenantId, issueNumber, publishedAt } = event.detail;
+    const { tenantId, data } = event.detail;
+    const { issueNumber, publishedAt } = data || {};
 
     if (!tenantId || !issueNumber || !publishedAt) {
       console.error('Missing required parameters:', { tenantId, issueNumber, publishedAt });

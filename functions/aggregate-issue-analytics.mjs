@@ -249,7 +249,9 @@ export function calculateTimingMetrics(opens, clicks) {
 
   return {
     medianTimeToOpen: calculateMedian(openTimes),
-    medianTimeToClick: calculateMedian(clickTimes)
+    p95TimeToOpen: calculatePercentile(openTimes, 95),
+    medianTimeToClick: calculateMedian(clickTimes),
+    p95TimeToClick: calculatePercentile(clickTimes, 95)
   };
 }
 
@@ -261,6 +263,12 @@ function calculateMedian(sortedArray) {
     : sortedArray[mid];
 }
 
+function calculatePercentile(sortedArray, percentile) {
+  if (sortedArray.length === 0) return 0;
+  const index = Math.ceil((percentile / 100) * sortedArray.length) - 1;
+  return sortedArray[Math.max(0, index)];
+}
+
 export function calculateEngagementType(clicks) {
   const clickerMap = new Map();
 
@@ -269,20 +277,20 @@ export function calculateEngagementType(clicks) {
     clickerMap.set(clickerId, (clickerMap.get(clickerId) || 0) + 1);
   }
 
-  let uniqueClickers = 0;
-  let repeatClickers = 0;
+  let newClickers = 0;
+  let returningClickers = 0;
 
   for (const [clickerId, clickCount] of clickerMap.entries()) {
     if (clickCount === 1) {
-      uniqueClickers++;
+      newClickers++;
     } else {
-      repeatClickers++;
+      returningClickers++;
     }
   }
 
   return {
-    uniqueClickers,
-    repeatClickers
+    newClickers,
+    returningClickers
   };
 }
 
@@ -317,7 +325,7 @@ export function formatComplaintDetails(complaints) {
   return complaints
     .slice(0, 100)
     .map(c => ({
-      emailHash: c.subscriberEmailHash,
+      email: c.subscriberEmailHash,
       timestamp: c.timestamp,
       complaintType: c.complaintType || 'spam'
     }));

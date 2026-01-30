@@ -146,9 +146,8 @@ export interface TimingMetrics {
 }
 
 export interface EngagementType {
-  uniqueClickers: number;  // Phase 1: first click in this issue
-  repeatClickers: number;  // Phase 1: multiple clicks in this issue
-  // Phase 2 will add: newClickers (first click ever), returningClickers (clicked in previous issues)
+  newClickers: number;
+  returningClickers: number;
 }
 
 export interface TrafficSource {

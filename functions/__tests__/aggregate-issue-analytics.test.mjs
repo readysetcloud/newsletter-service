@@ -522,7 +522,7 @@ describe('aggregate-issue-analytics', () => {
   });
 
   describe('calculateTimingMetrics', () => {
-    test('should calculate median timeToOpen and timeToClick', () => {
+    test('should calculate median and p95 timeToOpen and timeToClick', () => {
       const opens = [
         { timeToOpen: 100 },
         { timeToOpen: 200 },
@@ -539,7 +539,9 @@ describe('aggregate-issue-analytics', () => {
       const result = calculateTimingMetrics(opens, clicks);
 
       expect(result.medianTimeToOpen).toBe(300);
+      expect(result.p95TimeToOpen).toBe(500);
       expect(result.medianTimeToClick).toBe(2000);
+      expect(result.p95TimeToClick).toBe(3000);
     });
 
     test('should calculate median for even number of values', () => {
@@ -557,7 +559,25 @@ describe('aggregate-issue-analytics', () => {
       const result = calculateTimingMetrics(opens, clicks);
 
       expect(result.medianTimeToOpen).toBe(250);
+      expect(result.p95TimeToOpen).toBe(400);
       expect(result.medianTimeToClick).toBe(1500);
+      expect(result.p95TimeToClick).toBe(2000);
+    });
+
+    test('should calculate p95 correctly for larger datasets', () => {
+      const opens = [];
+      for (let i = 1; i <= 100; i++) {
+        opens.push({ timeToOpen: i * 10 });
+      }
+      const clicks = [];
+      for (let i = 1; i <= 100; i++) {
+        clicks.push({ timeToClick: i * 100 });
+      }
+
+      const result = calculateTimingMetrics(opens, clicks);
+
+      expect(result.p95TimeToOpen).toBe(950);
+      expect(result.p95TimeToClick).toBe(9500);
     });
 
     test('should filter out null values', () => {
@@ -577,19 +597,23 @@ describe('aggregate-issue-analytics', () => {
       const result = calculateTimingMetrics(opens, clicks);
 
       expect(result.medianTimeToOpen).toBe(200);
+      expect(result.p95TimeToOpen).toBe(300);
       expect(result.medianTimeToClick).toBe(2000);
+      expect(result.p95TimeToClick).toBe(3000);
     });
 
     test('should return 0 for empty arrays', () => {
       const result = calculateTimingMetrics([], []);
 
       expect(result.medianTimeToOpen).toBe(0);
+      expect(result.p95TimeToOpen).toBe(0);
       expect(result.medianTimeToClick).toBe(0);
+      expect(result.p95TimeToClick).toBe(0);
     });
   });
 
   describe('calculateEngagementType', () => {
-    test('should count unique vs repeat clickers', () => {
+    test('should count new vs returning clickers', () => {
       const clicks = [
         { subscriberEmailHash: 'hash1' },
         { subscriberEmailHash: 'hash2' },
@@ -602,11 +626,11 @@ describe('aggregate-issue-analytics', () => {
 
       const result = calculateEngagementType(clicks);
 
-      expect(result.uniqueClickers).toBe(2);
-      expect(result.repeatClickers).toBe(2);
+      expect(result.newClickers).toBe(2);
+      expect(result.returningClickers).toBe(2);
     });
 
-    test('should handle all unique clickers', () => {
+    test('should handle all new clickers', () => {
       const clicks = [
         { subscriberEmailHash: 'hash1' },
         { subscriberEmailHash: 'hash2' },
@@ -615,15 +639,15 @@ describe('aggregate-issue-analytics', () => {
 
       const result = calculateEngagementType(clicks);
 
-      expect(result.uniqueClickers).toBe(3);
-      expect(result.repeatClickers).toBe(0);
+      expect(result.newClickers).toBe(3);
+      expect(result.returningClickers).toBe(0);
     });
 
     test('should handle empty clicks array', () => {
       const result = calculateEngagementType([]);
 
-      expect(result.uniqueClickers).toBe(0);
-      expect(result.repeatClickers).toBe(0);
+      expect(result.newClickers).toBe(0);
+      expect(result.returningClickers).toBe(0);
     });
   });
 
@@ -744,12 +768,12 @@ describe('aggregate-issue-analytics', () => {
 
       expect(result).toEqual([
         {
-          emailHash: 'hash1',
+          email: 'hash1',
           timestamp: '2025-01-29T10:00:00.000Z',
           complaintType: 'spam'
         },
         {
-          emailHash: 'hash2',
+          email: 'hash2',
           timestamp: '2025-01-29T11:00:00.000Z',
           complaintType: 'abuse'
         }
@@ -788,8 +812,8 @@ describe('aggregate-issue-analytics', () => {
       const result = formatComplaintDetails(complaints);
 
       expect(result).toHaveLength(100);
-      expect(result[0].emailHash).toBe('hash1');
-      expect(result[99].emailHash).toBe('hash100');
+      expect(result[0].email).toBe('hash1');
+      expect(result[99].email).toBe('hash100');
     });
 
     test('should handle empty complaints array', () => {

@@ -8,6 +8,10 @@ const ddb = new DynamoDBClient();
 const ses = new SESv2Client();
 const eventBridge = new EventBridgeClient();
 
+const padIssueNumber = (issueNumber) => {
+  return String(issueNumber).padStart(5, '0');
+};
+
 export const handler = async (event) => {
   try {
     console.log('Processing clean bounced subscribers event:', JSON.stringify(event, null, 2));
@@ -157,16 +161,20 @@ const updateSubscriberCount = async (tenant) => {
 
 const updateCleanedCount = async (issueId, cleanedCount) => {
   try {
+    const [tenantId, issueNumber] = issueId.split('#');
+
     await ddb.send(new UpdateItemCommand({
       TableName: process.env.TABLE_NAME,
       Key: marshall({
         pk: issueId,
         sk: 'stats'
       }),
-      UpdateExpression: 'SET cleaned = :count',
-      ExpressionAttributeValues: {
-        ':count': { N: cleanedCount.toString() }
-      }
+      UpdateExpression: 'SET cleaned = :count, GSI1PK = if_not_exists(GSI1PK, :gsi1pk), GSI1SK = if_not_exists(GSI1SK, :gsi1sk)',
+      ExpressionAttributeValues: marshall({
+        ':count': cleanedCount,
+        ':gsi1pk': `${tenantId}#issue`,
+        ':gsi1sk': padIssueNumber(parseInt(issueNumber))
+      })
     }));
 
     console.log(`Updated issue ${issueId} stats with cleaned count: ${cleanedCount}`);

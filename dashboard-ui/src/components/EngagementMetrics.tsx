@@ -1,9 +1,9 @@
 
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
-import type { PerformanceOverview } from '@/types/api';
+import type { TrendAggregates } from '@/types';
 
 interface EngagementMetricsProps {
-  performanceOverview: PerformanceOverview;
+  aggregates: TrendAggregates;
 }
 
 type TooltipPayloadItem = {
@@ -26,26 +26,26 @@ function CustomTooltip({ active, payload }: { active?: boolean; payload?: Toolti
   return null;
 }
 
-export function EngagementMetrics({ performanceOverview }: EngagementMetricsProps) {
+export function EngagementMetrics({ aggregates }: EngagementMetricsProps) {
   const data = [
     {
       name: 'Opened',
-      value: performanceOverview.avgOpenRate,
+      value: aggregates.avgOpenRate,
       color: '#3b82f6'
     },
     {
       name: 'Clicked',
-      value: performanceOverview.avgClickRate,
+      value: aggregates.avgClickRate,
       color: '#10b981'
     },
     {
       name: 'Bounced',
-      value: performanceOverview.avgBounceRate,
+      value: aggregates.avgBounceRate,
       color: '#ef4444'
     },
     {
       name: 'Other',
-      value: Math.max(0, 100 - performanceOverview.avgOpenRate - performanceOverview.avgClickRate - performanceOverview.avgBounceRate),
+      value: Math.max(0, 100 - aggregates.avgOpenRate - aggregates.avgClickRate - aggregates.avgBounceRate),
       color: '#6b7280'
     }
   ].filter(item => item.value > 0);

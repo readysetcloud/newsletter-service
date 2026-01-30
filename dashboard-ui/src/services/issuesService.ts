@@ -1,13 +1,16 @@
 import { apiClient } from './api';
+import { validateIssueStats, validateTrendsData } from '@/utils/dataValidation';
 import type {
   Issue,
   IssueListItem,
+  IssueMetrics,
   TrendsData,
   CreateIssueRequest,
   UpdateIssueRequest,
   ListIssuesParams,
 } from '@/types/issues';
 import type { ApiResponse } from '@/types';
+import { calculateCompositeScore } from '@/utils/analyticsCalculations';
 
 /**
  * Service for managing newsletter issues through the API
@@ -49,7 +52,18 @@ class IssuesService {
    * @returns Promise resolving to the complete issue details including content and stats
    */
   async getIssue(id: string): Promise<ApiResponse<Issue>> {
-    return apiClient.get(`/issues/${id}`);
+    const response = await apiClient.get<Issue>(`/issues/${id}`);
+
+    if (response.success && response.data?.stats) {
+      if (!validateIssueStats(response.data.stats)) {
+        return {
+          success: false,
+          error: 'Invalid issue stats structure received from server',
+        };
+      }
+    }
+
+    return response;
   }
 
   /**
@@ -59,7 +73,18 @@ class IssuesService {
    */
   async getTrends(timeRange?: string): Promise<ApiResponse<TrendsData>> {
     const query = timeRange ? `?timeRange=${timeRange}` : '';
-    return apiClient.get(`/issues/trends${query}`);
+    const response = await apiClient.get<TrendsData>(`/issues/trends${query}`);
+
+    if (response.success && response.data) {
+      if (!validateTrendsData(response.data)) {
+        return {
+          success: false,
+          error: 'Invalid trends data structure received from server',
+        };
+      }
+    }
+
+    return response;
   }
 
   /**
@@ -90,6 +115,74 @@ class IssuesService {
    */
   async deleteIssue(issueId: string): Promise<ApiResponse<void>> {
     return apiClient.delete(`/issues/${issueId}`);
+  }
+
+  /**
+   * Fetches comparison data for an issue including average, last issue, and best issue metrics
+   * @param currentIssueId - ID of the current issue to exclude from calculations
+   * @param issueCount - Number of recent issues to include in average calculation
+   * @returns Promise resolving to comparison metrics
+   */
+  async getComparisonData(currentIssueId: string, issueCount: number = 10): Promise<{
+    average?: IssueMetrics;
+    lastIssue?: IssueMetrics;
+    bestIssue?: IssueMetrics;
+  }> {
+    try {
+      const trendsResponse = await this.getTrends();
+
+      if (!trendsResponse.success || !trendsResponse.data) {
+        return {};
+      }
+
+      const { issues, aggregates } = trendsResponse.data;
+
+      // Filter out the current issue
+      const otherIssues = issues.filter(issue => issue.id !== currentIssueId);
+
+      if (otherIssues.length === 0) {
+        return {};
+      }
+
+      // Calculate average metrics from aggregates
+      const average: IssueMetrics = {
+        openRate: aggregates.avgOpenRate,
+        clickRate: aggregates.avgClickRate,
+        bounceRate: aggregates.avgBounceRate,
+        delivered: Math.round(aggregates.totalDelivered / aggregates.issueCount),
+        opens: 0,
+        clicks: 0,
+        bounces: 0,
+        complaints: 0,
+      };
+
+      // Get last issue (most recent)
+      const lastIssue = otherIssues[0];
+      const lastIssueMetrics: IssueMetrics | undefined = lastIssue ? {
+        ...lastIssue.metrics,
+      } : undefined;
+
+      // Find best issue by composite score
+      let bestIssue: IssueMetrics | undefined;
+      let bestScore = -1;
+
+      for (const issue of otherIssues) {
+        const score = calculateCompositeScore(issue.metrics);
+        if (score > bestScore) {
+          bestScore = score;
+          bestIssue = { ...issue.metrics };
+        }
+      }
+
+      return {
+        average,
+        lastIssue: lastIssueMetrics,
+        bestIssue,
+      };
+    } catch (error) {
+      console.error('Error fetching comparison data:', error);
+      return {};
+    }
   }
 }
 

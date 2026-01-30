@@ -114,37 +114,60 @@ pub struct IssueStats {
     deliveries: i64,
     bounces: i64,
     complaints: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    insights: Option<serde_json::Value>,
 }
 
 // Response type for trends endpoint
 #[derive(Serialize)]
 pub struct TrendsResponse {
-    #[serde(rename = "totalIssues")]
-    total_issues: i32,
-    #[serde(rename = "publishedCount")]
-    published_count: i32,
-    #[serde(rename = "avgOpenRate")]
-    avg_open_rate: f64,
-    #[serde(rename = "avgClickRate")]
-    avg_click_rate: f64,
-    #[serde(rename = "topPerformers")]
-    top_performers: Vec<TopPerformer>,
+    issues: Vec<IssueTrendItem>,
+    aggregates: TrendAggregates,
 }
 
 #[derive(Serialize)]
-pub struct TopPerformer {
+pub struct IssueTrendItem {
     id: String,
-    title: String,
+    metrics: IssueMetrics,
+}
+
+#[derive(Serialize)]
+pub struct IssueMetrics {
     #[serde(rename = "openRate")]
     open_rate: f64,
     #[serde(rename = "clickRate")]
     click_rate: f64,
+    #[serde(rename = "bounceRate")]
+    bounce_rate: f64,
+    delivered: i64,
+    opens: i64,
+    clicks: i64,
+    bounces: i64,
+    complaints: i64,
+}
+
+#[derive(Serialize)]
+pub struct TrendAggregates {
+    #[serde(rename = "avgOpenRate")]
+    avg_open_rate: f64,
+    #[serde(rename = "avgClickRate")]
+    avg_click_rate: f64,
+    #[serde(rename = "avgBounceRate")]
+    avg_bounce_rate: f64,
+    #[serde(rename = "totalDelivered")]
+    total_delivered: i64,
+    #[serde(rename = "issueCount")]
+    issue_count: i32,
 }
 
 #[derive(Deserialize)]
 pub struct TrendsQuery {
-    #[serde(rename = "timeRange")]
-    time_range: Option<String>,
+    #[serde(rename = "issueCount", default = "default_issue_count")]
+    issue_count: i32,
+}
+
+fn default_issue_count() -> i32 {
+    10
 }
 
 // Internal data structure for issue records from DynamoDB
@@ -352,9 +375,12 @@ fn parse_query_params(event: &Request) -> Result<ListIssuesQuery, AppError> {
 
 fn parse_trends_query_params(event: &Request) -> Result<TrendsQuery, AppError> {
     let query_params = event.query_string_parameters();
-    let time_range = query_params.first("timeRange").map(|s: &str| s.to_string());
+    let issue_count = query_params
+        .first("issueCount")
+        .and_then(|s: &str| s.parse::<i32>().ok())
+        .unwrap_or_else(default_issue_count);
 
-    Ok(TrendsQuery { time_range })
+    Ok(TrendsQuery { issue_count })
 }
 
 fn validate_list_params(query: &ListIssuesQuery) -> Result<(), AppError> {
@@ -805,24 +831,76 @@ fn parse_issue_stats(item: &HashMap<String, AttributeValue>) -> Result<IssueStat
         .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or(0);
 
+    let insights = item.get("insights").and_then(|v| {
+        if let Ok(m) = v.as_m() {
+            parse_insights_map(m).ok()
+        } else if let Ok(s) = v.as_s() {
+            serde_json::from_str(s).ok()
+        } else {
+            None
+        }
+    });
+
     Ok(IssueStats {
         opens,
         clicks,
         deliveries,
         bounces,
         complaints,
+        insights,
     })
 }
 
-async fn calculate_trends(
+fn parse_insights_map(
+    map: &HashMap<String, AttributeValue>,
+) -> Result<serde_json::Value, AppError> {
+    let mut json_map = serde_json::Map::new();
+
+    for (key, value) in map {
+        let json_value = attribute_value_to_json(value)?;
+        json_map.insert(key.clone(), json_value);
+    }
+
+    Ok(serde_json::Value::Object(json_map))
+}
+
+fn attribute_value_to_json(value: &AttributeValue) -> Result<serde_json::Value, AppError> {
+    match value {
+        AttributeValue::S(s) => Ok(serde_json::Value::String(s.clone())),
+        AttributeValue::N(n) => {
+            if let Ok(i) = n.parse::<i64>() {
+                Ok(serde_json::Value::Number(serde_json::Number::from(i)))
+            } else if let Ok(f) = n.parse::<f64>() {
+                Ok(serde_json::Number::from_f64(f)
+                    .map(serde_json::Value::Number)
+                    .unwrap_or(serde_json::Value::Null))
+            } else {
+                Ok(serde_json::Value::Null)
+            }
+        }
+        AttributeValue::Bool(b) => Ok(serde_json::Value::Bool(*b)),
+        AttributeValue::Null(_) => Ok(serde_json::Value::Null),
+        AttributeValue::M(m) => parse_insights_map(m),
+        AttributeValue::L(l) => {
+            let mut json_array = Vec::new();
+            for item in l {
+                json_array.push(attribute_value_to_json(item)?);
+            }
+            Ok(serde_json::Value::Array(json_array))
+        }
+        _ => Ok(serde_json::Value::Null),
+    }
+}
+
+async fn query_published_issues_with_stats(
     tenant_id: &str,
-    query: &TrendsQuery,
-) -> Result<TrendsResponse, AppError> {
+    limit: i32,
+) -> Result<Vec<IssueTrendItem>, AppError> {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
         .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
 
-    let gsi1pk = format!("{}#newsletter", tenant_id);
+    let gsi1pk = format!("{}#issue", tenant_id);
 
     let result = ddb_client
         .query()
@@ -831,122 +909,110 @@ async fn calculate_trends(
         .key_condition_expression("GSI1PK = :gsi1pk")
         .expression_attribute_values(":gsi1pk", AttributeValue::S(gsi1pk))
         .scan_index_forward(false)
+        .limit(limit)
         .send()
         .await?;
 
-    let issues: Vec<IssueRecord> = result
-        .items()
-        .iter()
-        .filter_map(|item| parse_issue_record(item).ok())
-        .collect();
+    let mut issues_with_stats = Vec::new();
 
-    let cutoff_time = calculate_time_cutoff(&query.time_range);
+    for item in result.items() {
+        let issue_number = match item
+            .get("GSI1SK")
+            .and_then(|v| v.as_s().ok())
+            .and_then(|s| s.parse::<i32>().ok())
+        {
+            Some(num) => num,
+            None => continue,
+        };
 
-    let filtered_issues: Vec<&IssueRecord> = issues
-        .iter()
-        .filter(|issue| {
-            if let Some(cutoff) = &cutoff_time {
-                if let Some(published_at) = &issue.published_at {
-                    return published_at >= cutoff;
-                }
-                return false;
-            }
-            true
-        })
-        .collect();
+        let stats = match parse_issue_stats(item) {
+            Ok(stats) => stats,
+            Err(_) => continue,
+        };
 
-    let total_issues = filtered_issues.len() as i32;
-    let published_issues: Vec<&IssueRecord> = filtered_issues
-        .iter()
-        .filter(|issue| issue.status == "published")
-        .copied()
-        .collect();
-    let published_count = published_issues.len() as i32;
+        let metrics = calculate_issue_metrics(&stats);
 
-    let mut total_open_rate = 0.0;
-    let mut total_click_rate = 0.0;
-    let mut issues_with_stats = 0;
-    let mut top_performers_data: Vec<(String, String, f64, f64)> = Vec::new();
-
-    for issue in &published_issues {
-        if let Ok(stats) = get_issue_stats(tenant_id, &issue.issue_number.to_string()).await {
-            let open_rate = if stats.deliveries > 0 {
-                (stats.opens as f64 / stats.deliveries as f64) * 100.0
-            } else {
-                0.0
-            };
-
-            let click_rate = if stats.deliveries > 0 {
-                (stats.clicks as f64 / stats.deliveries as f64) * 100.0
-            } else {
-                0.0
-            };
-
-            total_open_rate += open_rate;
-            total_click_rate += click_rate;
-            issues_with_stats += 1;
-
-            top_performers_data.push((
-                issue.issue_number.to_string(),
-                issue.title.clone(),
-                open_rate,
-                click_rate,
-            ));
-        }
+        issues_with_stats.push(IssueTrendItem {
+            id: issue_number.to_string(),
+            metrics,
+        });
     }
 
-    let avg_open_rate = if issues_with_stats > 0 {
-        total_open_rate / issues_with_stats as f64
-    } else {
-        0.0
-    };
-
-    let avg_click_rate = if issues_with_stats > 0 {
-        total_click_rate / issues_with_stats as f64
-    } else {
-        0.0
-    };
-
-    top_performers_data.sort_by(|a, b| {
-        let engagement_a = a.2 + a.3;
-        let engagement_b = b.2 + b.3;
-        engagement_b
-            .partial_cmp(&engagement_a)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let top_performers: Vec<TopPerformer> = top_performers_data
-        .into_iter()
-        .take(5)
-        .map(|(id, title, open_rate, click_rate)| TopPerformer {
-            id,
-            title,
-            open_rate,
-            click_rate,
-        })
-        .collect();
-
-    Ok(TrendsResponse {
-        total_issues,
-        published_count,
-        avg_open_rate,
-        avg_click_rate,
-        top_performers,
-    })
+    Ok(issues_with_stats)
 }
 
-fn calculate_time_cutoff(time_range: &Option<String>) -> Option<String> {
-    use chrono::{Duration, Utc};
-
-    let now = Utc::now();
-    let cutoff = match time_range.as_deref() {
-        Some("7d") => now - Duration::days(7),
-        Some("30d") => now - Duration::days(30),
-        Some("90d") => now - Duration::days(90),
-        _ => return None,
+fn calculate_issue_metrics(stats: &IssueStats) -> IssueMetrics {
+    let open_rate = if stats.deliveries > 0 {
+        (stats.opens as f64 / stats.deliveries as f64) * 100.0
+    } else {
+        0.0
     };
 
-    Some(cutoff.to_rfc3339())
+    let click_rate = if stats.deliveries > 0 {
+        (stats.clicks as f64 / stats.deliveries as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    let bounce_rate = if stats.deliveries > 0 {
+        (stats.bounces as f64 / stats.deliveries as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    IssueMetrics {
+        open_rate: (open_rate * 100.0).round() / 100.0,
+        click_rate: (click_rate * 100.0).round() / 100.0,
+        bounce_rate: (bounce_rate * 100.0).round() / 100.0,
+        delivered: stats.deliveries,
+        opens: stats.opens,
+        clicks: stats.clicks,
+        bounces: stats.bounces,
+        complaints: stats.complaints,
+    }
+}
+
+fn calculate_aggregates(issues: &[IssueTrendItem]) -> TrendAggregates {
+    if issues.is_empty() {
+        return TrendAggregates {
+            avg_open_rate: 0.0,
+            avg_click_rate: 0.0,
+            avg_bounce_rate: 0.0,
+            total_delivered: 0,
+            issue_count: 0,
+        };
+    }
+
+    let total_open_rate: f64 = issues.iter().map(|i| i.metrics.open_rate).sum();
+    let total_click_rate: f64 = issues.iter().map(|i| i.metrics.click_rate).sum();
+    let total_bounce_rate: f64 = issues.iter().map(|i| i.metrics.bounce_rate).sum();
+    let total_delivered: i64 = issues.iter().map(|i| i.metrics.delivered).sum();
+
+    let count = issues.len() as f64;
+
+    TrendAggregates {
+        avg_open_rate: ((total_open_rate / count) * 100.0).round() / 100.0,
+        avg_click_rate: ((total_click_rate / count) * 100.0).round() / 100.0,
+        avg_bounce_rate: ((total_bounce_rate / count) * 100.0).round() / 100.0,
+        total_delivered,
+        issue_count: issues.len() as i32,
+    }
+}
+
+async fn calculate_trends(
+    tenant_id: &str,
+    query: &TrendsQuery,
+) -> Result<TrendsResponse, AppError> {
+    let issue_count = query.issue_count.clamp(1, 50);
+
+    let issues_with_stats = query_published_issues_with_stats(tenant_id, issue_count).await?;
+
+    let aggregates = calculate_aggregates(&issues_with_stats);
+
+    Ok(TrendsResponse {
+        issues: issues_with_stats,
+        aggregates,
+    })
 }
 
 async fn get_next_issue_number(tenant_id: &str) -> Result<i32, AppError> {
@@ -1414,6 +1480,102 @@ mod tests {
         assert_eq!(stats.deliveries, 0);
         assert_eq!(stats.bounces, 0);
         assert_eq!(stats.complaints, 0);
+        assert!(stats.insights.is_none());
+    }
+
+    #[test]
+    fn test_parse_issue_stats_with_insights_map() {
+        let mut item = HashMap::new();
+        item.insert("opens".to_string(), AttributeValue::N("150".to_string()));
+        item.insert("clicks".to_string(), AttributeValue::N("45".to_string()));
+        item.insert(
+            "deliveries".to_string(),
+            AttributeValue::N("500".to_string()),
+        );
+        item.insert("bounces".to_string(), AttributeValue::N("5".to_string()));
+        item.insert("complaints".to_string(), AttributeValue::N("2".to_string()));
+
+        let mut insights_map = HashMap::new();
+        let mut current_metrics = HashMap::new();
+        current_metrics.insert(
+            "openRate".to_string(),
+            AttributeValue::N("26.0".to_string()),
+        );
+        current_metrics.insert(
+            "clickThroughRate".to_string(),
+            AttributeValue::N("9.0".to_string()),
+        );
+        insights_map.insert(
+            "currentMetrics".to_string(),
+            AttributeValue::M(current_metrics),
+        );
+
+        item.insert("insights".to_string(), AttributeValue::M(insights_map));
+
+        let result = parse_issue_stats(&item);
+        assert!(result.is_ok());
+
+        let stats = result.unwrap();
+        assert_eq!(stats.opens, 150);
+        assert!(stats.insights.is_some());
+
+        let insights = stats.insights.unwrap();
+        assert!(insights.is_object());
+        assert!(insights.get("currentMetrics").is_some());
+    }
+
+    #[test]
+    fn test_parse_issue_stats_with_insights_string() {
+        let mut item = HashMap::new();
+        item.insert("opens".to_string(), AttributeValue::N("150".to_string()));
+        item.insert("clicks".to_string(), AttributeValue::N("45".to_string()));
+        item.insert(
+            "deliveries".to_string(),
+            AttributeValue::N("500".to_string()),
+        );
+        item.insert("bounces".to_string(), AttributeValue::N("5".to_string()));
+        item.insert("complaints".to_string(), AttributeValue::N("2".to_string()));
+
+        let insights_json = r#"{"currentMetrics":{"openRate":26.0,"clickThroughRate":9.0}}"#;
+        item.insert(
+            "insights".to_string(),
+            AttributeValue::S(insights_json.to_string()),
+        );
+
+        let result = parse_issue_stats(&item);
+        assert!(result.is_ok());
+
+        let stats = result.unwrap();
+        assert_eq!(stats.opens, 150);
+        assert!(stats.insights.is_some());
+
+        let insights = stats.insights.unwrap();
+        assert!(insights.is_object());
+        assert!(insights.get("currentMetrics").is_some());
+    }
+
+    #[test]
+    fn test_parse_issue_stats_without_insights_backward_compatible() {
+        let mut item = HashMap::new();
+        item.insert("opens".to_string(), AttributeValue::N("150".to_string()));
+        item.insert("clicks".to_string(), AttributeValue::N("45".to_string()));
+        item.insert(
+            "deliveries".to_string(),
+            AttributeValue::N("500".to_string()),
+        );
+        item.insert("bounces".to_string(), AttributeValue::N("5".to_string()));
+        item.insert("complaints".to_string(), AttributeValue::N("2".to_string()));
+
+        let result = parse_issue_stats(&item);
+        assert!(result.is_ok());
+
+        let stats = result.unwrap();
+        assert_eq!(stats.opens, 150);
+        assert_eq!(stats.clicks, 45);
+        assert_eq!(stats.deliveries, 500);
+        assert_eq!(stats.bounces, 5);
+        assert_eq!(stats.complaints, 2);
+        assert!(stats.insights.is_none());
     }
 
     #[test]
@@ -1441,6 +1603,7 @@ mod tests {
             deliveries: 500,
             bounces: 5,
             complaints: 2,
+            insights: None,
         });
 
         let response = build_issue_response(issue, stats);
@@ -1479,41 +1642,6 @@ mod tests {
         assert_eq!(response.status, "draft");
         assert!(response.stats.is_none());
         assert!(response.published_at.is_none());
-    }
-
-    #[test]
-    fn test_calculate_time_cutoff_7d() {
-        let time_range = Some("7d".to_string());
-        let cutoff = calculate_time_cutoff(&time_range);
-        assert!(cutoff.is_some());
-    }
-
-    #[test]
-    fn test_calculate_time_cutoff_30d() {
-        let time_range = Some("30d".to_string());
-        let cutoff = calculate_time_cutoff(&time_range);
-        assert!(cutoff.is_some());
-    }
-
-    #[test]
-    fn test_calculate_time_cutoff_90d() {
-        let time_range = Some("90d".to_string());
-        let cutoff = calculate_time_cutoff(&time_range);
-        assert!(cutoff.is_some());
-    }
-
-    #[test]
-    fn test_calculate_time_cutoff_none() {
-        let time_range = None;
-        let cutoff = calculate_time_cutoff(&time_range);
-        assert!(cutoff.is_none());
-    }
-
-    #[test]
-    fn test_calculate_time_cutoff_invalid() {
-        let time_range = Some("invalid".to_string());
-        let cutoff = calculate_time_cutoff(&time_range);
-        assert!(cutoff.is_none());
     }
 
     #[test]
@@ -1934,6 +2062,7 @@ mod tests {
                     deliveries: 500,
                     bounces: 5,
                     complaints: 2,
+                    insights: None,
                 })
             } else {
                 None
@@ -2120,88 +2249,6 @@ mod tests {
             let decoded_key = decoded.unwrap();
             prop_assert_eq!(decoded_key.get("pk"), key.get("pk"));
             prop_assert_eq!(decoded_key.get("sk"), key.get("sk"));
-        }
-
-        /// **Feature: issue-management-api, Property 9: Trends Aggregation Completeness**
-        ///
-        /// For any trends request, the response must include all required aggregate metrics:
-        /// totalIssues, publishedCount, avgOpenRate, avgClickRate, and topPerformers list.
-        ///
-        /// **Validates: Requirements AC-3.1, AC-3.2**
-        #[test]
-        fn property_9_trends_aggregation_completeness(
-            total_issues in 0i32..100,
-            published_count in 0i32..100
-        ) {
-            let trends = TrendsResponse {
-                total_issues,
-                published_count: published_count.min(total_issues),
-                avg_open_rate: 25.5,
-                avg_click_rate: 10.2,
-                top_performers: vec![],
-            };
-
-            prop_assert!(trends.total_issues >= 0);
-            prop_assert!(trends.published_count >= 0);
-            prop_assert!(trends.published_count <= trends.total_issues);
-            prop_assert!(trends.avg_open_rate >= 0.0);
-            prop_assert!(trends.avg_click_rate >= 0.0);
-        }
-
-        /// **Feature: issue-management-api, Property 10: Trends Time Filter Correctness**
-        ///
-        /// For any trends request with a time filter, only issues with publishedAt timestamps
-        /// within the specified time range should be included in the aggregation calculations.
-        ///
-        /// **Validates: Requirements AC-3.3**
-        #[test]
-        fn property_10_trends_time_filter_correctness(
-            time_range in prop::sample::select(vec!["7d", "30d", "90d"])
-        ) {
-            let cutoff = calculate_time_cutoff(&Some(time_range.to_string()));
-            prop_assert!(cutoff.is_some());
-
-            let cutoff_str = cutoff.unwrap();
-            prop_assert!(!cutoff_str.is_empty());
-            prop_assert!(cutoff_str.contains("T"));
-            prop_assert!(cutoff_str.ends_with("Z") || cutoff_str.contains("+"));
-        }
-
-        /// **Feature: issue-management-api, Property 11: Top Performers Sort Order**
-        ///
-        /// For any trends response, the topPerformers list must be sorted in descending order
-        /// by engagement metrics (open rate or click rate).
-        ///
-        /// **Validates: Requirements AC-3.5**
-        #[test]
-        fn property_11_top_performers_sort_order(
-            performers_count in 1usize..10
-        ) {
-            let mut performers: Vec<TopPerformer> = (0..performers_count)
-                .map(|i| TopPerformer {
-                    id: format!("{}", i),
-                    title: format!("Issue {}", i),
-                    open_rate: (performers_count - i) as f64 * 10.0,
-                    click_rate: (performers_count - i) as f64 * 5.0,
-                })
-                .collect();
-
-            performers.sort_by(|a, b| {
-                let engagement_a = a.open_rate + a.click_rate;
-                let engagement_b = b.open_rate + b.click_rate;
-                engagement_b
-                    .partial_cmp(&engagement_a)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-
-            for i in 0..performers.len().saturating_sub(1) {
-                let engagement_current = performers[i].open_rate + performers[i].click_rate;
-                let engagement_next = performers[i + 1].open_rate + performers[i + 1].click_rate;
-                prop_assert!(
-                    engagement_current >= engagement_next,
-                    "Top performers must be sorted in descending order by engagement"
-                );
-            }
         }
 
         /// **Feature: issue-management-api, Property 12: Create Issue Draft Status**
@@ -2604,5 +2651,211 @@ mod tests {
 
         let result = publish_event(tenant_id, event_type, &data).await;
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_calculate_issue_metrics_with_deliveries() {
+        let stats = IssueStats {
+            opens: 450,
+            clicks: 125,
+            deliveries: 1000,
+            bounces: 20,
+            complaints: 5,
+            insights: None,
+        };
+
+        let metrics = calculate_issue_metrics(&stats);
+
+        assert_eq!(metrics.open_rate, 45.0);
+        assert_eq!(metrics.click_rate, 12.5);
+        assert_eq!(metrics.bounce_rate, 2.0);
+        assert_eq!(metrics.delivered, 1000);
+    }
+
+    #[test]
+    fn test_calculate_issue_metrics_zero_deliveries() {
+        let stats = IssueStats {
+            opens: 0,
+            clicks: 0,
+            deliveries: 0,
+            bounces: 0,
+            complaints: 0,
+            insights: None,
+        };
+
+        let metrics = calculate_issue_metrics(&stats);
+
+        assert_eq!(metrics.open_rate, 0.0);
+        assert_eq!(metrics.click_rate, 0.0);
+        assert_eq!(metrics.bounce_rate, 0.0);
+        assert_eq!(metrics.delivered, 0);
+    }
+
+    #[test]
+    fn test_calculate_issue_metrics_rounding() {
+        let stats = IssueStats {
+            opens: 333,
+            clicks: 111,
+            deliveries: 1000,
+            bounces: 7,
+            complaints: 2,
+            insights: None,
+        };
+
+        let metrics = calculate_issue_metrics(&stats);
+
+        assert_eq!(metrics.open_rate, 33.3);
+        assert_eq!(metrics.click_rate, 11.1);
+        assert_eq!(metrics.bounce_rate, 0.7);
+        assert_eq!(metrics.delivered, 1000);
+    }
+
+    #[test]
+    fn test_calculate_issue_metrics_high_engagement() {
+        let stats = IssueStats {
+            opens: 950,
+            clicks: 800,
+            deliveries: 1000,
+            bounces: 10,
+            complaints: 1,
+            insights: None,
+        };
+
+        let metrics = calculate_issue_metrics(&stats);
+
+        assert_eq!(metrics.open_rate, 95.0);
+        assert_eq!(metrics.click_rate, 80.0);
+        assert_eq!(metrics.bounce_rate, 1.0);
+        assert_eq!(metrics.delivered, 1000);
+    }
+
+    #[test]
+    fn test_calculate_aggregates_empty_array() {
+        let issues: Vec<IssueTrendItem> = vec![];
+        let aggregates = calculate_aggregates(&issues);
+
+        assert_eq!(aggregates.avg_open_rate, 0.0);
+        assert_eq!(aggregates.avg_click_rate, 0.0);
+        assert_eq!(aggregates.avg_bounce_rate, 0.0);
+        assert_eq!(aggregates.total_delivered, 0);
+        assert_eq!(aggregates.issue_count, 0);
+    }
+
+    #[test]
+    fn test_calculate_aggregates_single_issue() {
+        let issues = vec![IssueTrendItem {
+            id: "1".to_string(),
+            metrics: IssueMetrics {
+                open_rate: 45.0,
+                click_rate: 12.5,
+                bounce_rate: 2.0,
+                delivered: 1000,
+                opens: 450,
+                clicks: 125,
+                bounces: 20,
+                complaints: 5,
+            },
+        }];
+
+        let aggregates = calculate_aggregates(&issues);
+
+        assert_eq!(aggregates.avg_open_rate, 45.0);
+        assert_eq!(aggregates.avg_click_rate, 12.5);
+        assert_eq!(aggregates.avg_bounce_rate, 2.0);
+        assert_eq!(aggregates.total_delivered, 1000);
+        assert_eq!(aggregates.issue_count, 1);
+    }
+
+    #[test]
+    fn test_calculate_aggregates_multiple_issues() {
+        let issues = vec![
+            IssueTrendItem {
+                id: "1".to_string(),
+                metrics: IssueMetrics {
+                    open_rate: 40.0,
+                    click_rate: 10.0,
+                    bounce_rate: 2.0,
+                    delivered: 1000,
+                    opens: 400,
+                    clicks: 100,
+                    bounces: 20,
+                    complaints: 5,
+                },
+            },
+            IssueTrendItem {
+                id: "2".to_string(),
+                metrics: IssueMetrics {
+                    open_rate: 50.0,
+                    click_rate: 15.0,
+                    bounce_rate: 3.0,
+                    delivered: 1500,
+                    opens: 750,
+                    clicks: 225,
+                    bounces: 45,
+                    complaints: 10,
+                },
+            },
+            IssueTrendItem {
+                id: "3".to_string(),
+                metrics: IssueMetrics {
+                    open_rate: 45.0,
+                    click_rate: 12.5,
+                    bounce_rate: 2.5,
+                    delivered: 1200,
+                    opens: 540,
+                    clicks: 150,
+                    bounces: 30,
+                    complaints: 8,
+                },
+            },
+        ];
+
+        let aggregates = calculate_aggregates(&issues);
+
+        assert_eq!(aggregates.avg_open_rate, 45.0);
+        assert_eq!(aggregates.avg_click_rate, 12.5);
+        assert_eq!(aggregates.avg_bounce_rate, 2.5);
+        assert_eq!(aggregates.total_delivered, 3700);
+        assert_eq!(aggregates.issue_count, 3);
+    }
+
+    #[test]
+    fn test_calculate_aggregates_rounding() {
+        let issues = vec![
+            IssueTrendItem {
+                id: "1".to_string(),
+                metrics: IssueMetrics {
+                    open_rate: 33.33,
+                    click_rate: 11.11,
+                    bounce_rate: 2.22,
+                    delivered: 1000,
+                    opens: 333,
+                    clicks: 111,
+                    bounces: 22,
+                    complaints: 5,
+                },
+            },
+            IssueTrendItem {
+                id: "2".to_string(),
+                metrics: IssueMetrics {
+                    open_rate: 44.44,
+                    click_rate: 13.33,
+                    bounce_rate: 1.11,
+                    delivered: 1500,
+                    opens: 667,
+                    clicks: 200,
+                    bounces: 17,
+                    complaints: 8,
+                },
+            },
+        ];
+
+        let aggregates = calculate_aggregates(&issues);
+
+        assert_eq!(aggregates.avg_open_rate, 38.89);
+        assert_eq!(aggregates.avg_click_rate, 12.22);
+        assert_eq!(aggregates.avg_bounce_rate, 1.67);
+        assert_eq!(aggregates.total_delivered, 2500);
+        assert_eq!(aggregates.issue_count, 2);
     }
 }

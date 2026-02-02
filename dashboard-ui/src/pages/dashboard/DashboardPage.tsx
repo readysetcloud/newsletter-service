@@ -3,7 +3,6 @@ import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react
 import { AppHeader } from '@/components/layout/AppHeader';
 import { dashboardService } from '@/services/dashboardService';
 import { profileService } from '@/services/profileService';
-import { Loading } from '@/components/ui/Loading';
 import { DashboardSkeleton } from '@/components/ui/SkeletonLoader';
 import MetricsCard from '@/components/MetricsCard';
 import { MaxMindAttribution } from '@/components/analytics';

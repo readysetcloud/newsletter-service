@@ -139,7 +139,7 @@ describe('Engagement and Bounce Data - Property-Based Tests', () => {
             const suppressedRatio = Math.max(0, 1 - permanentRatio - temporaryRatio);
             const normalizedPermanent = permanentRatio / (permanentRatio + temporaryRatio + suppressedRatio);
             const normalizedTemporary = temporaryRatio / (permanentRatio + temporaryRatio + suppressedRatio);
-            const normalizedSuppressed = suppressedRatio / (permanentRatio + temporaryRatio + suppressedRatio);
+            // const normalizedSuppressed = suppressedRatio / (permanentRatio + temporaryRatio + suppressedRatio);
 
             const permanent = Math.floor(totalBounces * normalizedPermanent);
             const temporary = Math.floor(totalBounces * normalizedTemporary);
@@ -195,7 +195,7 @@ describe('Engagement and Bounce Data - Property-Based Tests', () => {
             const suppressedRatio = Math.max(0, 1 - permanentRatio - temporaryRatio);
             const normalizedPermanent = permanentRatio / (permanentRatio + temporaryRatio + suppressedRatio);
             const normalizedTemporary = temporaryRatio / (permanentRatio + temporaryRatio + suppressedRatio);
-            const normalizedSuppressed = suppressedRatio / (permanentRatio + temporaryRatio + suppressedRatio);
+            // const normalizedSuppressed = suppressedRatio / (permanentRatio + temporaryRatio + suppressedRatio);
 
             const permanent = Math.floor(totalBounces * normalizedPermanent);
             const temporary = Math.floor(totalBounces * normalizedTemporary);
@@ -232,7 +232,7 @@ describe('Engagement and Bounce Data - Property-Based Tests', () => {
             const suppressedRatio = Math.max(0, 1 - permanentRatio - temporaryRatio);
             const normalizedPermanent = permanentRatio / (permanentRatio + temporaryRatio + suppressedRatio);
             const normalizedTemporary = temporaryRatio / (permanentRatio + temporaryRatio + suppressedRatio);
-            const normalizedSuppressed = suppressedRatio / (permanentRatio + temporaryRatio + suppressedRatio);
+            // const normalizedSuppressed = suppressedRatio / (permanentRatio + temporaryRatio + suppressedRatio);
 
             const permanent = Math.floor(totalBounces * normalizedPermanent);
             const temporary = Math.floor(totalBounces * normalizedTemporary);
@@ -261,11 +261,11 @@ describe('Engagement and Bounce Data - Property-Based Tests', () => {
           fc.integer({ min: 1, max: 5000 }),
           fc.integer({ min: 2, max: 10 }),
           (permanent, temporary, suppressed, scaleFactor) => {
-            const originalBounceReasons: BounceReasons = {
-              permanent,
-              temporary,
-              suppressed,
-            };
+            // const originalBounceReasons: BounceReasons = {
+            //   permanent,
+            //   temporary,
+            //   suppressed,
+            // };
 
             const originalTotal = permanent + temporary + suppressed;
             const originalPermanentRatio = permanent / originalTotal;

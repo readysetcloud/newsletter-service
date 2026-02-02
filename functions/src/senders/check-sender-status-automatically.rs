@@ -2,10 +2,17 @@ use aws_sdk_dynamodb::Client as DynamoDbClient;
 use aws_sdk_sesv2::Client as SesClient;
 use chrono::{DateTime, Duration, Utc};
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
-use newsletter::senders::{aws_clients, error::AppError, types::*};
+use newsletter::senders::{
+    aws_clients,
+    error::AppError,
+    types::{KeyPatterns, SenderRecord, VerificationStatus},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::env;
+
+#[cfg(test)]
+use newsletter::senders::types::VerificationType;
 
 #[cfg(test)]
 #[derive(Debug, Serialize)]

@@ -30,9 +30,10 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
         }
 
         // Brand endpoints
-        (&Method::GET, "/me/brand/check") => brand::check_brand_id(event).await,
-        (&Method::PUT, "/me/brand") => brand::update_brand(event).await,
-        (&Method::POST, "/me/brand/photo") => brand::upload_photo(event).await,
+        (&Method::GET, "/brand/check") => brand::check_brand_id(event).await,
+        (&Method::GET, "/brand/validate") => brand::check_brand_id(event).await,
+        (&Method::PUT, "/brand") => brand::update_brand(event).await,
+        (&Method::POST, "/brand/photo") => brand::upload_photo(event).await,
 
         // API Keys endpoints
         (&Method::GET, "/api-keys") => api_keys::list_keys(event).await,
@@ -104,9 +105,10 @@ fn is_valid_api_path(path: &str) -> bool {
     path == "/me"
         || path.starts_with("/profile/")
         // Brand paths
-        || path == "/me/brand"
-        || path == "/me/brand/check"
-        || path == "/me/brand/photo"
+        || path == "/brand"
+        || path == "/brand/check"
+        || path == "/brand/validate"
+        || path == "/brand/photo"
         // API keys paths
         || path == "/api-keys"
         || path.starts_with("/api-keys/")
@@ -222,9 +224,10 @@ mod tests {
 
     #[test]
     fn test_is_valid_api_path_brand() {
-        assert!(is_valid_api_path("/me/brand"));
-        assert!(is_valid_api_path("/me/brand/check"));
-        assert!(is_valid_api_path("/me/brand/photo"));
+        assert!(is_valid_api_path("/brand"));
+        assert!(is_valid_api_path("/brand/check"));
+        assert!(is_valid_api_path("/brand/validate"));
+        assert!(is_valid_api_path("/brand/photo"));
     }
 
     #[test]
@@ -270,9 +273,10 @@ mod tests {
     #[test]
     fn test_route_matching_brand_aliases() {
         // Brand paths
-        assert!(is_valid_api_path("/me/brand"));
-        assert!(is_valid_api_path("/me/brand/check"));
-        assert!(is_valid_api_path("/me/brand/photo"));
+        assert!(is_valid_api_path("/brand"));
+        assert!(is_valid_api_path("/brand/check"));
+        assert!(is_valid_api_path("/brand/validate"));
+        assert!(is_valid_api_path("/brand/photo"));
     }
 
     #[test]
@@ -360,10 +364,11 @@ mod tests {
 
     #[test]
     fn test_method_validation_brand_endpoints() {
-        // Brand endpoints: GET for check, PUT for update, POST for photo
-        assert!(is_valid_api_path("/me/brand/check"));
-        assert!(is_valid_api_path("/me/brand"));
-        assert!(is_valid_api_path("/me/brand/photo"));
+        // Brand endpoints: GET for check/validate, PUT for update, POST for photo
+        assert!(is_valid_api_path("/brand/check"));
+        assert!(is_valid_api_path("/brand/validate"));
+        assert!(is_valid_api_path("/brand"));
+        assert!(is_valid_api_path("/brand/photo"));
     }
 
     #[test]
@@ -421,7 +426,7 @@ mod tests {
     fn test_cors_handles_all_endpoint_types() {
         // Verify CORS can handle all endpoint categories
         let profile_path = "/me";
-        let brand_path = "/me/brand";
+        let brand_path = "/brand";
         let api_keys_path = "/api-keys";
         let senders_path = "/senders";
         let domain_path = "/senders/domain";

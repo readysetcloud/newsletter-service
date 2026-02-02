@@ -39,7 +39,7 @@ describe('Audience Insights - Property-Based Tests', () => {
             const tabletRatio = Math.max(0, 1 - desktopRatio - mobileRatio);
             const normalizedDesktop = desktopRatio / (desktopRatio + mobileRatio + tabletRatio);
             const normalizedMobile = mobileRatio / (desktopRatio + mobileRatio + tabletRatio);
-            const normalizedTablet = tabletRatio / (desktopRatio + mobileRatio + tabletRatio);
+            // const normalizedTablet = tabletRatio / (desktopRatio + mobileRatio + tabletRatio);
 
             const desktop = Math.floor(totalClicks * normalizedDesktop);
             const mobile = Math.floor(totalClicks * normalizedMobile);
@@ -95,7 +95,7 @@ describe('Audience Insights - Property-Based Tests', () => {
             const tabletRatio = Math.max(0, 1 - desktopRatio - mobileRatio);
             const normalizedDesktop = desktopRatio / (desktopRatio + mobileRatio + tabletRatio);
             const normalizedMobile = mobileRatio / (desktopRatio + mobileRatio + tabletRatio);
-            const normalizedTablet = tabletRatio / (desktopRatio + mobileRatio + tabletRatio);
+            // const normalizedTablet = tabletRatio / (desktopRatio + mobileRatio + tabletRatio);
 
             const desktop = Math.floor(totalClicks * normalizedDesktop);
             const mobile = Math.floor(totalClicks * normalizedMobile);

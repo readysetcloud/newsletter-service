@@ -1,13 +1,6 @@
 import { Card } from '../ui/Card';
 import TrendIndicator from '../analytics/TrendIndicator';
 import type { IssueMetrics } from '../../types/issues';
-import { calculatePercentageDifference } from '../../utils/analyticsCalculations';
-
-interface ComparisonData {
-  openRate: number;
-  clickRate: number;
-  bounceRate: number;
-}
 
 interface IssueComparisonCardProps {
   current: IssueMetrics;
@@ -36,8 +29,8 @@ function MetricComparison({ label, current, comparison, format, inverse = false 
     );
   }
 
-  const percentDiff = calculatePercentageDifference(current, comparison);
-  const isPositive = inverse ? percentDiff < 0 : percentDiff > 0;
+  // const _percentDiff = calculatePercentageDifference(current, comparison);
+  // const isPositive = inverse ? percentDiff < 0 : percentDiff > 0;
 
   return (
     <div className="flex justify-between items-center py-2">

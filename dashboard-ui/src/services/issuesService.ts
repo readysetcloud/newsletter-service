@@ -123,7 +123,7 @@ class IssuesService {
    * @param issueCount - Number of recent issues to include in average calculation
    * @returns Promise resolving to comparison metrics
    */
-  async getComparisonData(currentIssueId: string, issueCount: number = 10): Promise<{
+  async getComparisonData(currentIssueId: string, _issueCount: number = 10): Promise<{
     average?: IssueMetrics;
     lastIssue?: IssueMetrics;
     bestIssue?: IssueMetrics;

@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { Plus, Trash2, Eye, RefreshCw, ArrowUpDown, ArrowUp, ArrowDown, Filter } from 'lucide-react';
 import { AppHeader } from '@/components/layout/AppHeader';
 import { Button } from '@/components/ui/Button';
-import { Select } from '@/components/ui/Select';
 import { useToast } from '@/components/ui/Toast';
 import { Card, CardContent } from '@/components/ui/Card';
 import {
@@ -92,11 +91,6 @@ export const IssuesListPage: React.FC = () => {
   useEffect(() => {
     loadIssues(true);
   }, [statusFilter, loadIssues]);
-
-  const handleFilterChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    setStatusFilter(e.target.value as IssueStatus | 'all');
-    setNextToken(null);
-  }, []);
 
   const handleLoadMore = useCallback(() => {
     if (!loadingMore && hasMore) {
@@ -202,27 +196,31 @@ export const IssuesListPage: React.FC = () => {
   }, [sortField]);
 
   const filteredIssues = useMemo(() => {
-    let filtered = [...issues];
+    const filtered = [...issues];
 
     // Sort
     filtered.sort((a, b) => {
       let comparison = 0;
 
       switch (sortField) {
-        case 'title':
+        case 'title': {
           comparison = a.title.localeCompare(b.title);
           break;
-        case 'status':
+        }
+        case 'status': {
           comparison = a.status.localeCompare(b.status);
           break;
-        case 'issueNumber':
+        }
+        case 'issueNumber': {
           comparison = a.issueNumber - b.issueNumber;
           break;
-        case 'date':
+        }
+        case 'date': {
           const dateA = new Date(a.publishedAt || a.scheduledAt || a.createdAt).getTime();
           const dateB = new Date(b.publishedAt || b.scheduledAt || b.createdAt).getTime();
           comparison = dateA - dateB;
           break;
+        }
       }
 
       return sortDirection === 'asc' ? comparison : -comparison;
@@ -594,6 +592,10 @@ export const IssuesListPage: React.FC = () => {
           <div
             className="fixed inset-0 z-40"
             onClick={() => setShowStatusFilter(false)}
+            onKeyDown={(e) => e.key === 'Escape' && setShowStatusFilter(false)}
+            role="button"
+            tabIndex={0}
+            aria-label="Close filter menu"
           />
           <div
             className="fixed z-50 bg-surface border border-border rounded-lg shadow-lg py-1 min-w-[140px]"

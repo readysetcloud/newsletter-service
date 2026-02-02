@@ -133,7 +133,98 @@ paths:
           $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/UnknownError"
-
+    put:
+      summary: Update my personal profile
+      description: Updates the authenticated user's personal information and preferences
+      tags:
+        - Profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                firstName:
+                  type: string
+                  maxLength: 50
+                  description: User's first name
+                lastName:
+                  type: string
+                  maxLength: 50
+                  description: User's last name
+                timezone:
+                  type: string
+                  maxLength: 50
+                  description: User's timezone (e.g., America/New_York)
+                locale:
+                  type: string
+                  maxLength: 10
+                  pattern: "^[a-z]{2}(-[A-Z]{2})?$"
+                  description: User's locale (e.g., en-US)
+                links:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                        maxLength: 100
+                      url:
+                        type: string
+                        maxLength: 500
+                    required: [name, url]
+                  maxItems: 10
+                  description: User's social/professional links
+              additionalProperties: false
+              minProperties: 1
+      responses:
+        "200":
+          description: Personal profile updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  profile:
+                    type: object
+                    properties:
+                      firstName:
+                        type: string
+                        nullable: true
+                      lastName:
+                        type: string
+                        nullable: true
+                      timezone:
+                        type: string
+                        nullable: true
+                      locale:
+                        type: string
+                        nullable: true
+                      links:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            name:
+                              type: string
+                            url:
+                              type: string
+                        nullable: true
+                      updatedAt:
+                        type: string
+                        format: date-time
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+          
   /profiles/{userId}:
     parameters:
       - name: userId
@@ -358,7 +449,7 @@ paths:
         "500":
           $ref: "#/components/responses/UnknownError"
 
-  /me/brand:
+  /brand:
     put:
       summary: Update my brand details
       description: Updates the authenticated user's brand and business information
@@ -439,99 +530,6 @@ paths:
                         type: array
                         items:
                           type: string
-                        nullable: true
-                      updatedAt:
-                        type: string
-                        format: date-time
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "500":
-          $ref: "#/components/responses/UnknownError"
-
-  /me/profile:
-    put:
-      summary: Update my personal profile
-      description: Updates the authenticated user's personal information and preferences
-      tags:
-        - Profile
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                firstName:
-                  type: string
-                  maxLength: 50
-                  description: User's first name
-                lastName:
-                  type: string
-                  maxLength: 50
-                  description: User's last name
-                timezone:
-                  type: string
-                  maxLength: 50
-                  description: User's timezone (e.g., America/New_York)
-                locale:
-                  type: string
-                  maxLength: 10
-                  pattern: "^[a-z]{2}(-[A-Z]{2})?$"
-                  description: User's locale (e.g., en-US)
-                links:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      name:
-                        type: string
-                        maxLength: 100
-                      url:
-                        type: string
-                        maxLength: 500
-                    required: [name, url]
-                  maxItems: 10
-                  description: User's social/professional links
-              additionalProperties: false
-              minProperties: 1
-      responses:
-        "200":
-          description: Personal profile updated successfully
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                  profile:
-                    type: object
-                    properties:
-                      firstName:
-                        type: string
-                        nullable: true
-                      lastName:
-                        type: string
-                        nullable: true
-                      timezone:
-                        type: string
-                        nullable: true
-                      locale:
-                        type: string
-                        nullable: true
-                      links:
-                        type: array
-                        items:
-                          type: object
-                          properties:
-                            name:
-                              type: string
-                            url:
-                              type: string
                         nullable: true
                       updatedAt:
                         type: string

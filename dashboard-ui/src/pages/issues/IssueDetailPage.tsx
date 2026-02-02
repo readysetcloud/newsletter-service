@@ -22,6 +22,8 @@ const ComplaintDetailsTable = lazy(() => import('../../components/issues/Complai
 const BounceReasonsChart = lazy(() => import('../../components/issues/BounceReasonsChart').then(m => ({ default: m.BounceReasonsChart })));
 const EngagementTypeIndicator = lazy(() => import('../../components/issues/EngagementTypeIndicator').then(m => ({ default: m.EngagementTypeIndicator })));
 const IssueComparisonCard = lazy(() => import('../../components/issues/IssueComparisonCard').then(m => ({ default: m.IssueComparisonCard })));
+const GeoMap = lazy(() => import('../../components/analytics/GeoMap').then(m => ({ default: m.GeoMap })));
+const LinkSelector = lazy(() => import('../../components/analytics/LinkSelector').then(m => ({ default: m.LinkSelector })));
 
 export const IssueDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -33,6 +35,7 @@ export const IssueDetailPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [selectedLinkId, setSelectedLinkId] = useState<string | null>(null);
 
   const loadIssue = useCallback(async () => {
     if (!id) return;
@@ -507,6 +510,43 @@ export const IssueDetailPage: React.FC = () => {
                 />
               </Suspense>
               <MaxMindAttribution />
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Geographic Analytics Map */}
+        {isPublished && analytics?.geoDistribution && analytics.geoDistribution.length > 0 && (
+          <Card className="shadow-md mt-4 sm:mt-6 border-l-4 border-l-purple-500">
+            <CardHeader className="bg-muted/30 p-3 sm:p-6">
+              <CardTitle className="text-base sm:text-xl">🌍 Geographic Analytics</CardTitle>
+              <p className="text-xs sm:text-sm text-muted-foreground mt-1">
+                Interactive map showing engagement by country
+              </p>
+            </CardHeader>
+            <CardContent className="pt-4 sm:pt-6 p-3 sm:p-6">
+              <Suspense fallback={<div className="animate-pulse h-96 bg-muted rounded" />}>
+                {analytics.links && analytics.links.length > 0 && (
+                  <LinkSelector
+                    links={analytics.links.map(link => ({
+                      id: link.url,
+                      url: link.url,
+                      totalClicks: link.clicks
+                    }))}
+                    selectedLinkId={selectedLinkId}
+                    onLinkSelect={setSelectedLinkId}
+                  />
+                )}
+                <GeoMap
+                  geoDistribution={analytics.geoDistribution}
+                  linkAnalytics={analytics.links.map(link => ({
+                    linkId: link.url,
+                    url: link.url,
+                    totalClicks: link.clicks,
+                    geoDistribution: link.geoDistribution || []
+                  }))}
+                  selectedLinkId={selectedLinkId}
+                />
+              </Suspense>
             </CardContent>
           </Card>
         )}

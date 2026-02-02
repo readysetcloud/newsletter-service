@@ -64,19 +64,15 @@ describe('Property 1: Dashboard Load Time', () => {
         'DeliverabilityHealthWidget',
       ];
 
-      // 'test@example.com',
-  firstName: 'Test',
-  lastName: 'User',
-  brand: {
-    brandName: 'Test Newsletter',
-    brandId: 'test-brand',
-  },
-});
+      // Property: All lazy loaded components should be defined
+      expect(lazyLoadedComponents.length).toBeGreaterThan(0);
+      lazyLoadedComponents.forEach(component => {
+        expect(component).toBeTruthy();
+      });
+    });
 
-describe('Property 1: Dashboard Load Time', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    dashboardService.invalidateTrendsCache();t least 1 minute
+    it('should verify cache TTL is reasonable', () => {
+      const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
       expect(CACHE_TTL_MS).toBeLessThanOrEqual(10 * 60 * 1000); // At most 10 minutes
     });
 

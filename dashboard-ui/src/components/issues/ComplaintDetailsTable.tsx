@@ -8,6 +8,13 @@ export interface ComplaintDetailsTableProps {
 type SortField = 'email' | 'timestamp' | 'complaintType';
 type SortDirection = 'asc' | 'desc';
 
+const SortIcon: React.FC<{ field: SortField; sortField: SortField; sortDirection: SortDirection }> = ({ field, sortField, sortDirection }) => {
+  if (sortField !== field) {
+    return <span className="text-gray-400">↕</span>;
+  }
+  return <span>{sortDirection === 'asc' ? '↑' : '↓'}</span>;
+};
+
 export const ComplaintDetailsTable: React.FC<ComplaintDetailsTableProps> = ({ complaints }) => {
   const [sortField, setSortField] = useState<SortField>('timestamp');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
@@ -55,13 +62,6 @@ export const ComplaintDetailsTable: React.FC<ComplaintDetailsTableProps> = ({ co
     });
   };
 
-  const SortIcon = ({ field }: { field: SortField }) => {
-    if (sortField !== field) {
-      return <span className="text-gray-400">↕</span>;
-    }
-    return <span>{sortDirection === 'asc' ? '↑' : '↓'}</span>;
-  };
-
   if (complaints.length === 0) {
     return (
       <div className="bg-white rounded-lg shadow p-6">
@@ -107,7 +107,7 @@ export const ComplaintDetailsTable: React.FC<ComplaintDetailsTableProps> = ({ co
                   onKeyDown={(e) => e.key === 'Enter' && handleSort('email')}
                 >
                   <div className="flex items-center gap-1">
-                    Email <SortIcon field="email" />
+                    Email <SortIcon field="email" sortField={sortField} sortDirection={sortDirection} />
                   </div>
                 </th>
                 <th
@@ -119,7 +119,7 @@ export const ComplaintDetailsTable: React.FC<ComplaintDetailsTableProps> = ({ co
                   onKeyDown={(e) => e.key === 'Enter' && handleSort('timestamp')}
                 >
                   <div className="flex items-center gap-1">
-                    Timestamp <SortIcon field="timestamp" />
+                    Timestamp <SortIcon field="timestamp" sortField={sortField} sortDirection={sortDirection} />
                   </div>
                 </th>
                 <th
@@ -131,7 +131,7 @@ export const ComplaintDetailsTable: React.FC<ComplaintDetailsTableProps> = ({ co
                   onKeyDown={(e) => e.key === 'Enter' && handleSort('complaintType')}
                 >
                   <div className="flex items-center gap-1">
-                    Type <SortIcon field="complaintType" />
+                    Type <SortIcon field="complaintType" sortField={sortField} sortDirection={sortDirection} />
                   </div>
                 </th>
               </tr>

@@ -38,7 +38,7 @@ Specialized component for brand logo uploads. Features:
 
 The brand management interface integrates with the following API endpoints:
 - `GET /me` - Retrieve user profile and brand data
-- `PUT /me/brand` - Update brand information
+- `PUT /brand` - Update brand information
 - `POST /brand/logo` - Generate presigned URL for logo upload
 - `PUT /brand/logo` - Confirm logo upload
 

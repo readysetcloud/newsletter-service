@@ -1,4 +1,4 @@
-/* eslint-env node, commonjs */
+/* global module */
 module.exports = {
   ci: {
     collect: {

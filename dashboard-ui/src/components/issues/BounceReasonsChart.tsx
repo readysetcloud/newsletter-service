@@ -6,6 +6,35 @@ export interface BounceReasonsChartProps {
   bounceReasons: BounceReasons;
 }
 
+interface TooltipProps {
+  active?: boolean;
+  payload?: Array<{
+    value: number;
+    payload: {
+      name: string;
+      count: number;
+      percentage: number;
+    };
+  }>;
+}
+
+const CustomTooltip: React.FC<TooltipProps> = ({ active, payload }) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="bg-white border border-gray-200 rounded shadow-lg p-3">
+        <p className="font-semibold text-gray-900">{payload[0].payload.name}</p>
+        <p className="text-sm text-gray-600">
+          Count: <span className="font-medium">{payload[0].value}</span>
+        </p>
+        <p className="text-sm text-gray-600">
+          Percentage: <span className="font-medium">{payload[0].payload.percentage.toFixed(1)}%</span>
+        </p>
+      </div>
+    );
+  }
+  return null;
+};
+
 export const BounceReasonsChart: React.FC<BounceReasonsChartProps> = ({ bounceReasons }) => {
   const { permanent, temporary, suppressed } = bounceReasons;
   const total = permanent + temporary + suppressed;
@@ -27,23 +56,6 @@ export const BounceReasonsChart: React.FC<BounceReasonsChartProps> = ({ bounceRe
       percentage: total > 0 ? (suppressed / total) * 100 : 0,
     },
   ];
-
-  const CustomTooltip = ({ active, payload }: any) => {
-    if (active && payload && payload.length) {
-      return (
-        <div className="bg-white border border-gray-200 rounded shadow-lg p-3">
-          <p className="font-semibold text-gray-900">{payload[0].payload.name}</p>
-          <p className="text-sm text-gray-600">
-            Count: <span className="font-medium">{payload[0].value}</span>
-          </p>
-          <p className="text-sm text-gray-600">
-            Percentage: <span className="font-medium">{payload[0].payload.percentage.toFixed(1)}%</span>
-          </p>
-        </div>
-      );
-    }
-    return null;
-  };
 
   if (total === 0) {
     return (

@@ -30,16 +30,18 @@ export const MetricsCardSkeleton: React.FC = () => {
 };
 
 export const ChartSkeleton: React.FC = () => {
+  const barHeights = [120, 180, 150, 200, 170, 140, 190, 160];
+
   return (
     <div className="bg-surface rounded-lg shadow p-6">
       <Skeleton className="h-6 w-48 mb-6" />
       <div className="space-y-4">
         <div className="flex items-end justify-between h-48">
-          {[...Array(8)].map((_, i) => (
+          {barHeights.map((height, i) => (
             <Skeleton
               key={i}
               className="w-12"
-              style={{ height: `${Math.random() * 100 + 50}px` }}
+              style={{ height: `${height}px` }}
             />
           ))}
         </div>

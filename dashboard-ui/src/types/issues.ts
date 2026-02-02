@@ -118,6 +118,7 @@ export interface LinkPerformance {
   clicks: number;
   percentOfTotal: number;
   position: number;
+  geoDistribution?: GeoData[];
 }
 
 export interface ClickDecayPoint {

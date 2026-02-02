@@ -36,7 +36,7 @@ export async function updateBrand(brandData: {
   brandLogo?: string;
   tags?: string[];
 }): Promise<BrandInfo> {
-  const response = await apiClient.put<BrandInfo>('/me/brand', brandData);
+  const response = await apiClient.put<BrandInfo>('/brand', brandData);
 
   if (!response.success) {
     throw new Error(response.error || 'Failed to update brand');

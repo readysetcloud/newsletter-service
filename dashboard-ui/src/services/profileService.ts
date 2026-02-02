@@ -44,7 +44,7 @@ export class ProfileService {
    * Update the user's brand information
    */
   async updateBrand(data: BrandUpdateRequest): Promise<ApiResponse<{ message: string; brand: BrandInfo }>> {
-    return apiClient.put<{ message: string; brand: BrandInfo }>('/me/brand', data);
+    return apiClient.put<{ message: string; brand: BrandInfo }>('/brand', data);
   }
 
   /**

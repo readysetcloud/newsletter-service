@@ -84,7 +84,7 @@ describe('API Services', () => {
 
       expect(result.success).toBe(true);
       expect(result.data).toEqual(mockResponse);
-      expect(apiClient.put).toHaveBeenCalledWith('/me/profile', updateData);
+      expect(apiClient.put).toHaveBeenCalledWith('/me', updateData);
     });
 
     it('should update brand', async () => {
@@ -108,7 +108,7 @@ describe('API Services', () => {
 
       expect(result.success).toBe(true);
       expect(result.data).toEqual(mockResponse);
-      expect(apiClient.put).toHaveBeenCalledWith('/me/brand', brandData);
+      expect(apiClient.put).toHaveBeenCalledWith('/brand', brandData);
     });
 
     it('should handle brand photo upload', async () => {

@@ -18,13 +18,7 @@ import {
   validateTrendAggregates,
   validateIssueTrendItem,
   validateLinkPerformance,
-  validateClickDecayPoint,
-  validateGeoData,
   validateDeviceBreakdown,
-  validateTimingMetrics,
-  validateEngagementType,
-  validateBounceReasons,
-  validateComplaintDetail,
 } from '../dataValidation';
 
 describe('Property 17: Data Validation Before Rendering', () => {

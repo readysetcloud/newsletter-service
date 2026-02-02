@@ -71,7 +71,7 @@ describe('Property 13: Data Loading State Consistency', () => {
         { callId: 2, loading: false, hasData: true, hasError: false },
       ];
 
-      apiCallSequence.forEach((state, index) => {
+      apiCallSequence.forEach((state) => {
         // Property: Each API call should follow the loading -> result pattern
         if (state.loading) {
           expect(state.hasData).toBe(false);
@@ -205,7 +205,7 @@ describe('Property 14: Error Handling Completeness', () => {
     it('should not provide retry button for auth errors', () => {
       const authErrors = ['401', '403'];
 
-      authErrors.forEach(errorCode => {
+      authErrors.forEach(() => {
         const hasRetryButton = false;
 
         // Property: Auth errors should not have retry button

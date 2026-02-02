@@ -282,7 +282,10 @@ Resources:
       Cors:
         AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
         AllowHeaders: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
-        AllowOrigin: !Sub "'${Origin}'"
+        AllowOrigin: !If
+          - DeployFrontendCustomDomain
+          - !Sub "'https://${FrontendCustomDomain}'"
+          - !Sub "'https://${FrontendDistribution.DomainName}'"
       Auth:
         DefaultAuthorizer: LambdaAuthorizer
         AddDefaultAuthorizerToCorsPreflight: false
@@ -1153,7 +1156,10 @@ Resources:
           TABLE_NAME: !Ref NewsletterTable
           USER_POOL_ID: !Ref NewsletterUserPool
           HOSTING_BUCKET_NAME: !Ref HostingBucket
-          ORIGIN: !Ref Origin
+          ORIGIN: !If
+            - DeployFrontendCustomDomain
+            - !Sub "https://${FrontendCustomDomain}"
+            - !Sub "https://${FrontendDistribution.DomainName}"
           # Senders environment variables
           SES_CONFIGURATION_SET: !Ref ConfigurationSet
           SYSTEM_FROM_EMAIL: !If

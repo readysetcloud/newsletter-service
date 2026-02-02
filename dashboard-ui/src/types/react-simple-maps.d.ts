@@ -32,7 +32,7 @@ declare module 'react-simple-maps' {
     fill?: string;
     stroke?: string;
     strokeWidth?: number;
-    onMouseEnter?: () => void;
+    onMouseEnter?: (event: React.MouseEvent) => void;
     onMouseLeave?: () => void;
     onClick?: () => void;
     style?: {

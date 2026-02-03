@@ -144,6 +144,8 @@ class IssuesService {
         return {};
       }
 
+      const averageSubscribers = otherIssues.reduce((sum, issue) => sum + issue.metrics.subscribers, 0) / otherIssues.length;
+
       // Calculate average metrics from aggregates
       const average: IssueMetrics = {
         openRate: aggregates.avgOpenRate,
@@ -154,6 +156,7 @@ class IssuesService {
         clicks: 0,
         bounces: 0,
         complaints: 0,
+        subscribers: Math.round(averageSubscribers),
       };
 
       // Get last issue (most recent)

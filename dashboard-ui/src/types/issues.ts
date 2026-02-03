@@ -17,6 +17,7 @@ export interface IssueStats {
   deliveries: number;
   bounces: number;
   complaints: number;
+  subscribers: number;
   analytics?: IssueAnalytics;
 }
 
@@ -43,6 +44,7 @@ export interface IssueMetrics {
   clicks: number;
   bounces: number;
   complaints: number;
+  subscribers: number;
 }
 
 export interface IssueTrendItem {

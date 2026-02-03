@@ -1,11 +1,11 @@
 
 import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { AppHeader } from '@/components/layout/AppHeader';
 import { dashboardService } from '@/services/dashboardService';
 import { profileService } from '@/services/profileService';
 import { DashboardSkeleton } from '@/components/ui/SkeletonLoader';
 import MetricsCard from '@/components/MetricsCard';
-import { MaxMindAttribution } from '@/components/analytics';
 import type { TrendsData, UserProfile, TrendComparison, BestWorstIssues } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
 import { calculatePercentageDifference, calculateHealthStatus, calculateCompositeScore } from '@/utils/analyticsCalculations';
@@ -26,12 +26,13 @@ const DeliverabilityHealthWidget = lazy(() => import('@/components/Deliverabilit
 
 export function DashboardPage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [trendsData, setTrendsData] = useState<TrendsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [issueCount, setIssueCount] = useState(10);
+  const [issueCount, setIssueCount] = useState(5);
 
   const trendComparisons = useMemo(() => {
     if (!trendsData?.aggregates || !trendsData?.previousPeriodAggregates) {
@@ -292,6 +293,13 @@ export function DashboardPage() {
                     >
                       Try again
                     </button>
+                    <button
+                      onClick={() => navigate('/issues')}
+                      className="ml-2 px-3 py-2 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                      aria-label="View issues list"
+                    >
+                      View issues
+                    </button>
                   </div>
                 </div>
               </div>
@@ -371,6 +379,15 @@ export function DashboardPage() {
                         <p className="mt-1 text-sm text-muted-foreground">
                           No newsletter issues have been published yet.
                         </p>
+                        <div className="mt-4">
+                          <button
+                            onClick={() => navigate('/issues/new')}
+                            className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md bg-primary-600 text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                            aria-label="Create a new issue"
+                          >
+                            Create your first issue
+                          </button>
+                        </div>
                       </div>
                     </div>
                   )}
@@ -382,7 +399,7 @@ export function DashboardPage() {
                         <h3 className="text-sm sm:text-base font-medium text-foreground">Latest Issue Performance</h3>
                         <span className="text-xs sm:text-sm text-muted-foreground">Issue #{trendsData.issues[0].id}</span>
                       </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
+                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-3">
                         <div>
                           <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Opens</div>
                           <div className="text-lg sm:text-xl font-semibold text-foreground">{formatNumber(trendsData.issues[0].metrics.opens)}</div>
@@ -402,6 +419,11 @@ export function DashboardPage() {
                           <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Delivered</div>
                           <div className="text-lg sm:text-xl font-semibold text-foreground">{formatNumber(trendsData.issues[0].metrics.delivered)}</div>
                           <div className="text-xs text-muted-foreground">Total sent</div>
+                        </div>
+                        <div>
+                          <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Subscribers</div>
+                          <div className="text-lg sm:text-xl font-semibold text-foreground">{formatNumber(trendsData.issues[0].metrics.subscribers)}</div>
+                          <div className="text-xs text-muted-foreground">List size</div>
                         </div>
                       </div>
                       {trendsData.issues[0].metrics.complaints > 0 && (
@@ -438,13 +460,31 @@ export function DashboardPage() {
                               <th className="px-3 sm:px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider hidden lg:table-cell">
                                 Delivered
                               </th>
+                              <th className="px-3 sm:px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider hidden xl:table-cell">
+                                Subscribers
+                              </th>
                             </tr>
                           </thead>
                           <tbody className="bg-surface divide-y divide-border">
                             {trendsData.issues.slice(0, 10).map((issue) => (
-                              <tr key={issue.id} className="hover:bg-background">
+                              <tr
+                                key={issue.id}
+                                className="hover:bg-background cursor-pointer"
+                                onClick={() => navigate(`/issues/${issue.id}`)}
+                                onKeyDown={(event) => {
+                                  if (event.key === 'Enter' || event.key === ' ') {
+                                    event.preventDefault();
+                                    navigate(`/issues/${issue.id}`);
+                                  }
+                                }}
+                                tabIndex={0}
+                                role="link"
+                                aria-label={`View issue ${issue.id} details`}
+                              >
                                 <td className="px-3 sm:px-6 py-3 sm:py-4">
-                                  <div className="text-xs sm:text-sm font-medium text-foreground">Issue #{issue.id}</div>
+                                  <span className="text-xs sm:text-sm font-medium text-foreground">
+                                    Issue #{issue.id}
+                                  </span>
                                 </td>
                                 <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-xs sm:text-sm text-foreground">
                                   {formatPercentage(issue.metrics.openRate)}
@@ -454,6 +494,9 @@ export function DashboardPage() {
                                 </td>
                                 <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-xs sm:text-sm text-foreground hidden lg:table-cell">
                                   {formatNumber(issue.metrics.delivered)}
+                                </td>
+                                <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-xs sm:text-sm text-foreground hidden xl:table-cell">
+                                  {formatNumber(issue.metrics.subscribers)}
                                 </td>
                               </tr>
                             ))}
@@ -526,8 +569,6 @@ export function DashboardPage() {
             </div>
           )}
 
-          {/* MaxMind Attribution */}
-          {trendsData && <MaxMindAttribution />}
         </div>
       </main>
     </div>

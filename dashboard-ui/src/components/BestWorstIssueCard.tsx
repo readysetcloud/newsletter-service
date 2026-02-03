@@ -24,7 +24,11 @@ export default function BestWorstIssueCard({ bestIssue, worstIssue }: BestWorstI
 
       <div className="space-y-3 sm:space-y-4">
         {bestIssue && (
-          <div className="border border-green-200 bg-green-50 rounded-lg p-3 sm:p-4">
+          <Link
+            to={`/issues/${bestIssue.id}`}
+            className="border border-green-200 bg-green-50 rounded-lg p-3 sm:p-4 block hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-ring"
+            aria-label={`View details for issue ${bestIssue.issueNumber}`}
+          >
             <div className="flex items-start justify-between gap-2">
               <div className="flex items-start gap-2 sm:gap-3 flex-1 min-w-0">
                 <div className="p-1.5 sm:p-2 bg-green-100 rounded-full flex-shrink-0">
@@ -41,19 +45,19 @@ export default function BestWorstIssueCard({ bestIssue, worstIssue }: BestWorstI
                   </div>
                 </div>
               </div>
-              <Link
-                to={`/issues/${bestIssue.id}`}
-                className="flex-shrink-0 text-green-600 hover:text-green-700 p-1 -m-1 touch-manipulation"
-                aria-label={`View details for issue ${bestIssue.issueNumber}`}
-              >
+              <span className="flex-shrink-0 text-green-600">
                 <ExternalLink className="w-4 h-4" />
-              </Link>
+              </span>
             </div>
-          </div>
+          </Link>
         )}
 
         {worstIssue && (
-          <div className="border border-red-200 bg-red-50 rounded-lg p-3 sm:p-4">
+          <Link
+            to={`/issues/${worstIssue.id}`}
+            className="border border-red-200 bg-red-50 rounded-lg p-3 sm:p-4 block hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-ring"
+            aria-label={`View details for issue ${worstIssue.issueNumber}`}
+          >
             <div className="flex items-start justify-between gap-2">
               <div className="flex items-start gap-2 sm:gap-3 flex-1 min-w-0">
                 <div className="p-1.5 sm:p-2 bg-red-100 rounded-full flex-shrink-0">
@@ -70,15 +74,11 @@ export default function BestWorstIssueCard({ bestIssue, worstIssue }: BestWorstI
                   </div>
                 </div>
               </div>
-              <Link
-                to={`/issues/${worstIssue.id}`}
-                className="flex-shrink-0 text-red-600 hover:text-red-700 p-1 -m-1 touch-manipulation"
-                aria-label={`View details for issue ${worstIssue.issueNumber}`}
-              >
+              <span className="flex-shrink-0 text-red-600">
                 <ExternalLink className="w-4 h-4" />
-              </Link>
+              </span>
             </div>
-          </div>
+          </Link>
         )}
       </div>
     </div>

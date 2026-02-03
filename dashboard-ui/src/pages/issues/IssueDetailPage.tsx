@@ -185,11 +185,14 @@ export const IssueDetailPage: React.FC = () => {
       clicks: issue.stats.clicks,
       bounces: issue.stats.bounces,
       complaints: issue.stats.complaints,
+      subscribers: issue.stats.subscribers,
     };
   }, [issue]);
 
   const averageMetrics = useMemo<IssueMetrics | null>(() => {
     if (!trendsData?.aggregates) return null;
+    const issueCount = trendsData.issues.length || 1;
+    const avgSubscribers = trendsData.issues.reduce((sum, i) => sum + i.metrics.subscribers, 0) / issueCount;
 
     return {
       openRate: trendsData.aggregates.avgOpenRate,
@@ -200,6 +203,7 @@ export const IssueDetailPage: React.FC = () => {
       clicks: 0,
       bounces: 0,
       complaints: 0,
+      subscribers: Math.round(avgSubscribers),
     };
   }, [trendsData]);
 

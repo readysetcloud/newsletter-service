@@ -225,7 +225,8 @@ describe('Analytics Calculations - Property-Based Tests', () => {
           fc.integer({ min: 0, max: 10000 }),
           fc.integer({ min: 0, max: 1000 }),
           fc.integer({ min: 0, max: 100 }),
-          (openRate, clickRate, bounceRate, delivered, opens, clicks, bounces, complaints) => {
+          fc.integer({ min: 0, max: 100000 }),
+          (openRate, clickRate, bounceRate, delivered, opens, clicks, bounces, complaints, subscribers) => {
             const metrics: IssueMetrics = {
               openRate,
               clickRate,
@@ -235,6 +236,7 @@ describe('Analytics Calculations - Property-Based Tests', () => {
               clicks,
               bounces,
               complaints,
+              subscribers,
             };
 
             const score = calculateCompositeScore(metrics);
@@ -257,6 +259,7 @@ describe('Analytics Calculations - Property-Based Tests', () => {
         clicks: 400,
         bounces: 20,
         complaints: 1,
+        subscribers: 980,
       };
 
       const poorMetrics: IssueMetrics = {
@@ -268,6 +271,7 @@ describe('Analytics Calculations - Property-Based Tests', () => {
         clicks: 50,
         bounces: 150,
         complaints: 10,
+        subscribers: 980,
       };
 
       const goodScore = calculateCompositeScore(goodMetrics);
@@ -286,6 +290,7 @@ describe('Analytics Calculations - Property-Based Tests', () => {
         clicks: 0,
         bounces: 0,
         complaints: 0,
+        subscribers: 1000,
       };
 
       const highClickRate: IssueMetrics = {
@@ -297,6 +302,7 @@ describe('Analytics Calculations - Property-Based Tests', () => {
         clicks: 1000,
         bounces: 0,
         complaints: 0,
+        subscribers: 1000,
       };
 
       const openScore = calculateCompositeScore(highOpenRate);

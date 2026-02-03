@@ -1710,6 +1710,7 @@ components:
         - deliveries
         - bounces
         - complaints
+        - subscribers
       properties:
         opens:
           type: integer
@@ -1726,6 +1727,9 @@ components:
         complaints:
           type: integer
           description: Number of spam complaints
+        subscribers:
+          type: integer
+          description: Subscriber count at send time
 
     TrendsResponse:
       type: object
@@ -1770,6 +1774,7 @@ components:
         - clickRate
         - bounceRate
         - delivered
+        - subscribers
       properties:
         openRate:
           type: number
@@ -1787,6 +1792,10 @@ components:
           type: integer
           format: int64
           description: Number of emails delivered
+        subscribers:
+          type: integer
+          format: int64
+          description: Subscriber count at send time
 
     TrendAggregates:
       type: object

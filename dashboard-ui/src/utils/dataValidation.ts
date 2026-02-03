@@ -34,7 +34,8 @@ export function validateIssueMetrics(data: unknown): data is IssueMetrics {
     isNonNegativeNumber(metrics.opens) &&
     isNonNegativeNumber(metrics.clicks) &&
     isNonNegativeNumber(metrics.bounces) &&
-    isNonNegativeNumber(metrics.complaints)
+    isNonNegativeNumber(metrics.complaints) &&
+    isNonNegativeNumber(metrics.subscribers)
   );
 }
 
@@ -238,6 +239,10 @@ export function validateIssueStats(data: unknown): data is IssueStats {
   }
   if (!isNonNegativeNumber(stats.complaints)) {
     console.error('IssueStats validation failed: invalid complaints');
+    return false;
+  }
+  if (!isNonNegativeNumber(stats.subscribers)) {
+    console.error('IssueStats validation failed: invalid subscribers');
     return false;
   }
   if (stats.analytics !== undefined && !validateIssueAnalytics(stats.analytics)) {

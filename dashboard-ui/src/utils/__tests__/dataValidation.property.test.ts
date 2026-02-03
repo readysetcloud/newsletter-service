@@ -36,6 +36,7 @@ describe('Property 17: Data Validation Before Rendering', () => {
         clicks: 123,
         bounces: 21,
         complaints: 2,
+        subscribers: 980,
       };
 
       expect(validateIssueMetrics(validMetrics)).toBe(true);
@@ -67,6 +68,7 @@ describe('Property 17: Data Validation Before Rendering', () => {
               clicks: 123,
               bounces: 21,
               complaints: 2,
+              subscribers: 980,
             },
           },
         ],
@@ -89,6 +91,7 @@ describe('Property 17: Data Validation Before Rendering', () => {
         deliveries: 1000,
         bounces: 21,
         complaints: 2,
+        subscribers: 980,
       };
 
       expect(validateIssueStats(validStats)).toBe(true);
@@ -130,6 +133,7 @@ describe('Property 17: Data Validation Before Rendering', () => {
         clicks: 123,
         bounces: 21,
         complaints: 2,
+        subscribers: 980,
       };
 
       expect(validateIssueMetrics(invalidMetrics)).toBe(false);
@@ -145,6 +149,7 @@ describe('Property 17: Data Validation Before Rendering', () => {
         clicks: 123,
         bounces: 21,
         complaints: 2,
+        subscribers: 980,
       };
 
       expect(validateIssueMetrics(invalidMetrics)).toBe(false);
@@ -160,6 +165,7 @@ describe('Property 17: Data Validation Before Rendering', () => {
         clicks: 123,
         bounces: 21,
         complaints: 2,
+        subscribers: 980,
       };
 
       expect(validateIssueMetrics(invalidMetrics)).toBe(false);
@@ -175,6 +181,7 @@ describe('Property 17: Data Validation Before Rendering', () => {
         clicks: 123,
         bounces: 21,
         complaints: 2,
+        subscribers: 980,
       };
 
       expect(validateIssueMetrics(invalidMetrics)).toBe(false);
@@ -217,6 +224,7 @@ describe('Property 17: Data Validation Before Rendering', () => {
         deliveries: 1000,
         bounces: 21,
         complaints: 2,
+        subscribers: 980,
       };
 
       expect(validateIssueStats(invalidStats)).toBe(false);
@@ -258,6 +266,7 @@ describe('Property 17: Data Validation Before Rendering', () => {
         clicks: 123,
         bounces: 21,
         complaints: 2,
+        subscribers: 980,
       };
 
       expect(validateIssueMetrics(invalidMetrics)).toBe(false);
@@ -287,6 +296,7 @@ describe('Property 17: Data Validation Before Rendering', () => {
           clicks: 123,
           bounces: 21,
           complaints: 2,
+          subscribers: 980,
         },
       };
 
@@ -333,6 +343,7 @@ describe('Property 17: Data Validation Before Rendering', () => {
         bounces: 21,
         complaints: 2,
         analytics: undefined,
+        subscribers: 980,
       };
 
       expect(validateIssueStats(validStats)).toBe(true);
@@ -506,6 +517,7 @@ describe('Property 17: Data Validation Before Rendering', () => {
         clicks: 0,
         bounces: 0,
         complaints: 0,
+        subscribers: 0,
       };
 
       expect(validateIssueMetrics(zeroMetrics)).toBe(true);
@@ -521,6 +533,7 @@ describe('Property 17: Data Validation Before Rendering', () => {
         clicks: 1000,
         bounces: 1000,
         complaints: 0,
+        subscribers: 1000,
       };
 
       expect(validateIssueMetrics(maxRateMetrics)).toBe(true);
@@ -611,6 +624,7 @@ describe('Property 17: Data Validation Before Rendering', () => {
         deliveries: 1000,
         bounces: 10,
         complaints: 1,
+        subscribers: 980,
       };
 
       const isValid = validateIssueStats(validData);

@@ -18,6 +18,7 @@ describe('Dashboard Calculations - Property-Based Tests', () => {
               clicks: fc.integer({ min: 0, max: 10000 }),
               bounces: fc.integer({ min: 0, max: 1000 }),
               complaints: fc.integer({ min: 0, max: 100 }),
+              subscribers: fc.integer({ min: 0, max: 100000 }),
             }),
             { minLength: 2, maxLength: 50 }
           ),
@@ -56,6 +57,7 @@ describe('Dashboard Calculations - Property-Based Tests', () => {
               clicks: fc.integer({ min: 0, max: 10000 }),
               bounces: fc.integer({ min: 0, max: 1000 }),
               complaints: fc.integer({ min: 0, max: 100 }),
+              subscribers: fc.integer({ min: 0, max: 100000 }),
             }),
             { minLength: 2, maxLength: 50 }
           ),
@@ -94,6 +96,7 @@ describe('Dashboard Calculations - Property-Based Tests', () => {
               clicks: fc.integer({ min: 0, max: 10000 }),
               bounces: fc.integer({ min: 0, max: 1000 }),
               complaints: fc.integer({ min: 0, max: 100 }),
+              subscribers: fc.integer({ min: 0, max: 100000 }),
             }),
             { minLength: 2, maxLength: 50 }
           ),
@@ -129,6 +132,7 @@ describe('Dashboard Calculations - Property-Based Tests', () => {
             clicks: fc.integer({ min: 0, max: 10000 }),
             bounces: fc.integer({ min: 0, max: 1000 }),
             complaints: fc.integer({ min: 0, max: 100 }),
+            subscribers: fc.integer({ min: 0, max: 100000 }),
           }),
           (metrics) => {
             const issuesWithScores = [
@@ -162,6 +166,7 @@ describe('Dashboard Calculations - Property-Based Tests', () => {
             clicks: fc.integer({ min: 0, max: 10000 }),
             bounces: fc.integer({ min: 0, max: 1000 }),
             complaints: fc.integer({ min: 0, max: 100 }),
+            subscribers: fc.integer({ min: 0, max: 100000 }),
           }),
           (metrics) => {
             const score1 = calculateCompositeScore(metrics as IssueMetrics);

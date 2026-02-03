@@ -257,7 +257,7 @@ function App() {
               </div>
               <footer className="border-t border-border bg-surface">
                 <div className="mx-auto max-w-7xl px-4 py-3 text-xs text-muted-foreground sm:px-6 lg:px-8">
-                  © {new Date().getFullYear()} Outboxed
+                  <div>© {new Date().getFullYear()} Outboxed</div>
                 </div>
               </footer>
             </div>

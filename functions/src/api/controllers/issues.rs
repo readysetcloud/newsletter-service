@@ -114,6 +114,7 @@ pub struct IssueStats {
     deliveries: i64,
     bounces: i64,
     complaints: i64,
+    subscribers: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     analytics: Option<serde_json::Value>,
 }
@@ -144,6 +145,7 @@ pub struct IssueMetrics {
     clicks: i64,
     bounces: i64,
     complaints: i64,
+    subscribers: i64,
 }
 
 #[derive(Serialize)]
@@ -831,6 +833,12 @@ fn parse_issue_stats(item: &HashMap<String, AttributeValue>) -> Result<IssueStat
         .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or(0);
 
+    let subscribers = item
+        .get("subscribers")
+        .and_then(|v| v.as_n().ok())
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(0);
+
     let analytics = item.get("analytics").and_then(|v| {
         if let Ok(m) = v.as_m() {
             parse_insights_map(m).ok()
@@ -847,6 +855,7 @@ fn parse_issue_stats(item: &HashMap<String, AttributeValue>) -> Result<IssueStat
         deliveries,
         bounces,
         complaints,
+        subscribers,
         analytics,
     })
 }
@@ -969,6 +978,7 @@ fn calculate_issue_metrics(stats: &IssueStats) -> IssueMetrics {
         clicks: stats.clicks,
         bounces: stats.bounces,
         complaints: stats.complaints,
+        subscribers: stats.subscribers,
     }
 }
 
@@ -1455,6 +1465,10 @@ mod tests {
         );
         item.insert("bounces".to_string(), AttributeValue::N("5".to_string()));
         item.insert("complaints".to_string(), AttributeValue::N("2".to_string()));
+        item.insert(
+            "subscribers".to_string(),
+            AttributeValue::N("480".to_string()),
+        );
 
         let result = parse_issue_stats(&item);
         assert!(result.is_ok());
@@ -1465,6 +1479,7 @@ mod tests {
         assert_eq!(stats.deliveries, 500);
         assert_eq!(stats.bounces, 5);
         assert_eq!(stats.complaints, 2);
+        assert_eq!(stats.subscribers, 480);
     }
 
     #[test]
@@ -1480,6 +1495,7 @@ mod tests {
         assert_eq!(stats.deliveries, 0);
         assert_eq!(stats.bounces, 0);
         assert_eq!(stats.complaints, 0);
+        assert_eq!(stats.subscribers, 0);
         assert!(stats.analytics.is_none());
     }
 
@@ -1603,6 +1619,7 @@ mod tests {
             deliveries: 500,
             bounces: 5,
             complaints: 2,
+            subscribers: 0,
             analytics: None,
         });
 
@@ -2661,6 +2678,7 @@ mod tests {
             deliveries: 1000,
             bounces: 20,
             complaints: 5,
+            subscribers: 900,
             analytics: None,
         };
 
@@ -2680,6 +2698,7 @@ mod tests {
             deliveries: 0,
             bounces: 0,
             complaints: 0,
+            subscribers: 0,
             analytics: None,
         };
 
@@ -2699,6 +2718,7 @@ mod tests {
             deliveries: 1000,
             bounces: 7,
             complaints: 2,
+            subscribers: 1000,
             analytics: None,
         };
 
@@ -2718,6 +2738,7 @@ mod tests {
             deliveries: 1000,
             bounces: 10,
             complaints: 1,
+            subscribers: 1000,
             analytics: None,
         };
 
@@ -2754,6 +2775,7 @@ mod tests {
                 clicks: 125,
                 bounces: 20,
                 complaints: 5,
+                subscribers: 980,
             },
         }];
 
@@ -2780,6 +2802,7 @@ mod tests {
                     clicks: 100,
                     bounces: 20,
                     complaints: 5,
+                    subscribers: 950,
                 },
             },
             IssueTrendItem {
@@ -2793,6 +2816,7 @@ mod tests {
                     clicks: 225,
                     bounces: 45,
                     complaints: 10,
+                    subscribers: 1200,
                 },
             },
             IssueTrendItem {
@@ -2806,6 +2830,7 @@ mod tests {
                     clicks: 150,
                     bounces: 30,
                     complaints: 8,
+                    subscribers: 1100,
                 },
             },
         ];
@@ -2833,6 +2858,7 @@ mod tests {
                     clicks: 111,
                     bounces: 22,
                     complaints: 5,
+                    subscribers: 980,
                 },
             },
             IssueTrendItem {
@@ -2846,6 +2872,7 @@ mod tests {
                     clicks: 200,
                     bounces: 17,
                     complaints: 8,
+                    subscribers: 1200,
                 },
             },
         ];

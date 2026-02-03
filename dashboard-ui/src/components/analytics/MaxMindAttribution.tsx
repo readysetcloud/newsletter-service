@@ -1,6 +1,6 @@
 export function MaxMindAttribution() {
   return (
-    <div className="text-xs text-muted-foreground mt-4 pt-4 border-t border-border">
+    <div className="text-xs text-muted-foreground mt-2">
       This product includes GeoLite2 data created by MaxMind, available from{' '}
       <a
         href="https://www.maxmind.com"

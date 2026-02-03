@@ -42,8 +42,9 @@ export async function updateBrand(brandData: {
     throw new Error(response.error || 'Failed to update brand');
   }
 
+  // Some endpoints return 204 No Content on success.
   if (!response.data) {
-    throw new Error('No brand data returned from server');
+    return brandData;
   }
 
   return response.data;

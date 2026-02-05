@@ -48,7 +48,7 @@ export const DeleteIssueDialog: React.FC<DeleteIssueDialogProps> = ({
         'This action cannot be undone'
       ]}
       details={[
-        { label: 'Issue Title', value: issue.title },
+        { label: 'Issue Subject', value: issue.subject },
         { label: 'Issue Number', value: `#${issue.issueNumber}` },
         { label: 'Status', value: issue.status }
       ]}

@@ -18,7 +18,7 @@ export interface IssueCardProps {
 
 /**
  * Mobile-optimized card component for displaying issue list items
- * Shows issue title, status, dates, and engagement metrics in a compact format
+ * Shows issue subject, status, dates, and engagement metrics in a compact format
  */
 export const IssueCard: React.FC<IssueCardProps> = React.memo(({ issue }) => {
   const formatDate = (dateString: string) => {
@@ -40,9 +40,9 @@ export const IssueCard: React.FC<IssueCardProps> = React.memo(({ issue }) => {
             <Link
               to={`/issues/${issue.id}`}
               className="hover:text-primary-600 transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 rounded line-clamp-2"
-              aria-label={`View issue: ${issue.title}`}
+              aria-label={`View issue: ${issue.subject}`}
             >
-              {issue.title}
+              {issue.subject}
             </Link>
           </CardTitle>
           <IssueStatusBadge status={issue.status} className="flex-shrink-0" />
@@ -58,8 +58,6 @@ export const IssueCard: React.FC<IssueCardProps> = React.memo(({ issue }) => {
 
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium text-foreground">Issue #{issue.issueNumber}</span>
-            <span className="text-muted-foreground/50">•</span>
-            <span className="text-xs font-mono text-muted-foreground truncate">{issue.slug}</span>
           </div>
         </div>
       </CardContent>

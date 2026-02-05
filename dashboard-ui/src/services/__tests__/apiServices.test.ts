@@ -305,7 +305,7 @@ describe('API Services', () => {
         issues: [
           {
             id: 'issue-1',
-            title: 'Issue #1',
+            subject: 'Issue #1',
             publishedAt: '2024-01-01T00:00:00Z',
             metrics: {
               openRate: 45.2,

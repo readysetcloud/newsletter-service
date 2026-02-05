@@ -156,9 +156,14 @@ async fn handle_api_key_auth(
         return Err("Invalid API key".into());
     };
 
+    let tenant_email = fetch_tenant_email(&state.ddb, &state.table_name, &user_context.tenant_id)
+        .await?
+        .ok_or("Tenant email not found")?;
+
     let api_arn = get_api_arn_pattern(event.method_arn.as_deref().unwrap_or_default());
     let context = build_context([
         ("userId", Some(user_context.created_by)),
+        ("email", Some(tenant_email)),
         ("tenantId", Some(user_context.tenant_id.clone())),
         ("keyId", Some(user_context.key_id)),
         ("authType", Some("api_key".to_string())),
@@ -334,6 +339,26 @@ async fn update_api_key_usage(
         .await?;
 
     Ok(())
+}
+
+async fn fetch_tenant_email(
+    client: &DynamoDbClient,
+    table_name: &str,
+    tenant_id: &str,
+) -> Result<Option<String>, Error> {
+    let response = client
+        .get_item()
+        .table_name(table_name)
+        .key("pk", AttributeValue::S(tenant_id.to_string()))
+        .key("sk", AttributeValue::S("tenant".to_string()))
+        .send()
+        .await?;
+
+    let Some(item) = response.item else {
+        return Ok(None);
+    };
+
+    Ok(get_optional_string_attr(&item, "email"))
 }
 
 fn decode_api_key(api_key: &str) -> Option<DecodedApiKey> {

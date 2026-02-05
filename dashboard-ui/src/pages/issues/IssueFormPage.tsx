@@ -11,16 +11,16 @@ import { issuesService } from '@/services/issuesService';
 import type { Issue, CreateIssueRequest, UpdateIssueRequest } from '@/types/issues';
 
 interface FormData {
-  title: string;
+  subject: string;
   content: string;
-  slug: string;
+  issueNumber?: string;
   scheduledAt?: string;
 }
 
 interface FormErrors {
-  title?: string;
+  subject?: string;
   content?: string;
-  slug?: string;
+  issueNumber?: string;
   scheduledAt?: string;
 }
 
@@ -31,9 +31,9 @@ export const IssueFormPage: React.FC = () => {
   const isEditMode = !!id;
 
   const [formData, setFormData] = useState<FormData>({
-    title: '',
+    subject: '',
     content: '',
-    slug: '',
+    issueNumber: '',
     scheduledAt: '',
   });
 
@@ -54,9 +54,9 @@ export const IssueFormPage: React.FC = () => {
         const issue = response.data;
         setExistingIssue(issue);
         setFormData({
-          title: issue.title,
+          subject: issue.subject,
           content: issue.content,
-          slug: issue.slug,
+          issueNumber: issue.issueNumber ? String(issue.issueNumber) : '',
           scheduledAt: issue.scheduledAt ? toDatetimeLocal(issue.scheduledAt) : '',
         });
 
@@ -94,14 +94,6 @@ export const IssueFormPage: React.FC = () => {
     }
   }, [isEditMode, id, loadIssue]);
 
-  // Generate slug from title
-  const generateSlug = (title: string): string => {
-    return title
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '');
-  };
-
   // Convert ISO datetime to datetime-local format
   const toDatetimeLocal = (isoString: string): string => {
     if (!isoString) return '';
@@ -122,15 +114,6 @@ export const IssueFormPage: React.FC = () => {
     }));
     setIsDirty(true);
 
-    // Auto-generate slug from title if slug is empty or hasn't been manually edited
-    if (field === 'title' && !isEditMode) {
-      const newSlug = generateSlug(value);
-      setFormData((prev) => ({
-        ...prev,
-        slug: newSlug,
-      }));
-    }
-
     // Clear error for this field
     if (errors[field]) {
       setErrors((prev) => ({
@@ -143,12 +126,12 @@ export const IssueFormPage: React.FC = () => {
   // Validate single field
   const validateField = useCallback((field: keyof FormData, value: string): string | undefined => {
     switch (field) {
-      case 'title':
+      case 'subject':
         if (!value.trim()) {
-          return 'Title is required';
+          return 'Subject is required';
         }
         if (value.length > 200) {
-          return 'Title must be 200 characters or less';
+          return 'Subject must be 200 characters or less';
         }
         break;
 
@@ -158,12 +141,12 @@ export const IssueFormPage: React.FC = () => {
         }
         break;
 
-      case 'slug':
-        if (!value.trim()) {
-          return 'Slug is required';
-        }
-        if (!/^[a-z0-9-]+$/.test(value)) {
-          return 'Slug must contain only lowercase letters, numbers, and hyphens';
+      case 'issueNumber':
+        if (value && value.trim()) {
+          const parsed = Number(value);
+          if (!Number.isInteger(parsed) || parsed < 1) {
+            return 'Issue number must be a positive whole number';
+          }
         }
         break;
 
@@ -189,14 +172,14 @@ export const IssueFormPage: React.FC = () => {
   const validateForm = useCallback((): boolean => {
     const newErrors: FormErrors = {};
 
-    newErrors.title = validateField('title', formData.title);
+    newErrors.subject = validateField('subject', formData.subject);
     newErrors.content = validateField('content', formData.content);
-    newErrors.slug = validateField('slug', formData.slug);
+    newErrors.issueNumber = validateField('issueNumber', formData.issueNumber || '');
     newErrors.scheduledAt = validateField('scheduledAt', formData.scheduledAt || '');
 
     setErrors(newErrors);
 
-    return !newErrors.title && !newErrors.content && !newErrors.slug && !newErrors.scheduledAt;
+    return !newErrors.subject && !newErrors.content && !newErrors.issueNumber && !newErrors.scheduledAt;
   }, [formData, validateField]);
 
   // Handle form submission
@@ -213,9 +196,8 @@ export const IssueFormPage: React.FC = () => {
       if (isEditMode && id) {
         // Update existing issue
         const updateData: UpdateIssueRequest = {
-          title: formData.title,
+          subject: formData.subject,
           content: formData.content,
-          slug: formData.slug,
         };
 
         if (formData.scheduledAt) {
@@ -263,10 +245,13 @@ export const IssueFormPage: React.FC = () => {
       } else {
         // Create new issue
         const createData: CreateIssueRequest = {
-          title: formData.title,
+          subject: formData.subject,
           content: formData.content,
-          slug: formData.slug,
         };
+
+        if (formData.issueNumber && formData.issueNumber.trim()) {
+          createData.issueNumber = Number(formData.issueNumber);
+        }
 
         if (formData.scheduledAt) {
           createData.scheduledAt = new Date(formData.scheduledAt).toISOString();
@@ -348,17 +333,10 @@ export const IssueFormPage: React.FC = () => {
 
           {/* Form Skeleton */}
           <div className="bg-surface rounded-lg border border-border p-6 space-y-6">
-            {/* Title Input Skeleton */}
+            {/* Subject Input Skeleton */}
             <div className="space-y-2">
               <div className="h-4 w-16 bg-muted rounded animate-pulse" />
               <div className="h-10 w-full bg-muted rounded animate-pulse" />
-            </div>
-
-            {/* Slug Input Skeleton */}
-            <div className="space-y-2">
-              <div className="h-4 w-12 bg-muted rounded animate-pulse" />
-              <div className="h-10 w-full bg-muted rounded animate-pulse" />
-              <div className="h-3 w-64 bg-muted rounded animate-pulse" />
             </div>
 
             {/* Content Textarea Skeleton */}
@@ -407,39 +385,43 @@ export const IssueFormPage: React.FC = () => {
         {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-6" id="issue-form" aria-label={isEditMode ? 'Edit issue form' : 'Create issue form'}>
           <div className="bg-surface rounded-lg border border-border shadow-sm p-4 sm:p-6 space-y-6">
-            {/* Title Input */}
+            {/* Subject Input */}
             <Input
-              label="Title *"
-              placeholder="Enter issue title"
-              value={formData.title}
-              onChange={(e) => handleInputChange('title', e.target.value)}
+              label="Subject *"
+              placeholder="Enter issue subject"
+              value={formData.subject}
+              onChange={(e) => handleInputChange('subject', e.target.value)}
               onBlur={() => {
-                const error = validateField('title', formData.title);
+                const error = validateField('subject', formData.subject);
                 if (error) {
-                  setErrors((prev) => ({ ...prev, title: error }));
+                  setErrors((prev) => ({ ...prev, subject: error }));
                 }
               }}
-              error={errors.title}
+              error={errors.subject}
               disabled={isFormDisabled}
               maxLength={200}
             />
 
-            {/* Slug Input */}
-            <Input
-              label="Slug *"
-              placeholder="issue-slug"
-              value={formData.slug}
-              onChange={(e) => handleInputChange('slug', e.target.value)}
-              onBlur={() => {
-                const error = validateField('slug', formData.slug);
-                if (error) {
-                  setErrors((prev) => ({ ...prev, slug: error }));
-                }
-              }}
-              error={errors.slug}
-              helperText="URL-friendly identifier (lowercase, hyphens, alphanumeric)"
-              disabled={isFormDisabled}
-            />
+            {!isEditMode && (
+              <Input
+                label="Issue Number (Optional)"
+                placeholder="Leave blank to auto-assign"
+                type="number"
+                min={1}
+                step={1}
+                value={formData.issueNumber || ''}
+                onChange={(e) => handleInputChange('issueNumber', e.target.value)}
+                onBlur={() => {
+                  const error = validateField('issueNumber', formData.issueNumber || '');
+                  if (error) {
+                    setErrors((prev) => ({ ...prev, issueNumber: error }));
+                  }
+                }}
+                error={errors.issueNumber}
+                disabled={isFormDisabled}
+                helperText="Use this only if you need a specific issue number. Otherwise leave blank."
+              />
+            )}
 
             {/* Scheduled At Input */}
             <div>

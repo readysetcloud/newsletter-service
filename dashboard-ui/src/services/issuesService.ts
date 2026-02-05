@@ -89,17 +89,25 @@ class IssuesService {
 
   /**
    * Creates a new draft issue
-   * @param data - Issue creation data including title, content, slug, and optional metadata
+   * @param data - Issue creation data including subject, content, and optional metadata
+   * @param options - Optional request options (e.g., idempotency key)
    * @returns Promise resolving to the newly created issue
    */
-  async createIssue(data: CreateIssueRequest): Promise<ApiResponse<Issue>> {
-    return apiClient.post('/issues', data);
+  async createIssue(
+    data: CreateIssueRequest,
+    options?: { idempotencyKey?: string }
+  ): Promise<ApiResponse<Issue>> {
+    const headers = options?.idempotencyKey
+      ? { 'Idempotency-Key': options.idempotencyKey }
+      : undefined;
+
+    return apiClient.post('/issues', data, headers ? { headers } : undefined);
   }
 
   /**
    * Updates an existing draft issue
    * @param issueId - Unique identifier of the issue to update
-   * @param data - Partial issue data to update (title, content, slug, scheduledAt, metadata)
+   * @param data - Partial issue data to update (subject, content, scheduledAt, metadata)
    * @returns Promise resolving to the updated issue
    * @throws {Error} 409 Conflict if attempting to update a non-draft issue
    */

@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 export interface BestWorstIssue {
   id: string;
   issueNumber: number;
-  title?: string;
+  subject?: string;
   score: number;
 }
 
@@ -38,7 +38,7 @@ export default function BestWorstIssueCard({ bestIssue, worstIssue }: BestWorstI
                   <div className="text-xs sm:text-sm font-medium text-green-900 mb-1">Best Performing</div>
                   <div className="text-xs sm:text-sm text-green-700 truncate">
                     Issue #{bestIssue.issueNumber}
-                    {bestIssue.title && `: ${bestIssue.title}`}
+                    {bestIssue.subject && `: ${bestIssue.subject}`}
                   </div>
                   <div className="text-xs text-green-600 mt-1">
                     Score: {bestIssue.score.toFixed(2)}
@@ -67,7 +67,7 @@ export default function BestWorstIssueCard({ bestIssue, worstIssue }: BestWorstI
                   <div className="text-xs sm:text-sm font-medium text-red-900 mb-1">Needs Attention</div>
                   <div className="text-xs sm:text-sm text-red-700 truncate">
                     Issue #{worstIssue.issueNumber}
-                    {worstIssue.title && `: ${worstIssue.title}`}
+                    {worstIssue.subject && `: ${worstIssue.subject}`}
                   </div>
                   <div className="text-xs text-red-600 mt-1">
                     Score: {worstIssue.score.toFixed(2)}

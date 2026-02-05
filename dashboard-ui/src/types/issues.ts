@@ -3,8 +3,7 @@ export type IssueStatus = 'draft' | 'scheduled' | 'published' | 'failed';
 export interface IssueListItem {
   id: string;
   issueNumber: number;
-  title: string;
-  slug: string;
+  subject: string;
   status: IssueStatus;
   createdAt: string;
   publishedAt?: string;
@@ -30,7 +29,7 @@ export interface Issue extends IssueListItem {
 
 export interface TopPerformer {
   id: string;
-  title: string;
+  subject: string;
   openRate: number;
   clickRate: number;
 }
@@ -76,13 +75,13 @@ export interface BestWorstIssues {
   best: {
     id: string;
     issueNumber: number;
-    title?: string;
+    subject?: string;
     score: number;
   } | null;
   worst: {
     id: string;
     issueNumber: number;
-    title?: string;
+    subject?: string;
     score: number;
   } | null;
 }
@@ -94,17 +93,16 @@ export interface TrendsData {
 }
 
 export interface CreateIssueRequest {
-  title: string;
+  subject: string;
   content: string;
-  slug: string;
+  issueNumber?: number;
   scheduledAt?: string;
   metadata?: Record<string, unknown>;
 }
 
 export interface UpdateIssueRequest {
-  title?: string;
+  subject?: string;
   content?: string;
-  slug?: string;
   scheduledAt?: string;
   metadata?: Record<string, unknown>;
 }

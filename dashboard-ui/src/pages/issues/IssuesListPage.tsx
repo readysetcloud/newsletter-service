@@ -26,7 +26,7 @@ export const IssuesListPage: React.FC = () => {
   const [nextToken, setNextToken] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [issueToDelete, setIssueToDelete] = useState<Issue | null>(null);
-  const [sortField, setSortField] = useState<'title' | 'status' | 'issueNumber' | 'date'>('date');
+  const [sortField, setSortField] = useState<'subject' | 'status' | 'issueNumber' | 'date'>('date');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [showStatusFilter, setShowStatusFilter] = useState(false);
 
@@ -186,7 +186,7 @@ export const IssuesListPage: React.FC = () => {
     setNextToken(null);
   }, []);
 
-  const handleSort = useCallback((field: 'title' | 'status' | 'issueNumber' | 'date') => {
+  const handleSort = useCallback((field: 'subject' | 'status' | 'issueNumber' | 'date') => {
     if (sortField === field) {
       setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
     } else {
@@ -203,8 +203,8 @@ export const IssuesListPage: React.FC = () => {
       let comparison = 0;
 
       switch (sortField) {
-        case 'title': {
-          comparison = a.title.localeCompare(b.title);
+        case 'subject': {
+          comparison = a.subject.localeCompare(b.subject);
           break;
         }
         case 'status': {
@@ -416,11 +416,11 @@ export const IssuesListPage: React.FC = () => {
                       <tr>
                         <th scope="col" className="w-[40%] px-6 py-3 text-left">
                           <button
-                            onClick={() => handleSort('title')}
+                            onClick={() => handleSort('subject')}
                             className="flex items-center gap-2 text-xs font-medium text-muted-foreground uppercase tracking-wider hover:text-foreground transition-colors group"
                           >
-                            Title
-                            {sortField === 'title' ? (
+                            Subject
+                            {sortField === 'subject' ? (
                               sortDirection === 'asc' ? (
                                 <ArrowUp className="w-3 h-3" />
                               ) : (
@@ -508,13 +508,13 @@ export const IssuesListPage: React.FC = () => {
                               <button
                                 onClick={() => navigate(`/issues/${issue.id}`)}
                                 className="text-left hover:text-primary-600 transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 rounded w-full"
-                                aria-label={`View issue: ${issue.title}`}
+                                aria-label={`View issue: ${issue.subject}`}
                               >
                                 <div className="text-sm font-medium text-foreground group-hover:text-primary-600 transition-colors">
-                                  {issue.title}
+                                  {issue.subject}
                                 </div>
                                 <div className="text-xs text-muted-foreground font-mono mt-1">
-                                  {issue.slug}
+                                  Issue #{issue.issueNumber}
                                 </div>
                               </button>
                             </td>
@@ -536,7 +536,7 @@ export const IssuesListPage: React.FC = () => {
                                   variant="ghost"
                                   size="sm"
                                   onClick={() => navigate(`/issues/${issue.id}`)}
-                                  aria-label={`View issue: ${issue.title}`}
+                                  aria-label={`View issue: ${issue.subject}`}
                                   className="hover:bg-primary-50 dark:hover:bg-primary-900/20"
                                 >
                                   <Eye className="w-4 h-4" />
@@ -546,7 +546,7 @@ export const IssuesListPage: React.FC = () => {
                                     variant="ghost"
                                     size="sm"
                                     onClick={() => handleDeleteClick(issue)}
-                                    aria-label={`Delete issue: ${issue.title}`}
+                                    aria-label={`Delete issue: ${issue.subject}`}
                                     className="hover:bg-error-50 dark:hover:bg-error-900/20"
                                   >
                                     <Trash2 className="w-4 h-4 text-error-600 dark:text-error-400" />

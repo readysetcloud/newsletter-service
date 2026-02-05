@@ -9,7 +9,7 @@
         "TableName": "${TableName}",
         "Key": {
           "pk": {
-            "S.$": "$$.Execution.Input.key"
+            "S.$": "States.Format('{}#{}', $$.Execution.Input.tenant.id, $$.Execution.Input.issueId)"
           },
           "sk": {
             "S": "newsletter"
@@ -41,9 +41,55 @@
             }
           ],
           "Next": "Save Issue Record"
+        },
+        {
+          "And": [
+            {
+              "Variable": "$.existingNewsletter.Item",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.existingNewsletter.Item.status.S",
+              "StringEquals": "draft"
+            }
+          ],
+          "Next": "Mark Issue In Progress"
         }
       ],
       "Default": "Success - Duplicate Request"
+    },
+    "Mark Issue In Progress": {
+      "Type": "Task",
+      "Resource": "${DynamodbUpdateItem}",
+      "Parameters": {
+        "TableName": "${TableName}",
+        "Key": {
+          "pk": {
+            "S.$": "States.Format('{}#{}', $$.Execution.Input.tenant.id, $$.Execution.Input.issueId)"
+          },
+          "sk": {
+            "S": "newsletter"
+          }
+        },
+        "UpdateExpression": "SET #status = :status, #content = :content, updatedAt = :updatedAt",
+        "ExpressionAttributeNames": {
+          "#status": "status",
+          "#content": "content"
+        },
+        "ExpressionAttributeValues": {
+          ":status": {
+            "S": "in progress"
+          },
+          ":content": {
+            "S.$": "$$.Execution.Input.content"
+          },
+          ":updatedAt": {
+            "S.$": "$$.State.EnteredTime"
+          }
+        }
+      },
+      "Next": "Is Scheduled In The Future And Not Preview?",
+      "ResultPath": null
     },
     "Save Issue Record": {
       "Type": "Task",
@@ -52,13 +98,22 @@
         "TableName": "${TableName}",
         "Item": {
           "pk": {
-            "S.$": "$$.Execution.Input.key"
+            "S.$": "States.Format('{}#{}', $$.Execution.Input.tenant.id, $$.Execution.Input.issueId)"
           },
           "sk": {
             "S": "newsletter"
           },
           "status": {
             "S": "in progress"
+          },
+          "content": {
+            "S.$": "$$.Execution.Input.content"
+          },
+          "createdAt": {
+            "S.$": "$$.State.EnteredTime"
+          },
+          "updatedAt": {
+            "S.$": "$$.State.EnteredTime"
           }
         }
       },
@@ -113,7 +168,8 @@
         "FunctionName": "${SetupVotingOptions}",
         "Payload": {
           "content.$": "$$.Execution.Input.content",
-          "tenant.$": "$$.Execution.Input.tenant"
+          "tenant.$": "$$.Execution.Input.tenant",
+          "issueId.$": "$$.Execution.Input.issueId"
         }
       },
       "Retry": [
@@ -207,13 +263,14 @@
               "Resource": "${LambdaInvoke}",
               "Parameters": {
                 "FunctionName": "${ParseMdToJson}",
-                "Payload": {
-                  "content.$": "$.content",
-                  "fileName.$": "$$.Execution.Input.fileName",
-                  "isPreview.$": "$$.Execution.Input.isPreview",
-                  "votingOptions.$": "$votingOptions"
-                }
-              },
+          "Payload": {
+            "content.$": "$.content",
+            "fileName.$": "$$.Execution.Input.fileName",
+            "isPreview.$": "$$.Execution.Input.isPreview",
+            "votingOptions.$": "$votingOptions",
+            "issueId.$": "$$.Execution.Input.issueId"
+          }
+        },
               "Retry": [
                 {
                   "ErrorEquals": [
@@ -309,7 +366,7 @@
                   "BackoffRate": 2
                 }
               ],
-              "OutputPath": "$.Payload",
+              "ResultPath": "$.publishResult",
               "Next": "Schedule Tasks and Update"
             },
             "Schedule Tasks and Update": {
@@ -397,7 +454,7 @@
                         "TableName": "${TableName}",
                         "Key": {
                           "pk": {
-                            "S.$": "$$.Execution.Input.key"
+                            "S.$": "States.Format('{}#{}', $$.Execution.Input.tenant.id, $$.Execution.Input.issueId)"
                           },
                           "sk": {
                             "S": "newsletter"
@@ -459,7 +516,7 @@
         "TableName": "${TableName}",
         "Key": {
           "pk": {
-            "S.$": "$$.Execution.Input.key"
+            "S.$": "States.Format('{}#{}', $$.Execution.Input.tenant.id, $$.Execution.Input.issueId)"
           },
           "sk": {
             "S": "newsletter"
@@ -488,7 +545,7 @@
         "TableName": "${TableName}",
         "Key": {
           "pk": {
-            "S.$": "$$.Execution.Input.key"
+            "S.$": "States.Format('{}#{}', $$.Execution.Input.tenant.id, $$.Execution.Input.issueId)"
           },
           "sk": {
             "S": "newsletter"
@@ -500,7 +557,7 @@
         },
         "ExpressionAttributeValues": {
           ":status": {
-            "S": "succeeded"
+            "S": "published"
           }
         }
       },

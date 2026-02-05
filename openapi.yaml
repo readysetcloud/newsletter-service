@@ -1122,9 +1122,16 @@ paths:
 
     post:
       summary: Create a new issue
-      description: Creates a new draft newsletter issue
+      description: Creates a new issue (draft by default, or scheduled when action is "schedule")
       tags:
         - Issues
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Idempotency key for safely retrying requests (stored for 24 hours)
       requestBody:
         required: true
         content:
@@ -1528,8 +1535,7 @@ components:
       required:
         - id
         - issueNumber
-        - title
-        - slug
+        - subject
         - status
         - createdAt
       properties:
@@ -1539,12 +1545,9 @@ components:
         issueNumber:
           type: integer
           description: Sequential issue number
-        title:
+        subject:
           type: string
-          description: Issue title
-        slug:
-          type: string
-          description: URL-friendly slug
+          description: Issue subject
         status:
           type: string
           enum: [draft, scheduled, published, failed]
@@ -1565,22 +1568,26 @@ components:
     CreateIssueRequest:
       type: object
       required:
-        - title
+        - subject
         - content
-        - slug
       properties:
-        title:
+        issueNumber:
+          type: integer
+          description: Optional issue number to assign (must be unique per tenant)
+        subject:
           type: string
           maxLength: 200
-          description: Issue title
+          description: Issue subject
         content:
           type: string
           description: Issue content in markdown format
-        slug:
+        scheduledAt:
           type: string
-          maxLength: 100
-          pattern: "^[a-z0-9-]+$"
-          description: URL-friendly slug (lowercase, numbers, hyphens only)
+          description: When to schedule the issue for publishing (RFC3339 or "now")
+        action:
+          type: string
+          enum: [draft, schedule]
+          description: Controls whether the issue is created as a draft or scheduled immediately
         metadata:
           type: object
           description: Optional metadata for the issue
@@ -1590,8 +1597,7 @@ components:
       required:
         - id
         - issueNumber
-        - title
-        - slug
+        - subject
         - status
         - content
         - createdAt
@@ -1603,12 +1609,9 @@ components:
         issueNumber:
           type: integer
           description: Sequential issue number
-        title:
+        subject:
           type: string
-          description: Issue title
-        slug:
-          type: string
-          description: URL-friendly slug
+          description: Issue subject
         status:
           type: string
           enum: [draft]
@@ -1630,8 +1633,7 @@ components:
       required:
         - id
         - issueNumber
-        - title
-        - slug
+        - subject
         - status
         - content
         - createdAt
@@ -1643,12 +1645,9 @@ components:
         issueNumber:
           type: integer
           description: Sequential issue number
-        title:
+        subject:
           type: string
-          description: Issue title
-        slug:
-          type: string
-          description: URL-friendly slug
+          description: Issue subject
         status:
           type: string
           enum: [draft, scheduled, published, failed]
@@ -1682,18 +1681,13 @@ components:
       type: object
       minProperties: 1
       properties:
-        title:
+        subject:
           type: string
           maxLength: 200
-          description: Issue title
+          description: Issue subject
         content:
           type: string
           description: Issue content in markdown format
-        slug:
-          type: string
-          maxLength: 100
-          pattern: "^[a-z0-9-]+$"
-          description: URL-friendly slug (lowercase, numbers, hyphens only)
         scheduledAt:
           type: string
           format: date-time
@@ -1750,16 +1744,16 @@ components:
       type: object
       required:
         - id
-        - title
+        - subject
         - publishedAt
         - metrics
       properties:
         id:
           type: string
           description: Issue identifier
-        title:
+        subject:
           type: string
-          description: Issue title
+          description: Issue subject
         publishedAt:
           type: string
           format: date-time
@@ -1830,16 +1824,16 @@ components:
       type: object
       required:
         - id
-        - title
+        - subject
         - openRate
         - clickRate
       properties:
         id:
           type: string
           description: Issue identifier
-        title:
+        subject:
           type: string
-          description: Issue title
+          description: Issue subject
         openRate:
           type: number
           format: double

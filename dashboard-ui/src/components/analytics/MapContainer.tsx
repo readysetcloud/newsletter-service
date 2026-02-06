@@ -1,10 +1,11 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { ComposableMap, Geographies, Geography, ZoomableGroup } from 'react-simple-maps';
 import { GeoDistributionData, getMetricValue } from './GeoMap';
+import type { GeoMetric } from './MetricToggle';
 
 export interface MapContainerProps {
   geoDistribution: GeoDistributionData[];
-  selectedMetric: 'clicks' | 'opens' | 'engagementRate';
+  selectedMetric: GeoMetric;
   colorScale: (value: number) => string;
   onCountryHover: (country: string | null, data: GeoDistributionData | null, event?: React.MouseEvent) => void;
   countryCodeMap: Map<string, string>;

@@ -11,6 +11,8 @@ export function Tooltip({ content, position }: TooltipProps) {
   const formatNumber = (num: number) => num.toLocaleString();
   const formatEngagementRate = (rate: number | null) =>
     rate !== null ? `${rate.toFixed(1)}%` : 'N/A';
+  const formatUniqueEngagementRate = (rate?: number | null) =>
+    rate !== undefined ? formatEngagementRate(rate) : null;
 
   return (
     <div
@@ -24,7 +26,19 @@ export function Tooltip({ content, position }: TooltipProps) {
       <div className="space-y-1 text-xs text-gray-600">
         <p>Clicks: {formatNumber(content.clicks)}</p>
         <p>Opens: {formatNumber(content.opens)}</p>
+        {content.uniqueClicks !== undefined && (
+          <p>Unique Clicks: {formatNumber(content.uniqueClicks)}</p>
+        )}
+        {content.uniqueOpens !== undefined && (
+          <p>Unique Opens: {formatNumber(content.uniqueOpens)}</p>
+        )}
+        {content.uniqueUsers !== undefined && (
+          <p>Unique Users: {formatNumber(content.uniqueUsers)}</p>
+        )}
         <p>Engagement: {formatEngagementRate(content.engagementRate)}</p>
+        {formatUniqueEngagementRate(content.uniqueEngagementRate) && (
+          <p>Unique Engagement: {formatUniqueEngagementRate(content.uniqueEngagementRate)}</p>
+        )}
       </div>
     </div>
   );

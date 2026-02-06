@@ -182,6 +182,7 @@ describe('aggregate-issue-analytics', () => {
 
       expect(analytics).toHaveProperty('links');
       expect(analytics).toHaveProperty('clickDecay');
+      expect(analytics).toHaveProperty('openDecay');
       expect(analytics).toHaveProperty('geoDistribution');
       expect(analytics).toHaveProperty('deviceBreakdown');
       expect(analytics).toHaveProperty('timingMetrics');

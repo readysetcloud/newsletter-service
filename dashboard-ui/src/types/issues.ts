@@ -49,6 +49,10 @@ export interface IssueMetrics {
 export interface IssueTrendItem {
   id: string;
   metrics: IssueMetrics;
+  analyticsSummary?: {
+    engagementType?: EngagementType;
+    trafficSource?: TrafficSource;
+  };
 }
 
 export interface TrendAggregates {
@@ -127,10 +131,19 @@ export interface ClickDecayPoint {
   cumulativeClicks: number;
 }
 
+export interface OpenDecayPoint {
+  hour: number;
+  opens: number;
+  cumulativeOpens: number;
+}
+
 export interface GeoData {
   country: string;
   clicks: number;
   opens: number;
+  uniqueClickUsers?: number;
+  uniqueOpenUsers?: number;
+  uniqueUsers?: number;
 }
 
 export interface DeviceBreakdown {
@@ -174,6 +187,7 @@ export interface ComplaintDetail {
 export interface IssueAnalytics {
   links: LinkPerformance[];
   clickDecay: ClickDecayPoint[];
+  openDecay?: OpenDecayPoint[];
   geoDistribution: GeoData[];
   deviceBreakdown: DeviceBreakdown;
   timingMetrics: TimingMetrics;

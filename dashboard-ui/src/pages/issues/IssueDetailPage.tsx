@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Pencil, Trash, RefreshCw, AlertCircle } from 'lucide-react';
 import { AppHeader } from '../../components/layout/AppHeader';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { useToast } from '../../components/ui/Toast';
+import { InfoTooltip } from '../../components/ui/InfoTooltip';
 import { IssueStatusBadge } from '../../components/issues/IssueStatusBadge';
 import { MarkdownPreview } from '../../components/issues/MarkdownPreview';
 import { DeleteIssueDialog } from '../../components/issues/DeleteIssueDialog';
@@ -18,17 +19,21 @@ import type { Issue, IssueAnalytics, IssueMetrics, TrendsData } from '../../type
 // Lazy load analytics components for better performance
 const LinkPerformanceTable = lazy(() => import('../../components/issues/LinkPerformanceTable').then(m => ({ default: m.LinkPerformanceTable })));
 const ClickDecayChart = lazy(() => import('../../components/issues/ClickDecayChart'));
+const OpenDecayChart = lazy(() => import('../../components/issues/OpenDecayChart'));
 const AudienceInsightsPanel = lazy(() => import('../../components/issues/AudienceInsightsPanel').then(m => ({ default: m.AudienceInsightsPanel })));
 const ComplaintDetailsTable = lazy(() => import('../../components/issues/ComplaintDetailsTable').then(m => ({ default: m.ComplaintDetailsTable })));
 const BounceReasonsChart = lazy(() => import('../../components/issues/BounceReasonsChart').then(m => ({ default: m.BounceReasonsChart })));
 const EngagementTypeIndicator = lazy(() => import('../../components/issues/EngagementTypeIndicator').then(m => ({ default: m.EngagementTypeIndicator })));
 const IssueComparisonCard = lazy(() => import('../../components/issues/IssueComparisonCard').then(m => ({ default: m.IssueComparisonCard })));
+const TrafficSourceChart = lazy(() => import('../../components/issues/TrafficSourceChart').then(m => ({ default: m.TrafficSourceChart })));
+const TimingMetricsChart = lazy(() => import('../../components/issues/TimingMetricsChart').then(m => ({ default: m.TimingMetricsChart })));
 const GeoMap = lazy(() => import('../../components/analytics/GeoMap').then(m => ({ default: m.GeoMap })));
 const LinkSelector = lazy(() => import('../../components/analytics/LinkSelector').then(m => ({ default: m.LinkSelector })));
 
 export const IssueDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { addToast } = useToast();
 
   const [issue, setIssue] = useState<Issue | null>(null);
@@ -39,6 +44,13 @@ export const IssueDetailPage: React.FC = () => {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedLinkId, setSelectedLinkId] = useState<string | null>(null);
   const [isAnalyticsRebuilding, setIsAnalyticsRebuilding] = useState(false);
+  const [detailTab, setDetailTab] = useState<'overview' | 'engagement' | 'audience' | 'deliverability'>(() => {
+    const tab = searchParams.get('tab');
+    if (tab === 'engagement' || tab === 'audience' || tab === 'deliverability') {
+      return tab;
+    }
+    return 'overview';
+  });
 
   const loadIssue = useCallback(async () => {
     if (!id) return;
@@ -109,6 +121,16 @@ export const IssueDetailPage: React.FC = () => {
       loadIssue();
     }
   }, [id, loadIssue]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams);
+    if (detailTab !== 'overview') {
+      params.set('tab', detailTab);
+    } else {
+      params.delete('tab');
+    }
+    setSearchParams(params, { replace: true });
+  }, [detailTab, searchParams, setSearchParams]);
 
   const handleRebuildAnalytics = useCallback(async () => {
     if (!id) return;
@@ -409,6 +431,48 @@ export const IssueDetailPage: React.FC = () => {
           </CardContent>
         </Card>
 
+        <Card className="mb-6">
+          <CardHeader className="pb-3">
+            <CardTitle>Issue Details</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <select
+              value={detailTab}
+              onChange={(e) => setDetailTab(e.target.value as typeof detailTab)}
+              className="sm:hidden w-full text-sm border border-border rounded-md px-3 py-2 bg-surface focus:outline-none focus:ring-2 focus:ring-ring"
+              aria-label="Select issue detail tab"
+            >
+              <option value="overview">Overview</option>
+              <option value="engagement">Engagement</option>
+              <option value="audience">Audience</option>
+              <option value="deliverability">Deliverability</option>
+            </select>
+            <div className="hidden sm:flex flex-wrap gap-2">
+              {([
+                { id: 'overview', label: 'Overview' },
+                { id: 'engagement', label: 'Engagement' },
+                { id: 'audience', label: 'Audience' },
+                { id: 'deliverability', label: 'Deliverability' }
+              ] as const).map(tab => (
+                <button
+                  key={tab.id}
+                  onClick={() => setDetailTab(tab.id)}
+                  className={`px-3 py-2 rounded-md text-xs sm:text-sm font-medium border ${
+                    detailTab === tab.id
+                      ? 'bg-primary-600 text-white border-primary-600'
+                      : 'bg-surface text-muted-foreground border-border hover:text-foreground'
+                  }`}
+                  aria-label={`Show ${tab.label}`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        {detailTab === 'overview' && (
+          <>
         {/* Issue Content */}
         <Card className="mb-6">
           <CardHeader>
@@ -423,7 +487,13 @@ export const IssueDetailPage: React.FC = () => {
         {isPublished && issue.stats && (
           <Card className="shadow-sm">
             <CardHeader>
-              <CardTitle>Performance Metrics</CardTitle>
+              <CardTitle className="flex items-center gap-2">
+                Performance Metrics
+                <InfoTooltip
+                  label="Performance metrics"
+                  description="Core delivery, open, click, bounce, and complaint counts for this issue."
+                />
+              </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
@@ -525,11 +595,22 @@ export const IssueDetailPage: React.FC = () => {
           </Card>
         )}
 
+          </>
+        )}
+
+        {detailTab === 'engagement' && (
+          <>
         {/* Link Performance Section */}
         {isPublished && analytics?.links && analytics.links.length > 0 && (
           <Card className="shadow-md mt-4 sm:mt-6 border-l-4 border-l-primary-500">
             <CardHeader className="bg-muted/30 p-3 sm:p-6">
-              <CardTitle className="text-base sm:text-xl">📊 Link Performance</CardTitle>
+              <CardTitle className="text-base sm:text-xl flex items-center gap-2">
+                Link Performance
+                <InfoTooltip
+                  label="Link performance"
+                  description="Shows top links by clicks and their share of total engagement."
+                />
+              </CardTitle>
               <p className="text-xs sm:text-sm text-muted-foreground mt-1">
                 Top performing links and click distribution
               </p>
@@ -545,11 +626,40 @@ export const IssueDetailPage: React.FC = () => {
           </Card>
         )}
 
+        {/* Traffic Sources Section */}
+        {isPublished && analytics?.trafficSource && (
+          <Card className="shadow-md mt-4 sm:mt-6 border-l-4 border-l-emerald-500">
+            <CardHeader className="bg-muted/30 p-3 sm:p-6">
+              <CardTitle className="text-base sm:text-xl flex items-center gap-2">
+                Traffic Sources
+                <InfoTooltip
+                  label="Traffic sources"
+                  description="Breakdown of clicks attributed to email vs web."
+                />
+              </CardTitle>
+              <p className="text-xs sm:text-sm text-muted-foreground mt-1">
+                Where clicks are coming from
+              </p>
+            </CardHeader>
+            <CardContent className="pt-4 sm:pt-6 p-3 sm:p-6">
+              <Suspense fallback={<div className="animate-pulse h-48 bg-muted rounded" />}>
+                <TrafficSourceChart trafficSource={analytics.trafficSource} />
+              </Suspense>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Click Decay Chart Section */}
         {isPublished && analytics?.clickDecay && analytics.clickDecay.length > 0 && (
           <Card className="shadow-md mt-4 sm:mt-6 border-l-4 border-l-blue-500">
             <CardHeader className="bg-muted/30 p-3 sm:p-6">
-              <CardTitle className="text-base sm:text-xl">📈 Click Activity Over Time</CardTitle>
+              <CardTitle className="text-base sm:text-xl flex items-center gap-2">
+                Click Activity Over Time
+                <InfoTooltip
+                  label="Click activity"
+                  description="How click engagement evolves in the hours after publish."
+                />
+              </CardTitle>
               <p className="text-xs sm:text-sm text-muted-foreground mt-1">
                 How engagement evolved after publication
               </p>
@@ -562,11 +672,45 @@ export const IssueDetailPage: React.FC = () => {
           </Card>
         )}
 
+        {/* Open Decay Chart Section */}
+        {isPublished && analytics?.openDecay && analytics.openDecay.length > 0 && (
+          <Card className="shadow-md mt-4 sm:mt-6 border-l-4 border-l-emerald-500">
+            <CardHeader className="bg-muted/30 p-3 sm:p-6">
+              <CardTitle className="text-base sm:text-xl flex items-center gap-2">
+                Open Activity Over Time
+                <InfoTooltip
+                  label="Open activity"
+                  description="How open engagement evolves in the hours after publish."
+                />
+              </CardTitle>
+              <p className="text-xs sm:text-sm text-muted-foreground mt-1">
+                Open activity since publication
+              </p>
+            </CardHeader>
+            <CardContent className="pt-4 sm:pt-6 p-3 sm:p-6">
+              <Suspense fallback={<div className="animate-pulse h-64 bg-muted rounded" />}>
+                <OpenDecayChart openDecay={analytics.openDecay} />
+              </Suspense>
+            </CardContent>
+          </Card>
+        )}
+
+          </>
+        )}
+
+        {detailTab === 'audience' && (
+          <>
         {/* Audience Insights Section */}
         {isPublished && analytics && (
           <Card className="shadow-md mt-4 sm:mt-6 border-l-4 border-l-green-500">
             <CardHeader className="bg-muted/30 p-3 sm:p-6">
-              <CardTitle className="text-base sm:text-xl">👥 Audience Insights</CardTitle>
+              <CardTitle className="text-base sm:text-xl flex items-center gap-2">
+                Audience Insights
+                <InfoTooltip
+                  label="Audience insights"
+                  description="Device mix, geography, and engagement timing for this issue."
+                />
+              </CardTitle>
               <p className="text-xs sm:text-sm text-muted-foreground mt-1">
                 Geographic distribution, devices, and engagement timing
               </p>
@@ -584,11 +728,40 @@ export const IssueDetailPage: React.FC = () => {
           </Card>
         )}
 
+        {/* Timing Metrics Section */}
+        {isPublished && analytics?.timingMetrics && (
+          <Card className="shadow-md mt-4 sm:mt-6 border-l-4 border-l-sky-500">
+            <CardHeader className="bg-muted/30 p-3 sm:p-6">
+              <CardTitle className="text-base sm:text-xl flex items-center gap-2">
+                Time to Engage
+                <InfoTooltip
+                  label="Time to engage"
+                  description="Median and 95th percentile time to open and click."
+                />
+              </CardTitle>
+              <p className="text-xs sm:text-sm text-muted-foreground mt-1">
+                Median and 95th percentile time to open and click
+              </p>
+            </CardHeader>
+            <CardContent className="pt-4 sm:pt-6 p-3 sm:p-6">
+              <Suspense fallback={<div className="animate-pulse h-48 bg-muted rounded" />}>
+                <TimingMetricsChart timingMetrics={analytics.timingMetrics} />
+              </Suspense>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Geographic Analytics Map */}
         {isPublished && analytics?.geoDistribution && analytics.geoDistribution.length > 0 && (
           <Card className="shadow-md mt-4 sm:mt-6 border-l-4 border-l-purple-500">
             <CardHeader className="bg-muted/30 p-3 sm:p-6">
-              <CardTitle className="text-base sm:text-xl">🌍 Geographic Analytics</CardTitle>
+              <CardTitle className="text-base sm:text-xl flex items-center gap-2">
+                Geographic Analytics
+                <InfoTooltip
+                  label="Geographic analytics"
+                  description="Map of engagement by country. Toggle between totals and unique metrics."
+                />
+              </CardTitle>
               <p className="text-xs sm:text-sm text-muted-foreground mt-1">
                 Interactive map showing engagement by country
               </p>
@@ -621,11 +794,22 @@ export const IssueDetailPage: React.FC = () => {
           </Card>
         )}
 
+          </>
+        )}
+
+        {detailTab === 'deliverability' && (
+          <>
         {/* Quality Signals Section */}
         {isPublished && analytics && (
           <Card className="shadow-md mt-4 sm:mt-6 border-l-4 border-l-orange-500">
             <CardHeader className="bg-muted/30 p-3 sm:p-6">
-              <CardTitle className="text-base sm:text-xl">⚠️ Quality Signals</CardTitle>
+              <CardTitle className="text-base sm:text-xl flex items-center gap-2">
+                Quality Signals
+                <InfoTooltip
+                  label="Quality signals"
+                  description="Engagement patterns, bounces, and complaints that impact deliverability."
+                />
+              </CardTitle>
               <p className="text-xs sm:text-sm text-muted-foreground mt-1">
                 Engagement patterns, bounces, and complaints
               </p>
@@ -659,6 +843,9 @@ export const IssueDetailPage: React.FC = () => {
             </CardContent>
           </Card>
         )}
+          </>
+        )}
+
       </main>
 
       {/* Delete Confirmation Dialog */}

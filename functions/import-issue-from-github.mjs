@@ -57,11 +57,12 @@ const processNewIssue = async (data) => {
     data.futureDate = `${metadata.data.date.toISOString().split('T')[0]}T12:00:00Z`;
   }
 
-  const issueMatch = (metadata.data.issueNumber?.toString() || github.fileName).match(/\d+/);
+  const slugSource = (metadata.data.slug || github.slug || '').toString();
+  const issueMatch = slugSource.match(/\/(\d+)/);
   if (!issueMatch) {
-    throw new Error('Unable to determine issue number from metadata or filename');
+    throw new Error('Unable to determine issue number from slug');
   }
-  data.issueId = Number(issueMatch[0]);
+  data.issueId = Number(issueMatch[1]);
   data.key = `${data.tenant.id}#${data.issueId}`;
   
   await sfn.send(new StartExecutionCommand({

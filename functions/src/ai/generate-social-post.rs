@@ -167,7 +167,7 @@ Rules:
 > Most engineers treat document formats and edge performance as implementation details.
 > They're not. They quietly shape latency, cost, and failure modes long before users notice.
 >
-> The Ready, Set, Cloud Picks of the Week #198 is out.
+> Binary Protocols and Edge Performance | Ready, Set, Cloud Picks of the Week #198 is out.
 >
 > This issue looks at why binary protocols matter, how image optimization affects real performance, and what AI at the edge actually means.
 >

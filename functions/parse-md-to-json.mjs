@@ -82,7 +82,7 @@ export const handler = async (state) => {
     sendAtDate,
     listCleanupDate: listCleanupDate.toISOString().split('.')[0],
     reportStatsDate: reportStatsDate.toISOString().split('.')[0],
-    subject: `Serverless Picks of the Week #${dataTemplate.metadata.number} - ${dataTemplate.metadata.title}`
+    subject: `${dataTemplate.metadata.title} | Ready, Set, Cloud Picks of the Week #${dataTemplate.metadata.number}`
   };
 };
 

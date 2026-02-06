@@ -95,14 +95,21 @@ export const handler = async (event) => {
           const pkParts = record.pk.split('#');
 
           if (pkParts.length !== 2) {
-            throw new Error(`Invalid pk format: ${record.pk}`);
+            console.warn('Skipping stats record with invalid pk format:', { pk: record.pk });
+            continue;
           }
 
-          const [tenantId, issueNumber] = pkParts;
-          const issueNum = parseInt(issueNumber);
+          const [tenantIdRaw, issueNumberRaw] = pkParts;
+          let tenantId = tenantIdRaw;
+          let issueNum = parseInt(issueNumberRaw, 10);
 
           if (isNaN(issueNum)) {
-            throw new Error(`Invalid issue number: ${issueNumber}`);
+            const legacyInfo = parseLegacyNewsletterInfo(record.pk, record.GSI1SK || record.createdAt);
+            if (!legacyInfo) {
+              throw new Error(`Invalid issue number: ${issueNumberRaw}`);
+            }
+            tenantId = legacyInfo.tenantId;
+            issueNum = legacyInfo.issueNumber;
           }
 
           const analyticsResult = await ddb.send(new GetItemCommand({
@@ -226,13 +233,15 @@ export const handler = async (event) => {
           const pk = record.pk;
 
           if (!pk) {
-            throw new Error('Missing pk on newsletter item');
+            console.warn('Skipping newsletter item with missing pk');
+            continue;
           }
 
           if (isLegacyNewsletterPk(pk)) {
             const legacyInfo = parseLegacyNewsletterInfo(pk, record.GSI1SK || record.createdAt);
             if (!legacyInfo) {
-              throw new Error(`Unable to parse legacy pk: ${pk}`);
+              console.warn('Skipping newsletter item with unparseable legacy pk:', { pk });
+              continue;
             }
 
             const newPk = `${legacyInfo.tenantId}#${legacyInfo.issueNumber}`;

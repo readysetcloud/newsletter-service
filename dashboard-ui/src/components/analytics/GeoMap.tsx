@@ -2,7 +2,7 @@
 import { useState, useMemo, useCallback } from 'react';
 import { scaleLinear } from 'd3-scale';
 import { MapContainer } from './MapContainer';
-import { MetricToggle } from './MetricToggle';
+import { MetricToggle, type GeoMetric } from './MetricToggle';
 import { ColorLegend } from './ColorLegend';
 import { Attribution } from './Attribution';
 import { Tooltip } from './Tooltip';
@@ -11,12 +11,15 @@ export interface GeoDistributionData {
   country: string;
   clicks: number;
   opens: number;
+  uniqueClickUsers?: number;
+  uniqueOpenUsers?: number;
+  uniqueUsers?: number;
 }
 
 export interface GeoMapProps {
   geoDistribution: GeoDistributionData[];
-  selectedMetric?: 'clicks' | 'opens' | 'engagementRate';
-  onMetricChange?: (metric: 'clicks' | 'opens' | 'engagementRate') => void;
+  selectedMetric?: GeoMetric;
+  onMetricChange?: (metric: GeoMetric) => void;
   className?: string;
   linkAnalytics?: LinkAnalytics[];
   selectedLinkId?: string | null;
@@ -35,13 +38,17 @@ export interface TooltipData {
   countryCode: string;
   clicks: number;
   opens: number;
+  uniqueClicks?: number;
+  uniqueOpens?: number;
+  uniqueUsers?: number;
   engagementRate: number | null;
+  uniqueEngagementRate?: number | null;
 }
 
 interface GeoMapState {
   hoveredCountry: string | null;
   tooltipContent: TooltipData | null;
-  selectedMetric: 'clicks' | 'opens' | 'engagementRate';
+  selectedMetric: GeoMetric;
 }
 
 export function calculateEngagementRate(clicks: number, opens: number): number | null {
@@ -49,7 +56,14 @@ export function calculateEngagementRate(clicks: number, opens: number): number |
   return (clicks / opens) * 100;
 }
 
-export function getMetricValue(data: GeoDistributionData, metric: 'clicks' | 'opens' | 'engagementRate'): number {
+export function calculateUniqueEngagementRate(data: GeoDistributionData): number | null {
+  const uniqueClicks = data.uniqueClickUsers ?? data.uniqueUsers ?? 0;
+  const uniqueOpens = data.uniqueOpenUsers ?? 0;
+  if (uniqueOpens === 0) return null;
+  return (uniqueClicks / uniqueOpens) * 100;
+}
+
+export function getMetricValue(data: GeoDistributionData, metric: GeoMetric): number {
   switch (metric) {
     case 'clicks': {
       return data.clicks;
@@ -57,8 +71,18 @@ export function getMetricValue(data: GeoDistributionData, metric: 'clicks' | 'op
     case 'opens': {
       return data.opens;
     }
+    case 'uniqueClicks': {
+      return data.uniqueClickUsers ?? data.uniqueUsers ?? 0;
+    }
+    case 'uniqueOpens': {
+      return data.uniqueOpenUsers ?? 0;
+    }
     case 'engagementRate': {
       const rate = calculateEngagementRate(data.clicks, data.opens);
+      return rate !== null ? rate : 0;
+    }
+    case 'uniqueEngagementRate': {
+      const rate = calculateUniqueEngagementRate(data);
       return rate !== null ? rate : 0;
     }
     default:
@@ -66,7 +90,7 @@ export function getMetricValue(data: GeoDistributionData, metric: 'clicks' | 'op
   }
 }
 
-export function createColorScale(data: GeoDistributionData[], metric: 'clicks' | 'opens' | 'engagementRate'): (value: number) => string {
+export function createColorScale(data: GeoDistributionData[], metric: GeoMetric): (value: number) => string {
   if (data.length === 0) {
     return () => '#e5e7eb';
   }
@@ -90,24 +114,26 @@ export function validateGeoDistribution(data: GeoDistributionData[]): GeoDistrib
     return [];
   }
 
-  return data.filter(item => {
-    if (!item.country || typeof item.country !== 'string' || item.country.length !== 2) {
+  return data.reduce<GeoDistributionData[]>((acc, item) => {
+    if (!item.country || typeof item.country !== 'string' || (item.country.length !== 2 && item.country !== 'unknown')) {
       console.warn('Invalid country code:', item.country);
-      return false;
+      return acc;
     }
 
     if (typeof item.clicks !== 'number' || item.clicks < 0) {
       console.warn('Invalid clicks value for country:', item.country);
-      return false;
+      return acc;
     }
 
-    if (typeof item.opens !== 'number' || item.opens < 0) {
-      console.warn('Invalid opens value for country:', item.country);
-      return false;
-    }
+    const opensValue = typeof item.opens === 'number' && item.opens >= 0 ? item.opens : 0;
 
-    return true;
-  });
+    acc.push({
+      ...item,
+      opens: opensValue
+    });
+
+    return acc;
+  }, []);
 }
 
 export function GeoMap({
@@ -139,7 +165,7 @@ export function GeoMap({
     return linkData?.geoDistribution ? validateGeoDistribution(linkData.geoDistribution) : [];
   }, [validatedGeoDistribution, linkAnalytics, selectedLinkId]);
 
-  const handleMetricChange = (metric: 'clicks' | 'opens' | 'engagementRate') => {
+  const handleMetricChange = (metric: GeoMetric) => {
     setState(prev => ({ ...prev, selectedMetric: metric }));
     onMetricChange?.(metric);
   };
@@ -173,7 +199,11 @@ export function GeoMap({
           countryCode,
           clicks: data.clicks,
           opens: data.opens,
-          engagementRate: calculateEngagementRate(data.clicks, data.opens)
+          uniqueClicks: data.uniqueClickUsers ?? data.uniqueUsers,
+          uniqueOpens: data.uniqueOpenUsers,
+          uniqueUsers: data.uniqueUsers,
+          engagementRate: calculateEngagementRate(data.clicks, data.opens),
+          uniqueEngagementRate: calculateUniqueEngagementRate(data)
         }
       }));
     } else {
@@ -192,7 +222,10 @@ export function GeoMap({
   const metricLabels = {
     clicks: 'Clicks',
     opens: 'Opens',
-    engagementRate: 'Engagement Rate (%)'
+    uniqueClicks: 'Unique Clicks',
+    uniqueOpens: 'Unique Opens',
+    engagementRate: 'Engagement Rate (%)',
+    uniqueEngagementRate: 'Unique Engagement Rate (%)'
   };
 
   if (selectedLinkId && filteredGeoDistribution.length === 0) {
@@ -216,6 +249,9 @@ export function GeoMap({
         selectedMetric={state.selectedMetric}
         onMetricChange={handleMetricChange}
       />
+      <div className="text-xs text-muted-foreground mb-3">
+        Totals show event counts. Unique metrics show distinct recipients.
+      </div>
 
       <div className="relative bg-gray-50 rounded-lg p-4" style={{ height: '500px' }}>
         <MapContainer

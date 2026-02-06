@@ -1,11 +1,13 @@
 
 import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { AppHeader } from '@/components/layout/AppHeader';
 import { dashboardService } from '@/services/dashboardService';
 import { profileService } from '@/services/profileService';
 import { DashboardSkeleton } from '@/components/ui/SkeletonLoader';
+import { InfoTooltip } from '@/components/ui/InfoTooltip';
 import MetricsCard from '@/components/MetricsCard';
+import { SubscriberGrowthChart } from '@/components/SubscriberGrowthChart';
 import type { TrendsData, UserProfile, TrendComparison, BestWorstIssues } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
 import { calculatePercentageDifference, calculateHealthStatus, calculateCompositeScore } from '@/utils/analyticsCalculations';
@@ -23,16 +25,28 @@ const IssuePerformanceChart = lazy(() => import('@/components/IssuePerformanceCh
 const SenderStatusWidget = lazy(() => import('@/components/senders/SenderStatusWidget').then(m => ({ default: m.SenderStatusWidget })));
 const BestWorstIssueCard = lazy(() => import('@/components/BestWorstIssueCard'));
 const DeliverabilityHealthWidget = lazy(() => import('@/components/DeliverabilityHealthWidget'));
+const QualitySignalsChart = lazy(() => import('@/components/QualitySignalsChart'));
+const EngagementTypeTrendChart = lazy(() => import('@/components/EngagementTypeTrendChart'));
+const TrafficSourceTrendChart = lazy(() => import('@/components/TrafficSourceTrendChart'));
 
 export function DashboardPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [trendsData, setTrendsData] = useState<TrendsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [issueCount, setIssueCount] = useState(5);
+  const [showAllIssues, setShowAllIssues] = useState(() => searchParams.get('issues') === 'all');
+  const [rightPanelTab, setRightPanelTab] = useState<'summary' | 'quality' | 'engagement' | 'traffic'>(() => {
+    const tab = searchParams.get('insights');
+    if (tab === 'quality' || tab === 'engagement' || tab === 'traffic') {
+      return tab;
+    }
+    return 'summary';
+  });
 
   const trendComparisons = useMemo(() => {
     if (!trendsData?.aggregates || !trendsData?.previousPeriodAggregates) {
@@ -192,6 +206,21 @@ export function DashboardPage() {
   };
 
   useEffect(() => {
+    const params = new URLSearchParams(searchParams);
+    if (showAllIssues) {
+      params.set('issues', 'all');
+    } else {
+      params.delete('issues');
+    }
+    if (rightPanelTab !== 'summary') {
+      params.set('insights', rightPanelTab);
+    } else {
+      params.delete('insights');
+    }
+    setSearchParams(params, { replace: true });
+  }, [searchParams, showAllIssues, rightPanelTab, setSearchParams]);
+
+  useEffect(() => {
     loadProfileData();
   }, [loadProfileData]);
 
@@ -306,6 +335,9 @@ export function DashboardPage() {
             </div>
           ) : trendsData ? (
             <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm uppercase tracking-widest text-muted-foreground">Overview</h3>
+              </div>
               {/* Key Metrics Grid - Primary metrics visible without scrolling */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
                 <MetricsCard
@@ -366,37 +398,21 @@ export function DashboardPage() {
               {/* Performance Overview - Below the fold */}
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4">
                 <div className="lg:col-span-2 space-y-3 sm:space-y-4">
-                  {trendsData.issues.length > 0 ? (
-                    <Suspense fallback={<div className="bg-surface rounded-lg shadow p-6 animate-pulse h-64" />}>
-                      <IssuePerformanceChart trendsData={trendsData} />
-                    </Suspense>
-                  ) : (
-                    <div className="bg-surface rounded-lg shadow p-6">
-                      <h3 className="text-lg font-medium text-foreground mb-4">Newsletter Issue Performance</h3>
-                      <div className="text-center py-12">
-                        <BarChart3 className="mx-auto h-12 w-12 text-muted-foreground" />
-                        <h3 className="mt-2 text-sm font-medium text-foreground">No issues found</h3>
-                        <p className="mt-1 text-sm text-muted-foreground">
-                          No newsletter issues have been published yet.
-                        </p>
-                        <div className="mt-4">
-                          <button
-                            onClick={() => navigate('/issues/new')}
-                            className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md bg-primary-600 text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-                            aria-label="Create a new issue"
-                          >
-                            Create your first issue
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
+                  <div className="flex items-center justify-between pt-2 border-t border-border">
+                    <h3 className="text-sm uppercase tracking-widest text-muted-foreground">Trends</h3>
+                  </div>
 
-                  {/* Most Recent Issue Stats */}
+                  {/* Latest Issue Performance (moved up) */}
                   {trendsData.issues.length > 0 && (
                     <div className="bg-surface rounded-lg shadow p-3 sm:p-4">
                       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-3 gap-1">
-                        <h3 className="text-sm sm:text-base font-medium text-foreground">Latest Issue Performance</h3>
+                        <h3 className="text-sm sm:text-base font-medium text-foreground flex items-center gap-2">
+                          Latest Issue Performance
+                          <InfoTooltip
+                            label="Latest issue performance"
+                            description="Snapshot of the most recent published issue so you can quickly spot outliers."
+                          />
+                        </h3>
                         <span className="text-xs sm:text-sm text-muted-foreground">Issue #{trendsData.issues[0].id}</span>
                       </div>
                       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-3">
@@ -438,11 +454,69 @@ export function DashboardPage() {
                     </div>
                   )}
 
+                  {trendsData.issues.length > 0 ? (
+                    <Suspense fallback={<div className="bg-surface rounded-lg shadow p-6 animate-pulse h-64" />}>
+                      <IssuePerformanceChart trendsData={trendsData} />
+                    </Suspense>
+                  ) : (
+                    <div className="bg-surface rounded-lg shadow p-6">
+                      <h3 className="text-lg font-medium text-foreground mb-4">Newsletter Issue Performance</h3>
+                      <div className="text-center py-12">
+                        <BarChart3 className="mx-auto h-12 w-12 text-muted-foreground" />
+                        <h3 className="mt-2 text-sm font-medium text-foreground">No issues found</h3>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          No newsletter issues have been published yet.
+                        </p>
+                        <div className="mt-4">
+                          <button
+                            onClick={() => navigate('/issues/new')}
+                            className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md bg-primary-600 text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                            aria-label="Create a new issue"
+                          >
+                            Create your first issue
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Quality Signals Over Time */}
+                  {trendsData.issues.length > 0 && (
+                    <div className="bg-surface rounded-lg shadow p-3 sm:p-4">
+                      <div className="mb-3">
+                        <h3 className="text-sm sm:text-base font-medium text-foreground flex items-center gap-2">
+                          Quality Signals
+                          <InfoTooltip
+                            label="Quality signals"
+                            description="Bounces and complaints indicate deliverability risk over time."
+                          />
+                        </h3>
+                        <p className="text-xs sm:text-sm text-muted-foreground mt-1">Bounces and complaints by issue</p>
+                      </div>
+                      <Suspense fallback={<div className="bg-muted rounded-lg h-56 animate-pulse" />}>
+                        <QualitySignalsChart trendsData={trendsData} />
+                      </Suspense>
+                    </div>
+                  )}
+
                   {/* Recent Issues */}
                   {trendsData.issues.length > 0 && (
                     <div className="bg-surface rounded-lg shadow overflow-hidden">
-                      <div className="px-3 sm:px-4 py-3 border-b border-border">
-                        <h3 className="text-sm sm:text-base font-medium text-foreground">Recent Issues</h3>
+                      <div className="px-3 sm:px-4 py-3 border-b border-border flex items-center justify-between">
+                        <h3 className="text-sm sm:text-base font-medium text-foreground flex items-center gap-2">
+                          Recent Issues
+                          <InfoTooltip
+                            label="Recent issues"
+                            description="Quick access to the latest issues with key performance metrics."
+                          />
+                        </h3>
+                        <button
+                          onClick={() => setShowAllIssues(prev => !prev)}
+                          className="text-xs sm:text-sm text-primary-600 hover:text-primary-700 font-medium"
+                          aria-label={showAllIssues ? 'Show fewer issues' : 'Show all issues'}
+                        >
+                          {showAllIssues ? 'Show less' : 'Show all'}
+                        </button>
                       </div>
                       <div className="overflow-x-auto">
                         <table className="min-w-full divide-y divide-border">
@@ -466,7 +540,7 @@ export function DashboardPage() {
                             </tr>
                           </thead>
                           <tbody className="bg-surface divide-y divide-border">
-                            {trendsData.issues.slice(0, 10).map((issue) => (
+                            {trendsData.issues.slice(0, showAllIssues ? 10 : 5).map((issue) => (
                               <tr
                                 key={issue.id}
                                 className="hover:bg-background cursor-pointer"
@@ -508,56 +582,161 @@ export function DashboardPage() {
                 </div>
 
                 <div className="space-y-3 sm:space-y-4">
-                  {/* Performance Summary */}
+                  <div className="flex items-center justify-between pt-2 border-t border-border lg:border-t-0 lg:pt-0">
+                    <h3 className="text-sm uppercase tracking-widest text-muted-foreground">Insights</h3>
+                  </div>
+                  {/* Subscriber Growth */}
+                  {trendsData.issues.length > 0 && (
+                    <div className="bg-surface rounded-lg shadow p-3 sm:p-4">
+                      <div className="mb-3">
+                        <h3 className="text-sm sm:text-base font-medium text-foreground flex items-center gap-2">
+                          Subscriber Growth
+                          <InfoTooltip
+                            label="Subscriber growth"
+                            description="Tracks list size across issues to show growth or churn trends."
+                          />
+                        </h3>
+                        <p className="text-xs sm:text-sm text-muted-foreground mt-1">Last {Math.min(issueCount, trendsData.issues.length)} issues</p>
+                      </div>
+                      <SubscriberGrowthChart trendsData={trendsData} />
+                    </div>
+                  )}
+
                   <div className="bg-surface rounded-lg shadow p-3 sm:p-4">
-                    <h3 className="text-sm sm:text-base font-medium text-foreground mb-3">Performance Summary</h3>
-                  <div className="space-y-3">
-                    <div>
-                      <div className="flex justify-between text-xs sm:text-sm">
-                        <span className="text-muted-foreground">Open Rate</span>
-                        <span className="font-medium">{formatPercentage(trendsData.aggregates.avgOpenRate)}</span>
-                      </div>
-                      <div className="mt-1 w-full bg-muted rounded-full h-2">
-                        <div
-                          className="bg-primary-600 h-2 rounded-full"
-                          style={{ width: `${Math.min(trendsData.aggregates.avgOpenRate, 100)}%` }}
-                        ></div>
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-sm sm:text-base font-medium text-foreground flex items-center gap-2">
+                        {rightPanelTab === 'summary'
+                          ? 'Performance Summary'
+                          : rightPanelTab === 'quality'
+                            ? 'Quality Signals'
+                            : rightPanelTab === 'engagement'
+                              ? 'Engagement Trends'
+                              : 'Traffic Source Trends'}
+                        <InfoTooltip
+                          label="Insights panel"
+                          description="Switch between performance, quality, engagement, and traffic trends."
+                        />
+                      </h3>
+                      <select
+                        value={rightPanelTab}
+                        onChange={(e) => setRightPanelTab(e.target.value as typeof rightPanelTab)}
+                        className="sm:hidden w-full text-sm border border-border rounded-md px-3 py-2 bg-surface focus:outline-none focus:ring-2 focus:ring-ring"
+                        aria-label="Select insights tab"
+                      >
+                        <option value="summary">Summary</option>
+                        <option value="quality">Quality</option>
+                        <option value="engagement">Engagement</option>
+                        <option value="traffic">Traffic</option>
+                      </select>
+                      <div className="hidden sm:inline-flex rounded-lg border border-border overflow-hidden">
+                        <button
+                          onClick={() => setRightPanelTab('summary')}
+                          className={`px-3 py-1.5 text-xs sm:text-sm font-medium ${
+                            rightPanelTab === 'summary'
+                              ? 'bg-primary-600 text-white'
+                              : 'bg-surface text-muted-foreground hover:text-foreground'
+                          }`}
+                          aria-label="Show performance summary"
+                        >
+                          Summary
+                        </button>
+                        <button
+                          onClick={() => setRightPanelTab('quality')}
+                          className={`px-3 py-1.5 text-xs sm:text-sm font-medium ${
+                            rightPanelTab === 'quality'
+                              ? 'bg-primary-600 text-white'
+                              : 'bg-surface text-muted-foreground hover:text-foreground'
+                          }`}
+                          aria-label="Show quality signals"
+                        >
+                          Quality
+                        </button>
+                        <button
+                          onClick={() => setRightPanelTab('engagement')}
+                          className={`px-3 py-1.5 text-xs sm:text-sm font-medium ${
+                            rightPanelTab === 'engagement'
+                              ? 'bg-primary-600 text-white'
+                              : 'bg-surface text-muted-foreground hover:text-foreground'
+                          }`}
+                          aria-label="Show engagement trends"
+                        >
+                          Engagement
+                        </button>
+                        <button
+                          onClick={() => setRightPanelTab('traffic')}
+                          className={`px-3 py-1.5 text-xs sm:text-sm font-medium ${
+                            rightPanelTab === 'traffic'
+                              ? 'bg-primary-600 text-white'
+                              : 'bg-surface text-muted-foreground hover:text-foreground'
+                          }`}
+                          aria-label="Show traffic source trends"
+                        >
+                          Traffic
+                        </button>
                       </div>
                     </div>
 
-                    <div>
-                      <div className="flex justify-between text-xs sm:text-sm">
-                        <span className="text-muted-foreground">Click Rate</span>
-                        <span className="font-medium">{formatPercentage(trendsData.aggregates.avgClickRate)}</span>
-                      </div>
-                      <div className="mt-1 w-full bg-muted rounded-full h-2">
-                        <div
-                          className="bg-success-600 h-2 rounded-full"
-                          style={{ width: `${Math.min(trendsData.aggregates.avgClickRate, 100)}%` }}
-                        ></div>
-                      </div>
-                    </div>
+                    {rightPanelTab === 'summary' ? (
+                      <div className="space-y-3">
+                        <div>
+                          <div className="flex justify-between text-xs sm:text-sm">
+                            <span className="text-muted-foreground">Open Rate</span>
+                            <span className="font-medium">{formatPercentage(trendsData.aggregates.avgOpenRate)}</span>
+                          </div>
+                          <div className="mt-1 w-full bg-muted rounded-full h-2">
+                            <div
+                              className="bg-primary-600 h-2 rounded-full"
+                              style={{ width: `${Math.min(trendsData.aggregates.avgOpenRate, 100)}%` }}
+                            ></div>
+                          </div>
+                        </div>
 
-                    <div>
-                      <div className="flex justify-between text-xs sm:text-sm">
-                        <span className="text-muted-foreground">Bounce Rate</span>
-                        <span className="font-medium">{formatPercentage(trendsData.aggregates.avgBounceRate)}</span>
-                      </div>
-                      <div className="mt-1 w-full bg-muted rounded-full h-2">
-                        <div
-                          className="bg-error-600 h-2 rounded-full"
-                          style={{ width: `${Math.min(trendsData.aggregates.avgBounceRate, 100)}%` }}
-                        ></div>
-                      </div>
-                    </div>
+                        <div>
+                          <div className="flex justify-between text-xs sm:text-sm">
+                            <span className="text-muted-foreground">Click Rate</span>
+                            <span className="font-medium">{formatPercentage(trendsData.aggregates.avgClickRate)}</span>
+                          </div>
+                          <div className="mt-1 w-full bg-muted rounded-full h-2">
+                            <div
+                              className="bg-success-600 h-2 rounded-full"
+                              style={{ width: `${Math.min(trendsData.aggregates.avgClickRate, 100)}%` }}
+                            ></div>
+                          </div>
+                        </div>
 
-                    <div className="pt-3 border-t border-border">
-                      <div className="text-xs sm:text-sm text-muted-foreground">Total Emails Delivered</div>
-                      <div className="text-lg sm:text-xl font-semibold text-foreground">
-                        {formatNumber(trendsData.aggregates.totalDelivered)}
+                        <div>
+                          <div className="flex justify-between text-xs sm:text-sm">
+                            <span className="text-muted-foreground">Bounce Rate</span>
+                            <span className="font-medium">{formatPercentage(trendsData.aggregates.avgBounceRate)}</span>
+                          </div>
+                          <div className="mt-1 w-full bg-muted rounded-full h-2">
+                            <div
+                              className="bg-error-600 h-2 rounded-full"
+                              style={{ width: `${Math.min(trendsData.aggregates.avgBounceRate, 100)}%` }}
+                            ></div>
+                          </div>
+                        </div>
+
+                        <div className="pt-3 border-t border-border">
+                          <div className="text-xs sm:text-sm text-muted-foreground">Total Emails Delivered</div>
+                          <div className="text-lg sm:text-xl font-semibold text-foreground">
+                            {formatNumber(trendsData.aggregates.totalDelivered)}
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                    </div>
+                    ) : rightPanelTab === 'quality' ? (
+                      <Suspense fallback={<div className="bg-muted rounded-lg h-44 animate-pulse" />}>
+                        <QualitySignalsChart trendsData={trendsData} />
+                      </Suspense>
+                    ) : rightPanelTab === 'engagement' ? (
+                      <Suspense fallback={<div className="bg-muted rounded-lg h-40 animate-pulse" />}>
+                        <EngagementTypeTrendChart trendsData={trendsData} />
+                      </Suspense>
+                    ) : (
+                      <Suspense fallback={<div className="bg-muted rounded-lg h-40 animate-pulse" />}>
+                        <TrafficSourceTrendChart trendsData={trendsData} />
+                      </Suspense>
+                    )}
                   </div>
                 </div>
               </div>

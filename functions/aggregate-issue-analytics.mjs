@@ -48,6 +48,7 @@ export const handler = async (event) => {
     const analytics = {
       links: calculateLinkPerformance(events.clicks),
       clickDecay: calculateClickDecay(events.clicks, publishedAt),
+      openDecay: calculateOpenDecay(events.opens, publishedAt),
       geoDistribution: calculateGeoDistribution(events.clicks, events.opens),
       deviceBreakdown: calculateDeviceBreakdown(events.opens),
       timingMetrics: calculateTimingMetrics(events.opens, events.clicks),
@@ -219,6 +220,33 @@ export function calculateClickDecay(clicks, publishedAt) {
     const clicks = hourlyClicks.get(hour) || 0;
     cumulative += clicks;
     decay.push({ hour, clicks, cumulativeClicks: cumulative });
+  }
+
+  return decay;
+}
+
+export function calculateOpenDecay(opens, publishedAt) {
+  const publishTime = new Date(publishedAt).getTime();
+  const hourlyOpens = new Map();
+
+  for (const open of opens) {
+    const openTime = new Date(open.timestamp).getTime();
+    const hoursSincePublish = Math.floor((openTime - publishTime) / (1000 * 60 * 60));
+
+    if (hoursSincePublish >= 0 && hoursSincePublish < 168) {
+      hourlyOpens.set(hoursSincePublish, (hourlyOpens.get(hoursSincePublish) || 0) + 1);
+    }
+  }
+
+  const hours = Array.from(hourlyOpens.keys());
+  const maxHour = hours.length > 0 ? Math.min(Math.max(...hours), 167) : 0;
+  const decay = [];
+  let cumulative = 0;
+
+  for (let hour = 0; hour <= maxHour; hour++) {
+    const opens = hourlyOpens.get(hour) || 0;
+    cumulative += opens;
+    decay.push({ hour, opens, cumulativeOpens: cumulative });
   }
 
   return decay;

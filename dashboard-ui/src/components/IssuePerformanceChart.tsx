@@ -2,6 +2,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { useNavigate } from 'react-router-dom';
 
 import type { TrendsData } from '@/types';
+import { InfoTooltip } from '@/components/ui/InfoTooltip';
 
 interface IssuePerformanceChartProps {
   trendsData: TrendsData;
@@ -57,8 +58,12 @@ export default function IssuePerformanceChart({ trendsData }: IssuePerformanceCh
   return (
     <div className="bg-surface rounded-lg shadow p-6">
       <div className="flex justify-between items-center mb-4">
-        <h3 className="text-lg font-medium text-foreground">
+        <h3 className="text-lg font-medium text-foreground flex items-center gap-2">
           Issue Performance Trends
+          <InfoTooltip
+            label="Performance trends"
+            description="Compares open, click, and bounce rates across recent issues."
+          />
         </h3>
         <span className="text-sm text-muted-foreground">
           Last {trendsData.aggregates.issueCount} issues

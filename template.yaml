@@ -3366,6 +3366,10 @@ Resources:
             - Effect: Allow
               Action: scheduler:CreateSchedule
               Resource: !Sub "arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/newsletter/*"
+            - Effect: Allow
+              Action:
+                - iam:PassRole
+              Resource: !GetAtt AggregationSchedulerRole.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1

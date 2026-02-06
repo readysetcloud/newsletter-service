@@ -7,12 +7,14 @@ import type {
   IssueMetrics,
   LinkPerformance,
   ClickDecayPoint,
+  OpenDecayPoint,
   GeoData,
   DeviceBreakdown,
   TimingMetrics,
   EngagementType,
   BounceReasons,
   ComplaintDetail,
+  TrafficSource,
 } from '@/types/issues';
 
 function isNonNegativeNumber(value: unknown): value is number {
@@ -54,11 +56,15 @@ export function validateTrendAggregates(data: unknown): data is TrendAggregates 
 export function validateIssueTrendItem(data: unknown): data is IssueTrendItem {
   if (!data || typeof data !== 'object') return false;
   const item = data as Record<string, unknown>;
-  return (
-    typeof item.id === 'string' &&
-    item.id.length > 0 &&
-    validateIssueMetrics(item.metrics)
-  );
+  if (!(typeof item.id === 'string' && item.id.length > 0 && validateIssueMetrics(item.metrics))) {
+    return false;
+  }
+  if (item.analyticsSummary !== undefined) {
+    if (!validateAnalyticsSummary(item.analyticsSummary)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export function validateTrendsData(data: unknown): data is TrendsData {
@@ -110,15 +116,39 @@ export function validateClickDecayPoint(data: unknown): data is ClickDecayPoint 
   );
 }
 
+export function validateOpenDecayPoint(data: unknown): data is OpenDecayPoint {
+  if (!data || typeof data !== 'object') return false;
+  const point = data as Record<string, unknown>;
+  return (
+    typeof point.hour === 'number' &&
+    point.hour >= 0 &&
+    isNonNegativeNumber(point.opens) &&
+    isNonNegativeNumber(point.cumulativeOpens)
+  );
+}
+
 export function validateGeoData(data: unknown): data is GeoData {
   if (!data || typeof data !== 'object') return false;
   const geo = data as Record<string, unknown>;
-  return (
-    typeof geo.country === 'string' &&
-    geo.country.length > 0 &&
-    isNonNegativeNumber(geo.clicks) &&
-    isNonNegativeNumber(geo.opens)
-  );
+  if (!(typeof geo.country === 'string' && geo.country.length > 0)) {
+    return false;
+  }
+  if (!isNonNegativeNumber(geo.clicks)) {
+    return false;
+  }
+  if (geo.opens !== undefined && !isNonNegativeNumber(geo.opens)) {
+    return false;
+  }
+  if (geo.uniqueClickUsers !== undefined && !isNonNegativeNumber(geo.uniqueClickUsers)) {
+    return false;
+  }
+  if (geo.uniqueOpenUsers !== undefined && !isNonNegativeNumber(geo.uniqueOpenUsers)) {
+    return false;
+  }
+  if (geo.uniqueUsers !== undefined && !isNonNegativeNumber(geo.uniqueUsers)) {
+    return false;
+  }
+  return true;
 }
 
 export function validateDeviceBreakdown(data: unknown): data is DeviceBreakdown {
@@ -149,6 +179,29 @@ export function validateEngagementType(data: unknown): data is EngagementType {
     isNonNegativeNumber(engagement.newClickers) &&
     isNonNegativeNumber(engagement.returningClickers)
   );
+}
+
+export function validateTrafficSource(data: unknown): data is TrafficSource {
+  if (!data || typeof data !== 'object') return false;
+  const source = data as Record<string, unknown>;
+  if (!source.clicks || typeof source.clicks !== 'object') return false;
+  const clicks = source.clicks as Record<string, unknown>;
+  return (
+    isNonNegativeNumber(clicks.email) &&
+    isNonNegativeNumber(clicks.web)
+  );
+}
+
+export function validateAnalyticsSummary(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const summary = data as Record<string, unknown>;
+  if (summary.engagementType !== undefined && !validateEngagementType(summary.engagementType)) {
+    return false;
+  }
+  if (summary.trafficSource !== undefined && !validateTrafficSource(summary.trafficSource)) {
+    return false;
+  }
+  return true;
 }
 
 export function validateBounceReasons(data: unknown): data is BounceReasons {
@@ -188,6 +241,12 @@ export function validateIssueAnalytics(data: unknown): data is IssueAnalytics {
     console.error('IssueAnalytics validation failed: invalid clickDecay');
     return false;
   }
+  if (analytics.openDecay !== undefined) {
+    if (!Array.isArray(analytics.openDecay) || !analytics.openDecay.every(validateOpenDecayPoint)) {
+      console.error('IssueAnalytics validation failed: invalid openDecay');
+      return false;
+    }
+  }
   if (!Array.isArray(analytics.geoDistribution) || !analytics.geoDistribution.every(validateGeoData)) {
     console.error('IssueAnalytics validation failed: invalid geoDistribution');
     return false;
@@ -202,6 +261,10 @@ export function validateIssueAnalytics(data: unknown): data is IssueAnalytics {
   }
   if (!validateEngagementType(analytics.engagementType)) {
     console.error('IssueAnalytics validation failed: invalid engagementType');
+    return false;
+  }
+  if (!validateTrafficSource(analytics.trafficSource)) {
+    console.error('IssueAnalytics validation failed: invalid trafficSource');
     return false;
   }
   if (!validateBounceReasons(analytics.bounceReasons)) {

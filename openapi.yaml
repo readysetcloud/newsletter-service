@@ -1187,7 +1187,7 @@ paths:
         required: true
         schema:
           type: string
-        description: The issue ID (format: tenantId#issueNumber)
+        description: The issue ID (issue number as a string)
     get:
       summary: Get a single issue
       description: Retrieves detailed information about a specific issue including content and statistics
@@ -1250,6 +1250,43 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /issues/{id}/analytics/rebuild:
+    post:
+      summary: Rebuild issue analytics
+      description: Queues an on-demand analytics rebuild for a published issue
+      tags:
+        - Issues
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The issue ID
+      responses:
+        "202":
+          description: Analytics rebuild queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: queued
+                  issueId:
+                    type: string
+                  issueNumber:
+                    type: integer
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/UnknownError"
 
@@ -1541,7 +1578,7 @@ components:
       properties:
         id:
           type: string
-          description: Issue identifier (format: tenantId#issueNumber)
+          description: Issue identifier (issue number as a string)
         issueNumber:
           type: integer
           description: Sequential issue number
@@ -1641,7 +1678,7 @@ components:
       properties:
         id:
           type: string
-          description: Issue identifier (format: tenantId#issueNumber)
+          description: Issue identifier (issue number as a string)
         issueNumber:
           type: integer
           description: Sequential issue number
@@ -1724,6 +1761,8 @@ components:
         subscribers:
           type: integer
           description: Subscriber count at send time
+        analytics:
+          $ref: "#/components/schemas/IssueAnalytics"
 
     TrendsResponse:
       type: object
@@ -1744,22 +1783,15 @@ components:
       type: object
       required:
         - id
-        - subject
-        - publishedAt
         - metrics
       properties:
         id:
           type: string
           description: Issue identifier
-        subject:
-          type: string
-          description: Issue subject
-        publishedAt:
-          type: string
-          format: date-time
-          description: Publication timestamp
         metrics:
           $ref: "#/components/schemas/IssueMetrics"
+        analyticsSummary:
+          $ref: "#/components/schemas/IssueAnalyticsSummary"
 
     IssueMetrics:
       type: object
@@ -1768,6 +1800,10 @@ components:
         - clickRate
         - bounceRate
         - delivered
+        - opens
+        - clicks
+        - bounces
+        - complaints
         - subscribers
       properties:
         openRate:
@@ -1786,6 +1822,22 @@ components:
           type: integer
           format: int64
           description: Number of emails delivered
+        opens:
+          type: integer
+          format: int64
+          description: Number of opens
+        clicks:
+          type: integer
+          format: int64
+          description: Number of clicks
+        bounces:
+          type: integer
+          format: int64
+          description: Number of bounces
+        complaints:
+          type: integer
+          format: int64
+          description: Number of complaints
         subscribers:
           type: integer
           format: int64
@@ -1842,3 +1894,210 @@ components:
           type: number
           format: double
           description: Click rate for this issue
+
+    IssueAnalyticsSummary:
+      type: object
+      properties:
+        engagementType:
+          $ref: "#/components/schemas/EngagementType"
+        trafficSource:
+          $ref: "#/components/schemas/TrafficSource"
+
+    IssueAnalytics:
+      type: object
+      required:
+        - links
+        - clickDecay
+        - geoDistribution
+        - deviceBreakdown
+        - timingMetrics
+        - engagementType
+        - trafficSource
+        - bounceReasons
+        - complaintDetails
+      properties:
+        links:
+          type: array
+          items:
+            $ref: "#/components/schemas/LinkPerformance"
+        clickDecay:
+          type: array
+          items:
+            $ref: "#/components/schemas/ClickDecayPoint"
+        openDecay:
+          type: array
+          items:
+            $ref: "#/components/schemas/OpenDecayPoint"
+        geoDistribution:
+          type: array
+          items:
+            $ref: "#/components/schemas/GeoData"
+        deviceBreakdown:
+          $ref: "#/components/schemas/DeviceBreakdown"
+        timingMetrics:
+          $ref: "#/components/schemas/TimingMetrics"
+        engagementType:
+          $ref: "#/components/schemas/EngagementType"
+        trafficSource:
+          $ref: "#/components/schemas/TrafficSource"
+        bounceReasons:
+          $ref: "#/components/schemas/BounceReasons"
+        complaintDetails:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComplaintDetail"
+
+    LinkPerformance:
+      type: object
+      required:
+        - url
+        - clicks
+        - percentOfTotal
+        - position
+      properties:
+        url:
+          type: string
+        clicks:
+          type: integer
+        percentOfTotal:
+          type: number
+        position:
+          type: integer
+        geoDistribution:
+          type: array
+          items:
+            $ref: "#/components/schemas/GeoData"
+
+    ClickDecayPoint:
+      type: object
+      required:
+        - hour
+        - clicks
+        - cumulativeClicks
+      properties:
+        hour:
+          type: integer
+        clicks:
+          type: integer
+        cumulativeClicks:
+          type: integer
+
+    OpenDecayPoint:
+      type: object
+      required:
+        - hour
+        - opens
+        - cumulativeOpens
+      properties:
+        hour:
+          type: integer
+        opens:
+          type: integer
+        cumulativeOpens:
+          type: integer
+
+    GeoData:
+      type: object
+      required:
+        - country
+        - clicks
+      properties:
+        country:
+          type: string
+        clicks:
+          type: integer
+        opens:
+          type: integer
+        uniqueClickUsers:
+          type: integer
+        uniqueOpenUsers:
+          type: integer
+        uniqueUsers:
+          type: integer
+
+    DeviceBreakdown:
+      type: object
+      required:
+        - desktop
+        - mobile
+        - tablet
+      properties:
+        desktop:
+          type: integer
+        mobile:
+          type: integer
+        tablet:
+          type: integer
+
+    TimingMetrics:
+      type: object
+      required:
+        - medianTimeToOpen
+        - p95TimeToOpen
+        - medianTimeToClick
+        - p95TimeToClick
+      properties:
+        medianTimeToOpen:
+          type: number
+        p95TimeToOpen:
+          type: number
+        medianTimeToClick:
+          type: number
+        p95TimeToClick:
+          type: number
+
+    EngagementType:
+      type: object
+      required:
+        - newClickers
+        - returningClickers
+      properties:
+        newClickers:
+          type: integer
+        returningClickers:
+          type: integer
+
+    TrafficSource:
+      type: object
+      required:
+        - clicks
+      properties:
+        clicks:
+          type: object
+          required:
+            - email
+            - web
+          properties:
+            email:
+              type: integer
+            web:
+              type: integer
+
+    BounceReasons:
+      type: object
+      required:
+        - permanent
+        - temporary
+        - suppressed
+      properties:
+        permanent:
+          type: integer
+        temporary:
+          type: integer
+        suppressed:
+          type: integer
+
+    ComplaintDetail:
+      type: object
+      required:
+        - email
+        - timestamp
+        - complaintType
+      properties:
+        email:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        complaintType:
+          type: string

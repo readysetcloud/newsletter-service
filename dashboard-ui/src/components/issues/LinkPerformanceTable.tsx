@@ -17,6 +17,19 @@ export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({ link
   }
 
   const sortedLinks = [...links].sort((a, b) => b.clicks - a.clicks);
+  const hasUniqueUsers = sortedLinks.some(link =>
+    (link.geoDistribution || []).some(geo =>
+      typeof geo.uniqueUsers === 'number' || typeof geo.uniqueClickUsers === 'number'
+    )
+  );
+  const getUniqueUsers = (link: LinkPerformance) => {
+    if (!link.geoDistribution) return null;
+    const total = link.geoDistribution.reduce((sum, geo) => {
+      const value = geo.uniqueUsers ?? geo.uniqueClickUsers;
+      return typeof value === 'number' ? sum + value : sum;
+    }, 0);
+    return total > 0 ? total : null;
+  };
 
   return (
     <div className="overflow-x-auto -mx-4 sm:mx-0">
@@ -30,6 +43,11 @@ export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({ link
               <th className="text-right py-2 sm:py-3 px-2 sm:px-4 font-semibold text-xs sm:text-sm text-foreground hidden sm:table-cell">
                 Position
               </th>
+              {hasUniqueUsers && (
+                <th className="text-right py-2 sm:py-3 px-2 sm:px-4 font-semibold text-xs sm:text-sm text-foreground hidden md:table-cell">
+                  Unique Users
+                </th>
+              )}
               <th className="text-right py-2 sm:py-3 px-2 sm:px-4 font-semibold text-xs sm:text-sm text-foreground">
                 Clicks
               </th>
@@ -59,6 +77,11 @@ export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({ link
                 <td className="py-2 sm:py-3 px-2 sm:px-4 text-right text-xs sm:text-sm text-muted-foreground hidden sm:table-cell">
                   {link.position}
                 </td>
+                {hasUniqueUsers && (
+                  <td className="py-2 sm:py-3 px-2 sm:px-4 text-right text-xs sm:text-sm text-muted-foreground hidden md:table-cell">
+                    {getUniqueUsers(link)?.toLocaleString() ?? '—'}
+                  </td>
+                )}
                 <td className="py-2 sm:py-3 px-2 sm:px-4 text-right text-xs sm:text-sm font-medium whitespace-nowrap">
                   {link.clicks.toLocaleString()}
                 </td>
@@ -70,7 +93,10 @@ export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({ link
           </tbody>
           <tfoot>
             <tr className="border-t-2 border-border bg-muted/50">
-              <td className="py-2 sm:py-3 px-2 sm:px-4 font-semibold text-xs sm:text-sm text-foreground" colSpan={2}>
+              <td
+                className="py-2 sm:py-3 px-2 sm:px-4 font-semibold text-xs sm:text-sm text-foreground"
+                colSpan={hasUniqueUsers ? 3 : 2}
+              >
                 Total
               </td>
               <td className="py-2 sm:py-3 px-2 sm:px-4 text-right font-semibold text-xs sm:text-sm text-foreground whitespace-nowrap">

@@ -138,6 +138,8 @@ pub struct TrendsResponse {
 pub struct IssueTrendItem {
     id: String,
     metrics: IssueMetrics,
+    #[serde(rename = "analyticsSummary", skip_serializing_if = "Option::is_none")]
+    analytics_summary: Option<IssueAnalyticsSummary>,
 }
 
 #[derive(Serialize)]
@@ -154,6 +156,33 @@ pub struct IssueMetrics {
     bounces: i64,
     complaints: i64,
     subscribers: i64,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct IssueAnalyticsSummary {
+    #[serde(rename = "engagementType", skip_serializing_if = "Option::is_none")]
+    engagement_type: Option<EngagementType>,
+    #[serde(rename = "trafficSource", skip_serializing_if = "Option::is_none")]
+    traffic_source: Option<TrafficSource>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct EngagementType {
+    #[serde(rename = "newClickers")]
+    new_clickers: i64,
+    #[serde(rename = "returningClickers")]
+    returning_clickers: i64,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct TrafficSource {
+    clicks: TrafficSourceClicks,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct TrafficSourceClicks {
+    email: i64,
+    web: i64,
 }
 
 #[derive(Serialize)]
@@ -973,6 +1002,18 @@ fn parse_issue_stats(item: &HashMap<String, AttributeValue>) -> Result<IssueStat
     })
 }
 
+fn extract_analytics_summary(stats: &IssueStats) -> Option<IssueAnalyticsSummary> {
+    let analytics = stats.analytics.as_ref()?;
+    let parsed: Result<IssueAnalyticsSummary, _> = serde_json::from_value(analytics.clone());
+    parsed.ok().and_then(|summary| {
+        if summary.engagement_type.is_none() && summary.traffic_source.is_none() {
+            None
+        } else {
+            Some(summary)
+        }
+    })
+}
+
 fn parse_insights_map(
     map: &HashMap<String, AttributeValue>,
 ) -> Result<serde_json::Value, AppError> {
@@ -1053,10 +1094,12 @@ async fn query_published_issues_with_stats(
         };
 
         let metrics = calculate_issue_metrics(&stats);
+        let analytics_summary = extract_analytics_summary(&stats);
 
         issues_with_stats.push(IssueTrendItem {
             id: issue_number.to_string(),
             metrics,
+            analytics_summary,
         });
     }
 
@@ -3034,6 +3077,7 @@ mod tests {
                 complaints: 5,
                 subscribers: 980,
             },
+            analytics_summary: None,
         }];
 
         let aggregates = calculate_aggregates(&issues);
@@ -3061,6 +3105,7 @@ mod tests {
                     complaints: 5,
                     subscribers: 950,
                 },
+                analytics_summary: None,
             },
             IssueTrendItem {
                 id: "2".to_string(),
@@ -3075,6 +3120,7 @@ mod tests {
                     complaints: 10,
                     subscribers: 1200,
                 },
+                analytics_summary: None,
             },
             IssueTrendItem {
                 id: "3".to_string(),
@@ -3089,6 +3135,7 @@ mod tests {
                     complaints: 8,
                     subscribers: 1100,
                 },
+                analytics_summary: None,
             },
         ];
 
@@ -3117,6 +3164,7 @@ mod tests {
                     complaints: 5,
                     subscribers: 980,
                 },
+                analytics_summary: None,
             },
             IssueTrendItem {
                 id: "2".to_string(),
@@ -3131,6 +3179,7 @@ mod tests {
                     complaints: 8,
                     subscribers: 1200,
                 },
+                analytics_summary: None,
             },
         ];
 

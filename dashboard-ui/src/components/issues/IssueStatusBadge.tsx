@@ -16,19 +16,19 @@ export interface IssueStatusBadgeProps {
 const statusConfig: Record<IssueStatus, { label: string; className: string }> = {
   draft: {
     label: 'Draft',
-    className: 'bg-gray-100 text-gray-800 border-gray-300 dark:bg-gray-800 dark:text-gray-200 dark:border-gray-600'
+    className: 'bg-gray-100 text-gray-800 border-gray-300 dark:bg-gray-700 dark:text-gray-100 dark:border-gray-500'
   },
   scheduled: {
     label: 'Scheduled',
-    className: 'bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-700'
+    className: 'bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-800/60 dark:text-blue-100 dark:border-blue-400'
   },
   published: {
     label: 'Published',
-    className: 'bg-green-100 text-green-800 border-green-300 dark:bg-green-900/30 dark:text-green-300 dark:border-green-700'
+    className: 'bg-green-100 text-green-800 border-green-300 dark:bg-green-800/60 dark:text-green-100 dark:border-green-400'
   },
   failed: {
     label: 'Failed',
-    className: 'bg-red-100 text-red-800 border-red-300 dark:bg-red-900/30 dark:text-red-300 dark:border-red-700'
+    className: 'bg-red-100 text-red-800 border-red-300 dark:bg-red-800/60 dark:text-red-100 dark:border-red-400'
   }
 };
 

@@ -4,6 +4,7 @@ import { ArrowLeft, Pencil, Trash, RefreshCw, AlertCircle } from 'lucide-react';
 import { AppHeader } from '../../components/layout/AppHeader';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
+import { useToast } from '../../components/ui/Toast';
 import { IssueStatusBadge } from '../../components/issues/IssueStatusBadge';
 import { MarkdownPreview } from '../../components/issues/MarkdownPreview';
 import { DeleteIssueDialog } from '../../components/issues/DeleteIssueDialog';
@@ -28,6 +29,7 @@ const LinkSelector = lazy(() => import('../../components/analytics/LinkSelector'
 export const IssueDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { addToast } = useToast();
 
   const [issue, setIssue] = useState<Issue | null>(null);
   const [analytics, setAnalytics] = useState<IssueAnalytics | null>(null);
@@ -36,6 +38,7 @@ export const IssueDetailPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedLinkId, setSelectedLinkId] = useState<string | null>(null);
+  const [isAnalyticsRebuilding, setIsAnalyticsRebuilding] = useState(false);
 
   const loadIssue = useCallback(async () => {
     if (!id) return;
@@ -106,6 +109,37 @@ export const IssueDetailPage: React.FC = () => {
       loadIssue();
     }
   }, [id, loadIssue]);
+
+  const handleRebuildAnalytics = useCallback(async () => {
+    if (!id) return;
+
+    try {
+      setIsAnalyticsRebuilding(true);
+      const response = await issuesService.rebuildAnalytics(id);
+
+      if (response.success) {
+        addToast({
+          type: 'success',
+          title: 'Insights refresh queued',
+          message: 'We’ll process analytics for this issue shortly.',
+        });
+      } else {
+        addToast({
+          type: 'error',
+          title: 'Failed to refresh insights',
+          message: response.error || 'Could not queue analytics rebuild.',
+        });
+      }
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: 'Failed to refresh insights',
+        message: err instanceof Error ? err.message : 'Could not queue analytics rebuild.',
+      });
+    } finally {
+      setIsAnalyticsRebuilding(false);
+    }
+  }, [id, addToast]);
 
   const handleDelete = useCallback(async () => {
     if (!issue) return;
@@ -332,30 +366,45 @@ export const IssueDetailPage: React.FC = () => {
               </div>
 
               {/* Action Buttons */}
-              {isDraft && (
-                <div className="flex gap-2 flex-shrink-0">
+              <div className="flex gap-2 flex-shrink-0 flex-wrap justify-end">
+                {isPublished && (
                   <Button
-                    onClick={handleEdit}
+                    onClick={handleRebuildAnalytics}
                     variant="outline"
                     size="sm"
-                    aria-label="Edit this issue"
-                    className="hover:bg-primary-50 hover:border-primary-300 dark:hover:bg-primary-900/20 transition-colors"
+                    aria-label="Refresh analytics insights"
+                    disabled={isAnalyticsRebuilding}
                   >
-                    <Pencil className="h-4 w-4 mr-2" />
-                    <span className="hidden sm:inline">Edit</span>
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    <span className="hidden sm:inline">{isAnalyticsRebuilding ? 'Queuing…' : 'Refresh insights'}</span>
+                    <span className="sm:hidden">{isAnalyticsRebuilding ? 'Queuing…' : 'Refresh'}</span>
                   </Button>
-                  <Button
-                    onClick={() => setDeleteDialogOpen(true)}
-                    variant="destructive"
-                    size="sm"
-                    aria-label="Delete this issue"
-                    className="hover:bg-error-700 transition-colors"
-                  >
-                    <Trash className="h-4 w-4 mr-2" />
-                    <span className="hidden sm:inline">Delete</span>
-                  </Button>
-                </div>
-              )}
+                )}
+                {isDraft && (
+                  <>
+                    <Button
+                      onClick={handleEdit}
+                      variant="outline"
+                      size="sm"
+                      aria-label="Edit this issue"
+                      className="hover:bg-primary-50 hover:border-primary-300 dark:hover:bg-primary-900/20 transition-colors"
+                    >
+                      <Pencil className="h-4 w-4 mr-2" />
+                      <span className="hidden sm:inline">Edit</span>
+                    </Button>
+                    <Button
+                      onClick={() => setDeleteDialogOpen(true)}
+                      variant="destructive"
+                      size="sm"
+                      aria-label="Delete this issue"
+                      className="hover:bg-error-700 transition-colors"
+                    >
+                      <Trash className="h-4 w-4 mr-2" />
+                      <span className="hidden sm:inline">Delete</span>
+                    </Button>
+                  </>
+                )}
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -457,6 +506,23 @@ export const IssueDetailPage: React.FC = () => {
               />
             </Suspense>
           </div>
+        )}
+
+        {/* Analytics Pending Banner */}
+        {isPublished && issue.stats && !issue.stats.analytics && (
+          <Card className="shadow-sm mt-4 sm:mt-6 border-l-4 border-l-amber-500">
+            <CardHeader className="bg-muted/30 p-3 sm:p-6">
+              <CardTitle className="text-base sm:text-xl">Analytics Processing</CardTitle>
+              <p className="text-xs sm:text-sm text-muted-foreground mt-1">
+                Analytics can take a few minutes to appear after publish.
+              </p>
+            </CardHeader>
+            <CardContent className="pt-4 sm:pt-6 p-3 sm:p-6">
+              <div className="text-sm text-muted-foreground">
+                Refresh this page in a few minutes to see the latest analytics.
+              </div>
+            </CardContent>
+          </Card>
         )}
 
         {/* Link Performance Section */}

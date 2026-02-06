@@ -126,6 +126,15 @@ class IssuesService {
   }
 
   /**
+   * Requests analytics rebuild for a published issue
+   * @param issueId - Unique identifier of the issue to rebuild analytics for
+   * @returns Promise resolving when the rebuild request is accepted
+   */
+  async rebuildAnalytics(issueId: string): Promise<ApiResponse<{ status: string }>> {
+    return apiClient.post(`/issues/${issueId}/analytics/rebuild`, {});
+  }
+
+  /**
    * Fetches comparison data for an issue including average, last issue, and best issue metrics
    * @param currentIssueId - ID of the current issue to exclude from calculations
    * @param issueCount - Number of recent issues to include in average calculation

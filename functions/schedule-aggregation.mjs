@@ -15,7 +15,9 @@ export const handler = async (event) => {
       };
     }
 
-    const scheduleTime = calculateScheduleTime(publishedAt, '24h');
+    const scheduleTime = ensureFutureScheduleTime(
+      calculateScheduleTime(publishedAt, '24h')
+    );
     const scheduleName = `aggregate-${tenantId}-${issueNumber}-24h`;
 
     await scheduler.send(new CreateScheduleCommand({
@@ -65,4 +67,14 @@ export function calculateScheduleTime(publishedAt, delay) {
   const scheduleTime = new Date(publishTime.getTime() + delayMs);
 
   return scheduleTime.toISOString().replace(/\.\d{3}Z$/, '');
+}
+
+export function ensureFutureScheduleTime(scheduleTime) {
+  const minScheduleTime = new Date(Date.now() + 60 * 1000)
+    .toISOString()
+    .replace(/\.\d{3}Z$/, '');
+  const scheduleTimestamp = new Date(`${scheduleTime}Z`).getTime();
+  const minTimestamp = new Date(`${minScheduleTime}Z`).getTime();
+
+  return scheduleTimestamp < minTimestamp ? minScheduleTime : scheduleTime;
 }

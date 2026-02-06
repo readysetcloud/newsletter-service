@@ -74,6 +74,15 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
         (&Method::GET, "/issues") => issues::list_issues(event).await,
         (&Method::GET, "/issues/trends") => issues::get_trends(event).await,
         (&Method::POST, "/issues") => issues::create_issue(event).await,
+        (&Method::POST, path)
+            if path.starts_with("/issues/") && path.ends_with("/analytics/rebuild") =>
+        {
+            let issue_id = path
+                .strip_prefix("/issues/")
+                .and_then(|value| value.strip_suffix("/analytics/rebuild"))
+                .map(|value| value.to_string());
+            issues::rebuild_issue_analytics(event, issue_id).await
+        }
         (&Method::GET, path) if path.starts_with("/issues/") => {
             let issue_id = extract_path_param(path, "/issues/");
             issues::get_issue(event, issue_id).await

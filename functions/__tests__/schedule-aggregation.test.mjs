@@ -1,7 +1,7 @@
 import { jest } from '@jest/globals';
 
 const { SchedulerClient, CreateScheduleCommand } = await import('@aws-sdk/client-scheduler');
-const { handler, calculateScheduleTime } = await import('../schedule-aggregation.mjs');
+const { handler, calculateScheduleTime, ensureFutureScheduleTime } = await import('../schedule-aggregation.mjs');
 
 describe('schedule-aggregation', () => {
   let mockSend;
@@ -28,6 +28,7 @@ describe('schedule-aggregation', () => {
     test('should read issueNumber and publishedAt from event.detail.data', async () => {
       mockSend.mockResolvedValue({});
 
+      const publishedAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
       const event = {
         detail: {
           tenantId: 'tenant-123',
@@ -35,7 +36,7 @@ describe('schedule-aggregation', () => {
           type: 'ISSUE_PUBLISHED',
           data: {
             issueNumber: 42,
-            publishedAt: '2025-01-29T10:00:00.000Z',
+            publishedAt,
             title: 'Test Issue'
           }
         }
@@ -58,7 +59,7 @@ describe('schedule-aggregation', () => {
         detail: {
           tenantId: 'tenant-123',
           data: {
-            publishedAt: '2025-01-29T10:00:00.000Z'
+            publishedAt: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString()
           }
         }
       };
@@ -109,7 +110,7 @@ describe('schedule-aggregation', () => {
           tenantId: 'tenant-123',
           data: {
             issueNumber: 42,
-            publishedAt: '2025-01-29T10:00:00.000Z'
+            publishedAt: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString()
           }
         }
       };
@@ -162,6 +163,24 @@ describe('schedule-aggregation', () => {
 
       expect(scheduleTime).toBe('2025-01-30T10:00:00');
       expect(scheduleTime).not.toContain('.');
+    });
+  });
+
+  describe('ensureFutureScheduleTime', () => {
+    test('should keep future schedule times unchanged', () => {
+      const future = new Date(Date.now() + 2 * 60 * 60 * 1000)
+        .toISOString()
+        .replace(/\.\d{3}Z$/, '');
+      const result = ensureFutureScheduleTime(future);
+      expect(result).toBe(future);
+    });
+
+    test('should bump past schedule times to at least one minute from now', () => {
+      const past = '2020-01-01T00:00:00';
+      const result = ensureFutureScheduleTime(past);
+      const resultTime = new Date(`${result}Z`).getTime();
+      const minTime = Date.now() + 60 * 1000;
+      expect(resultTime).toBeGreaterThanOrEqual(minTime - 1000);
     });
   });
 });

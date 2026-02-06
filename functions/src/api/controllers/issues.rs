@@ -219,6 +219,16 @@ pub async fn get_issue(event: Request, issue_id: Option<String>) -> Result<Respo
     }
 }
 
+pub async fn rebuild_issue_analytics(
+    event: Request,
+    issue_id: Option<String>,
+) -> Result<Response<Body>, Error> {
+    match handle_rebuild_issue_analytics(event, issue_id).await {
+        Ok(response) => Ok(response),
+        Err(e) => Ok(response::format_error_response(&e)),
+    }
+}
+
 pub async fn get_trends(event: Request) -> Result<Response<Body>, Error> {
     match handle_get_trends(event).await {
         Ok(response) => Ok(response),
@@ -286,6 +296,49 @@ async fn handle_get_issue(
     let response_data = build_issue_response(issue, stats);
 
     response::format_response(200, response_data)
+}
+
+async fn handle_rebuild_issue_analytics(
+    event: Request,
+    issue_id: Option<String>,
+) -> Result<Response<Body>, AppError> {
+    let user_context = auth::get_user_context(&event)?;
+    let tenant_id = user_context
+        .tenant_id
+        .ok_or_else(|| AppError::Unauthorized("Tenant access required".to_string()))?;
+
+    let issue_id =
+        issue_id.ok_or_else(|| AppError::BadRequest("Issue ID is required".to_string()))?;
+
+    let issue = get_issue_by_id(&tenant_id, &issue_id).await?;
+
+    if issue.status != "published" {
+        return Err(AppError::BadRequest(
+            "Analytics can only be rebuilt for published issues".to_string(),
+        ));
+    }
+
+    let published_at = issue.published_at.clone().ok_or_else(|| {
+        AppError::BadRequest("Published timestamp is required for analytics rebuild".to_string())
+    })?;
+
+    publish_issue_published_event(
+        &tenant_id,
+        &user_context.user_id,
+        issue.issue_number,
+        &issue.subject,
+        &published_at,
+    )
+    .await?;
+
+    response::format_response(
+        202,
+        serde_json::json!({
+            "status": "queued",
+            "issueId": issue_id,
+            "issueNumber": issue.issue_number
+        }),
+    )
 }
 
 async fn handle_get_trends(event: Request) -> Result<Response<Body>, AppError> {
@@ -1600,6 +1653,68 @@ async fn publish_event<T: Serialize>(
                 event_type = %event_type,
                 error = %e,
                 "Failed to send event to EventBridge"
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn publish_issue_published_event(
+    tenant_id: &str,
+    user_id: &str,
+    issue_number: i32,
+    subject: &str,
+    published_at: &str,
+) -> Result<(), AppError> {
+    let eventbridge_client = aws_clients::get_eventbridge_client().await;
+
+    let detail = serde_json::json!({
+        "tenantId": tenant_id,
+        "userId": user_id,
+        "type": "ISSUE_PUBLISHED",
+        "data": {
+            "issueNumber": issue_number,
+            "publishedAt": published_at,
+            "title": subject
+        }
+    });
+
+    let detail_str = serde_json::to_string(&detail)
+        .map_err(|e| AppError::InternalError(format!("Failed to serialize event detail: {}", e)))?;
+
+    let put_events_result = eventbridge_client
+        .put_events()
+        .entries(
+            aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
+                .source("newsletter-service")
+                .detail_type("ISSUE_PUBLISHED")
+                .detail(detail_str)
+                .build(),
+        )
+        .send()
+        .await;
+
+    match put_events_result {
+        Ok(output) => {
+            for entry in output.entries() {
+                if let Some(error_code) = entry.error_code() {
+                    tracing::error!(
+                        tenant_id = %tenant_id,
+                        event_type = "ISSUE_PUBLISHED",
+                        error_code = %error_code,
+                        error_message = ?entry.error_message(),
+                        "Failed to publish analytics rebuild event"
+                    );
+                }
+            }
+            Ok(())
+        }
+        Err(e) => {
+            tracing::error!(
+                tenant_id = %tenant_id,
+                event_type = "ISSUE_PUBLISHED",
+                error = %e,
+                "Failed to send analytics rebuild event to EventBridge"
             );
             Ok(())
         }

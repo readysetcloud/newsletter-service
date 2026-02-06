@@ -309,7 +309,7 @@ export const IssueDetailPage: React.FC = () => {
             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-3 mb-2 flex-wrap">
-                  <h1 className="text-2xl sm:text-3xl font-bold text-foreground break-words">{issue.title}</h1>
+                  <h1 className="text-2xl sm:text-3xl font-bold text-foreground break-words">{issue.subject}</h1>
                   <IssueStatusBadge status={issue.status} />
                 </div>
                 <div className="flex flex-wrap gap-2 sm:gap-4 text-sm text-muted-foreground">

@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  Newsletter service powering Serverless Picks of the Week
+  Newsletter service powering Ready, Set, Cloud Picks of the Week
 
 Parameters:
   Environment:
@@ -81,7 +81,7 @@ Globals:
   Api:
     Cors:
       AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
-      AllowHeaders: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
+      AllowHeaders: "'Content-Type,Authorization,Idempotency-Key,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
       AllowOrigin: !Sub "'${Origin}'"
   Function:
     Architectures:
@@ -281,7 +281,7 @@ Resources:
       StageName: api
       Cors:
         AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
-        AllowHeaders: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
+        AllowHeaders: "'Content-Type,Authorization,Idempotency-Key,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
         AllowOrigin: !If
           - DeployFrontendCustomDomain
           - !Sub "'https://${FrontendCustomDomain}'"
@@ -1143,6 +1143,10 @@ Resources:
               Resource: "*"
             - Effect: Allow
               Action:
+                - states:StartExecution
+              Resource: !Ref StageIssueStateMachine
+            - Effect: Allow
+              Action:
                 - scheduler:CreateSchedule
                 - scheduler:UpdateSchedule
                 - scheduler:DeleteSchedule
@@ -1156,6 +1160,7 @@ Resources:
           TABLE_NAME: !Ref NewsletterTable
           USER_POOL_ID: !Ref NewsletterUserPool
           HOSTING_BUCKET_NAME: !Ref HostingBucket
+          STATE_MACHINE_ARN: !Ref StageIssueStateMachine
           ORIGIN: !If
             - DeployFrontendCustomDomain
             - !Sub "https://${FrontendCustomDomain}"

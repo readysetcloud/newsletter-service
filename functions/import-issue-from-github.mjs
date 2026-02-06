@@ -20,7 +20,6 @@ export const handler = async (event) => {
         id: tenant.pk,
         email: tenant.email
       },
-      key: `${tenant.pk}#${github.fileName}`,
       isPreview: process.env.IS_PREVIEW === true || process.env.IS_PREVIEW === 'true',
       ...email && { email }
     };
@@ -58,8 +57,13 @@ const processNewIssue = async (data) => {
     data.futureDate = `${metadata.data.date.toISOString().split('T')[0]}T12:00:00Z`;
   }
 
-  const match = metadata.data.slug.match(/\d+/);
-  data.issueId = Number(match[0])
+  const slugSource = (metadata.data.slug || github.slug || '').toString();
+  const issueMatch = slugSource.match(/\/(\d+)/);
+  if (!issueMatch) {
+    throw new Error('Unable to determine issue number from slug');
+  }
+  data.issueId = Number(issueMatch[1]);
+  data.key = `${data.tenant.id}#${data.issueId}`;
   
   await sfn.send(new StartExecutionCommand({
     stateMachineArn: process.env.STATE_MACHINE_ARN,
@@ -75,7 +79,6 @@ const processNewIssue = async (data) => {
       issueId: data.key,
       fileName: data.fileName,
       title: metadata.data.title || 'Untitled Issue',
-      slug: metadata.data.slug,
       scheduledDate: date > today ? date.toISOString() : null,
       isPreview: data.isPreview,
       metadata: metadata.data

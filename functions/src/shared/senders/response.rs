@@ -12,7 +12,10 @@ fn add_cors_headers(
 ) -> lambda_http::http::response::Builder {
     builder
         .header("Access-Control-Allow-Origin", get_cors_origin())
-        .header("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        .header(
+            "Access-Control-Allow-Headers",
+            "Content-Type,Authorization,Idempotency-Key",
+        )
         .header(
             "Access-Control-Allow-Methods",
             "GET,POST,PUT,DELETE,OPTIONS",

@@ -1,4 +1,3 @@
-import frontmatter from '@github-docs/frontmatter';
 import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import { DynamoDBClient, PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
@@ -9,9 +8,11 @@ const MAX_ATTEMPTS = 3;
 
 export const handler = async (state) => {
   try {
-    const { content, tenant } = state;
-    const newsletter = frontmatter(content);
-    const issueId = newsletter.data.slug.substring(1).toLowerCase();
+    const { content, tenant, issueId } = state;
+    const normalizedIssueId = String(issueId || '').trim().toLowerCase();
+    if (!normalizedIssueId) {
+      throw new Error('Missing issueId');
+    }
 
     let options = [];
     for (let attempts = 0; attempts < MAX_ATTEMPTS; attempts++) {
@@ -74,7 +75,7 @@ ${content}`
       const contentBlock = response.output.message?.content?.find(c => c.toolUse);
       if (!contentBlock) continue;
 
-      options = getFormattedOptions(issueId, contentBlock.toolUse.input.options);
+      options = getFormattedOptions(normalizedIssueId, contentBlock.toolUse.input.options);
       break;
     }
     if (!options?.length) {
@@ -82,7 +83,7 @@ ${content}`
     }
 
     const voteItem = {
-      pk: `${tenant.id}#${issueId}`,
+      pk: `${tenant.id}#${normalizedIssueId}`,
       sk: 'votes',
       options
     };

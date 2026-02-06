@@ -11,6 +11,11 @@ export const handler = async (state) => {
   const newsletter = frontmatter(state.content);
   const sponsor = await getSponsorDetails(newsletter.data.sponsor, newsletter.data.sponsor_description);
   const author = await getAuthor(newsletter.data.author);
+  const issueNumber = Number(state.issueId);
+
+  if (!Number.isFinite(issueNumber) || issueNumber < 1) {
+    throw new Error('Invalid or missing issueId');
+  }
 
   let sections = newsletter.content.split('### ');
   sections = sections.map(s => processSection(s, sponsor));
@@ -25,11 +30,11 @@ export const handler = async (state) => {
 
   const dataTemplate = {
     metadata: {
-      number: Number(newsletter.data.slug.substring(1)),
+      number: issueNumber,
       title: newsletter.data.title,
       description: newsletter.data.description,
       date: formattedDate,
-      url: `https://readysetcloud.io/newsletter${newsletter.data.slug}`,
+      url: `https://readysetcloud.io/newsletter/${issueNumber}`,
       ...(author && { author })
     },
     ...(sponsor && { sponsor }),
@@ -77,7 +82,7 @@ export const handler = async (state) => {
     sendAtDate,
     listCleanupDate: listCleanupDate.toISOString().split('.')[0],
     reportStatsDate: reportStatsDate.toISOString().split('.')[0],
-    subject: `Serverless Picks of the Week #${dataTemplate.metadata.number} - ${dataTemplate.metadata.title}`
+    subject: `${dataTemplate.metadata.title} | Ready, Set, Cloud Picks of the Week #${dataTemplate.metadata.number}`
   };
 };
 

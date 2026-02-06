@@ -72,8 +72,8 @@
               "to": {
                 "email.$": "$.detail.Item.contact.email"
               },
-              "subject.$": "States.Format('Serverless Picks of the Week Ad Copy Reminder ({})', $.Payload.slot.date)",
-              "text.$": "States.Format('Happy Wednesday {}!\r\rThis is a friendly reminder to submit your ad copy for your upcoming sponsored ad in the Serverless Picks of the Week newsletter by Friday at 8pm CST. \r\n\r\nFor the issue released on {}, you can send your ad copy by replying to this email. If you want to use the same copy as the previous issue, no further action is required. \r\n\r\nIf you have an issues meeting the deadline or have any other questions, please let me know as soon as possible.\r\n\r\nHave a great rest of your week!\r\n\r\nAllen Helton', $.detail.Item.contact.name, $.Payload.slot.date)",
+              "subject.$": "States.Format('Ready, Set, Cloud Picks of the Week Ad Copy Reminder ({})', $.Payload.slot.date)",
+              "text.$": "States.Format('Happy Wednesday {}!\r\rThis is a friendly reminder to submit your ad copy for your upcoming sponsored ad in the Ready, Set, Cloud Picks of the Week newsletter by Friday at 8pm CST. \r\n\r\nFor the issue released on {}, you can send your ad copy by replying to this email. If you want to use the same copy as the previous issue, no further action is required. \r\n\r\nIf you have an issues meeting the deadline or have any other questions, please let me know as soon as possible.\r\n\r\nHave a great rest of your week!\r\n\r\nAllen Helton', $.detail.Item.contact.name, $.Payload.slot.date)",
               "tenantId.$": "$.tenantId"
             },
             "DetailType": "Send Email v2",

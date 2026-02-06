@@ -3,6 +3,7 @@ use base64::Engine;
 use lambda_http::{Body, Error, Request, RequestExt, Response};
 use newsletter::admin::{auth, aws_clients, error::AppError, response};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
 // Request/Response types for list issues endpoint
@@ -31,8 +32,7 @@ pub struct IssueListItem {
     id: String,
     #[serde(rename = "issueNumber")]
     issue_number: i32,
-    title: String,
-    slug: String,
+    subject: String,
     status: String,
     #[serde(rename = "createdAt")]
     created_at: String,
@@ -45,11 +45,23 @@ pub struct IssueListItem {
 // Request/Response types for create issue endpoint
 #[derive(Deserialize)]
 pub struct CreateIssueRequest {
-    title: String,
+    #[serde(rename = "issueNumber", skip_serializing_if = "Option::is_none")]
+    issue_number: Option<i32>,
+    subject: String,
     content: String,
-    slug: String,
+    #[serde(rename = "scheduledAt", skip_serializing_if = "Option::is_none")]
+    scheduled_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    action: Option<CreateIssueAction>,
     #[serde(skip_serializing_if = "Option::is_none")]
     metadata: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize, Serialize, Copy, Clone, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum CreateIssueAction {
+    Draft,
+    Schedule,
 }
 
 #[derive(Serialize)]
@@ -57,8 +69,7 @@ pub struct CreateIssueResponse {
     id: String,
     #[serde(rename = "issueNumber")]
     issue_number: i32,
-    title: String,
-    slug: String,
+    subject: String,
     status: String,
     content: String,
     #[serde(rename = "createdAt")]
@@ -71,11 +82,9 @@ pub struct CreateIssueResponse {
 #[derive(Deserialize)]
 pub struct UpdateIssueRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
-    title: Option<String>,
+    subject: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    slug: Option<String>,
     #[serde(rename = "scheduledAt", skip_serializing_if = "Option::is_none")]
     scheduled_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -88,8 +97,7 @@ pub struct GetIssueResponse {
     id: String,
     #[serde(rename = "issueNumber")]
     issue_number: i32,
-    title: String,
-    slug: String,
+    subject: String,
     status: String,
     content: String,
     #[serde(rename = "createdAt")]
@@ -180,8 +188,7 @@ pub struct IssueRecord {
     pub gsi1pk: String,
     pub gsi1sk: String,
     pub issue_number: i32,
-    pub title: String,
-    pub slug: String,
+    pub subject: String,
     pub status: String,
     pub content: String,
     pub created_at: String,
@@ -189,6 +196,12 @@ pub struct IssueRecord {
     pub published_at: Option<String>,
     pub scheduled_at: Option<String>,
     pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug)]
+struct IdempotencyRecord {
+    issue_number: i32,
+    payload_hash: String,
 }
 
 // Public handler functions (called by router)
@@ -292,16 +305,93 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
     let tenant_id = user_context
         .tenant_id
         .ok_or_else(|| AppError::Unauthorized("Tenant access required".to_string()))?;
+    if user_context.email.trim().is_empty() {
+        return Err(AppError::BadRequest(
+            "Email is required to create issues".to_string(),
+        ));
+    }
 
     let body: CreateIssueRequest = serde_json::from_slice(event.body())
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
 
     validate_create_request(&body)?;
 
-    let issue_number = get_next_issue_number(&tenant_id).await?;
-    let issue = create_issue_record(&tenant_id, issue_number, &body).await?;
+    let action = body.action.unwrap_or(CreateIssueAction::Draft);
+    let idempotency_key = get_idempotency_key(&event);
+
+    let normalized_scheduled_at = normalize_scheduled_at(body.scheduled_at.as_deref())?;
+
+    if let Some(key) = idempotency_key.as_deref() {
+        if let Some(existing) = get_idempotency_record(&tenant_id, key).await? {
+            if let Some(issue_number) = body.issue_number {
+                if existing.issue_number != issue_number {
+                    return Err(AppError::Conflict(
+                        "Idempotency key reuse with different issueNumber".to_string(),
+                    ));
+                }
+            }
+
+            let existing_hash = compute_idempotency_hash(
+                &body,
+                existing.issue_number,
+                action,
+                normalized_scheduled_at.as_deref(),
+            );
+
+            if existing_hash != existing.payload_hash {
+                return Err(AppError::Conflict(
+                    "Idempotency key reuse with different payload".to_string(),
+                ));
+            }
+            return Err(AppError::Conflict("Duplicate request".to_string()));
+        }
+    }
+
+    let issue_number = if let Some(issue_number) = body.issue_number {
+        if issue_exists(&tenant_id, issue_number).await? {
+            return Err(AppError::Conflict(format!(
+                "Issue {} already exists",
+                issue_number
+            )));
+        }
+        issue_number
+    } else {
+        get_next_issue_number(&tenant_id).await?
+    };
+
+    let payload_hash = idempotency_key.as_deref().map(|_| {
+        compute_idempotency_hash(
+            &body,
+            issue_number,
+            action,
+            normalized_scheduled_at.as_deref(),
+        )
+    });
+
+    let issue = create_issue_record(
+        &tenant_id,
+        issue_number,
+        &body,
+        normalized_scheduled_at.clone(),
+    )
+    .await?;
 
     publish_event(&tenant_id, "ISSUE_DRAFT_SAVED", &issue).await?;
+
+    if action == CreateIssueAction::Schedule {
+        start_issue_schedule(
+            &tenant_id,
+            user_context.email.as_str(),
+            issue_number,
+            &body.content,
+            normalized_scheduled_at.as_deref(),
+        )
+        .await?;
+    }
+
+    if let (Some(key), Some(hash)) = (idempotency_key.as_deref(), payload_hash.as_deref()) {
+        save_idempotency_record(&tenant_id, key, issue_number, hash).await?;
+    }
 
     response::format_response(201, issue)
 }
@@ -406,13 +496,21 @@ fn validate_list_params(query: &ListIssuesQuery) -> Result<(), AppError> {
 }
 
 fn validate_create_request(body: &CreateIssueRequest) -> Result<(), AppError> {
-    if body.title.trim().is_empty() {
-        return Err(AppError::BadRequest("Title is required".to_string()));
+    if let Some(issue_number) = body.issue_number {
+        if issue_number < 1 {
+            return Err(AppError::BadRequest(
+                "issueNumber must be a positive integer".to_string(),
+            ));
+        }
     }
 
-    if body.title.len() > 200 {
+    if body.subject.trim().is_empty() {
+        return Err(AppError::BadRequest("Subject is required".to_string()));
+    }
+
+    if body.subject.len() > 200 {
         return Err(AppError::BadRequest(
-            "Title must not exceed 200 characters".to_string(),
+            "Subject must not exceed 200 characters".to_string(),
         ));
     }
 
@@ -420,24 +518,12 @@ fn validate_create_request(body: &CreateIssueRequest) -> Result<(), AppError> {
         return Err(AppError::BadRequest("Content is required".to_string()));
     }
 
-    if body.slug.trim().is_empty() {
-        return Err(AppError::BadRequest("Slug is required".to_string()));
-    }
-
-    let slug_regex = regex::Regex::new(r"^[a-z0-9-]+$").unwrap();
-    if !slug_regex.is_match(&body.slug) {
-        return Err(AppError::BadRequest(
-            "Slug must contain only lowercase letters, numbers, and hyphens".to_string(),
-        ));
-    }
-
     Ok(())
 }
 
 fn validate_update_request(body: &UpdateIssueRequest) -> Result<(), AppError> {
-    if body.title.is_none()
+    if body.subject.is_none()
         && body.content.is_none()
-        && body.slug.is_none()
         && body.scheduled_at.is_none()
         && body.metadata.is_none()
     {
@@ -446,13 +532,13 @@ fn validate_update_request(body: &UpdateIssueRequest) -> Result<(), AppError> {
         ));
     }
 
-    if let Some(title) = &body.title {
-        if title.trim().is_empty() {
-            return Err(AppError::BadRequest("Title cannot be empty".to_string()));
+    if let Some(subject) = &body.subject {
+        if subject.trim().is_empty() {
+            return Err(AppError::BadRequest("Subject cannot be empty".to_string()));
         }
-        if title.len() > 200 {
+        if subject.len() > 200 {
             return Err(AppError::BadRequest(
-                "Title must not exceed 200 characters".to_string(),
+                "Subject must not exceed 200 characters".to_string(),
             ));
         }
     }
@@ -460,18 +546,6 @@ fn validate_update_request(body: &UpdateIssueRequest) -> Result<(), AppError> {
     if let Some(content) = &body.content {
         if content.trim().is_empty() {
             return Err(AppError::BadRequest("Content cannot be empty".to_string()));
-        }
-    }
-
-    if let Some(slug) = &body.slug {
-        if slug.trim().is_empty() {
-            return Err(AppError::BadRequest("Slug cannot be empty".to_string()));
-        }
-        let slug_regex = regex::Regex::new(r"^[a-z0-9-]+$").unwrap();
-        if !slug_regex.is_match(slug) {
-            return Err(AppError::BadRequest(
-                "Slug must contain only lowercase letters, numbers, and hyphens".to_string(),
-            ));
         }
     }
 
@@ -561,16 +635,10 @@ fn parse_issue_list_item(
 
     let id = format!("{}", issue_number);
 
-    let title = item
-        .get("title")
+    let subject = item
+        .get("subject")
         .and_then(|v| v.as_s().ok())
-        .ok_or_else(|| AppError::InternalError("Missing title".to_string()))?
-        .to_string();
-
-    let slug = item
-        .get("slug")
-        .and_then(|v| v.as_s().ok())
-        .ok_or_else(|| AppError::InternalError("Missing slug".to_string()))?
+        .ok_or_else(|| AppError::InternalError("Missing subject".to_string()))?
         .to_string();
 
     let status = item
@@ -598,8 +666,7 @@ fn parse_issue_list_item(
     Ok(IssueListItem {
         id,
         issue_number,
-        title,
-        slug,
+        subject,
         status,
         created_at,
         published_at,
@@ -703,16 +770,10 @@ fn parse_issue_record(item: &HashMap<String, AttributeValue>) -> Result<IssueRec
         .and_then(|s| s.parse::<i32>().ok())
         .ok_or_else(|| AppError::InternalError("Invalid issue number in pk".to_string()))?;
 
-    let title = item
-        .get("title")
+    let subject = item
+        .get("subject")
         .and_then(|v| v.as_s().ok())
-        .ok_or_else(|| AppError::InternalError("Missing title".to_string()))?
-        .to_string();
-
-    let slug = item
-        .get("slug")
-        .and_then(|v| v.as_s().ok())
-        .ok_or_else(|| AppError::InternalError("Missing slug".to_string()))?
+        .ok_or_else(|| AppError::InternalError("Missing subject".to_string()))?
         .to_string();
 
     let status = item
@@ -763,8 +824,7 @@ fn parse_issue_record(item: &HashMap<String, AttributeValue>) -> Result<IssueRec
         gsi1pk,
         gsi1sk,
         issue_number,
-        title,
-        slug,
+        subject,
         status,
         content,
         created_at,
@@ -1025,6 +1085,225 @@ async fn calculate_trends(
     })
 }
 
+fn get_idempotency_key(event: &Request) -> Option<String> {
+    event
+        .headers()
+        .get("Idempotency-Key")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn normalize_scheduled_at(value: Option<&str>) -> Result<Option<String>, AppError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("now") {
+        return Ok(None);
+    }
+
+    let parsed = chrono::DateTime::parse_from_rfc3339(trimmed)
+        .map_err(|_| AppError::BadRequest("scheduledAt must be RFC3339 or \"now\"".to_string()))?;
+
+    if parsed.with_timezone(&chrono::Utc) <= chrono::Utc::now() {
+        return Ok(None);
+    }
+
+    Ok(Some(parsed.to_rfc3339()))
+}
+
+fn compute_idempotency_hash(
+    body: &CreateIssueRequest,
+    issue_number: i32,
+    action: CreateIssueAction,
+    scheduled_at: Option<&str>,
+) -> String {
+    let payload = serde_json::json!({
+        "issueNumber": issue_number,
+        "subject": &body.subject,
+        "content": &body.content,
+        "action": match action {
+            CreateIssueAction::Draft => "draft",
+            CreateIssueAction::Schedule => "schedule",
+        },
+        "scheduledAt": scheduled_at,
+        "metadata": body.metadata.clone(),
+    });
+
+    let mut hasher = Sha256::new();
+    hasher.update(payload.to_string().as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+async fn issue_exists(tenant_id: &str, issue_number: i32) -> Result<bool, AppError> {
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+    let table_name = std::env::var("TABLE_NAME")
+        .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
+
+    let pk = format!("{}#{}", tenant_id, issue_number);
+    let sk = "newsletter";
+
+    let result = ddb_client
+        .get_item()
+        .table_name(&table_name)
+        .key("pk", AttributeValue::S(pk))
+        .key("sk", AttributeValue::S(sk.to_string()))
+        .send()
+        .await?;
+
+    Ok(result.item().is_some())
+}
+
+async fn get_idempotency_record(
+    tenant_id: &str,
+    idempotency_key: &str,
+) -> Result<Option<IdempotencyRecord>, AppError> {
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+    let table_name = std::env::var("TABLE_NAME")
+        .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
+
+    let pk = format!("{}#idempotency", tenant_id);
+    let sk = format!("idempotency#{}", idempotency_key);
+
+    let result = ddb_client
+        .get_item()
+        .table_name(&table_name)
+        .key("pk", AttributeValue::S(pk))
+        .key("sk", AttributeValue::S(sk))
+        .send()
+        .await?;
+
+    let item = match result.item() {
+        Some(item) => item,
+        None => return Ok(None),
+    };
+
+    let issue_number = item
+        .get("issueNumber")
+        .and_then(|v| v.as_n().ok())
+        .and_then(|s| s.parse::<i32>().ok())
+        .ok_or_else(|| {
+            AppError::InternalError("Invalid issueNumber in idempotency record".to_string())
+        })?;
+
+    let payload_hash = item
+        .get("payloadHash")
+        .and_then(|v| v.as_s().ok())
+        .map(|s| s.to_string())
+        .ok_or_else(|| {
+            AppError::InternalError("Invalid payloadHash in idempotency record".to_string())
+        })?;
+
+    Ok(Some(IdempotencyRecord {
+        issue_number,
+        payload_hash,
+    }))
+}
+
+async fn save_idempotency_record(
+    tenant_id: &str,
+    idempotency_key: &str,
+    issue_number: i32,
+    payload_hash: &str,
+) -> Result<(), AppError> {
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+    let table_name = std::env::var("TABLE_NAME")
+        .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
+
+    let now = chrono::Utc::now();
+    let ttl = now.timestamp() + (24 * 60 * 60);
+
+    let mut item = HashMap::new();
+    item.insert(
+        "pk".to_string(),
+        AttributeValue::S(format!("{}#idempotency", tenant_id)),
+    );
+    item.insert(
+        "sk".to_string(),
+        AttributeValue::S(format!("idempotency#{}", idempotency_key)),
+    );
+    item.insert(
+        "issueNumber".to_string(),
+        AttributeValue::N(issue_number.to_string()),
+    );
+    item.insert(
+        "payloadHash".to_string(),
+        AttributeValue::S(payload_hash.to_string()),
+    );
+    item.insert("createdAt".to_string(), AttributeValue::S(now.to_rfc3339()));
+    item.insert("ttl".to_string(), AttributeValue::N(ttl.to_string()));
+
+    let result = ddb_client
+        .put_item()
+        .table_name(&table_name)
+        .set_item(Some(item))
+        .condition_expression("attribute_not_exists(pk) AND attribute_not_exists(sk)")
+        .send()
+        .await;
+
+    match result {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            let is_conditional = err.as_service_error().is_some_and(|service_err| {
+                matches!(
+                    service_err,
+                    aws_sdk_dynamodb::operation::put_item::PutItemError::ConditionalCheckFailedException(_)
+                )
+            });
+
+            if is_conditional {
+                return Err(AppError::Conflict(
+                    "Idempotency key already exists".to_string(),
+                ));
+            }
+
+            Err(AppError::AwsError(format!(
+                "Failed to store idempotency record: {}",
+                err
+            )))
+        }
+    }
+}
+
+async fn start_issue_schedule(
+    tenant_id: &str,
+    tenant_email: &str,
+    issue_number: i32,
+    content: &str,
+    scheduled_at: Option<&str>,
+) -> Result<(), AppError> {
+    let sfn_client = aws_clients::get_sfn_client().await;
+    let state_machine_arn = std::env::var("STATE_MACHINE_ARN")
+        .map_err(|_| AppError::InternalError("STATE_MACHINE_ARN not set".to_string()))?;
+
+    let mut input = serde_json::json!({
+        "content": content,
+        "fileName": format!("issue-{}", issue_number),
+        "issueId": issue_number,
+        "tenant": {
+            "id": tenant_id,
+            "email": tenant_email
+        },
+        "isPreview": false
+    });
+
+    if let Some(scheduled_at) = scheduled_at {
+        input["futureDate"] = serde_json::Value::String(scheduled_at.to_string());
+    }
+
+    sfn_client
+        .start_execution()
+        .state_machine_arn(state_machine_arn)
+        .input(input.to_string())
+        .send()
+        .await
+        .map_err(|e| AppError::AwsError(format!("Failed to start schedule workflow: {}", e)))?;
+
+    Ok(())
+}
+
 async fn get_next_issue_number(tenant_id: &str) -> Result<i32, AppError> {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
@@ -1061,6 +1340,7 @@ async fn create_issue_record(
     tenant_id: &str,
     issue_number: i32,
     body: &CreateIssueRequest,
+    scheduled_at: Option<String>,
 ) -> Result<CreateIssueResponse, AppError> {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
@@ -1081,8 +1361,10 @@ async fn create_issue_record(
         "issueNumber".to_string(),
         AttributeValue::N(issue_number.to_string()),
     );
-    item.insert("title".to_string(), AttributeValue::S(body.title.clone()));
-    item.insert("slug".to_string(), AttributeValue::S(body.slug.clone()));
+    item.insert(
+        "subject".to_string(),
+        AttributeValue::S(body.subject.clone()),
+    );
     item.insert("status".to_string(), AttributeValue::S("draft".to_string()));
     item.insert(
         "content".to_string(),
@@ -1090,6 +1372,13 @@ async fn create_issue_record(
     );
     item.insert("createdAt".to_string(), AttributeValue::S(now.clone()));
     item.insert("updatedAt".to_string(), AttributeValue::S(now.clone()));
+
+    if let Some(scheduled_at) = scheduled_at.as_ref() {
+        item.insert(
+            "scheduledAt".to_string(),
+            AttributeValue::S(scheduled_at.clone()),
+        );
+    }
 
     if let Some(metadata) = &body.metadata {
         if let Ok(metadata_str) = serde_json::to_string(metadata) {
@@ -1108,8 +1397,7 @@ async fn create_issue_record(
     Ok(CreateIssueResponse {
         id: issue_number.to_string(),
         issue_number,
-        title: body.title.clone(),
-        slug: body.slug.clone(),
+        subject: body.subject.clone(),
         status: "draft".to_string(),
         content: body.content.clone(),
         created_at: now.clone(),
@@ -1140,10 +1428,11 @@ async fn update_issue_record(
 
     expression_attribute_values.insert(":updated_at".to_string(), AttributeValue::S(now.clone()));
 
-    if let Some(title) = &body.title {
-        update_expression_parts.push("#title = :title".to_string());
-        expression_attribute_names.insert("#title".to_string(), "title".to_string());
-        expression_attribute_values.insert(":title".to_string(), AttributeValue::S(title.clone()));
+    if let Some(subject) = &body.subject {
+        update_expression_parts.push("#subject = :subject".to_string());
+        expression_attribute_names.insert("#subject".to_string(), "subject".to_string());
+        expression_attribute_values
+            .insert(":subject".to_string(), AttributeValue::S(subject.clone()));
     }
 
     if let Some(content) = &body.content {
@@ -1151,11 +1440,6 @@ async fn update_issue_record(
         expression_attribute_names.insert("#content".to_string(), "content".to_string());
         expression_attribute_values
             .insert(":content".to_string(), AttributeValue::S(content.clone()));
-    }
-
-    if let Some(slug) = &body.slug {
-        update_expression_parts.push("slug = :slug".to_string());
-        expression_attribute_values.insert(":slug".to_string(), AttributeValue::S(slug.clone()));
     }
 
     if let Some(scheduled_at) = &body.scheduled_at {
@@ -1261,10 +1545,10 @@ async fn publish_event<T: Serialize>(
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
 
-    let title = issue_data
-        .get("title")
+    let subject = issue_data
+        .get("subject")
         .and_then(|v| v.as_str())
-        .unwrap_or("Untitled");
+        .unwrap_or("No subject");
 
     let status = issue_data
         .get("status")
@@ -1275,7 +1559,7 @@ async fn publish_event<T: Serialize>(
         "tenantId": tenant_id,
         "issueId": issue_id,
         "issueNumber": issue_number,
-        "title": title,
+        "subject": subject,
         "status": status,
         "timestamp": chrono::Utc::now().to_rfc3339()
     });
@@ -1326,8 +1610,7 @@ fn build_issue_response(issue: IssueRecord, stats: Option<IssueStats>) -> GetIss
     GetIssueResponse {
         id: issue.issue_number.to_string(),
         issue_number: issue.issue_number,
-        title: issue.title,
-        slug: issue.slug,
+        subject: issue.subject,
         status: issue.status,
         content: issue.content,
         created_at: issue.created_at,
@@ -1363,12 +1646,8 @@ mod tests {
             AttributeValue::S("2024-01-15T10:30:00Z".to_string()),
         );
         item.insert(
-            "title".to_string(),
+            "subject".to_string(),
             AttributeValue::S("Test Issue".to_string()),
-        );
-        item.insert(
-            "slug".to_string(),
-            AttributeValue::S("test-issue".to_string()),
         );
         item.insert(
             "status".to_string(),
@@ -1396,8 +1675,7 @@ mod tests {
 
         let issue = result.unwrap();
         assert_eq!(issue.issue_number, 42);
-        assert_eq!(issue.title, "Test Issue");
-        assert_eq!(issue.slug, "test-issue");
+        assert_eq!(issue.subject, "Test Issue");
         assert_eq!(issue.status, "published");
         assert_eq!(issue.content, "# Test Content");
         assert_eq!(issue.published_at, Some("2024-01-15T11:00:00Z".to_string()));
@@ -1423,12 +1701,8 @@ mod tests {
             AttributeValue::S("2024-01-15T10:30:00Z".to_string()),
         );
         item.insert(
-            "title".to_string(),
+            "subject".to_string(),
             AttributeValue::S("Draft Issue".to_string()),
-        );
-        item.insert(
-            "slug".to_string(),
-            AttributeValue::S("draft-issue".to_string()),
         );
         item.insert("status".to_string(), AttributeValue::S("draft".to_string()));
         item.insert(
@@ -1602,8 +1876,7 @@ mod tests {
             gsi1pk: "tenant-123#newsletter".to_string(),
             gsi1sk: "2024-01-15T10:30:00Z".to_string(),
             issue_number: 42,
-            title: "Test Issue".to_string(),
-            slug: "test-issue".to_string(),
+            subject: "Test Issue".to_string(),
             status: "published".to_string(),
             content: "# Test Content".to_string(),
             created_at: "2024-01-15T10:00:00Z".to_string(),
@@ -1627,7 +1900,7 @@ mod tests {
 
         assert_eq!(response.id, "42");
         assert_eq!(response.issue_number, 42);
-        assert_eq!(response.title, "Test Issue");
+        assert_eq!(response.subject, "Test Issue");
         assert_eq!(response.status, "published");
         assert!(response.stats.is_some());
         assert_eq!(response.stats.unwrap().opens, 150);
@@ -1641,8 +1914,7 @@ mod tests {
             gsi1pk: "tenant-123#newsletter".to_string(),
             gsi1sk: "2024-01-15T10:30:00Z".to_string(),
             issue_number: 1,
-            title: "Draft Issue".to_string(),
-            slug: "draft-issue".to_string(),
+            subject: "Draft Issue".to_string(),
             status: "draft".to_string(),
             content: "Draft content".to_string(),
             created_at: "2024-01-15T10:00:00Z".to_string(),
@@ -1664,9 +1936,11 @@ mod tests {
     #[test]
     fn test_validate_create_request_valid() {
         let request = CreateIssueRequest {
-            title: "Test Issue".to_string(),
+            issue_number: None,
+            subject: "Test Issue".to_string(),
             content: "# Test Content".to_string(),
-            slug: "test-issue".to_string(),
+            scheduled_at: None,
+            action: None,
             metadata: None,
         };
 
@@ -1675,11 +1949,13 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_create_request_empty_title() {
+    fn test_validate_create_request_empty_subject() {
         let request = CreateIssueRequest {
-            title: "".to_string(),
+            issue_number: None,
+            subject: "".to_string(),
             content: "# Test Content".to_string(),
-            slug: "test-issue".to_string(),
+            scheduled_at: None,
+            action: None,
             metadata: None,
         };
 
@@ -1689,11 +1965,13 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_create_request_title_too_long() {
+    fn test_validate_create_request_subject_too_long() {
         let request = CreateIssueRequest {
-            title: "a".repeat(201),
+            issue_number: None,
+            subject: "a".repeat(201),
             content: "# Test Content".to_string(),
-            slug: "test-issue".to_string(),
+            scheduled_at: None,
+            action: None,
             metadata: None,
         };
 
@@ -1705,51 +1983,11 @@ mod tests {
     #[test]
     fn test_validate_create_request_empty_content() {
         let request = CreateIssueRequest {
-            title: "Test Issue".to_string(),
+            issue_number: None,
+            subject: "Test Issue".to_string(),
             content: "".to_string(),
-            slug: "test-issue".to_string(),
-            metadata: None,
-        };
-
-        let result = validate_create_request(&request);
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), AppError::BadRequest(_)));
-    }
-
-    #[test]
-    fn test_validate_create_request_empty_slug() {
-        let request = CreateIssueRequest {
-            title: "Test Issue".to_string(),
-            content: "# Test Content".to_string(),
-            slug: "".to_string(),
-            metadata: None,
-        };
-
-        let result = validate_create_request(&request);
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), AppError::BadRequest(_)));
-    }
-
-    #[test]
-    fn test_validate_create_request_invalid_slug_uppercase() {
-        let request = CreateIssueRequest {
-            title: "Test Issue".to_string(),
-            content: "# Test Content".to_string(),
-            slug: "Test-Issue".to_string(),
-            metadata: None,
-        };
-
-        let result = validate_create_request(&request);
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), AppError::BadRequest(_)));
-    }
-
-    #[test]
-    fn test_validate_create_request_invalid_slug_special_chars() {
-        let request = CreateIssueRequest {
-            title: "Test Issue".to_string(),
-            content: "# Test Content".to_string(),
-            slug: "test_issue!".to_string(),
+            scheduled_at: None,
+            action: None,
             metadata: None,
         };
 
@@ -1761,9 +1999,8 @@ mod tests {
     #[test]
     fn test_validate_update_request_valid_single_field() {
         let request = UpdateIssueRequest {
-            title: Some("Updated Title".to_string()),
+            subject: Some("Updated Subject".to_string()),
             content: None,
-            slug: None,
             scheduled_at: None,
             metadata: None,
         };
@@ -1775,9 +2012,8 @@ mod tests {
     #[test]
     fn test_validate_update_request_valid_multiple_fields() {
         let request = UpdateIssueRequest {
-            title: Some("Updated Title".to_string()),
+            subject: Some("Updated Subject".to_string()),
             content: Some("Updated content".to_string()),
-            slug: Some("updated-slug".to_string()),
             scheduled_at: None,
             metadata: None,
         };
@@ -1789,9 +2025,8 @@ mod tests {
     #[test]
     fn test_validate_update_request_no_fields() {
         let request = UpdateIssueRequest {
-            title: None,
+            subject: None,
             content: None,
-            slug: None,
             scheduled_at: None,
             metadata: None,
         };
@@ -1802,11 +2037,10 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_update_request_empty_title() {
+    fn test_validate_update_request_empty_subject() {
         let request = UpdateIssueRequest {
-            title: Some("".to_string()),
+            subject: Some("".to_string()),
             content: None,
-            slug: None,
             scheduled_at: None,
             metadata: None,
         };
@@ -1817,11 +2051,10 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_update_request_title_too_long() {
+    fn test_validate_update_request_subject_too_long() {
         let request = UpdateIssueRequest {
-            title: Some("a".repeat(201)),
+            subject: Some("a".repeat(201)),
             content: None,
-            slug: None,
             scheduled_at: None,
             metadata: None,
         };
@@ -1834,39 +2067,8 @@ mod tests {
     #[test]
     fn test_validate_update_request_empty_content() {
         let request = UpdateIssueRequest {
-            title: None,
+            subject: None,
             content: Some("".to_string()),
-            slug: None,
-            scheduled_at: None,
-            metadata: None,
-        };
-
-        let result = validate_update_request(&request);
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), AppError::BadRequest(_)));
-    }
-
-    #[test]
-    fn test_validate_update_request_empty_slug() {
-        let request = UpdateIssueRequest {
-            title: None,
-            content: None,
-            slug: Some("".to_string()),
-            scheduled_at: None,
-            metadata: None,
-        };
-
-        let result = validate_update_request(&request);
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), AppError::BadRequest(_)));
-    }
-
-    #[test]
-    fn test_validate_update_request_invalid_slug() {
-        let request = UpdateIssueRequest {
-            title: None,
-            content: None,
-            slug: Some("Invalid_Slug!".to_string()),
             scheduled_at: None,
             metadata: None,
         };
@@ -1884,8 +2086,7 @@ mod tests {
             gsi1pk: "tenant-123#newsletter".to_string(),
             gsi1sk: "2024-01-15T10:00:00Z".to_string(),
             issue_number: 1,
-            title: "Test Issue".to_string(),
-            slug: "test-issue".to_string(),
+            subject: "Test Issue".to_string(),
             status: "draft".to_string(),
             content: "Content".to_string(),
             created_at: "2024-01-15T10:00:00Z".to_string(),
@@ -1907,8 +2108,7 @@ mod tests {
             gsi1pk: "tenant-123#newsletter".to_string(),
             gsi1sk: "2024-01-15T10:00:00Z".to_string(),
             issue_number: 1,
-            title: "Test Issue".to_string(),
-            slug: "test-issue".to_string(),
+            subject: "Test Issue".to_string(),
             status: "published".to_string(),
             content: "Content".to_string(),
             created_at: "2024-01-15T10:00:00Z".to_string(),
@@ -1931,8 +2131,7 @@ mod tests {
             gsi1pk: "tenant-123#newsletter".to_string(),
             gsi1sk: "2024-01-15T10:00:00Z".to_string(),
             issue_number: 1,
-            title: "Test Issue".to_string(),
-            slug: "test-issue".to_string(),
+            subject: "Test Issue".to_string(),
             status: "scheduled".to_string(),
             content: "Content".to_string(),
             created_at: "2024-01-15T10:00:00Z".to_string(),
@@ -1955,8 +2154,7 @@ mod tests {
             gsi1pk: "tenant-123#newsletter".to_string(),
             gsi1sk: "2024-01-15T10:00:00Z".to_string(),
             issue_number: 1,
-            title: "Test Issue".to_string(),
-            slug: "test-issue".to_string(),
+            subject: "Test Issue".to_string(),
             status: "draft".to_string(),
             content: "Content".to_string(),
             created_at: "2024-01-15T10:00:00Z".to_string(),
@@ -1978,8 +2176,7 @@ mod tests {
             gsi1pk: "tenant-123#newsletter".to_string(),
             gsi1sk: "2024-01-15T10:00:00Z".to_string(),
             issue_number: 1,
-            title: "Test Issue".to_string(),
-            slug: "test-issue".to_string(),
+            subject: "Test Issue".to_string(),
             status: "published".to_string(),
             content: "Content".to_string(),
             created_at: "2024-01-15T10:00:00Z".to_string(),
@@ -2002,8 +2199,7 @@ mod tests {
             gsi1pk: "tenant-123#newsletter".to_string(),
             gsi1sk: "2024-01-15T10:00:00Z".to_string(),
             issue_number: 1,
-            title: "Test Issue".to_string(),
-            slug: "test-issue".to_string(),
+            subject: "Test Issue".to_string(),
             status: "scheduled".to_string(),
             content: "Content".to_string(),
             created_at: "2024-01-15T10:00:00Z".to_string(),
@@ -2026,8 +2222,7 @@ mod tests {
             gsi1pk: "tenant-123#newsletter".to_string(),
             gsi1sk: "2024-01-15T10:00:00Z".to_string(),
             issue_number: 1,
-            title: "Test Issue".to_string(),
-            slug: "test-issue".to_string(),
+            subject: "Test Issue".to_string(),
             status: "failed".to_string(),
             content: "Content".to_string(),
             created_at: "2024-01-15T10:00:00Z".to_string(),
@@ -2047,8 +2242,7 @@ mod tests {
     /*
         #[test]
         fn property_7_get_issue_response_completeness(
-            title in "[a-zA-Z0-9 ]{5,50}",
-            slug in "[a-z0-9-]{5,30}",
+            subject in "[a-zA-Z0-9 ]{5,50}",
             status in prop::sample::select(vec!["draft", "scheduled", "published", "failed"]),
             content in "[a-zA-Z0-9 \n]{10,100}",
             created_at in "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
@@ -2061,8 +2255,7 @@ mod tests {
                 gsi1pk: "tenant-123#newsletter".to_string(),
                 gsi1sk: created_at.clone(),
                 issue_number,
-                title: title.clone(),
-                slug: slug.clone(),
+                subject: subject.clone(),
                 status: status.to_string(),
                 content: content.clone(),
                 created_at: created_at.clone(),
@@ -2088,8 +2281,7 @@ mod tests {
             let response = build_issue_response(issue, stats.clone());
 
             prop_assert_eq!(response.issue_number, issue_number);
-            prop_assert_eq!(&response.title, &title);
-            prop_assert_eq!(&response.slug, &slug);
+            prop_assert_eq!(&response.subject, &subject);
             prop_assert_eq!(&response.status, status);
             prop_assert_eq!(&response.content, &content);
             prop_assert_eq!(&response.created_at, &created_at);
@@ -2126,8 +2318,7 @@ mod tests {
             item_tenant_a.insert("sk".to_string(), AttributeValue::S("newsletter".to_string()));
             item_tenant_a.insert("GSI1PK".to_string(), AttributeValue::S(format!("{}#newsletter", tenant_a)));
             item_tenant_a.insert("GSI1SK".to_string(), AttributeValue::S("2024-01-15T10:00:00Z".to_string()));
-            item_tenant_a.insert("title".to_string(), AttributeValue::S("Test Issue".to_string()));
-            item_tenant_a.insert("slug".to_string(), AttributeValue::S("test-issue".to_string()));
+            item_tenant_a.insert("subject".to_string(), AttributeValue::S("Test Issue".to_string()));
             item_tenant_a.insert("status".to_string(), AttributeValue::S("draft".to_string()));
             item_tenant_a.insert("content".to_string(), AttributeValue::S("Content".to_string()));
             item_tenant_a.insert("createdAt".to_string(), AttributeValue::S("2024-01-15T10:00:00Z".to_string()));
@@ -2143,8 +2334,7 @@ mod tests {
             item_tenant_b.insert("sk".to_string(), AttributeValue::S("newsletter".to_string()));
             item_tenant_b.insert("GSI1PK".to_string(), AttributeValue::S(format!("{}#newsletter", tenant_b)));
             item_tenant_b.insert("GSI1SK".to_string(), AttributeValue::S("2024-01-15T10:00:00Z".to_string()));
-            item_tenant_b.insert("title".to_string(), AttributeValue::S("Test Issue".to_string()));
-            item_tenant_b.insert("slug".to_string(), AttributeValue::S("test-issue".to_string()));
+            item_tenant_b.insert("subject".to_string(), AttributeValue::S("Test Issue".to_string()));
             item_tenant_b.insert("status".to_string(), AttributeValue::S("draft".to_string()));
             item_tenant_b.insert("content".to_string(), AttributeValue::S("Content".to_string()));
             item_tenant_b.insert("createdAt".to_string(), AttributeValue::S("2024-01-15T10:00:00Z".to_string()));
@@ -2161,16 +2351,14 @@ mod tests {
         #[test]
         fn property_2_list_response_completeness(
             issue_number in 1i32..1000,
-            title in "[a-zA-Z0-9 ]{5,50}",
-            slug in "[a-z0-9-]{5,30}",
+            subject in "[a-zA-Z0-9 ]{5,50}",
             status in prop::sample::select(vec!["draft", "scheduled", "published", "failed"]),
             created_at in "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"
         ) {
             let mut item = HashMap::new();
             item.insert("pk".to_string(), AttributeValue::S(format!("tenant-123#{}", issue_number)));
             item.insert("sk".to_string(), AttributeValue::S("newsletter".to_string()));
-            item.insert("title".to_string(), AttributeValue::S(title.clone()));
-            item.insert("slug".to_string(), AttributeValue::S(slug.clone()));
+            item.insert("subject".to_string(), AttributeValue::S(subject.clone()));
             item.insert("status".to_string(), AttributeValue::S(status.to_string()));
             item.insert("createdAt".to_string(), AttributeValue::S(created_at.clone()));
 
@@ -2180,8 +2368,7 @@ mod tests {
             let issue = result.unwrap();
 
             prop_assert_eq!(issue.issue_number, issue_number);
-            prop_assert_eq!(&issue.title, &title);
-            prop_assert_eq!(&issue.slug, &slug);
+            prop_assert_eq!(&issue.subject, &subject);
             prop_assert_eq!(&issue.status, status);
             prop_assert_eq!(&issue.created_at, &created_at);
         }
@@ -2277,14 +2464,15 @@ mod tests {
         #[test]
         fn property_12_create_issue_draft_status(
             issue_number in 1i32..1000,
-            title in "[a-zA-Z0-9 ]{5,50}",
-            slug in "[a-z0-9-]{5,30}",
+            subject in "[a-zA-Z0-9 ]{5,50}",
             content in "[a-zA-Z0-9 \n]{10,100}"
         ) {
             let request = CreateIssueRequest {
-                title: title.clone(),
+                issue_number: None,
+                subject: subject.clone(),
                 content: content.clone(),
-                slug: slug.clone(),
+                scheduled_at: None,
+                action: None,
                 metadata: None,
             };
 
@@ -2292,8 +2480,7 @@ mod tests {
             let response = CreateIssueResponse {
                 id: issue_number.to_string(),
                 issue_number,
-                title: title.clone(),
-                slug: slug.clone(),
+                subject: subject.clone(),
                 status: "draft".to_string(),
                 content: content.clone(),
                 created_at: now.clone(),
@@ -2302,8 +2489,7 @@ mod tests {
 
             prop_assert_eq!(&response.status, "draft", "Created issue must have draft status");
             prop_assert_eq!(response.issue_number, issue_number);
-            prop_assert_eq!(&response.title, &title);
-            prop_assert_eq!(&response.slug, &slug);
+            prop_assert_eq!(&response.subject, &subject);
             prop_assert_eq!(&response.content, &content);
         }
 
@@ -2337,20 +2523,21 @@ mod tests {
 
         /// **Feature: issue-management-api, Property 14: Create Issue Input Validation**
         ///
-        /// For any create request missing required fields (title, content, slug) or containing
+        /// For any create request missing required fields (subject, content) or containing
         /// invalid content format, the operation must return 400 Bad Request with a descriptive
         /// error message.
         ///
         /// **Validates: Requirements AC-4.5**
         #[test]
-        fn property_14_create_issue_input_validation_missing_title(
-            content in "[a-zA-Z0-9 \n]{10,100}",
-            slug in "[a-z0-9-]{5,30}"
+        fn property_14_create_issue_input_validation_missing_subject(
+            content in "[a-zA-Z0-9 \n]{10,100}"
         ) {
             let request = CreateIssueRequest {
-                title: "".to_string(),
+                issue_number: None,
+                subject: "".to_string(),
                 content,
-                slug,
+                scheduled_at: None,
+                action: None,
                 metadata: None,
             };
 
@@ -2361,13 +2548,14 @@ mod tests {
 
         #[test]
         fn property_14_create_issue_input_validation_missing_content(
-            title in "[a-zA-Z0-9 ]{5,50}",
-            slug in "[a-z0-9-]{5,30}"
+            subject in "[a-zA-Z0-9 ]{5,50}"
         ) {
             let request = CreateIssueRequest {
-                title,
+                issue_number: None,
+                subject,
                 content: "".to_string(),
-                slug,
+                scheduled_at: None,
+                action: None,
                 metadata: None,
             };
 
@@ -2377,49 +2565,15 @@ mod tests {
         }
 
         #[test]
-        fn property_14_create_issue_input_validation_missing_slug(
-            title in "[a-zA-Z0-9 ]{5,50}",
+        fn property_14_create_issue_input_validation_subject_too_long(
             content in "[a-zA-Z0-9 \n]{10,100}"
         ) {
             let request = CreateIssueRequest {
-                title,
+                issue_number: None,
+                subject: "a".repeat(201),
                 content,
-                slug: "".to_string(),
-                metadata: None,
-            };
-
-            let result = validate_create_request(&request);
-            prop_assert!(result.is_err());
-            prop_assert!(matches!(result.unwrap_err(), AppError::BadRequest(_)));
-        }
-
-        #[test]
-        fn property_14_create_issue_input_validation_invalid_slug(
-            title in "[a-zA-Z0-9 ]{5,50}",
-            content in "[a-zA-Z0-9 \n]{10,100}",
-            invalid_slug in "[A-Z_!@#$%]{5,30}"
-        ) {
-            let request = CreateIssueRequest {
-                title,
-                content,
-                slug: invalid_slug,
-                metadata: None,
-            };
-
-            let result = validate_create_request(&request);
-            prop_assert!(result.is_err());
-            prop_assert!(matches!(result.unwrap_err(), AppError::BadRequest(_)));
-        }
-
-        #[test]
-        fn property_14_create_issue_input_validation_title_too_long(
-            content in "[a-zA-Z0-9 \n]{10,100}",
-            slug in "[a-z0-9-]{5,30}"
-        ) {
-            let request = CreateIssueRequest {
-                title: "a".repeat(201),
-                content,
-                slug,
+                scheduled_at: None,
+                action: None,
                 metadata: None,
             };
 
@@ -2430,20 +2584,18 @@ mod tests {
 
         /// **Feature: issue-management-api, Property 15: Update Issue Field Modification**
         ///
-        /// For any update request with valid field values (title, content, slug, metadata, scheduledAt),
+        /// For any update request with valid field values (subject, content, metadata, scheduledAt),
         /// the issue record must reflect the new values after the update operation completes.
         ///
         /// **Validates: Requirements AC-5.1, AC-5.2**
         #[test]
         fn property_15_update_issue_field_modification(
-            new_title in "[a-zA-Z0-9 ]{5,50}",
-            new_content in "[a-zA-Z0-9 \n]{10,100}",
-            new_slug in "[a-z0-9-]{5,30}"
+            new_subject in "[a-zA-Z0-9 ]{5,50}",
+            new_content in "[a-zA-Z0-9 \n]{10,100}"
         ) {
             let request = UpdateIssueRequest {
-                title: Some(new_title.clone()),
+                subject: Some(new_subject.clone()),
                 content: Some(new_content.clone()),
-                slug: Some(new_slug.clone()),
                 scheduled_at: None,
                 metadata: None,
             };
@@ -2451,14 +2603,11 @@ mod tests {
             let result = validate_update_request(&request);
             prop_assert!(result.is_ok());
 
-            if let Some(title) = &request.title {
-                prop_assert_eq!(title, &new_title);
+            if let Some(subject) = &request.subject {
+                prop_assert_eq!(subject, &new_subject);
             }
             if let Some(content) = &request.content {
                 prop_assert_eq!(content, &new_content);
-            }
-            if let Some(slug) = &request.slug {
-                prop_assert_eq!(slug, &new_slug);
             }
         }
 
@@ -2500,8 +2649,7 @@ mod tests {
                 gsi1pk: "tenant-123#newsletter".to_string(),
                 gsi1sk: "2024-01-15T10:00:00Z".to_string(),
                 issue_number: 1,
-                title: "Test Issue".to_string(),
-                slug: "test-issue".to_string(),
+                subject: "Test Issue".to_string(),
                 status: status.to_string(),
                 content: "Content".to_string(),
                 created_at: "2024-01-15T10:00:00Z".to_string(),
@@ -2530,8 +2678,7 @@ mod tests {
                 gsi1pk: "tenant-123#newsletter".to_string(),
                 gsi1sk: "2024-01-15T10:00:00Z".to_string(),
                 issue_number: 1,
-                title: "Test Issue".to_string(),
-                slug: "test-issue".to_string(),
+                subject: "Test Issue".to_string(),
                 status: "draft".to_string(),
                 content: "Content".to_string(),
                 created_at: "2024-01-15T10:00:00Z".to_string(),
@@ -2561,8 +2708,7 @@ mod tests {
                 gsi1pk: "tenant-123#newsletter".to_string(),
                 gsi1sk: "2024-01-15T10:00:00Z".to_string(),
                 issue_number: 1,
-                title: "Test Issue".to_string(),
-                slug: "test-issue".to_string(),
+                subject: "Test Issue".to_string(),
                 status: status.to_string(),
                 content: "Content".to_string(),
                 created_at: "2024-01-15T10:00:00Z".to_string(),
@@ -2591,8 +2737,7 @@ mod tests {
         let data = CreateIssueResponse {
             id: "42".to_string(),
             issue_number: 42,
-            title: "Test Issue".to_string(),
-            slug: "test-issue".to_string(),
+            subject: "Test Issue".to_string(),
             status: "draft".to_string(),
             content: "# Test Content".to_string(),
             created_at: "2024-01-15T10:00:00Z".to_string(),
@@ -2610,8 +2755,7 @@ mod tests {
         let data = GetIssueResponse {
             id: "1".to_string(),
             issue_number: 1,
-            title: "Updated Issue".to_string(),
-            slug: "updated-issue".to_string(),
+            subject: "Updated Issue".to_string(),
             status: "draft".to_string(),
             content: "Updated content".to_string(),
             created_at: "2024-01-15T10:00:00Z".to_string(),
@@ -2636,8 +2780,7 @@ mod tests {
             gsi1pk: "test-tenant-789#newsletter".to_string(),
             gsi1sk: "2024-01-15T10:00:00Z".to_string(),
             issue_number: 5,
-            title: "Deleted Issue".to_string(),
-            slug: "deleted-issue".to_string(),
+            subject: "Deleted Issue".to_string(),
             status: "draft".to_string(),
             content: "Content to be deleted".to_string(),
             created_at: "2024-01-15T10:00:00Z".to_string(),
@@ -2658,8 +2801,7 @@ mod tests {
         let data = CreateIssueResponse {
             id: "99".to_string(),
             issue_number: 99,
-            title: "Test Issue".to_string(),
-            slug: "test-issue".to_string(),
+            subject: "Test Issue".to_string(),
             status: "draft".to_string(),
             content: "Content".to_string(),
             created_at: "2024-01-15T10:00:00Z".to_string(),

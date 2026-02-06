@@ -101,14 +101,14 @@ const padIssueNumber = (issueNumber) => {
   return String(issueNumber).padStart(5, '0');
 };
 
-const setupIssueStats = async (tenant, slug, subject, publishedAt) => {
+const setupIssueStats = async (tenant, issueNumber, subject, publishedAt) => {
   await ddb.send(new PutItemCommand({
     TableName: process.env.TABLE_NAME,
     Item: marshall({
-      pk: `${tenant.pk}#${slug}`,
+      pk: `${tenant.pk}#${issueNumber}`,
       sk: 'stats',
       GSI1PK: `${tenant.pk}#issue`,
-      GSI1SK: padIssueNumber(parseInt(slug)),
+      GSI1SK: padIssueNumber(issueNumber),
       subject,
       publishedAt,
       opens: 0,

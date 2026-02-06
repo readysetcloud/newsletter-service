@@ -6,8 +6,8 @@ const eventBridge = new EventBridgeClient();
 
 // Event types for different newsletter operations
 export const EVENT_TYPES = {
-  ISSUE_PUBLISHED: 'Issue Published',
-  ISSUE_DRAFT_SAVED: 'Issue Draft Saved',
+  ISSUE_PUBLISHED: 'ISSUE_PUBLISHED',
+  ISSUE_DRAFT_SAVED: 'ISSUE_DRAFT_SAVED',
   SUBSCRIBER_ADDED: 'Subscriber Added',
   SUBSCRIBER_REMOVED: 'Subscriber Removed',
   BRAND_UPDATED: 'Brand Updated',

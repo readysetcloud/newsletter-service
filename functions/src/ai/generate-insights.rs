@@ -50,9 +50,12 @@ async fn function_handler(
     converse(&model_id, &system_prompt, &user_prompt, tools, options).await?;
 
     // Load insights from DynamoDB
-    let insights = load_insights(&payload.tenant_id, &payload.issue_id).await?;
+    let (insights, insights_v2) = load_insights(&payload.tenant_id, &payload.issue_id).await?;
 
-    Ok(GenerateInsightsResponse { insights })
+    Ok(GenerateInsightsResponse {
+        insights,
+        insights_v2,
+    })
 }
 
 async fn get_historical_data(tenant_id: &str, issue_id: &str) -> Result<Vec<Value>, FunctionError> {
@@ -157,7 +160,10 @@ fn attribute_value_to_json(value: &AttributeValue) -> Result<Value, FunctionErro
     }
 }
 
-async fn load_insights(tenant_id: &str, issue_id: &str) -> Result<Vec<String>, FunctionError> {
+async fn load_insights(
+    tenant_id: &str,
+    issue_id: &str,
+) -> Result<(Vec<String>, Option<Value>), FunctionError> {
     let table_name = std::env::var("TABLE_NAME")
         .map_err(|_| FunctionError::MissingField("TABLE_NAME".to_string()))?;
 
@@ -184,7 +190,7 @@ async fn load_insights(tenant_id: &str, issue_id: &str) -> Result<Vec<String>, F
                 issue_id = issue_id,
                 "Analytics were not generated for this issue"
             );
-            return Ok(Vec::new());
+            return Ok((Vec::new(), None));
         }
     };
 
@@ -196,7 +202,7 @@ async fn load_insights(tenant_id: &str, issue_id: &str) -> Result<Vec<String>, F
                 issue_id = issue_id,
                 "Insights were not generated for this issue"
             );
-            return Ok(Vec::new());
+            return Ok((Vec::new(), None));
         }
     };
 
@@ -208,7 +214,11 @@ async fn load_insights(tenant_id: &str, issue_id: &str) -> Result<Vec<String>, F
         _ => Vec::new(),
     };
 
-    Ok(insights)
+    let insights_v2 = item
+        .get("insightsV2")
+        .and_then(|attr| attribute_value_to_json(attr).ok());
+
+    Ok((insights, insights_v2))
 }
 
 fn get_insights_system_prompt() -> String {
@@ -228,6 +238,8 @@ You will receive:
    - engagementQuality: deeper engagement metrics (clicksPerOpener, clicksPerSubscriber, opensFirst1hPct, opensFirst6hPct)
    - trends: historical performance over last 4 issues with rolling averages and best-in-last-4 values
 4) "Historical Issues": an array of prior issues in the same (or very similar) shape
+5) "insightCandidates": optional array of precomputed insight candidates with evidence and recommendations
+6) "eventAnalytics": optional deep analytics (decay, device, traffic, engagement type, geo)
 
 Some fields may be missing. Use what is available. Do not invent exact metric values.
 
@@ -240,13 +252,14 @@ Some fields may be missing. Use what is available. Do not invent exact metric va
    - Examine engagementQuality for subscriber behavior patterns
    - Review trends data to identify patterns over the last 4 issues
    - Consider the subject line effectiveness based on open rate performance
-2) Compare "Current Issue Data" against "Historical Issues" for additional context
-3) Generate 2-5 insights that are:
+2) If "insightCandidates" exists and is non-empty, use it as the primary source of insights and do not invent new metrics.
+3) Compare "Current Issue Data" against "Historical Issues" for additional context when candidates are missing or incomplete.
+4) Generate 2-5 insights that are:
    - specific to the metrics provided, leveraging the new benchmark and health data
    - actionable within the next issue (subject, structure, content mix, link strategy, deliverability/list hygiene)
    - phrased as a recommendation + short rationale tied to observed data
    - prioritized based on healthScore status and benchmark deviations
-4) Focus on:
+5) Focus on:
    - Metrics significantly above or below benchmarks (>10% deviation)
    - Health score concerns (if status is "Needs Attention" or "OK")
    - Content performance patterns (highly concentrated vs broad distribution)
@@ -254,9 +267,9 @@ Some fields may be missing. Use what is available. Do not invent exact metric va
    - Engagement quality signals (low clicks per opener, slow open velocity)
    - Trend patterns (consistent decline, improvement, volatility)
    - Subject line effectiveness (if open rate is significantly different from benchmark, consider subject line impact)
-5) Avoid generic advice. Each insight must reference at least one concrete metric or comparative observation (e.g., "Open rate 15% below 3-week average" or "Top link captured 60% of clicks indicating highly concentrated engagement").
-6) Do not output more than 5 insights. Do not output fewer than 2 insights unless data is severely incomplete (then output 2 best-effort insights).
-7) Do not mention internal IDs like pk/sk/GSI keys. Do not include raw URLs unless the topPerformingLink is directly relevant to an insight.
+6) Avoid generic advice. Each insight must reference at least one concrete metric or comparative observation (e.g., "Open rate 15% below 3-week average" or "Top link captured 60% of clicks indicating highly concentrated engagement").
+7) Do not output more than 5 insights. Do not output fewer than 2 insights unless data is severely incomplete (then output 2 best-effort insights).
+8) Do not mention internal IDs like pk/sk/GSI keys. Do not include raw URLs unless the topPerformingLink is directly relevant to an insight.
 
 ## Expectation
 You MUST call the tool createInsights exactly once.
@@ -264,6 +277,24 @@ The tool payload must match this schema:
 {
   "issueId": string,
   "insights": string[] // 2 to 5 items
+  "insightsV2"?: [
+    {
+      "type": string,
+      "severity": "info" | "watch" | "action",
+      "confidence": "low" | "med" | "high",
+      "summary": string,
+      "recommendation": string,
+      "evidence"?: [
+        {
+          "metric": string,
+          "value"?: string,
+          "benchmark"?: string,
+          "deltaPct"?: string,
+          "note"?: string
+        }
+      ]
+    }
+  ]
 }
 
 ## Narrowing / Output Rules
@@ -272,6 +303,8 @@ The tool payload must match this schema:
 - If "Historical Issues" is empty, generate insights from "Current Issue Data" using benchmarks and health score (still actionable).
 - Prioritize insights based on health score status and benchmark deviations.
 - When subject line is provided and open rate deviates significantly from benchmark, consider mentioning subject line effectiveness.
+- If "insightCandidates" exists, include "insightsV2" mapped from the chosen candidates (carry over their type, severity, confidence, recommendation, and evidence).
+- For "insightsV2" evidence values, convert numbers to strings (tool schema expects strings).
 "#.to_string()
 }
 

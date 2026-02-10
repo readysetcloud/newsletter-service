@@ -9,6 +9,7 @@ const LINK_EXPIRATION_DAYS = 14;
 export const handler = async (state) => {
   const linkRegex = /\[.*?\]\((.*?)\)/g;
   let matches;
+  let linkPosition = 0;
 
   let updatedContent = state.content;
   while ((matches = linkRegex.exec(state.content)) !== null) {
@@ -18,15 +19,19 @@ export const handler = async (state) => {
     }
 
     if (matches[1] && matches[1].indexOf('mailto:') === -1) {
-      await initializeLinkRecord(state.tenantId, state.issueId, matches[1]);
-      updatedContent = updatedContent.replace(matches[1], `${process.env.REDIRECT_URL}?u=${encodeURI(matches[1])}&cid=${encodeURIComponent(`${state.tenantId}_${state.issueId}`)}&s=__EMAIL_HASH__`)
+      linkPosition += 1;
+      await initializeLinkRecord(state.tenantId, state.issueId, matches[1], linkPosition);
+      updatedContent = updatedContent.replace(
+        matches[1],
+        `${process.env.REDIRECT_URL}?u=${encodeURI(matches[1])}&cid=${encodeURIComponent(`${state.tenantId}_${state.issueId}`)}&s=__EMAIL_HASH__`
+      );
     }
   }
 
   return { content: updatedContent };
 };
 
-const initializeLinkRecord = async (tenantId, issueId, link) => {
+const initializeLinkRecord = async (tenantId, issueId, link, position) => {
   try {
     await ddb.send(new PutItemCommand({
       TableName: process.env.TABLE_NAME,
@@ -34,6 +39,7 @@ const initializeLinkRecord = async (tenantId, issueId, link) => {
         pk: `${tenantId}#${issueId}`,
         sk: `link#${hash(link)}`,
         url: link,
+        position,
         clicks_total: 0,
         byDay: {},
         ttl: Math.floor(Date.now() / 1000) + (LINK_EXPIRATION_DAYS * 24 * 60 * 60)

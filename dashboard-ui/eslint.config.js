@@ -81,6 +81,7 @@ export default [
       ...jsxA11y.configs.recommended.rules,
       'no-undef': 'off',
       'react/react-in-jsx-scope': 'off',
+      'react/prop-types': 'off', // TypeScript handles prop validation
       'react-refresh/only-export-components': [
         'warn',
         { allowConstantExport: true },

@@ -1,11 +1,13 @@
 /* eslint-disable react-refresh/only-export-components */
 import { useState, useMemo, useCallback } from 'react';
 import { scaleLinear } from 'd3-scale';
+import { ZoomIn, ZoomOut } from 'lucide-react';
 import { MapContainer } from './MapContainer';
 import { MetricToggle, type GeoMetric } from './MetricToggle';
 import { ColorLegend } from './ColorLegend';
 import { Attribution } from './Attribution';
 import { Tooltip } from './Tooltip';
+import { TopCountriesList } from './TopCountriesList';
 
 export interface GeoDistributionData {
   country: string;
@@ -49,6 +51,8 @@ interface GeoMapState {
   hoveredCountry: string | null;
   tooltipContent: TooltipData | null;
   selectedMetric: GeoMetric;
+  highlightedCountry: string | null;
+  zoomLevel: number;
 }
 
 export function calculateEngagementRate(clicks: number, opens: number): number | null {
@@ -147,7 +151,9 @@ export function GeoMap({
   const [state, setState] = useState<GeoMapState>({
     hoveredCountry: null,
     tooltipContent: null,
-    selectedMetric: controlledMetric || 'clicks'
+    selectedMetric: controlledMetric || 'clicks',
+    highlightedCountry: null,
+    zoomLevel: 1
   });
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
 
@@ -168,6 +174,21 @@ export function GeoMap({
   const handleMetricChange = (metric: GeoMetric) => {
     setState(prev => ({ ...prev, selectedMetric: metric }));
     onMetricChange?.(metric);
+  };
+
+  const handleCountryClick = (countryCode: string) => {
+    setState(prev => ({
+      ...prev,
+      highlightedCountry: prev.highlightedCountry === countryCode ? null : countryCode
+    }));
+  };
+
+  const handleZoomIn = () => {
+    setState(prev => ({ ...prev, zoomLevel: Math.min(prev.zoomLevel + 0.5, 3) }));
+  };
+
+  const handleZoomOut = () => {
+    setState(prev => ({ ...prev, zoomLevel: Math.max(prev.zoomLevel - 0.5, 1) }));
   };
 
   const colorScale = useMemo(
@@ -245,31 +266,80 @@ export function GeoMap({
 
   return (
     <div className={`geo-map ${className}`}>
-      <MetricToggle
-        selectedMetric={state.selectedMetric}
-        onMetricChange={handleMetricChange}
-      />
-      <div className="text-xs text-muted-foreground mb-3">
-        Totals show event counts. Unique metrics show distinct recipients.
-      </div>
-
-      <div className="relative bg-gray-50 rounded-lg p-4" style={{ height: '500px' }}>
-        <MapContainer
-          geoDistribution={filteredGeoDistribution}
+      <div className="mb-4">
+        <MetricToggle
           selectedMetric={state.selectedMetric}
-          colorScale={colorScale}
-          onCountryHover={handleCountryHover}
-          countryCodeMap={countryCodeMap}
+          onMetricChange={handleMetricChange}
         />
-        <Tooltip content={state.tooltipContent} position={tooltipPosition} />
+        <div className="text-xs text-muted-foreground mt-2">
+          Totals show event counts. Unique metrics show distinct recipients.
+        </div>
       </div>
 
-      <ColorLegend
-        minValue={minValue}
-        maxValue={maxValue}
-        colorScale={colorScale}
-        metricLabel={metricLabels[state.selectedMetric]}
-      />
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+        <div className="lg:col-span-2">
+          <div className="relative bg-gray-50 rounded-lg p-4" style={{ height: '500px' }}>
+            <MapContainer
+              geoDistribution={filteredGeoDistribution}
+              selectedMetric={state.selectedMetric}
+              colorScale={colorScale}
+              onCountryHover={handleCountryHover}
+              countryCodeMap={countryCodeMap}
+              highlightedCountry={state.highlightedCountry}
+              zoomLevel={state.zoomLevel}
+            />
+            <Tooltip content={state.tooltipContent} position={tooltipPosition} />
+
+            {/* Zoom controls for mobile */}
+            <div className="absolute bottom-4 right-4 flex flex-col gap-2 lg:hidden">
+              <button
+                onClick={handleZoomIn}
+                disabled={state.zoomLevel >= 3}
+                className="bg-white border border-border rounded-lg p-2 shadow-md hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-blue-500"
+                aria-label="Zoom in"
+              >
+                <ZoomIn className="w-5 h-5" />
+              </button>
+              <button
+                onClick={handleZoomOut}
+                disabled={state.zoomLevel <= 1}
+                className="bg-white border border-border rounded-lg p-2 shadow-md hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-blue-500"
+                aria-label="Zoom out"
+              >
+                <ZoomOut className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <ColorLegend
+              minValue={minValue}
+              maxValue={maxValue}
+              colorScale={colorScale}
+              metricLabel={metricLabels[state.selectedMetric]}
+            />
+          </div>
+        </div>
+
+        <div className="lg:col-span-1">
+          <TopCountriesList
+            geoDistribution={filteredGeoDistribution}
+            selectedMetric={state.selectedMetric}
+            onCountryClick={handleCountryClick}
+            highlightedCountry={state.highlightedCountry}
+            maxCountries={5}
+          />
+        </div>
+      </div>
+
+      <div className="mt-4 text-xs text-muted-foreground bg-muted/30 p-3 rounded-lg">
+        <p className="font-semibold mb-1">Understanding Geographic Analytics:</p>
+        <p>
+          The map shows where your audience is engaging from. Darker colors indicate higher engagement.
+          Click on countries in the top list to highlight them on the map. Use the metric toggle to switch
+          between total events and unique recipients. Geographic data is based on IP address geolocation.
+        </p>
+      </div>
 
       <Attribution />
     </div>

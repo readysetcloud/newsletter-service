@@ -154,3 +154,218 @@ export const IssueDetailSkeleton: React.FC = () => {
   );
 };
 
+// Skeleton for InsightsHeroSection
+export const InsightsHeroSkeleton: React.FC = () => {
+  return (
+    <div className="bg-gradient-to-br from-primary-50 to-primary-100 dark:from-primary-900/20 dark:to-primary-800/20 rounded-lg shadow p-6">
+      <Skeleton className="h-6 w-48 mb-4" />
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {[1, 2, 3].map(i => (
+          <div key={i} className="bg-surface rounded-lg p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Skeleton className="h-8 w-8 rounded-full" />
+              <Skeleton className="h-5 w-24" />
+            </div>
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-5/6" />
+            <Skeleton className="h-3 w-20 rounded-full" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// Skeleton for KeyMetricsSummary
+export const KeyMetricsSummarySkeleton: React.FC = () => {
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+      {[1, 2, 3, 4, 5].map(i => (
+        <div key={i} className="bg-surface rounded-lg shadow p-4 space-y-2 hover:shadow-md transition-shadow">
+          <Skeleton className="h-8 w-20" />
+          <Skeleton className="h-4 w-24" />
+          <div className="flex items-center gap-2">
+            <Skeleton className="h-4 w-4" />
+            <Skeleton className="h-3 w-16" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+// Skeleton for QuickNavigation
+export const QuickNavigationSkeleton: React.FC = () => {
+  return (
+    <div className="bg-surface rounded-lg shadow p-3">
+      <div className="flex items-center gap-4 overflow-x-auto">
+        {[1, 2, 3, 4].map(i => (
+          <div key={i} className="flex items-center gap-2 px-4 py-2">
+            <Skeleton className="h-5 w-5" />
+            <Skeleton className="h-4 w-24" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// Skeleton for CollapsibleSection
+export const CollapsibleSectionSkeleton: React.FC = () => {
+  return (
+    <div className="bg-surface rounded-lg shadow">
+      <div className="p-4 border-b border-border">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Skeleton className="h-5 w-5" />
+            <div className="space-y-1">
+              <Skeleton className="h-5 w-48" />
+              <Skeleton className="h-3 w-64" />
+            </div>
+          </div>
+          <Skeleton className="h-6 w-6" />
+        </div>
+      </div>
+      <div className="p-6 space-y-4">
+        <Skeleton className="h-64 w-full" />
+        <Skeleton className="h-48 w-full" />
+      </div>
+    </div>
+  );
+};
+
+// Skeleton for DeliverabilityHealthCard
+export const DeliverabilityHealthSkeleton: React.FC = () => {
+  return (
+    <div className="bg-surface rounded-lg shadow p-6 space-y-4">
+      <div className="flex items-center gap-4">
+        <Skeleton className="h-16 w-16 rounded-full" />
+        <div className="space-y-2">
+          <Skeleton className="h-6 w-32" />
+          <Skeleton className="h-4 w-48" />
+        </div>
+      </div>
+      <div className="space-y-3">
+        <div className="space-y-2">
+          <div className="flex justify-between">
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="h-4 w-12" />
+          </div>
+          <Skeleton className="h-2 w-full rounded-full" />
+        </div>
+        <div className="space-y-2">
+          <div className="flex justify-between">
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="h-4 w-12" />
+          </div>
+          <Skeleton className="h-2 w-full rounded-full" />
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Skeleton for GeoMap
+export const GeoMapSkeleton: React.FC = () => {
+  return (
+    <div className="bg-surface rounded-lg shadow p-6 space-y-4">
+      <div className="flex items-center justify-between">
+        <Skeleton className="h-6 w-48" />
+        <Skeleton className="h-8 w-32" />
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2">
+          <Skeleton className="h-96 w-full rounded" />
+        </div>
+        <div className="space-y-2">
+          <Skeleton className="h-5 w-32 mb-3" />
+          {[1, 2, 3, 4, 5].map(i => (
+            <div key={i} className="flex items-center justify-between p-2 bg-muted rounded">
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="h-4 w-16" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Skeleton for LinkPerformanceTable
+export const LinkPerformanceSkeleton: React.FC = () => {
+  return (
+    <div className="bg-surface rounded-lg shadow overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full">
+          <thead className="bg-muted">
+            <tr>
+              <th className="px-4 py-3 text-left">
+                <Skeleton className="h-4 w-24" />
+              </th>
+              <th className="px-4 py-3 text-left">
+                <Skeleton className="h-4 w-16" />
+              </th>
+              <th className="px-4 py-3 text-left">
+                <Skeleton className="h-4 w-20" />
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {[1, 2, 3, 4, 5].map(i => (
+              <tr key={i}>
+                <td className="px-4 py-3">
+                  <Skeleton className="h-4 w-48" />
+                </td>
+                <td className="px-4 py-3">
+                  <Skeleton className="h-4 w-12" />
+                </td>
+                <td className="px-4 py-3">
+                  <Skeleton className="h-4 w-16" />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+// Skeleton for DecayChart
+export const DecayChartSkeleton: React.FC = () => {
+  return (
+    <div className="bg-surface rounded-lg shadow p-6">
+      <Skeleton className="h-6 w-48 mb-4" />
+      <div className="space-y-2 mb-4">
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-3/4" />
+      </div>
+      <Skeleton className="h-64 w-full rounded" />
+    </div>
+  );
+};
+
+// Skeleton for ComparisonCard
+export const ComparisonCardSkeleton: React.FC = () => {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {[1, 2, 3].map(i => (
+        <div key={i} className="bg-surface rounded-lg shadow p-6 space-y-4">
+          <Skeleton className="h-5 w-32" />
+          <div className="space-y-3">
+            {[1, 2, 3].map(j => (
+              <div key={j} className="flex items-center justify-between">
+                <Skeleton className="h-4 w-24" />
+                <div className="flex items-center gap-2">
+                  <Skeleton className="h-4 w-4" />
+                  <Skeleton className="h-4 w-16" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+

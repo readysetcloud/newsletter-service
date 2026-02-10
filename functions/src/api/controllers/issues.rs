@@ -112,6 +112,10 @@ pub struct GetIssueResponse {
     metadata: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stats: Option<IssueStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    insights: Option<Vec<String>>,
+    #[serde(rename = "insightsV2", skip_serializing_if = "Option::is_none")]
+    insights_v2: Option<Vec<InsightV2>>,
 }
 
 // Stats structure for issue engagement metrics
@@ -207,6 +211,31 @@ pub struct TrendsQuery {
 
 fn default_issue_count() -> i32 {
     10
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct InsightEvidence {
+    metric: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    benchmark: Option<String>,
+    #[serde(rename = "deltaPct", skip_serializing_if = "Option::is_none")]
+    delta_pct: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct InsightV2 {
+    #[serde(rename = "type")]
+    insight_type: String,
+    severity: String,
+    confidence: String,
+    summary: String,
+    recommendation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evidence: Option<Vec<InsightEvidence>>,
 }
 
 // Internal data structure for issue records from DynamoDB
@@ -321,8 +350,12 @@ async fn handle_get_issue(
 
     let issue = get_issue_by_id(&tenant_id, &issue_id).await?;
     let stats = get_issue_stats(&tenant_id, &issue_id).await.ok();
+    let insights = get_issue_insights(&tenant_id, &issue_id)
+        .await
+        .ok()
+        .flatten();
 
-    let response_data = build_issue_response(issue, stats);
+    let response_data = build_issue_response(issue, stats, insights);
 
     response::format_response(200, response_data)
 }
@@ -1027,6 +1060,64 @@ fn parse_insights_map(
     Ok(serde_json::Value::Object(json_map))
 }
 
+#[derive(Clone)]
+struct IssueInsights {
+    insights: Option<Vec<String>>,
+    insights_v2: Option<Vec<InsightV2>>,
+}
+
+async fn get_issue_insights(
+    tenant_id: &str,
+    issue_id: &str,
+) -> Result<Option<IssueInsights>, AppError> {
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+    let table_name = std::env::var("TABLE_NAME")
+        .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
+
+    let issue_number = issue_id
+        .parse::<i32>()
+        .map_err(|_| AppError::BadRequest("Invalid issue ID format".to_string()))?;
+
+    let pk = format!("{}#{}", tenant_id, issue_number);
+    let sk = "analytics";
+
+    let result = ddb_client
+        .get_item()
+        .table_name(&table_name)
+        .key("pk", AttributeValue::S(pk))
+        .key("sk", AttributeValue::S(sk.to_string()))
+        .send()
+        .await?;
+
+    let item = match result.item() {
+        Some(item) => item,
+        None => return Ok(None),
+    };
+
+    let insights = item.get("insights").and_then(|attr| match attr {
+        AttributeValue::L(list) => Some(
+            list.iter()
+                .filter_map(|v| v.as_s().ok().map(|s| s.to_string()))
+                .collect::<Vec<String>>(),
+        ),
+        _ => None,
+    });
+
+    let insights_v2 = item
+        .get("insightsV2")
+        .and_then(|attr| attribute_value_to_json(attr).ok())
+        .and_then(|value| serde_json::from_value::<Vec<InsightV2>>(value).ok());
+
+    if insights.is_none() && insights_v2.is_none() {
+        return Ok(None);
+    }
+
+    Ok(Some(IssueInsights {
+        insights,
+        insights_v2,
+    }))
+}
+
 fn attribute_value_to_json(value: &AttributeValue) -> Result<serde_json::Value, AppError> {
     match value {
         AttributeValue::S(s) => Ok(serde_json::Value::String(s.clone())),
@@ -1581,7 +1672,9 @@ async fn update_issue_record(
     let updated_issue = parse_issue_record(updated_item)?;
     let stats = get_issue_stats(tenant_id, issue_id).await.ok();
 
-    Ok(build_issue_response(updated_issue, stats))
+    let insights = get_issue_insights(tenant_id, issue_id).await.ok().flatten();
+
+    Ok(build_issue_response(updated_issue, stats, insights))
 }
 
 async fn delete_issue_records(tenant_id: &str, issue_id: &str) -> Result<(), AppError> {
@@ -1764,7 +1857,11 @@ async fn publish_issue_published_event(
     }
 }
 
-fn build_issue_response(issue: IssueRecord, stats: Option<IssueStats>) -> GetIssueResponse {
+fn build_issue_response(
+    issue: IssueRecord,
+    stats: Option<IssueStats>,
+    insights: Option<IssueInsights>,
+) -> GetIssueResponse {
     GetIssueResponse {
         id: issue.issue_number.to_string(),
         issue_number: issue.issue_number,
@@ -1777,6 +1874,8 @@ fn build_issue_response(issue: IssueRecord, stats: Option<IssueStats>) -> GetIss
         scheduled_at: issue.scheduled_at,
         metadata: issue.metadata,
         stats,
+        insights: insights.as_ref().and_then(|data| data.insights.clone()),
+        insights_v2: insights.and_then(|data| data.insights_v2),
     }
 }
 
@@ -2054,7 +2153,7 @@ mod tests {
             analytics: None,
         });
 
-        let response = build_issue_response(issue, stats);
+        let response = build_issue_response(issue, stats, None);
 
         assert_eq!(response.id, "42");
         assert_eq!(response.issue_number, 42);
@@ -2082,7 +2181,7 @@ mod tests {
             metadata: None,
         };
 
-        let response = build_issue_response(issue, None);
+        let response = build_issue_response(issue, None, None);
 
         assert_eq!(response.id, "1");
         assert_eq!(response.issue_number, 1);
@@ -2436,7 +2535,7 @@ mod tests {
                 None
             };
 
-            let response = build_issue_response(issue, stats.clone());
+            let response = build_issue_response(issue, stats.clone(), None);
 
             prop_assert_eq!(response.issue_number, issue_number);
             prop_assert_eq!(&response.subject, &subject);
@@ -2922,6 +3021,8 @@ mod tests {
             scheduled_at: None,
             metadata: None,
             stats: None,
+            insights: None,
+            insights_v2: None,
         };
 
         let result = publish_event(tenant_id, event_type, &data).await;

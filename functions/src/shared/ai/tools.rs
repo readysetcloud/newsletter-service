@@ -2,7 +2,7 @@ use super::error::ToolError;
 use aws_sdk_bedrockruntime::types::{Tool, ToolInputSchema, ToolSpecification};
 use aws_sdk_dynamodb::types::AttributeValue;
 use aws_sdk_dynamodb::Client as DynamoDbClient;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
@@ -103,6 +103,44 @@ pub async fn create_insights_handler(
         #[serde(rename = "issueId")]
         issue_id: String,
         insights: Vec<String>,
+        #[serde(rename = "insightsV2")]
+        insights_v2: Option<Vec<InsightV2>>,
+    }
+
+    #[derive(Deserialize, Serialize)]
+    struct InsightEvidence {
+        metric: String,
+        value: Option<String>,
+        benchmark: Option<String>,
+        #[serde(rename = "deltaPct")]
+        delta_pct: Option<String>,
+        note: Option<String>,
+    }
+
+    #[derive(Deserialize, Serialize)]
+    struct InsightV2 {
+        #[serde(rename = "type")]
+        insight_type: String,
+        severity: String,
+        confidence: String,
+        summary: String,
+        recommendation: String,
+        evidence: Option<Vec<InsightEvidence>>,
+    }
+
+    fn json_to_attr(value: &Value) -> AttributeValue {
+        match value {
+            Value::Null => AttributeValue::Null(true),
+            Value::Bool(b) => AttributeValue::Bool(*b),
+            Value::Number(n) => AttributeValue::N(n.to_string()),
+            Value::String(s) => AttributeValue::S(s.clone()),
+            Value::Array(arr) => AttributeValue::L(arr.iter().map(json_to_attr).collect()),
+            Value::Object(obj) => AttributeValue::M(
+                obj.iter()
+                    .map(|(k, v)| (k.clone(), json_to_attr(v)))
+                    .collect(),
+            ),
+        }
     }
 
     let parsed: CreateInsightsInput =
@@ -112,6 +150,36 @@ pub async fn create_insights_handler(
         return Err(ToolError::InvalidInput(
             "Insights array must contain 1-5 items".to_string(),
         ));
+    }
+
+    if let Some(ref insights_v2) = parsed.insights_v2 {
+        if insights_v2.is_empty() || insights_v2.len() > 5 {
+            return Err(ToolError::InvalidInput(
+                "insightsV2 array must contain 1-5 items".to_string(),
+            ));
+        }
+
+        for insight in insights_v2 {
+            if insight.summary.trim().is_empty() || insight.recommendation.trim().is_empty() {
+                return Err(ToolError::InvalidInput(
+                    "insightsV2 items must include summary and recommendation".to_string(),
+                ));
+            }
+
+            let severity = insight.severity.as_str();
+            if !matches!(severity, "info" | "watch" | "action") {
+                return Err(ToolError::InvalidInput(
+                    "insightsV2 severity must be info, watch, or action".to_string(),
+                ));
+            }
+
+            let confidence = insight.confidence.as_str();
+            if !matches!(confidence, "low" | "med" | "high") {
+                return Err(ToolError::InvalidInput(
+                    "insightsV2 confidence must be low, med, or high".to_string(),
+                ));
+            }
+        }
     }
 
     let table_name = std::env::var("TABLE_NAME")
@@ -131,14 +199,40 @@ pub async fn create_insights_handler(
             .collect(),
     );
 
+    let mut update_expression = "SET #insights = :insights".to_string();
+    let mut expression_attribute_names = HashMap::new();
+    let mut expression_attribute_values = HashMap::new();
+
+    expression_attribute_names.insert("#insights".to_string(), "insights".to_string());
+    expression_attribute_values.insert(":insights".to_string(), insights_attr);
+
+    if let Some(insights_v2) = parsed.insights_v2 {
+        let insights_v2_value = serde_json::to_value(&insights_v2)
+            .map_err(|e| ToolError::InvalidInput(e.to_string()))?;
+        let insights_v2_attr = json_to_attr(&insights_v2_value);
+
+        update_expression
+            .push_str(", #insightsV2 = :insightsV2, #insightsVersion = :insightsVersion");
+        expression_attribute_names.insert("#insightsV2".to_string(), "insightsV2".to_string());
+        expression_attribute_names.insert(
+            "#insightsVersion".to_string(),
+            "insightsVersion".to_string(),
+        );
+        expression_attribute_values.insert(":insightsV2".to_string(), insights_v2_attr);
+        expression_attribute_values.insert(
+            ":insightsVersion".to_string(),
+            AttributeValue::N("2".to_string()),
+        );
+    }
+
     ddb_client
         .update_item()
         .table_name(table_name)
         .key("pk", AttributeValue::S(pk.clone()))
         .key("sk", AttributeValue::S(sk.to_string()))
-        .update_expression("SET #insights = :insights")
-        .expression_attribute_names("#insights", "insights")
-        .expression_attribute_values(":insights", insights_attr)
+        .update_expression(update_expression)
+        .set_expression_attribute_names(Some(expression_attribute_names))
+        .set_expression_attribute_values(Some(expression_attribute_values))
         .send()
         .await
         .map_err(|e| {
@@ -231,6 +325,36 @@ pub fn get_create_insights_tool() -> ToolDefinition {
                 "minItems": 1,
                 "maxItems": 5,
                 "description": "List of actionable insights"
+            },
+            "insightsV2": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "type": { "type": "string" },
+                        "severity": { "type": "string", "enum": ["info", "watch", "action"] },
+                        "confidence": { "type": "string", "enum": ["low", "med", "high"] },
+                        "summary": { "type": "string" },
+                        "recommendation": { "type": "string" },
+                        "evidence": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "metric": { "type": "string" },
+                                    "value": { "type": "string" },
+                                    "benchmark": { "type": "string" },
+                                    "deltaPct": { "type": "string" },
+                                    "note": { "type": "string" }
+                                }
+                            }
+                        }
+                    },
+                    "required": ["type", "severity", "confidence", "summary", "recommendation"]
+                },
+                "minItems": 1,
+                "maxItems": 5,
+                "description": "Structured insights with evidence"
             }
         },
         "required": ["issueId", "insights"]
@@ -364,6 +488,66 @@ mod tests {
 
         if let Some(val) = _guard {
             std::env::set_var("TABLE_NAME", val);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_insights_rejects_invalid_insights_v2_severity() {
+        let input = serde_json::json!({
+            "issueId": "test-issue-123",
+            "insights": ["Valid insight"],
+            "insightsV2": [{
+                "type": "deliverability",
+                "severity": "critical",
+                "confidence": "high",
+                "summary": "Bounce rate spiked.",
+                "recommendation": "Run list hygiene."
+            }]
+        });
+
+        let options = ConverseOptions {
+            tenant_id: "test-tenant".to_string(),
+            user_id: None,
+        };
+
+        let result = create_insights_handler(input, &options).await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ToolError::InvalidInput(msg) => {
+                assert_eq!(msg, "insightsV2 severity must be info, watch, or action");
+            }
+            _ => panic!("Expected InvalidInput error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_insights_rejects_invalid_insights_v2_confidence() {
+        let input = serde_json::json!({
+            "issueId": "test-issue-123",
+            "insights": ["Valid insight"],
+            "insightsV2": [{
+                "type": "deliverability",
+                "severity": "action",
+                "confidence": "certain",
+                "summary": "Bounce rate spiked.",
+                "recommendation": "Run list hygiene."
+            }]
+        });
+
+        let options = ConverseOptions {
+            tenant_id: "test-tenant".to_string(),
+            user_id: None,
+        };
+
+        let result = create_insights_handler(input, &options).await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ToolError::InvalidInput(msg) => {
+                assert_eq!(msg, "insightsV2 confidence must be low, med, or high");
+            }
+            _ => panic!("Expected InvalidInput error"),
         }
     }
 

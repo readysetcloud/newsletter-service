@@ -15,17 +15,61 @@
             <td style="background-color:#4a90e2;color:#ffffff;padding:30px 20px;text-align:center;">
               <h1 style="margin:0;font-size:24px;font-weight:bold;">📊 Newsletter Issue {{issueName}} Performance</h1>
               <p style="margin:10px 0 0 0;font-size:16px;color:#e6f2ff;">Issue analytics summary</p>
-              {{#if insights}}
-              <div style="margin:15px 0 0 0;text-align:left;">
-                <ul style="margin:0;padding:0 0 0 20px;font-size:14px;line-height:1.6;">
-                  {{#each insights}}
-                  <li style="margin:5px 0;">{{this}}</li>
-                  {{/each}}
-                </ul>
+              {{#if issueUrl}}
+              <div style="margin:18px 0 0 0;">
+                <a href="{{issueUrl}}" style="display:inline-block;background-color:#ffffff;color:#4a90e2;text-decoration:none;padding:10px 18px;border-radius:20px;font-weight:bold;font-size:14px;">
+                  View full report in dashboard
+                </a>
               </div>
               {{/if}}
             </td>
           </tr>
+
+          <!-- Quick Summary -->
+          {{#if summaryStats}}
+          <tr>
+            <td style="padding:20px;background-color:#f8f9fa;">
+              <h3 style="margin:0 0 10px 0;font-size:18px;color:#333;">Quick Summary</h3>
+              <table width="100%" cellpadding="8" cellspacing="0" border="0">
+                {{#each summaryStats}}
+                <tr>
+                  <td style="padding:6px 0;color:#666;font-size:14px;width:45%;">{{this.label}}</td>
+                  <td style="padding:6px 0;color:#222;font-size:14px;font-weight:bold;">{{this.value}}</td>
+                </tr>
+                {{/each}}
+              </table>
+            </td>
+          </tr>
+          {{/if}}
+
+          <!-- Insights -->
+          {{#if insightsV2}}
+          <tr>
+            <td style="padding:20px;">
+              <h3 style="margin:0 0 12px 0;font-size:18px;color:#333;border-bottom:2px solid #e9ecef;padding-bottom:8px;">Key Insights</h3>
+              {{#each insightsV2}}
+              <div style="border:1px solid #e9ecef;border-left:5px solid {{#if (eq this.severity "action")}}#dc3545{{else if (eq this.severity "watch")}}#f0ad4e{{else}}#28a745{{/if}};padding:12px;margin-bottom:10px;border-radius:6px;">
+                <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.6px;color:#666;margin-bottom:6px;">
+                  {{this.type}} â€¢ {{this.severity}} â€¢ {{this.confidence}} confidence
+                </div>
+                <div style="font-size:14px;color:#222;font-weight:bold;margin-bottom:4px;">{{this.summary}}</div>
+                <div style="font-size:13px;color:#444;">{{this.recommendation}}</div>
+              </div>
+              {{/each}}
+            </td>
+          </tr>
+          {{else if insights}}
+          <tr>
+            <td style="padding:20px;">
+              <h3 style="margin:0 0 12px 0;font-size:18px;color:#333;border-bottom:2px solid #e9ecef;padding-bottom:8px;">Key Insights</h3>
+              <ul style="margin:0;padding:0 0 0 20px;font-size:14px;line-height:1.6;color:#333;">
+                {{#each insights}}
+                <li style="margin:6px 0;">{{this}}</li>
+                {{/each}}
+              </ul>
+            </td>
+          </tr>
+          {{/if}}
 
           <!-- Health Scoreboard -->
           {{#if healthScore}}

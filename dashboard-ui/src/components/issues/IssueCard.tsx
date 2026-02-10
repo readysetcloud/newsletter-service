@@ -1,9 +1,9 @@
-/* eslint-disable react/prop-types */
-import React from 'react';
+import React, { useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { Calendar, Eye, MousePointerClick } from 'lucide-react';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '../ui/Card';
 import { IssueStatusBadge } from './IssueStatusBadge';
+import { usePrefetchIssueDetail, shouldPrefetch } from '../../utils/prefetch';
 import type { IssueListItem } from '../../types/issues';
 
 /**
@@ -21,6 +21,8 @@ export interface IssueCardProps {
  * Shows issue subject, status, dates, and engagement metrics in a compact format
  */
 export const IssueCard: React.FC<IssueCardProps> = React.memo(({ issue }) => {
+  const { prefetchIssueComponents } = usePrefetchIssueDetail();
+
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
       year: 'numeric',
@@ -29,11 +31,21 @@ export const IssueCard: React.FC<IssueCardProps> = React.memo(({ issue }) => {
     });
   };
 
+  const handleMouseEnter = useCallback(() => {
+    // Only prefetch on fast connections
+    if (shouldPrefetch()) {
+      prefetchIssueComponents();
+    }
+  }, [prefetchIssueComponents]);
+
   const displayDate = issue.publishedAt || issue.scheduledAt || issue.createdAt;
   const dateLabel = issue.publishedAt ? 'Published' : issue.scheduledAt ? 'Scheduled' : 'Created';
 
   return (
-    <Card className="hover:shadow-lg hover:border-primary-200 transition-all duration-200">
+    <Card
+      className="hover:shadow-lg hover:border-primary-200 transition-all duration-200"
+      onMouseEnter={handleMouseEnter}
+    >
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-3">
           <CardTitle className="text-base sm:text-lg flex-1 min-w-0">

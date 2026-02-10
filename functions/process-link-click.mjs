@@ -150,8 +150,7 @@ const runInBatches = async (promises, batchSize) => {
 };
 
 const captureClickEvent = async (msg, eventTimestamp, statsCache) => {
-  const { cid, u: linkUrl, src, ip, s: subscriberEmailHash } = msg;
-
+  const { cid, u: linkUrl, src, ip, s: subscriberEmailHash, p: linkPosition } = msg;
   const validatedSource = (src === 'email' || src === 'web') ? src : 'web';
 
   const clickedAt = new Date(eventTimestamp || Date.now());
@@ -200,7 +199,7 @@ const captureClickEvent = async (msg, eventTimestamp, statsCache) => {
     timestamp,
     subscriberEmailHash: finalSubscriberHash,
     linkUrl,
-    linkPosition: null,
+    linkPosition: linkPosition ?? null,
     trafficSource: validatedSource,
     device,
     country,

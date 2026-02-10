@@ -1,12 +1,26 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
+import { visualizer } from 'rollup-plugin-visualizer'
 
 // https://vitejs.dev/config/
 export default defineConfig(({ command: _command, mode }) => {
   // Load env file based on `mode` in the current working directory.
+  const isAnalyze = process.env.ANALYZE === 'true';
+
   return {
-    plugins: [react()],
+    plugins: [
+      react(),
+      // Add bundle visualizer in analyze mode
+      ...(isAnalyze ? [
+        visualizer({
+          open: true,
+          filename: 'dist/stats.html',
+          gzipSize: true,
+          brotliSize: true,
+        })
+      ] : []),
+    ],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),
@@ -43,6 +57,19 @@ export default defineConfig(({ command: _command, mode }) => {
             const facadeModuleId = chunkInfo.facadeModuleId
               ? chunkInfo.facadeModuleId.split('/').pop()?.replace('.tsx', '').replace('.ts', '')
               : 'chunk';
+
+            // Create separate chunks for issue detail page components
+            if (facadeModuleId?.includes('IssueDetail')) {
+              return `js/issue-detail/[name]-[hash].js`;
+            }
+
+            // Create separate chunks for analytics components
+            if (facadeModuleId?.includes('Chart') ||
+                facadeModuleId?.includes('Analytics') ||
+                facadeModuleId?.includes('GeoMap')) {
+              return `js/analytics/[name]-[hash].js`;
+            }
+
             return `js/${facadeModuleId}-[hash].js`;
           },
           entryFileNames: 'js/[name]-[hash].js',

@@ -189,6 +189,54 @@ describe('build-report-data', () => {
       expect(result.insightData.engagementQuality).toBeDefined();
       expect(result.insightData.trends).toBeDefined();
     });
+
+    it('should attach insight candidates from event analytics', async () => {
+      ddbSend.mockResolvedValueOnce({ Items: [] });
+      ddbSend.mockResolvedValueOnce({ Items: [] });
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({ Items: [] });
+      ddbSend.mockResolvedValueOnce({ Items: [] });
+
+      const eventAnalytics = {
+        deviceBreakdown: { mobile: 70, desktop: 10 },
+        trafficSource: { clicks: { email: 80, web: 20 } },
+        clickDecay: [
+          { hour: 0, clicks: 5, cumulativeClicks: 5 },
+          { hour: 2, clicks: 5, cumulativeClicks: 10 }
+        ],
+        complaintDetails: [{ email: 'hash', timestamp: '2025-01-21T10:00:00Z', complaintType: 'spam' }]
+      };
+
+      const state = {
+        issue: 'tenant999#200',
+        subscribers: 1000,
+        priorSubscribers: 990,
+        sentDate: '2025-01-21T16:00:00.000Z',
+        subjectLine: 'Insights Newsletter',
+        links: [
+          { link: 'https://example.com/top', count: 50 }
+        ],
+        stats: {
+          M: {
+            deliveries: { N: '800' },
+            opens: { N: '200' },
+            reopens: { N: '20' },
+            bounces: { N: '5' },
+            unsubscribes: { N: '3' },
+            sends: { N: '805' },
+            cleaned: { N: '1' },
+            analytics: { S: JSON.stringify(eventAnalytics) }
+          }
+        }
+      };
+
+      const result = await handler(state);
+
+      expect(result.insightData.eventAnalytics).toBeDefined();
+      expect(result.insightData.insightCandidates).toBeDefined();
+      expect(Array.isArray(result.insightData.insightCandidates)).toBe(true);
+      expect(result.insightData.insightCandidates.length).toBeGreaterThan(0);
+    });
   });
 
   describe('Error handling', () => {

@@ -25,6 +25,8 @@ export interface Issue extends IssueListItem {
   updatedAt: string;
   metadata?: Record<string, unknown>;
   stats?: IssueStats;
+  insights?: string[];
+  insightsV2?: InsightV2[];
 }
 
 export interface TopPerformer {
@@ -195,4 +197,21 @@ export interface IssueAnalytics {
   trafficSource: TrafficSource;
   bounceReasons: BounceReasons;
   complaintDetails: ComplaintDetail[];
+}
+
+export interface InsightEvidence {
+  metric: string;
+  value?: string;
+  benchmark?: string;
+  deltaPct?: string;
+  note?: string;
+}
+
+export interface InsightV2 {
+  type: string;
+  severity: 'info' | 'watch' | 'action';
+  confidence: 'low' | 'med' | 'high';
+  summary: string;
+  recommendation: string;
+  evidence?: InsightEvidence[];
 }

@@ -24,10 +24,12 @@ declare module 'react-simple-maps' {
 
   export interface GeographiesProps {
     geography: string | object;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     children: (args: { geographies: any[] }) => React.ReactNode;
   }
 
   export interface GeographyProps {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     geography: any;
     fill?: string;
     stroke?: string;

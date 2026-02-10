@@ -79,3 +79,6 @@ export type { Toast, ToastProviderProps } from './Toast';
 // Utility Components
 export { Container } from './Container';
 export type { ContainerProps } from './Container';
+
+export { FadeIn } from './FadeIn';
+export type { FadeInProps } from './FadeIn';

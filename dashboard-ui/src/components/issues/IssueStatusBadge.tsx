@@ -1,4 +1,3 @@
-/* eslint-disable react/prop-types */
 import React from 'react';
 import { cn } from '../../utils/cn';
 import type { IssueStatus } from '../../types/issues';

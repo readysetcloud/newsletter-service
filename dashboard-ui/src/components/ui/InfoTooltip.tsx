@@ -10,13 +10,17 @@ export interface InfoTooltipProps {
 export const InfoTooltip: React.FC<InfoTooltipProps> = ({ label, description, className }) => {
   return (
     <span className={`relative inline-flex items-center group ${className || ''}`}>
-      <Info
-        className="w-4 h-4 text-muted-foreground group-hover:text-foreground"
-        aria-label={label}
-        role="img"
-        tabIndex={0}
-      />
-      <span className="pointer-events-none absolute z-20 left-0 top-6 max-w-[90vw] w-64 rounded-md bg-foreground text-background text-xs p-2 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 shadow-lg sm:left-1/2 sm:-translate-x-1/2 sm:w-56">
+      <button
+        type="button"
+        className="inline-flex items-center justify-center min-w-[44px] min-h-[44px] -m-2 p-2 rounded-md hover:bg-muted/50 focus:outline-none focus:ring-2 focus:ring-ring touch-manipulation"
+        aria-label={`Information about ${label}`}
+      >
+        <Info
+          className="w-4 h-4 text-muted-foreground group-hover:text-foreground"
+          aria-hidden="true"
+        />
+      </button>
+      <span className="pointer-events-none absolute z-20 left-0 top-6 max-w-[90vw] w-64 rounded-md bg-foreground text-background text-xs p-2 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 shadow-lg sm:left-1/2 sm:-translate-x-1/2 sm:w-56 transition-opacity duration-200">
         <span className="font-semibold block mb-1">{label}</span>
         <span className="leading-snug">{description}</span>
       </span>

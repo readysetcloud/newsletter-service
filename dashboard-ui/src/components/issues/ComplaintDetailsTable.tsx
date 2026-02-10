@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { InfoTooltip } from '../ui/InfoTooltip';
 import { ComplaintDetail } from '../../types/issues';
 
 export interface ComplaintDetailsTableProps {
@@ -73,8 +74,14 @@ export const ComplaintDetailsTable: React.FC<ComplaintDetailsTableProps> = ({ co
 
   return (
     <div className="bg-white rounded-lg shadow p-3 sm:p-6">
-      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-3 sm:mb-4 gap-2">
-        <h3 className="text-base sm:text-lg font-semibold">Complaint Details</h3>
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start mb-3 sm:mb-4 gap-2">
+        <div className="flex items-start gap-2">
+          <h3 className="text-base sm:text-lg font-semibold">Complaint Details</h3>
+          <InfoTooltip
+            label="Complaint Details"
+            description="Recipients who marked your email as spam. High complaint rates can severely damage your sender reputation and lead to blacklisting. Keep complaint rate below 0.1%."
+          />
+        </div>
         <div className="flex items-center gap-2">
           <label htmlFor="complaint-filter" className="text-xs sm:text-sm text-gray-600">
             Filter:
@@ -163,6 +170,18 @@ export const ComplaintDetailsTable: React.FC<ComplaintDetailsTableProps> = ({ co
 
       <div className="mt-3 sm:mt-4 text-xs sm:text-sm text-gray-600">
         Showing {sortedAndFilteredComplaints.length} of {complaints.length} complaints
+      </div>
+
+      <div className="mt-4 text-xs text-muted-foreground bg-muted/30 p-3 rounded-lg">
+        <p className="font-semibold mb-1">Understanding Complaint Types:</p>
+        <ul className="space-y-1 list-disc list-inside">
+          <li><strong>Spam:</strong> Recipient marked your email as spam or junk</li>
+          <li><strong>Abuse:</strong> Recipient reported your email as abusive content</li>
+        </ul>
+        <p className="mt-2">
+          To reduce complaints: ensure recipients opted in, provide clear unsubscribe links,
+          send relevant content, and honor unsubscribe requests immediately.
+        </p>
       </div>
     </div>
   );

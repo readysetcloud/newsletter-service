@@ -121,7 +121,7 @@ export const IssueFormPage: React.FC = () => {
         [field]: undefined,
       }));
     }
-  }, [isEditMode, errors]);
+  }, [errors]);
 
   // Validate single field
   const validateField = useCallback((field: keyof FormData, value: string): string | undefined => {

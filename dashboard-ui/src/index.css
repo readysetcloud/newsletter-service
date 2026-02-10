@@ -245,6 +245,17 @@
     }
   }
 
+  /* Enhanced focus indicators for keyboard navigation */
+  *:focus-visible {
+    outline: 2px solid rgb(var(--ring));
+    outline-offset: 2px;
+  }
+
+  /* Remove default focus outline when using mouse */
+  *:focus:not(:focus-visible) {
+    outline: none;
+  }
+
   /* Prevent zoom on input focus on iOS */
   @media screen and (max-width: 768px) {
     input[type="text"],
@@ -312,6 +323,99 @@
 }
 
 @layer utilities {
+  /* Animation keyframes */
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes fade-in-slide-up {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes fade-in-scale {
+    from {
+      opacity: 0;
+      transform: scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  /* Animation classes */
+  .animate-fade-in-fast {
+    animation: fade-in 200ms ease-in-out;
+  }
+
+  .animate-fade-in {
+    animation: fade-in 300ms ease-in-out;
+  }
+
+  .animate-fade-in-slow {
+    animation: fade-in 500ms ease-in-out;
+  }
+
+  .animate-fade-in-slide-up {
+    animation: fade-in-slide-up 400ms ease-out;
+  }
+
+  .animate-fade-in-scale {
+    animation: fade-in-scale 300ms ease-out;
+  }
+
+  /* Respect user's motion preferences */
+  @media (prefers-reduced-motion: reduce) {
+    .animate-fade-in-fast,
+    .animate-fade-in,
+    .animate-fade-in-slow,
+    .animate-fade-in-slide-up,
+    .animate-fade-in-scale {
+      animation: none;
+    }
+  }
+
+  /* Loading state utilities */
+  .loading-shimmer {
+    background: linear-gradient(
+      90deg,
+      rgb(var(--muted)) 0%,
+      rgb(var(--muted) / 0.8) 50%,
+      rgb(var(--muted)) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.5s ease-in-out infinite;
+  }
+
+  @keyframes shimmer {
+    0% {
+      background-position: -200% 0;
+    }
+    100% {
+      background-position: 200% 0;
+    }
+  }
+
+  /* Interactive element feedback */
+  .interactive-element {
+    @apply transition-all duration-200 ease-in-out;
+    @apply hover:shadow-md hover:-translate-y-0.5;
+    @apply active:scale-95;
+    @apply focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2;
+  }
+
   /* Screen reader only - visually hidden but accessible to screen readers */
   .sr-only {
     position: absolute;

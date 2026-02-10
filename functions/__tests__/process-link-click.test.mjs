@@ -124,6 +124,20 @@ describe('process-link-click handler', () => {
       expect(item.linkPosition).toBeNull();
     });
 
+    test('should include linkPosition when provided', async () => {
+      const logEvent = {
+        timestamp: Date.now(),
+        message: `INFO ${JSON.stringify({ cid: 'tenant123#42', u: 'https://example.com/test', p: 3 })}`
+      };
+
+      mockGetStats();
+      await handler(createCloudWatchEvent([logEvent]));
+
+      const putCalls = mockSend.mock.calls.filter(call => call[0] instanceof PutItemCommand);
+      const item = unmarshall(putCalls[0][0].input.Item);
+      expect(item.linkPosition).toBe(3);
+    });
+
     test('should set TTL to 90 days from now', async () => {
       const logEvent = {
         timestamp: Date.now(),

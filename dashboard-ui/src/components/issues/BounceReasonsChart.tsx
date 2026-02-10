@@ -1,5 +1,6 @@
 import React from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { InfoTooltip } from '../ui/InfoTooltip';
 import { BounceReasons } from '../../types/issues';
 
 export interface BounceReasonsChartProps {
@@ -68,7 +69,13 @@ export const BounceReasonsChart: React.FC<BounceReasonsChartProps> = ({ bounceRe
 
   return (
     <div className="bg-white rounded-lg shadow p-3 sm:p-6">
-      <h3 className="text-base sm:text-lg font-semibold mb-3 sm:mb-4">Bounce Reasons</h3>
+      <div className="flex items-start justify-between mb-3 sm:mb-4">
+        <h3 className="text-base sm:text-lg font-semibold">Bounce Reasons</h3>
+        <InfoTooltip
+          label="Bounce Types"
+          description="Permanent bounces are invalid addresses that should be removed. Temporary bounces may succeed later. Suppressed addresses are on your suppression list."
+        />
+      </div>
 
       <div className="mb-4 sm:mb-6">
         <ResponsiveContainer width="100%" height={250}>
@@ -85,21 +92,39 @@ export const BounceReasonsChart: React.FC<BounceReasonsChartProps> = ({ bounceRe
 
       <div className="grid grid-cols-3 gap-2 sm:gap-4 pt-3 sm:pt-4 border-t border-gray-200">
         <div className="text-center">
-          <div className="text-lg sm:text-2xl font-bold text-red-600">{permanent}</div>
+          <div className="flex items-center justify-center gap-1 mb-1">
+            <div className="text-lg sm:text-2xl font-bold text-red-600">{permanent}</div>
+            <InfoTooltip
+              label="Permanent Bounces"
+              description="Hard bounces from invalid email addresses. These should be removed from your list immediately to protect your sender reputation."
+            />
+          </div>
           <div className="text-xs sm:text-sm text-gray-600">Permanent</div>
           <div className="text-xs text-gray-500">
             {total > 0 ? ((permanent / total) * 100).toFixed(1) : 0}%
           </div>
         </div>
         <div className="text-center">
-          <div className="text-lg sm:text-2xl font-bold text-yellow-600">{temporary}</div>
+          <div className="flex items-center justify-center gap-1 mb-1">
+            <div className="text-lg sm:text-2xl font-bold text-yellow-600">{temporary}</div>
+            <InfoTooltip
+              label="Temporary Bounces"
+              description="Soft bounces from full mailboxes or temporary server issues. These addresses may accept mail later, but repeated soft bounces should be investigated."
+            />
+          </div>
           <div className="text-xs sm:text-sm text-gray-600">Temporary</div>
           <div className="text-xs text-gray-500">
             {total > 0 ? ((temporary / total) * 100).toFixed(1) : 0}%
           </div>
         </div>
         <div className="text-center">
-          <div className="text-lg sm:text-2xl font-bold text-gray-600">{suppressed}</div>
+          <div className="flex items-center justify-center gap-1 mb-1">
+            <div className="text-lg sm:text-2xl font-bold text-gray-600">{suppressed}</div>
+            <InfoTooltip
+              label="Suppressed Addresses"
+              description="Addresses on your suppression list (previously bounced, complained, or manually suppressed). These will not receive emails."
+            />
+          </div>
           <div className="text-xs sm:text-sm text-gray-600">Suppressed</div>
           <div className="text-xs text-gray-500">
             {total > 0 ? ((suppressed / total) * 100).toFixed(1) : 0}%
@@ -112,6 +137,16 @@ export const BounceReasonsChart: React.FC<BounceReasonsChartProps> = ({ bounceRe
           <span className="text-xs sm:text-sm font-medium text-gray-700">Total Bounces</span>
           <span className="text-base sm:text-lg font-bold text-gray-900">{total.toLocaleString()}</span>
         </div>
+      </div>
+
+      <div className="mt-4 text-xs text-muted-foreground bg-muted/30 p-3 rounded-lg">
+        <p className="font-semibold mb-1">How to Address Bounces:</p>
+        <ul className="space-y-1 list-disc list-inside">
+          <li><strong>Permanent:</strong> Remove these addresses immediately from your list</li>
+          <li><strong>Temporary:</strong> Monitor these addresses; remove if they bounce repeatedly</li>
+          <li><strong>Suppressed:</strong> These are already blocked from receiving future emails</li>
+        </ul>
+        <p className="mt-2">Keep your total bounce rate below 5% to maintain good deliverability.</p>
       </div>
     </div>
   );

@@ -26,4 +26,7 @@ export type { ColorLegendProps } from './ColorLegend';
 export { Attribution } from './Attribution';
 export type { AttributionProps } from './Attribution';
 
+export { TopCountriesList } from './TopCountriesList';
+export type { TopCountriesListProps } from './TopCountriesList';
+
 export { GeoMapErrorBoundary } from './GeoMapErrorBoundary';

@@ -219,6 +219,7 @@
         "Payload": {
           "insightData.$": "$.reportData.Payload.insightData",
           "insights.$": "$.insights.Payload.insights",
+          "insightsV2.$": "$.insights.Payload.insightsV2",
           "subject.$": "$.reportData.Payload.subject",
           "tenantId.$": "$$.Execution.Input.tenant.id",
           "recipientEmail.$": "$$.Execution.Input.tenant.email",

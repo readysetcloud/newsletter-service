@@ -32,3 +32,18 @@ export { BounceReasonsChart } from './BounceReasonsChart';
 export type { BounceReasonsChartProps } from './BounceReasonsChart';
 
 export { IssueComparisonCard } from './IssueComparisonCard';
+
+export { InsightsHeroSection } from './InsightsHeroSection';
+export type { InsightsHeroSectionProps } from './InsightsHeroSection';
+
+export { KeyMetricsSummary } from './KeyMetricsSummary';
+export type { KeyMetricsSummaryProps } from './KeyMetricsSummary';
+
+export { CollapsibleSection } from './CollapsibleSection';
+export type { CollapsibleSectionProps } from './CollapsibleSection';
+
+export { QuickNavigation, defaultSectionIcons } from './QuickNavigation';
+export type { QuickNavigationProps, NavigationSection } from './QuickNavigation';
+
+export { DeliverabilityHealthCard } from './DeliverabilityHealthCard';
+export type { DeliverabilityHealthCardProps } from './DeliverabilityHealthCard';

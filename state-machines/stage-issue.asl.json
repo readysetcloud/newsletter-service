@@ -501,7 +501,7 @@
               "BooleanEquals": true
             },
             {
-              "Variable": "$[1].success",
+              "Variable": "$[1].publishResult.Payload.success",
               "BooleanEquals": true
             }
           ]

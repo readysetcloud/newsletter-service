@@ -9,6 +9,8 @@ export interface MapContainerProps {
   colorScale: (value: number) => string;
   onCountryHover: (country: string | null, data: GeoDistributionData | null, event?: React.MouseEvent) => void;
   countryCodeMap: Map<string, string>;
+  highlightedCountry?: string | null;
+  zoomLevel?: number;
 }
 
 export function MapContainer({
@@ -16,7 +18,9 @@ export function MapContainer({
   selectedMetric,
   colorScale,
   onCountryHover,
-  countryCodeMap
+  countryCodeMap,
+  highlightedCountry = null,
+  zoomLevel = 1
 }: MapContainerProps) {
   const [geographiesData, setGeographiesData] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -68,15 +72,16 @@ export function MapContainer({
   return (
     <ComposableMap
       projection="geoMercator"
-      projectionConfig={{ scale: 100 }}
+      projectionConfig={{ scale: 100 * zoomLevel }}
       className="w-full h-full"
     >
-      <ZoomableGroup>
+      <ZoomableGroup zoom={zoomLevel}>
         <Geographies geography={geographiesData}>
           {({ geographies }: { geographies: Array<Record<string, unknown>> }) =>
             geographies.map((geo: Record<string, unknown>) => {
               const isoCode = countryCodeMap.get(geo.id as string) || (geo.properties as Record<string, unknown>)?.iso_a2 as string;
               const countryData = isoCode ? countryDataMap.get(isoCode) : null;
+              const isHighlighted = highlightedCountry === isoCode;
 
               const fillColor = countryData
                 ? colorScale(getMetricValue(countryData, selectedMetric))
@@ -87,8 +92,8 @@ export function MapContainer({
                   key={geo.rsmKey as string}
                   geography={geo}
                   fill={fillColor}
-                  stroke="#d1d5db"
-                  strokeWidth={0.5}
+                  stroke={isHighlighted ? '#1e40af' : '#d1d5db'}
+                  strokeWidth={isHighlighted ? 2 : 0.5}
                   onMouseEnter={(event) => handleCountryHover(isoCode, countryData, event)}
                   onMouseLeave={() => handleCountryHover(null, null)}
                   style={{

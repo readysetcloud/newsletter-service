@@ -21,6 +21,13 @@ Handlebars.registerHelper('formatTimeToOpen', (seconds) => {
 
 Handlebars.registerHelper('eq', (a, b) => a === b);
 
+const formatNumberValue = (num) => {
+  if (num === null || num === undefined) return '0';
+  const value = Number(num);
+  if (!Number.isFinite(value)) return '0';
+  return value.toFixed(2);
+};
+
 const formatDelta = (value) => {
   if (value === null || value === undefined) return null;
   return {
@@ -139,11 +146,14 @@ const prepareLinksWithPercentages = (links, totalClicks) => {
 
 export const handler = async (event) => {
   try {
-    const { insightData, insights, subject, tenantId, recipientEmail, issueId } = event;
+    const { insightData, insights, insightsV2, subject, tenantId, recipientEmail, issueId } = event;
 
     const issueName = issueId || 'N/A';
     const uniqueOpens = insightData.currentMetrics.uniqueOpens;
     const totalClicks = insightData.currentMetrics.clicks;
+    const dashboardBaseUrl = process.env.DASHBOARD_BASE_URL || process.env.ORIGIN || '';
+    const normalizedBase = dashboardBaseUrl ? dashboardBaseUrl.replace(/\/+$/, '') : '';
+    const issueUrl = normalizedBase ? `${normalizedBase}/issues/${issueId}` : null;
 
     const formattedWowDeltas = {
       openRateWoW: insightData.wowDeltas.openRateWoW !== null ? formatDelta(insightData.wowDeltas.openRateWoW) : null,
@@ -200,8 +210,17 @@ export const handler = async (event) => {
     const hasClientData = Object.keys(insightData.engagement.clientBreakdown || {}).length > 0;
     const hasMoreThan3Links = insightData.content.linkCount > 3;
 
+    const summaryStats = [
+      { label: 'Open rate', value: `${formatNumberValue(insightData.currentMetrics.openRate)}%` },
+      { label: 'Click rate', value: `${formatNumberValue(insightData.currentMetrics.clickThroughRate)}%` },
+      { label: 'Bounce rate', value: `${formatNumberValue(insightData.currentMetrics.bounceRate)}%` },
+      { label: 'Net growth', value: `${insightData.engagement.netGrowth >= 0 ? '+' : ''}${formatNumberValue(insightData.engagement.netGrowth)}` }
+    ];
+
     const templateData = {
       issueName,
+      issueUrl,
+      summaryStats,
       currentMetrics: {
         ...insightData.currentMetrics,
         growthRateColor: insightData.currentMetrics.growthRate >= 0 ? '#28a745' : '#dc3545'
@@ -250,7 +269,8 @@ export const handler = async (event) => {
         topPerformingLink: insightData.content.topPerformingLink
       },
       generatedDate: new Date().toLocaleDateString(),
-      insights: insights && insights.length > 0 ? insights : null
+      insights: insights && insights.length > 0 ? insights : null,
+      insightsV2: Array.isArray(insightsV2) && insightsV2.length > 0 ? insightsV2 : null
     };
 
     const html = template(templateData);

@@ -4,6 +4,16 @@ import { cn } from '../../utils/cn';
 export interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
   children: React.ReactNode;
   padding?: 'none' | 'sm' | 'md' | 'lg';
+  /**
+   * Enable hover effect (subtle elevation and shadow)
+   * @default false
+   */
+  hoverable?: boolean;
+  /**
+   * Enable interactive state (cursor pointer + hover effect)
+   * @default false
+   */
+  interactive?: boolean;
 }
 
 export interface CardHeaderProps extends React.HTMLAttributes<HTMLDivElement> {
@@ -28,6 +38,8 @@ const paddingVariants = {
 export const Card: React.FC<CardProps> = ({
   children,
   padding = 'md',
+  hoverable = false,
+  interactive = false,
   className,
   ...props
 }) => {
@@ -35,6 +47,9 @@ export const Card: React.FC<CardProps> = ({
     <div
       className={cn(
         'bg-surface rounded-lg border border-border shadow-sm',
+        'transition-all duration-200 ease-in-out',
+        hoverable && 'hover:shadow-md',
+        interactive && 'cursor-pointer hover:shadow-md hover:-translate-y-0.5 hover:border-primary-200',
         paddingVariants[padding],
         className
       )}

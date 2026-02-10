@@ -4,6 +4,28 @@ import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 const ddb = new DynamoDBClient();
 const n = (v) => Number.isFinite(Number(v)) ? Number(v) : 0;
 const pct = (num, den) => den > 0 ? Number(((n(num) / n(den)) * 100).toFixed(2)) : 0;
+const pctDelta = (current, benchmark) => {
+  if (!Number.isFinite(Number(benchmark)) || n(benchmark) === 0) return null;
+  return Number((((n(current) - n(benchmark)) / n(benchmark)) * 100).toFixed(1));
+};
+const pctShare = (part, total) => total > 0 ? Number(((n(part) / n(total)) * 100).toFixed(1)) : 0;
+const isPlainObject = (value) => value && typeof value === "object" && !Array.isArray(value);
+const isEventAnalytics = (analytics) => {
+  if (!isPlainObject(analytics)) return false;
+  if (analytics.currentMetrics) return false;
+  return Boolean(
+    analytics.links ||
+    analytics.clickDecay ||
+    analytics.openDecay ||
+    analytics.geoDistribution ||
+    analytics.deviceBreakdown ||
+    analytics.timingMetrics ||
+    analytics.engagementType ||
+    analytics.trafficSource ||
+    analytics.bounceReasons ||
+    analytics.complaintDetails
+  );
+};
 
 const normalizeISOTimestamp = (timestamp) => {
   if (!timestamp) return new Date().toISOString();
@@ -720,6 +742,455 @@ const calculateEngagementQuality = (metrics, velocity) => {
   };
 };
 
+const summarizeDecay = (decay, cumulativeKey) => {
+  if (!Array.isArray(decay) || decay.length === 0) return null;
+  const last = decay[decay.length - 1];
+  const total = n(last?.[cumulativeKey]);
+  if (total <= 0) return null;
+
+  const findHour = (targetPct) => {
+    const target = total * targetPct;
+    for (const entry of decay) {
+      if (n(entry?.[cumulativeKey]) >= target) return n(entry.hour);
+    }
+    return null;
+  };
+
+  return {
+    total,
+    halfLifeHours: findHour(0.5),
+    p80Hours: findHour(0.8)
+  };
+};
+
+const summarizeBreakdown = (breakdown) => {
+  if (!isPlainObject(breakdown)) return null;
+  const entries = Object.entries(breakdown)
+    .filter(([, value]) => n(value) > 0)
+    .sort((a, b) => n(b[1]) - n(a[1]));
+
+  if (!entries.length) return null;
+
+  const total = entries.reduce((sum, [, value]) => sum + n(value), 0);
+  const [topKey, topValue] = entries[0];
+
+  return {
+    total,
+    topKey,
+    topValue: n(topValue),
+    topShare: pctShare(topValue, total)
+  };
+};
+
+const summarizeTrafficSource = (trafficSource) => {
+  if (!isPlainObject(trafficSource) || !isPlainObject(trafficSource.clicks)) return null;
+  const email = n(trafficSource.clicks.email);
+  const web = n(trafficSource.clicks.web);
+  const total = email + web;
+  if (total <= 0) return null;
+
+  const topSource = email >= web ? "email" : "web";
+  const topShare = pctShare(Math.max(email, web), total);
+
+  return { total, email, web, topSource, topShare };
+};
+
+const summarizeGeoConcentration = (geoDistribution) => {
+  if (!Array.isArray(geoDistribution) || geoDistribution.length === 0) return null;
+  const sorted = [...geoDistribution].sort((a, b) => n(b.clicks) - n(a.clicks));
+  const totalClicks = sorted.reduce((sum, item) => sum + n(item.clicks), 0);
+  if (totalClicks <= 0) return null;
+  const top = sorted[0];
+  return {
+    topCountry: top.country || "unknown",
+    topClicks: n(top.clicks),
+    topShare: pctShare(top.clicks, totalClicks),
+    totalClicks
+  };
+};
+
+const buildInsightCandidates = (context) => {
+  const candidates = [];
+  const add = (candidate) => {
+    if (!candidate) return;
+    candidates.push(candidate);
+  };
+
+  const { currentMetrics, benchmarks, contentPerformance, listHealth, engagementQuality, engagement, trends, eventAnalytics } = context;
+
+  const openRateDelta = pctDelta(currentMetrics.openRate, benchmarks.openRateAvg3);
+  if (openRateDelta !== null && Math.abs(openRateDelta) >= 10) {
+    add({
+      type: "subject",
+      severity: openRateDelta < 0 ? "action" : "info",
+      confidence: "high",
+      observation: `Open rate is ${Math.abs(openRateDelta)}% ${openRateDelta < 0 ? "below" : "above"} the 3-issue average.`,
+      recommendation: openRateDelta < 0
+        ? "Test a shorter, benefit-led subject line and tighten the preview text for the next issue."
+        : "Keep the subject style consistent and reuse the winning structure in the next issue.",
+      evidence: [{
+        metric: "openRate",
+        value: currentMetrics.openRate,
+        benchmark: benchmarks.openRateAvg3,
+        deltaPct: openRateDelta
+      }],
+      priority: Math.abs(openRateDelta)
+    });
+  }
+
+  const ctrDelta = pctDelta(currentMetrics.clickThroughRate, benchmarks.ctrAvg3);
+  if (ctrDelta !== null && Math.abs(ctrDelta) >= 10) {
+    add({
+      type: "ctr",
+      severity: ctrDelta < 0 ? "action" : "info",
+      confidence: "high",
+      observation: `Click rate is ${Math.abs(ctrDelta)}% ${ctrDelta < 0 ? "below" : "above"} the 3-issue average.`,
+      recommendation: ctrDelta < 0
+        ? "Move the primary CTA higher and add a short benefit line to improve clicks."
+        : "Lean into the CTA style that worked and keep the same link density next issue.",
+      evidence: [{
+        metric: "clickThroughRate",
+        value: currentMetrics.clickThroughRate,
+        benchmark: benchmarks.ctrAvg3,
+        deltaPct: ctrDelta
+      }],
+      priority: Math.abs(ctrDelta)
+    });
+  }
+
+  if (currentMetrics.bounceRate >= benchmarks.bounceRateTarget || listHealth.bounceRateStatus !== "Normal") {
+    add({
+      type: "deliverability",
+      severity: currentMetrics.bounceRate >= benchmarks.bounceRateTarget ? "action" : "watch",
+      confidence: "high",
+      observation: `Bounce rate is ${n(currentMetrics.bounceRate).toFixed(2)}% (${listHealth.bounceRateStatus}).`,
+      recommendation: "Run list hygiene and suppress stale addresses before the next send.",
+      evidence: [{
+        metric: "bounceRate",
+        value: currentMetrics.bounceRate,
+        benchmark: benchmarks.bounceRateTarget,
+        deltaPct: pctDelta(currentMetrics.bounceRate, benchmarks.bounceRateTarget)
+      }],
+      priority: 18
+    });
+  }
+
+  if (listHealth.deliverabilityRate > 0 && listHealth.deliverabilityRate < 95) {
+    add({
+      type: "deliverability",
+      severity: "action",
+      confidence: "high",
+      observation: `Deliverability is ${n(listHealth.deliverabilityRate).toFixed(1)}%, below the 95% target.`,
+      recommendation: "Review sender reputation and run a warm-up or segmentation pass before the next issue.",
+      evidence: [{
+        metric: "deliverabilityRate",
+        value: listHealth.deliverabilityRate,
+        benchmark: 95,
+        deltaPct: pctDelta(listHealth.deliverabilityRate, 95)
+      }],
+      priority: 20
+    });
+  }
+
+  if (currentMetrics.growthRate < 0) {
+    add({
+      type: "growth",
+      severity: "action",
+      confidence: "high",
+      observation: `List size shrank by ${Math.abs(n(currentMetrics.growthRate)).toFixed(2)}% this issue.`,
+      recommendation: "Add a referral ask or forward-to-a-friend CTA in the next issue to reverse the decline.",
+      evidence: [{
+        metric: "growthRate",
+        value: currentMetrics.growthRate,
+        benchmark: benchmarks.growthRateAvg3,
+        deltaPct: pctDelta(currentMetrics.growthRate, benchmarks.growthRateAvg3)
+      }],
+      priority: 16
+    });
+  }
+
+  if (contentPerformance.topLinkPct >= 60 || contentPerformance.top3Pct >= 80) {
+    add({
+      type: "content_concentration",
+      severity: "action",
+      confidence: "high",
+      observation: `Top link captured ${n(contentPerformance.topLinkPct).toFixed(1)}% of clicks, indicating highly concentrated attention.`,
+      recommendation: "Keep the top story but add a stronger secondary CTA earlier to diversify engagement.",
+      evidence: [{
+        metric: "topLinkPct",
+        value: contentPerformance.topLinkPct,
+        benchmark: 50,
+        deltaPct: pctDelta(contentPerformance.topLinkPct, 50)
+      }],
+      priority: 14
+    });
+  } else if (contentPerformance.topLinkPct > 0 && contentPerformance.topLinkPct < 20) {
+    add({
+      type: "content_concentration",
+      severity: "watch",
+      confidence: "med",
+      observation: `No single link led engagement (top link ${n(contentPerformance.topLinkPct).toFixed(1)}% of clicks).`,
+      recommendation: "Introduce a clearer primary CTA to focus attention next issue.",
+      evidence: [{
+        metric: "topLinkPct",
+        value: contentPerformance.topLinkPct,
+        benchmark: 30,
+        deltaPct: pctDelta(contentPerformance.topLinkPct, 30)
+      }],
+      priority: 10
+    });
+  }
+
+  if (engagementQuality.opensFirst1hPct > 0) {
+    if (engagementQuality.opensFirst1hPct < 20) {
+      add({
+        type: "velocity",
+        severity: "action",
+        confidence: "med",
+        observation: `Only ${n(engagementQuality.opensFirst1hPct).toFixed(1)}% of opens happened in the first hour.`,
+        recommendation: "Test a different send time or day to accelerate early engagement.",
+        evidence: [{
+          metric: "opensFirst1hPct",
+          value: engagementQuality.opensFirst1hPct,
+          benchmark: 30,
+          deltaPct: pctDelta(engagementQuality.opensFirst1hPct, 30)
+        }],
+        priority: 12
+      });
+    } else if (engagementQuality.opensFirst1hPct >= 40) {
+      add({
+        type: "velocity",
+        severity: "info",
+        confidence: "med",
+        observation: `${n(engagementQuality.opensFirst1hPct).toFixed(1)}% of opens landed in the first hour, showing strong early pull.`,
+        recommendation: "Front-load the top CTA and keep the same send window.",
+        evidence: [{
+          metric: "opensFirst1hPct",
+          value: engagementQuality.opensFirst1hPct,
+          benchmark: 30,
+          deltaPct: pctDelta(engagementQuality.opensFirst1hPct, 30)
+        }],
+        priority: 8
+      });
+    }
+  }
+
+  if (engagementQuality.clicksPerOpener > 0 && engagementQuality.clicksPerOpener < 0.25) {
+    add({
+      type: "engagement_quality",
+      severity: "watch",
+      confidence: "med",
+      observation: `Clicks per opener is ${n(engagementQuality.clicksPerOpener).toFixed(2)}, suggesting low conversion from opens.`,
+      recommendation: "Tighten CTA copy and move the primary link higher in the issue.",
+      evidence: [{
+        metric: "clicksPerOpener",
+        value: engagementQuality.clicksPerOpener,
+        benchmark: 0.4,
+        deltaPct: pctDelta(engagementQuality.clicksPerOpener, 0.4)
+      }],
+      priority: 9
+    });
+  }
+
+  if (isPlainObject(engagement?.velocity)) {
+    const velocityTotal = Object.values(engagement.velocity).reduce((sum, value) => sum + n(value), 0);
+    if (velocityTotal > 0) {
+      const lateOpensPct = pctShare(n(engagement.velocity["24h+"]), velocityTotal);
+      if (lateOpensPct >= 30) {
+        add({
+          type: "velocity",
+          severity: "watch",
+          confidence: "med",
+          observation: `${n(lateOpensPct).toFixed(1)}% of opens happened after 24 hours.`,
+          recommendation: "Add a shorter subject and a punchier preheader to pull earlier attention.",
+          evidence: [{
+            metric: "opensAfter24hPct",
+            value: lateOpensPct,
+            benchmark: 20,
+            deltaPct: pctDelta(lateOpensPct, 20)
+          }],
+          priority: 8
+        });
+      }
+    }
+  }
+
+  const deviceSummary = summarizeBreakdown(eventAnalytics?.deviceBreakdown);
+  if (deviceSummary && deviceSummary.topShare >= 70) {
+    add({
+      type: "device_bias",
+      severity: "watch",
+      confidence: "med",
+      observation: `${deviceSummary.topShare}% of opens came from ${deviceSummary.topKey} devices.`,
+      recommendation: `Optimize layout for ${deviceSummary.topKey} (shorter paragraphs and clearer CTA buttons).`,
+      evidence: [{
+        metric: "deviceShare",
+        value: deviceSummary.topShare,
+        benchmark: 60,
+        deltaPct: pctDelta(deviceSummary.topShare, 60)
+      }],
+      priority: 7
+    });
+  }
+
+  const trafficSummary = summarizeTrafficSource(eventAnalytics?.trafficSource);
+  if (trafficSummary && trafficSummary.topShare >= 60) {
+    add({
+      type: "traffic_source",
+      severity: "watch",
+      confidence: "med",
+      observation: `${trafficSummary.topShare}% of clicks came from ${trafficSummary.topSource}.`,
+      recommendation: trafficSummary.topSource === "web"
+        ? "Add stronger in-email CTAs to capture more direct email clicks."
+        : "Keep the in-email CTAs prominent and consider adding a follow-up link in the footer.",
+      evidence: [{
+        metric: "trafficSourceShare",
+        value: trafficSummary.topShare,
+        benchmark: 60,
+        deltaPct: pctDelta(trafficSummary.topShare, 60)
+      }],
+      priority: 6
+    });
+  }
+
+  const clickDecaySummary = summarizeDecay(eventAnalytics?.clickDecay, "cumulativeClicks");
+  if (clickDecaySummary && clickDecaySummary.halfLifeHours !== null) {
+    if (clickDecaySummary.halfLifeHours <= 6) {
+      add({
+        type: "click_decay",
+        severity: "watch",
+        confidence: "med",
+        observation: `Half of clicks arrived within ${clickDecaySummary.halfLifeHours} hours.`,
+        recommendation: "Front-load the primary CTA so early readers see it immediately.",
+        evidence: [{
+          metric: "clickHalfLifeHours",
+          value: clickDecaySummary.halfLifeHours,
+          benchmark: 12,
+          deltaPct: pctDelta(clickDecaySummary.halfLifeHours, 12)
+        }],
+        priority: 6
+      });
+    } else if (clickDecaySummary.halfLifeHours >= 24) {
+      add({
+        type: "click_decay",
+        severity: "info",
+        confidence: "med",
+        observation: `Click activity stayed strong for ${clickDecaySummary.halfLifeHours} hours.`,
+        recommendation: "Keep evergreen content and consider reposting the top link mid-week.",
+        evidence: [{
+          metric: "clickHalfLifeHours",
+          value: clickDecaySummary.halfLifeHours,
+          benchmark: 12,
+          deltaPct: pctDelta(clickDecaySummary.halfLifeHours, 12)
+        }],
+        priority: 5
+      });
+    }
+  }
+
+  if (eventAnalytics?.timingMetrics && n(eventAnalytics.timingMetrics.medianTimeToOpen) > 0) {
+    const medianOpenHours = n(eventAnalytics.timingMetrics.medianTimeToOpen) / 3600;
+    if (medianOpenHours >= 6) {
+      add({
+        type: "timing",
+        severity: "watch",
+        confidence: "med",
+        observation: `Median time to open is ${medianOpenHours.toFixed(1)} hours.`,
+        recommendation: "Try a tighter subject/preheader combo to speed up opens.",
+        evidence: [{
+          metric: "medianTimeToOpenHours",
+          value: Number(medianOpenHours.toFixed(1)),
+          benchmark: 3,
+          deltaPct: pctDelta(medianOpenHours, 3)
+        }],
+        priority: 5
+      });
+    }
+  }
+
+  if (Array.isArray(trends?.lastIssues) && trends.lastIssues.length >= 3) {
+    const [a, b, c] = trends.lastIssues;
+    if (n(a.openRate) > n(b.openRate) && n(b.openRate) > n(c.openRate)) {
+      add({
+        type: "trend",
+        severity: "watch",
+        confidence: "med",
+        observation: "Open rates have declined across the last three issues.",
+        recommendation: "Revisit subject line framing and tighten the top section to arrest the slide.",
+        evidence: [{
+          metric: "openRateTrend",
+          value: `${n(a.openRate)} -> ${n(b.openRate)} -> ${n(c.openRate)}`,
+          benchmark: "last3",
+          deltaPct: null
+        }],
+        priority: 7
+      });
+    }
+  }
+
+  const engagementType = eventAnalytics?.engagementType;
+  if (engagementType && (n(engagementType.newClickers) + n(engagementType.returningClickers)) > 0) {
+    const totalClickers = n(engagementType.newClickers) + n(engagementType.returningClickers);
+    const newShare = pctShare(engagementType.newClickers, totalClickers);
+    if (newShare >= 60) {
+      add({
+        type: "audience_mix",
+        severity: "info",
+        confidence: "med",
+        observation: `${newShare}% of clickers were first-timers.`,
+        recommendation: "Add a short onboarding block or 'start here' section for new readers.",
+        evidence: [{
+          metric: "newClickerShare",
+          value: newShare,
+          benchmark: 50,
+          deltaPct: pctDelta(newShare, 50)
+        }],
+        priority: 5
+      });
+    }
+  }
+
+  const geoSummary = summarizeGeoConcentration(eventAnalytics?.geoDistribution);
+  if (geoSummary && geoSummary.topShare >= 60) {
+    add({
+      type: "geo_focus",
+      severity: "watch",
+      confidence: "low",
+      observation: `${geoSummary.topShare}% of clicks came from ${geoSummary.topCountry}.`,
+      recommendation: "Consider a send time optimized for that region or add regional context.",
+      evidence: [{
+        metric: "topGeoShare",
+        value: geoSummary.topShare,
+        benchmark: 50,
+        deltaPct: pctDelta(geoSummary.topShare, 50)
+      }],
+      priority: 4
+    });
+  }
+
+  if (Array.isArray(eventAnalytics?.complaintDetails) && eventAnalytics.complaintDetails.length > 0) {
+    add({
+      type: "complaints",
+      severity: "action",
+      confidence: "high",
+      observation: `There were ${eventAnalytics.complaintDetails.length} complaint(s) on this issue.`,
+      recommendation: "Review recent signups, reduce send frequency to cold segments, and reinforce opt-in language.",
+      evidence: [{
+        metric: "complaints",
+        value: eventAnalytics.complaintDetails.length,
+        benchmark: 0,
+        deltaPct: null
+      }],
+      priority: 17
+    });
+  }
+
+  return candidates
+    .sort((a, b) => (b.priority || 0) - (a.priority || 0))
+    .map(({ priority, ...rest }) => rest)
+    .slice(0, 12);
+};
+
 export const handler = async (state) => {
   let consolidatedData = null;
   let previousIssueAnalytics = null;
@@ -741,6 +1212,17 @@ export const handler = async (state) => {
       : (subscribers > 0 ? 100 : 0);
 
     const stats = unmarshall(state.stats);
+    let eventAnalytics = isEventAnalytics(stats.analytics) ? stats.analytics : null;
+    if (!eventAnalytics && typeof stats.analytics === "string") {
+      try {
+        const parsedAnalytics = JSON.parse(stats.analytics);
+        if (isEventAnalytics(parsedAnalytics)) {
+          eventAnalytics = parsedAnalytics;
+        }
+      } catch {
+        eventAnalytics = null;
+      }
+    }
 
     const deliveries = n(stats.deliveries);
     const totalOpens = n(stats.opens);
@@ -841,7 +1323,7 @@ export const handler = async (state) => {
 
     const trends = structureTrendsData(historicalIssues);
 
-    const insightData = {
+    const insightDataBase = {
       currentMetrics: {
         openRate,
         clickThroughRate,
@@ -898,7 +1380,15 @@ export const handler = async (state) => {
         deviceBreakdown: consolidatedData.deviceBreakdown || {},
         clientBreakdown: consolidatedData.clientBreakdown || {}
       },
-      clickGeography: consolidatedData.clickGeography || { totalClicks: 0, geoBreakdown: {} }
+      clickGeography: consolidatedData.clickGeography || { totalClicks: 0, geoBreakdown: {} },
+      eventAnalytics
+    };
+
+    const insightCandidates = buildInsightCandidates(insightDataBase);
+
+    const insightData = {
+      ...insightDataBase,
+      insightCandidates
     };
 
     await ddb.send(new UpdateItemCommand({

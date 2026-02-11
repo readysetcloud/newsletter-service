@@ -70,8 +70,11 @@ export const TopCountriesList: React.FC<TopCountriesListProps> = ({
   highlightedCountry,
   maxCountries = 5
 }) => {
+  // Defensive check: ensure geoDistribution is an array
+  const safeGeoDistribution = Array.isArray(geoDistribution) ? geoDistribution : [];
+
   // Sort countries by the selected metric
-  const sortedCountries = [...geoDistribution]
+  const sortedCountries = [...safeGeoDistribution]
     .sort((a, b) => getMetricValue(b, selectedMetric) - getMetricValue(a, selectedMetric))
     .slice(0, maxCountries);
 

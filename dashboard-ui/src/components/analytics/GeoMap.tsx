@@ -158,7 +158,11 @@ export function GeoMap({
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
 
   const validatedGeoDistribution = useMemo(
-    () => validateGeoDistribution(geoDistribution),
+    () => {
+      // Defensive check: ensure geoDistribution is an array
+      const safeGeoDistribution = Array.isArray(geoDistribution) ? geoDistribution : [];
+      return validateGeoDistribution(safeGeoDistribution);
+    },
     [geoDistribution]
   );
 
@@ -168,7 +172,10 @@ export function GeoMap({
     }
 
     const linkData = linkAnalytics.find(link => link.linkId === selectedLinkId);
-    return linkData?.geoDistribution ? validateGeoDistribution(linkData.geoDistribution) : [];
+    const linkGeoData = linkData?.geoDistribution;
+
+    // Defensive check: ensure linkGeoData is an array
+    return Array.isArray(linkGeoData) ? validateGeoDistribution(linkGeoData) : [];
   }, [validatedGeoDistribution, linkAnalytics, selectedLinkId]);
 
   const handleMetricChange = (metric: GeoMetric) => {

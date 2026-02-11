@@ -38,6 +38,24 @@ const statusConfig: Record<IssueStatus, { label: string; className: string }> = 
 export const IssueStatusBadge: React.FC<IssueStatusBadgeProps> = React.memo(({ status, className }) => {
   const config = statusConfig[status];
 
+  // Defensive check: if status is invalid, use a default config
+  if (!config) {
+    console.warn(`Invalid issue status: ${status}`);
+    return (
+      <span
+        className={cn(
+          'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border',
+          'bg-gray-100 text-gray-800 border-gray-300 dark:bg-gray-700 dark:text-gray-100 dark:border-gray-500',
+          className
+        )}
+        role="status"
+        aria-label={`Issue status: ${status || 'Unknown'}`}
+      >
+        {status || 'Unknown'}
+      </span>
+    );
+  }
+
   return (
     <span
       className={cn(

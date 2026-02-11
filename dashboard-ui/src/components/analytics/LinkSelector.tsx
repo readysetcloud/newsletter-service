@@ -16,7 +16,9 @@ export function LinkSelector({
   selectedLinkId,
   onLinkSelect
 }: LinkSelectorProps) {
-  const totalClicks = links.reduce((sum, link) => sum + link.totalClicks, 0);
+  // Defensive check: ensure links is an array
+  const safeLinks = Array.isArray(links) ? links : [];
+  const totalClicks = safeLinks.reduce((sum, link) => sum + (link?.totalClicks || 0), 0);
 
   return (
     <div className="mb-4">
@@ -36,7 +38,7 @@ export function LinkSelector({
           </div>
         </button>
 
-        {links.map(link => (
+        {safeLinks.map(link => (
           <button
             key={link.id}
             onClick={() => onLinkSelect(link.id)}
@@ -49,7 +51,7 @@ export function LinkSelector({
             <div className="flex justify-between items-center gap-2">
               <span className="truncate">{link.title || link.url}</span>
               <span className="text-xs text-gray-500 flex-shrink-0">
-                {link.totalClicks.toLocaleString()} clicks
+                {(link.totalClicks || 0).toLocaleString()} clicks
               </span>
             </div>
           </button>

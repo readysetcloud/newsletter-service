@@ -2,7 +2,8 @@ import { SESv2Client, SendEmailCommand, ListContactsCommand } from "@aws-sdk/cli
 import { SchedulerClient, CreateScheduleCommand } from "@aws-sdk/client-scheduler";
 import { DynamoDBClient, QueryCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
-import { encrypt } from './utils/helpers.mjs';
+import { encrypt, sendWithRetry } from './utils/helpers.mjs';
+import { tryGetContactsFromCache } from './utils/contact-cache.mjs';
 
 // Key patterns for DynamoDB (previously from ./senders/types.mjs)
 const KEY_PATTERNS = {
@@ -17,32 +18,25 @@ const ddb = new DynamoDBClient();
 const tpsLimit = parseInt(process.env.SES_TPS_LIMIT || "14", 10);
 const delayMs = Math.ceil(1000 / tpsLimit);
 
-const sendWithRetry = async (sendFn, maxRetries = 3) => {
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      return await sendFn();
-    } catch (err) {
-      const errorName = err?.name || err?.Code || err?.code;
-      const statusCode = err?.$metadata?.httpStatusCode;
-      const message = err?.message || '';
-      const isThrottling = [
-        'Throttling',
-        'ThrottlingException',
-        'TooManyRequestsException',
-        'RequestLimitExceeded',
-        'SlowDown'
-      ].includes(errorName) || statusCode === 429 || message.includes('Rate exceeded');
-
-      if (isThrottling) {
-        const delay = Math.pow(2, attempt) * 1000; // Exponential backoff
-        console.log(`Throttled (${errorName || statusCode || 'unknown'}), retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      } else {
-        throw err;
-      }
-    }
+/**
+ * Execute a phase with logging
+ * @param {string} phaseName - Name of the phase
+ * @param {Function} phaseFunction - Async function to execute
+ * @returns {Promise<any>} Result of the phase function
+ */
+const executePhase = async (phaseName, phaseFunction) => {
+  const startTime = Date.now();
+  console.log(`[PHASE START] ${phaseName}`);
+  try {
+    const result = await phaseFunction();
+    const duration = Date.now() - startTime;
+    console.log(`[PHASE COMPLETE] ${phaseName} (${duration}ms)`);
+    return result;
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    console.error(`[PHASE ERROR] ${phaseName} (${duration}ms)`, error);
+    throw error;
   }
-  throw new Error('Max retries exceeded');
 };
 
 /**
@@ -53,15 +47,17 @@ const sendWithRetry = async (sendFn, maxRetries = 3) => {
  */
 const getSenderByEmail = async (tenantId, email) => {
   try {
-    const result = await ddb.send(new QueryCommand({
-      TableName: process.env.TABLE_NAME,
-      IndexName: 'GSI1',
-      KeyConditionExpression: 'GSI1PK = :gsi1pk AND GSI1SK = :gsi1sk',
-      ExpressionAttributeValues: marshall({
-        ':gsi1pk': KEY_PATTERNS.SENDER_GSI1PK(tenantId),
-        ':gsi1sk': email
-      })
-    }));
+    const result = await sendWithRetry(async () => {
+      return await ddb.send(new QueryCommand({
+        TableName: process.env.TABLE_NAME,
+        IndexName: 'GSI1',
+        KeyConditionExpression: 'GSI1PK = :gsi1pk AND GSI1SK = :gsi1sk',
+        ExpressionAttributeValues: marshall({
+          ':gsi1pk': KEY_PATTERNS.SENDER_GSI1PK(tenantId),
+          ':gsi1sk': email
+        })
+      }));
+    }, 'Query sender by email');
 
     if (result.Items && result.Items.length > 0) {
       return unmarshall(result.Items[0]);
@@ -80,17 +76,19 @@ const getSenderByEmail = async (tenantId, email) => {
  */
 const getDefaultSender = async (tenantId) => {
   try {
-    const result = await ddb.send(new QueryCommand({
-      TableName: process.env.TABLE_NAME,
-      IndexName: 'GSI1',
-      KeyConditionExpression: 'GSI1PK = :gsi1pk',
-      FilterExpression: 'isDefault = :isDefault AND verificationStatus = :verified',
-      ExpressionAttributeValues: marshall({
-        ':gsi1pk': KEY_PATTERNS.SENDER_GSI1PK(tenantId),
-        ':isDefault': true,
-        ':verified': 'verified'
-      })
-    }));
+    const result = await sendWithRetry(async () => {
+      return await ddb.send(new QueryCommand({
+        TableName: process.env.TABLE_NAME,
+        IndexName: 'GSI1',
+        KeyConditionExpression: 'GSI1PK = :gsi1pk',
+        FilterExpression: 'isDefault = :isDefault AND verificationStatus = :verified',
+        ExpressionAttributeValues: marshall({
+          ':gsi1pk': KEY_PATTERNS.SENDER_GSI1PK(tenantId),
+          ':isDefault': true,
+          ':verified': 'verified'
+        })
+      }));
+    }, 'Query default sender');
 
     if (result.Items && result.Items.length > 0) {
       return unmarshall(result.Items[0]);
@@ -103,29 +101,76 @@ const getDefaultSender = async (tenantId) => {
 };
 
 /**
- * Update sender metrics after sending emails
+ * Update sender metrics after sending emails (Phase 4)
  * @param {string} tenantId - Tenant identifier
  * @param {string} senderId - Sender identifier
  * @param {number} emailCount - Number of emails sent
  */
-const updateSenderMetrics = async (tenantId, senderId, emailCount) => {
+const updateMetricsPhase = async (tenantId, senderId, emailCount) => {
+  console.log(`[METRICS] Starting update - senderId: ${senderId}, emailCount: ${emailCount}`);
+
   try {
-    await ddb.send(new UpdateItemCommand({
-      TableName: process.env.TABLE_NAME,
-      Key: marshall({
-        pk: tenantId,
-        sk: KEY_PATTERNS.SENDER(senderId)
-      }),
-      UpdateExpression: 'ADD emailsSent :count SET lastSentAt = :timestamp',
-      ExpressionAttributeValues: marshall({
-        ':count': emailCount,
-        ':timestamp': new Date().toISOString()
-      })
-    }));
+    await sendWithRetry(async () => {
+      return await ddb.send(new UpdateItemCommand({
+        TableName: process.env.TABLE_NAME,
+        Key: marshall({
+          pk: tenantId,
+          sk: KEY_PATTERNS.SENDER(senderId)
+        }),
+        UpdateExpression: 'ADD emailsSent :count SET lastSentAt = :timestamp',
+        ExpressionAttributeValues: marshall({
+          ':count': emailCount,
+          ':timestamp': new Date().toISOString()
+        })
+      }));
+    }, 'Update sender metrics');
+
+    console.log(`[METRICS] Update complete`);
   } catch (error) {
-    console.error('Error updating sender metrics:', error);
+    console.error('[METRICS] Error updating sender metrics:', error);
     // Don't throw error here as it shouldn't fail the email send
   }
+};
+
+/**
+ * Validate and select sender email for the tenant
+ * @param {string} tenantId - Tenant identifier
+ * @param {string|null} fromEmail - Optional specific sender email to use
+ * @returns {Promise<Object>} Sender record with email and senderId
+ */
+const validateSenderPhase = async (tenantId, fromEmail) => {
+  console.log(`[SENDER] Starting validation - tenantId: ${tenantId}, requested: ${fromEmail || 'default'}`);
+
+  let senderRecord = null;
+  const queryStart = Date.now();
+
+  if (fromEmail) {
+    // Query by specific email
+    console.log(`[SENDER] Querying by email: ${fromEmail}`);
+    senderRecord = await getSenderByEmail(tenantId, fromEmail);
+    const queryDuration = Date.now() - queryStart;
+    console.log(`[SENDER] Query completed in ${queryDuration}ms`);
+
+    if (!senderRecord) {
+      throw new Error(`From email '${fromEmail}' is not configured for this tenant`);
+    }
+    if (senderRecord.verificationStatus !== 'verified') {
+      throw new Error(`From email '${fromEmail}' is not verified`);
+    }
+  } else {
+    // Query for default sender
+    console.log(`[SENDER] Querying default sender`);
+    senderRecord = await getDefaultSender(tenantId);
+    const queryDuration = Date.now() - queryStart;
+    console.log(`[SENDER] Query completed in ${queryDuration}ms`);
+
+    if (!senderRecord) {
+      throw new Error('No default sender configured for this tenant');
+    }
+  }
+
+  console.log(`[SENDER] Selected: ${senderRecord.email}, status: ${senderRecord.verificationStatus}`);
+  return senderRecord;
 };
 
 /**
@@ -136,13 +181,15 @@ const updateSenderMetrics = async (tenantId, senderId, emailCount) => {
  */
 const filterRecentlyUnsubscribed = async (tenantId, emailAddresses) => {
   try {
-    const result = await ddb.send(new QueryCommand({
-      TableName: process.env.TABLE_NAME,
-      KeyConditionExpression: 'pk = :pk',
-      ExpressionAttributeValues: marshall({
-        ':pk': `${tenantId}#recent-unsubscribes`
-      })
-    }));
+    const result = await sendWithRetry(async () => {
+      return await ddb.send(new QueryCommand({
+        TableName: process.env.TABLE_NAME,
+        KeyConditionExpression: 'pk = :pk',
+        ExpressionAttributeValues: marshall({
+          ':pk': `${tenantId}#recent-unsubscribes`
+        })
+      }));
+    }, 'Query recent unsubscribes');
 
     if (!result.Items || result.Items.length === 0) {
       return emailAddresses; // No recent unsubscribes
@@ -168,9 +215,156 @@ const filterRecentlyUnsubscribed = async (tenantId, emailAddresses) => {
   }
 };
 
-export const handler = async (event) => {
-  try {
+/**
+ * Retrieve contacts from API with pagination logging
+ * @param {string} listName - Name of the contact list
+ * @returns {Promise<string[]>} Array of email addresses
+ */
+const retrieveContactsFromAPI = async (listName) => {
+  const contacts = [];
+  let nextToken;
+  let pageNum = 0;
 
+  do {
+    pageNum++;
+    const pageStart = Date.now();
+    console.log(`[CONTACTS] API request - page ${pageNum}`);
+
+    const response = await sendWithRetry(async () => {
+      return await ses.send(new ListContactsCommand({
+        ContactListName: listName,
+        NextToken: nextToken
+      }));
+    }, 'Retrieve contact list page');
+
+    const pageDuration = Date.now() - pageStart;
+    console.log(`[CONTACTS] Page ${pageNum} completed in ${pageDuration}ms - received ${response.Contacts?.length || 0} contacts`);
+
+    if (response.Contacts?.length) {
+      contacts.push(...response.Contacts.map(c => c.EmailAddress));
+    }
+    nextToken = response.NextToken;
+  } while (nextToken);
+
+  console.log(`[CONTACTS] API retrieval complete - total contacts: ${contacts.length}`);
+  return contacts;
+};
+
+/**
+ * Retrieve contacts for a list using cache-first strategy
+ * @param {string} listName - Name of the contact list
+ * @param {string} tenantId - Tenant identifier (for unsubscribe filtering)
+ * @returns {Promise<string[]>} Array of email addresses
+ */
+const retrieveContactsPhase = async (listName, tenantId) => {
+  console.log(`[CONTACTS] Starting retrieval - list: ${listName}`);
+
+  // Try cache first
+  const cacheResult = await tryGetContactsFromCache(listName);
+
+  let emailAddresses = [];
+
+  if (cacheResult.success) {
+    console.log(`[CONTACTS] Cache hit - file age: ${cacheResult.ageHours}h, contacts: ${cacheResult.contacts.length}`);
+    emailAddresses = cacheResult.contacts;
+  } else {
+    console.log(`[CONTACTS] Cache miss - reason: ${cacheResult.reason}`);
+    console.log(`[CONTACTS] Falling back to API`);
+    emailAddresses = await retrieveContactsFromAPI(listName);
+  }
+
+  if (emailAddresses.length === 0) {
+    throw new Error(`No contacts found in list: ${listName}`);
+  }
+
+  // Filter out recently unsubscribed emails (30-day buffer for safety)
+  const filteredAddresses = await filterRecentlyUnsubscribed(tenantId, emailAddresses);
+  const excludedCount = emailAddresses.length - filteredAddresses.length;
+  if (excludedCount > 0) {
+    console.log(`[CONTACTS] Excluded ${excludedCount} recently unsubscribed emails from send`);
+  }
+  emailAddresses = filteredAddresses;
+
+  console.log(`[CONTACTS] Retrieval complete - total contacts: ${emailAddresses.length}`);
+  return emailAddresses;
+};
+
+/**
+ * Send emails to recipients with personalization and TPS throttling
+ * @param {string[]} emailAddresses - Array of recipient email addresses
+ * @param {Object} emailConfig - Email configuration object
+ * @param {string} emailConfig.subject - Email subject line
+ * @param {string} emailConfig.html - Email HTML body
+ * @param {Object} emailConfig.replacements - Replacement tokens for personalization
+ * @param {string} emailConfig.referenceNumber - Optional reference number for tracking
+ * @param {string} senderEmail - Sender email address
+ * @returns {Promise<number>} Number of emails sent
+ */
+const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
+  console.log(`[SENDING] Starting - recipients: ${emailAddresses.length}, TPS: ${tpsLimit}, sender: ${senderEmail}`);
+
+  let sentCount = 0;
+  const totalCount = emailAddresses.length;
+
+  // Calculate progress logging interval: every 10% or every 50 emails, whichever is smaller
+  const logInterval = Math.min(50, Math.ceil(totalCount / 10));
+
+  for (const email of emailAddresses) {
+    await sendWithRetry(async () => {
+      // Apply personalization replacements
+      let personalizedHtml = emailConfig.html;
+
+      if (emailConfig.replacements?.emailAddress) {
+        personalizedHtml = personalizedHtml.replace(
+          new RegExp(emailConfig.replacements.emailAddress, 'g'),
+          email
+        );
+      }
+
+      if (emailConfig.replacements?.emailAddressHash) {
+        const emailHash = encrypt(email);
+        personalizedHtml = personalizedHtml.replace(
+          new RegExp(emailConfig.replacements.emailAddressHash, 'g'),
+          emailHash
+        );
+      }
+
+      await ses.send(new SendEmailCommand({
+        FromEmailAddress: senderEmail,
+        Destination: { ToAddresses: [email] },
+        Content: {
+          Simple: {
+            Subject: { Data: emailConfig.subject },
+            Body: { Html: { Data: personalizedHtml } }
+          }
+        },
+        ...emailConfig.referenceNumber && {
+          EmailTags: [{ Name: 'referenceNumber', Value: emailConfig.referenceNumber }]
+        },
+        ConfigurationSetName: process.env.CONFIGURATION_SET
+      }));
+    }, `Send email to ${email}`);
+
+    sentCount++;
+
+    // Log progress at intervals or when complete
+    if (sentCount % logInterval === 0 || sentCount === totalCount) {
+      console.log(`[SENDING] Progress: ${sentCount}/${totalCount} (${Math.round(sentCount / totalCount * 100)}%)`);
+    }
+
+    // TPS throttling delay
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+  }
+
+  console.log(`[SENDING] Complete - sent ${sentCount} emails`);
+  return sentCount;
+};
+
+export const handler = async (event) => {
+  const executionStart = Date.now();
+  console.log('[EXECUTION START] Send Email v2 handler invoked');
+
+  try {
     if (!event?.detail) {
       throw new Error('Missing event detail');
     }
@@ -190,28 +384,11 @@ export const handler = async (event) => {
       throw new Error('Missing required field: tenantId');
     }
 
-    // Determine which sender email to use
-    let senderEmail = null;
-    let senderRecord = null;
-
-    if (from) {
-      // If from email is provided, verify it's configured for this tenant
-      senderRecord = await getSenderByEmail(tenantId, from);
-      if (!senderRecord) {
-        throw new Error(`From email '${from}' is not configured for this tenant`);
-      }
-      if (senderRecord.verificationStatus !== 'verified') {
-        throw new Error(`From email '${from}' is not verified`);
-      }
-      senderEmail = from;
-    } else {
-      // If no from email provided, use the default sender
-      senderRecord = await getDefaultSender(tenantId);
-      if (!senderRecord) {
-        throw new Error('No default sender configured for this tenant');
-      }
-      senderEmail = senderRecord.email;
-    }
+    // Phase 1: Sender Validation
+    const senderRecord = await executePhase('Sender Validation', async () => {
+      return await validateSenderPhase(tenantId, from);
+    });
+    const senderEmail = senderRecord.email;
 
     console.log(`Using sender email: ${senderEmail} for tenant: ${tenantId}`);
 
@@ -222,26 +399,28 @@ export const handler = async (event) => {
       if (sendAtDate > now) {
         // Schedule for future, but remove sendAt property
         delete data.sendAt;
-        await scheduler.send(new CreateScheduleCommand({
-          ActionAfterCompletion: 'DELETE',
-          FlexibleTimeWindow: { Mode: 'OFF' },
-          GroupName: 'newsletter',
-          Name: `email-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
-          ScheduleExpression: `at(${sendAtDate.toISOString().slice(0, 19)})`,
-          Target: {
-            Arn: 'arn:aws:scheduler:::aws-sdk:eventbridge:putEvents',
-            RoleArn: process.env.SCHEDULER_ROLE_ARN,
-            Input: JSON.stringify({
-              Entries: [{
-                EventBusName: 'default',
-                Detail: JSON.stringify(data),
-                DetailType: 'Send Email v2',
-                Source: 'newsletter-service'
-              }]
-            })
-          },
+        await sendWithRetry(async () => {
+          return await scheduler.send(new CreateScheduleCommand({
+            ActionAfterCompletion: 'DELETE',
+            FlexibleTimeWindow: { Mode: 'OFF' },
+            GroupName: 'newsletter',
+            Name: `email-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+            ScheduleExpression: `at(${sendAtDate.toISOString().slice(0, 19)})`,
+            Target: {
+              Arn: 'arn:aws:scheduler:::aws-sdk:eventbridge:putEvents',
+              RoleArn: process.env.SCHEDULER_ROLE_ARN,
+              Input: JSON.stringify({
+                Entries: [{
+                  EventBusName: 'default',
+                  Detail: JSON.stringify(data),
+                  DetailType: 'Send Email v2',
+                  Source: 'newsletter-service'
+                }]
+              })
+            },
 
-        }));
+          }));
+        }, 'Schedule future email send');
         return { scheduled: true, sendAt: sendAtDate.toISOString() };
       }
     }
@@ -250,76 +429,41 @@ export const handler = async (event) => {
     if (to.email) {
       emailAddresses = [to.email];
     } else if (to.list) {
-      let nextToken;
-      do {
-        const contacts = await ses.send(new ListContactsCommand({
-          ContactListName: to.list,
-          NextToken: nextToken
-        }));
-        if (contacts.Contacts?.length) {
-          emailAddresses.push(...contacts.Contacts.map(c => c.EmailAddress));
-        }
-        nextToken = contacts.NextToken;
-      } while (nextToken);
-
-      if (emailAddresses.length === 0) {
-        throw new Error(`No contacts found in list: ${to.list}`);
-      }
-
-      // Filter out recently unsubscribed emails (30-day buffer for safety)
-      const filteredAddresses = await filterRecentlyUnsubscribed(tenantId, emailAddresses);
-      const excludedCount = emailAddresses.length - filteredAddresses.length;
-      if (excludedCount > 0) {
-        console.log(`Excluded ${excludedCount} recently unsubscribed emails from send`);
-      }
-      emailAddresses = filteredAddresses;
-    }
-
-    console.log(`Sending to ${emailAddresses.length} recipients with TPS limit ${tpsLimit} from ${senderEmail}`);
-
-    // Send each email with retry and TPS throttle
-    for (const email of emailAddresses) {
-      await sendWithRetry(async () => {
-        let personalizedEmail = html;
-        if (replacements?.emailAddress) {
-          personalizedEmail = personalizedEmail.replace(new RegExp(replacements.emailAddress, 'g'), email);
-        }
-        if (replacements?.emailAddressHash) {
-          const emailHash = encrypt(email);
-          personalizedEmail = personalizedEmail.replace(new RegExp(replacements.emailAddressHash, 'g'), emailHash);
-        }
-
-        await ses.send(new SendEmailCommand({
-          FromEmailAddress: senderEmail,
-          Destination: { ToAddresses: [email] },
-          Content: {
-            Simple: {
-              Subject: { Data: subject },
-              Body: { Html: { Data: personalizedEmail } }
-            }
-          },
-          ...data.referenceNumber && { EmailTags: [{ Name: 'referenceNumber', Value: data.referenceNumber }] },
-          ConfigurationSetName: process.env.CONFIGURATION_SET
-        }));
+      // Phase 2: Contact Retrieval
+      emailAddresses = await executePhase('Contact Retrieval', async () => {
+        return await retrieveContactsPhase(to.list, tenantId);
       });
-
-      // Make sure we don't send too quickly
-      await new Promise(resolve => setTimeout(resolve, delayMs));
     }
 
-    // Update sender metrics
+    // Phase 3: Email Sending
+    const sentCount = await executePhase('Email Sending', async () => {
+      return await sendEmailsPhase(emailAddresses, {
+        subject,
+        html,
+        replacements,
+        referenceNumber: data.referenceNumber
+      }, senderEmail);
+    });
+
+    // Phase 4: Metrics Update
     if (senderRecord) {
-      await updateSenderMetrics(tenantId, senderRecord.senderId, emailAddresses.length);
+      await executePhase('Metrics Update', async () => {
+        return await updateMetricsPhase(tenantId, senderRecord.senderId, sentCount);
+      });
     }
+
+    const executionDuration = Date.now() - executionStart;
+    console.log(`[EXECUTION COMPLETE] Total sent: ${sentCount}, Duration: ${executionDuration}ms, Sender: ${senderEmail}`);
 
     return {
       sent: true,
-      recipients: emailAddresses.length,
+      recipients: sentCount,
       senderEmail: senderEmail,
       senderId: senderRecord?.senderId
     };
   } catch (err) {
-    console.error('Send email error:', {
+    const executionDuration = Date.now() - executionStart;
+    console.error(`[EXECUTION ERROR] Duration: ${executionDuration}ms`, {
       error: err.message,
       stack: err.stack,
       event: JSON.stringify(event, null, 2)

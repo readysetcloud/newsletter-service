@@ -152,21 +152,32 @@ export const decrypt = (encrypted) => {
   }
 };
 
-export const sendWithRetry = async (sendFn, maxRetries = MAX_RETRIES) => {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+export const sendWithRetry = async (sendFn, operationName = 'Operation', maxRetries = MAX_RETRIES) => {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       return await sendFn();
     } catch (err) {
-      if (err.name === 'TooManyRequestsException' || err.name === 'ThrottlingException') {
+      const errorName = err?.name || err?.Code || err?.code;
+      const statusCode = err?.$metadata?.httpStatusCode;
+      const message = err?.message || '';
+      const isThrottling = [
+        'Throttling',
+        'ThrottlingException',
+        'TooManyRequestsException',
+        'RequestLimitExceeded',
+        'SlowDown'
+      ].includes(errorName) || statusCode === 429 || message.includes('Rate exceeded');
+
+      if (isThrottling) {
         const delay = Math.pow(2, attempt) * 1000; // Exponential backoff
-        console.warn(`Throttled, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`);
+        console.log(`[THROTTLE] ${operationName} throttled - error: ${errorName || statusCode}, retry ${attempt + 1}/${maxRetries} in ${delay}ms`);
         await sleep(delay);
       } else {
-        throw err; // Non-throttle error
+        throw err;
       }
     }
   }
-  throw new Error('Max retries exceeded');
+  throw new Error(`[THROTTLE] ${operationName} - max retries exceeded`);
 };
 
 export const throttle = async (tasks, rateLimitPerSecond = TPS_LIMIT) => {

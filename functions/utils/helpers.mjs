@@ -152,6 +152,8 @@ export const decrypt = (encrypted) => {
   }
 };
 
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 export const sendWithRetry = async (sendFn, operationName = 'Operation', maxRetries = MAX_RETRIES) => {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
@@ -189,5 +191,3 @@ export const throttle = async (tasks, rateLimitPerSecond = TPS_LIMIT) => {
     }
   }
 };
-
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));

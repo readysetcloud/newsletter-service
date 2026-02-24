@@ -221,33 +221,38 @@ const filterRecentlyUnsubscribed = async (tenantId, emailAddresses) => {
  * @returns {Promise<string[]>} Array of email addresses
  */
 const retrieveContactsFromAPI = async (listName) => {
-  const contacts = [];
-  let nextToken;
-  let pageNum = 0;
+  try {
+    const contacts = [];
+    let nextToken;
+    let pageNum = 0;
 
-  do {
-    pageNum++;
-    const pageStart = Date.now();
-    console.log(`[CONTACTS] API request - page ${pageNum}`);
+    do {
+      pageNum++;
+      const pageStart = Date.now();
+      console.log(`[CONTACTS] API request - page ${pageNum}`);
 
-    const response = await sendWithRetry(async () => {
-      return await ses.send(new ListContactsCommand({
-        ContactListName: listName,
-        NextToken: nextToken
-      }));
-    }, 'Retrieve contact list page');
+      const response = await sendWithRetry(async () => {
+        return await ses.send(new ListContactsCommand({
+          ContactListName: listName,
+          NextToken: nextToken
+        }));
+      }, 'Retrieve contact list page');
 
-    const pageDuration = Date.now() - pageStart;
-    console.log(`[CONTACTS] Page ${pageNum} completed in ${pageDuration}ms - received ${response.Contacts?.length || 0} contacts`);
+      const pageDuration = Date.now() - pageStart;
+      console.log(`[CONTACTS] Page ${pageNum} completed in ${pageDuration}ms - received ${response.Contacts?.length || 0} contacts`);
 
-    if (response.Contacts?.length) {
-      contacts.push(...response.Contacts.map(c => c.EmailAddress));
-    }
-    nextToken = response.NextToken;
-  } while (nextToken);
+      if (response.Contacts?.length) {
+        contacts.push(...response.Contacts.map(c => c.EmailAddress));
+      }
+      nextToken = response.NextToken;
+    } while (nextToken);
 
-  console.log(`[CONTACTS] API retrieval complete - total contacts: ${contacts.length}`);
-  return contacts;
+    console.log(`[CONTACTS] API retrieval complete - total contacts: ${contacts.length}`);
+    return contacts;
+  } catch (error) {
+    console.error(`[CONTACTS] Failed to retrieve contacts from API for list ${listName}:`, error);
+    throw new Error(`Failed to retrieve contacts from SES API: ${error.message}`);
+  }
 };
 
 /**

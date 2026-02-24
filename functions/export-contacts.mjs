@@ -1,5 +1,5 @@
 import { SESv2Client, ListContactListsCommand, ListContactsCommand } from "@aws-sdk/client-sesv2";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { sendWithRetry } from './utils/helpers.mjs';
 
 const ses = new SESv2Client();
@@ -77,12 +77,79 @@ const exportContactList = async (listName) => {
 };
 
 /**
+ * Invalidate (delete) cache for a specific contact list
+ * @param {string} listName - Name of the contact list to invalidate
+ * @returns {Promise<void>}
+ */
+const invalidateContactListCache = async (listName) => {
+  const key = `contact-lists/${listName}/contacts.json`;
+  await sendWithRetry(async () => {
+    return await s3.send(new DeleteObjectCommand({
+      Bucket: process.env.NEWSLETTER_BUCKET,
+      Key: key
+    }));
+  }, 'S3 DeleteObject');
+  console.log(`[INVALIDATE] Deleted cache for list: ${listName}`);
+};
+
+/**
  * Main handler for export-contacts Lambda function
  * Exports all SES contact lists to S3 for caching
- * @param {Object} event - Lambda event (unused)
+ * Supports manual cache invalidation via event.action = 'invalidate'
+ * @param {Object} event - Lambda event with optional action and listName
  * @returns {Promise<Object>} Export summary with statistics
  */
-export const handler = async (event) => {
+export const handler = async (event = {}) => {
+  // Validate required environment variables
+  if (!process.env.NEWSLETTER_BUCKET) {
+    throw new Error('NEWSLETTER_BUCKET environment variable is required');
+  }
+
+  // Handle manual cache invalidation
+  if (event.action === 'invalidate') {
+    console.log('[INVALIDATE] Starting cache invalidation');
+    const startTime = Date.now();
+
+    if (event.listName) {
+      // Invalidate specific list
+      await invalidateContactListCache(event.listName);
+      const duration = Date.now() - startTime;
+      console.log(`[INVALIDATE] Complete - duration: ${duration}ms`);
+      return {
+        success: true,
+        action: 'invalidate',
+        listName: event.listName,
+        durationMs: duration
+      };
+    } else {
+      // Invalidate all lists
+      const lists = await getAllContactLists();
+      let invalidatedCount = 0;
+      const errors = [];
+
+      for (const listName of lists) {
+        try {
+          await invalidateContactListCache(listName);
+          invalidatedCount++;
+        } catch (error) {
+          console.error(`[INVALIDATE] Failed to invalidate ${listName}:`, error);
+          errors.push({ listName, error: error.message });
+        }
+      }
+
+      const duration = Date.now() - startTime;
+      console.log(`[INVALIDATE] Complete - invalidated: ${invalidatedCount}, errors: ${errors.length}, duration: ${duration}ms`);
+      return {
+        success: true,
+        action: 'invalidate',
+        listsInvalidated: invalidatedCount,
+        errors,
+        durationMs: duration
+      };
+    }
+  }
+
+  // Default action: export all contact lists
   console.log('[EXPORT] Starting contact list export');
   const startTime = Date.now();
 
@@ -113,6 +180,7 @@ export const handler = async (event) => {
 
     return {
       success: true,
+      action: 'export',
       listsExported: totalLists,
       totalContacts,
       errors,

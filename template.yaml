@@ -350,10 +350,12 @@ Resources:
           - Id: DeleteRule
             Status: Enabled
             ExpirationInDays: 7
+            NoncurrentVersionExpirationInDays: 7
           - Id: ContactListsCacheExpiration
             Status: Enabled
             Prefix: contact-lists/
-            ExpirationInDays: 30
+            ExpirationInDays: 10
+            NoncurrentVersionExpirationInDays: 1
       VersioningConfiguration:
         Status: Enabled
 
@@ -1834,7 +1836,9 @@ Resources:
                 - ses:ListContacts
               Resource: "*"
             - Effect: Allow
-              Action: s3:PutObject
+              Action:
+                - s3:PutObject
+                - s3:DeleteObject
               Resource: !Sub "${NewsletterBucket.Arn}/contact-lists/*"
       Environment:
         Variables:
@@ -1845,8 +1849,6 @@ Resources:
           Type: Schedule
           Properties:
             Schedule: cron(0 2 ? * SUN *)  # Run at 2 AM UTC every Sunday
-            Description: Weekly export of SES contact lists to S3
-            Enabled: true
 
   ParseMdToJsonFunction:
     Type: AWS::Serverless::Function

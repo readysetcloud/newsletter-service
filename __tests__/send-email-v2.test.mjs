@@ -359,7 +359,7 @@ describe('send-email-v2 property-based tests', () => {
      * should be incremented and lastSentAt timestamp should be updated
      * Validates: Requirements 4.4
      */
-    test.skip('sender metrics are updated after successful email send', () => {
+    test('sender metrics are updated after successful email send', () => {
       const arbitraryEmail = fc.emailAddress();
       const arbitraryTenantId = fc.string({ minLength: 5, maxLength: 50 }).filter(s => s.trim().length > 0);
       const arbitrarySenderId = fc.string({ minLength: 5, maxLength: 50 }).filter(s => s.trim().length > 0);
@@ -452,7 +452,7 @@ describe('send-email-v2 property-based tests', () => {
      * sends should be at least the configured minimum delay based on TPS limit
      * Validates: Requirements 4.5
      */
-    test.skip('emails are sent with appropriate delay based on TPS limit', () => {
+    test('emails are sent with appropriate delay based on TPS limit', () => {
       const arbitraryTenantId = fc.string({ minLength: 5, maxLength: 50 }).filter(s => s.trim().length > 0);
       const arbitrarySenderId = fc.string({ minLength: 5, maxLength: 50 }).filter(s => s.trim().length > 0);
       const arbitrarySenderEmail = fc.emailAddress();

@@ -350,6 +350,12 @@ Resources:
           - Id: DeleteRule
             Status: Enabled
             ExpirationInDays: 7
+            NoncurrentVersionExpirationInDays: 7
+          - Id: ContactListsCacheExpiration
+            Status: Enabled
+            Prefix: contact-lists/
+            ExpirationInDays: 10
+            NoncurrentVersionExpirationInDays: 1
       VersioningConfiguration:
         Status: Enabled
 
@@ -1785,12 +1791,18 @@ Resources:
             - Effect: Allow
               Action: dynamodb:Query
               Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}/index/GSI1
+            - Effect: Allow
+              Action: s3:GetObject
+              Resource: !Sub "${NewsletterBucket.Arn}/contact-lists/*"
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          TABLE_NAME: !Ref NewsletterTable
           SCHEDULER_ROLE_ARN: !GetAtt SchedulerExecutionRole.Arn
           EMAIL_ENCRYPTION_KEY: !Ref EncryptionKey
           CONFIGURATION_SET: !Ref ConfigurationSet
+          NEWSLETTER_BUCKET: !Ref NewsletterBucket
+          CACHE_MAX_AGE_DAYS: "8"
       Events:
         EmailEvent:
           Type: EventBridgeRule
@@ -1800,6 +1812,43 @@ Resources:
                 - newsletter-service
               detail-type:
                 - Send Email v2
+
+  ExportContactsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - export-contacts.mjs
+    Properties:
+      Runtime: nodejs22.x
+      CodeUri: functions
+      Handler: export-contacts.handler
+      Timeout: 900
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - ses:ListContactLists
+                - ses:ListContacts
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:DeleteObject
+              Resource: !Sub "${NewsletterBucket.Arn}/contact-lists/*"
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          NEWSLETTER_BUCKET: !Ref NewsletterBucket
+      Events:
+        WeeklySchedule:
+          Type: Schedule
+          Properties:
+            Schedule: cron(0 2 ? * SUN *)  # Run at 2 AM UTC every Sunday
 
   ParseMdToJsonFunction:
     Type: AWS::Serverless::Function

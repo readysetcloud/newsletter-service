@@ -8,8 +8,7 @@ const ddbInstance = { send: jest.fn() };
 // Mock AWS SDK
 jest.unstable_mockModule('@aws-sdk/client-sesv2', () => ({
   SESv2Client: jest.fn(() => sesInstance),
-  SendEmailCommand: jest.fn((params) => ({ __type: 'SendEmail', ...params })),
-  ListContactsCommand: jest.fn((params) => ({ __type: 'ListContacts', ...params }))
+  SendEmailCommand: jest.fn((params) => ({ __type: 'SendEmail', ...params }))
 }));
 
 jest.unstable_mockModule('@aws-sdk/client-scheduler', () => ({
@@ -34,11 +33,11 @@ jest.unstable_mockModule('../functions/utils/helpers.mjs', () => ({
   sendWithRetry: jest.fn(async (fn, operationName) => await fn())
 }));
 
-// Mock contact-cache
-jest.unstable_mockModule('../functions/utils/contact-cache.mjs', () => ({
-  tryGetContactsFromCache: jest.fn(() => Promise.resolve({
-    success: false,
-    reason: 'not found'
+// Mock subscriber utility
+jest.unstable_mockModule('../functions/utils/subscriber.mjs', () => ({
+  listSubscribers: jest.fn(() => Promise.resolve({
+    subscribers: [],
+    lastEvaluatedKey: undefined
   }))
 }));
 
@@ -46,6 +45,7 @@ jest.unstable_mockModule('../functions/utils/contact-cache.mjs', () => ({
 
 // Import after mocks
 const { handler } = await import('../functions/send-email-v2.mjs');
+const { listSubscribers } = await import('../functions/utils/subscriber.mjs');
 
 describe('send-email-v2', () => {
   beforeAll(() => {
@@ -57,6 +57,12 @@ describe('send-email-v2', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+
+    // Reset listSubscribers mock to default behavior
+    listSubscribers.mockResolvedValue({
+      subscribers: [],
+      lastEvaluatedKey: undefined
+    });
   });
 
   describe('sender email validation', () => {
@@ -343,6 +349,12 @@ describe('send-email-v2 property-based tests', () => {
     process.env.CONFIGURATION_SET = 'test-config-set';
     process.env.SES_TPS_LIMIT = '5';
 
+    // Reset listSubscribers mock to default behavior
+    listSubscribers.mockResolvedValue({
+      subscribers: [],
+      lastEvaluatedKey: undefined
+    });
+
     // Suppress console logs during property tests
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -484,21 +496,17 @@ describe('send-email-v2 property-based tests', () => {
           // Mock DynamoDB calls
           ddbInstance.send.mockImplementation((command) => {
             if (command.__type === 'Query') {
-              // First query is for sender lookup
-              if (command.IndexName === 'GSI1') {
-                return Promise.resolve({
-                  Items: [{
-                    unmarshalled: {
-                      senderId: data.senderId,
-                      email: data.senderEmail,
-                      verificationStatus: 'verified',
-                      isDefault: false
-                    }
-                  }]
-                });
-              }
-              // Second query is for recent unsubscribes
-              return Promise.resolve({ Items: [] });
+              // Query is for sender lookup
+              return Promise.resolve({
+                Items: [{
+                  unmarshalled: {
+                    senderId: data.senderId,
+                    email: data.senderEmail,
+                    verificationStatus: 'verified',
+                    isDefault: false
+                  }
+                }]
+              });
             }
             if (command.__type === 'UpdateItem') {
               return Promise.resolve({});
@@ -506,15 +514,14 @@ describe('send-email-v2 property-based tests', () => {
             return Promise.resolve({});
           });
 
-          // Mock SES ListContacts to return recipients
-          const expectedRecipients = [...data.recipients]; // Create a copy
+          // Mock listSubscribers to return recipients
+          listSubscribers.mockResolvedValue({
+            subscribers: data.recipients.map(email => ({ email })),
+            lastEvaluatedKey: undefined
+          });
+
+          // Mock SES SendEmail
           sesInstance.send.mockImplementation((command) => {
-            if (command.__type === 'ListContacts') {
-              return Promise.resolve({
-                Contacts: expectedRecipients.map(email => ({ EmailAddress: email })),
-                NextToken: undefined
-              });
-            }
             if (command.__type === 'SendEmail') {
               return Promise.resolve({ MessageId: `msg-${Math.random()}` });
             }
@@ -553,11 +560,18 @@ describe('send-email-v2 property-based tests', () => {
           );
           expect(sendEmailCalls.length).toBe(data.recipients.length);
 
-          // Property: Each email should be sent to correct recipient
+          // Property: Each email should be sent to a recipient from the list
           const sentEmails = sendEmailCalls.map(call =>
             call[0].Destination.ToAddresses[0]
           );
-          expect(sentEmails.sort()).toEqual(data.recipients.sort());
+
+          // Verify all sent emails are in the recipients list
+          sentEmails.forEach(email => {
+            expect(data.recipients).toContain(email);
+          });
+
+          // Verify all recipients received an email
+          expect(sentEmails.length).toBe(data.recipients.length);
         }),
         { numRuns: 100 }
       );

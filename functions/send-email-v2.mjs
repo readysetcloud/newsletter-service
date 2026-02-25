@@ -1,9 +1,9 @@
-import { SESv2Client, SendEmailCommand, ListContactsCommand } from "@aws-sdk/client-sesv2";
+import { SESv2Client, SendEmailCommand } from "@aws-sdk/client-sesv2";
 import { SchedulerClient, CreateScheduleCommand } from "@aws-sdk/client-scheduler";
 import { DynamoDBClient, QueryCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { encrypt, sendWithRetry } from './utils/helpers.mjs';
-import { tryGetContactsFromCache } from './utils/contact-cache.mjs';
+import { listSubscribers } from './utils/subscriber.mjs';
 
 // Key patterns for DynamoDB (previously from ./senders/types.mjs)
 const KEY_PATTERNS = {
@@ -174,123 +174,39 @@ const validateSenderPhase = async (tenantId, fromEmail) => {
 };
 
 /**
- * Filter out recently unsubscribed emails to handle SES propagation delays
+ * Retrieve subscribers for a tenant from Subscribers table
  * @param {string} tenantId - Tenant identifier
- * @param {string[]} emailAddresses - List of email addresses to filter
- * @returns {Promise<string[]>} Filtered list excluding recently unsubscribed emails
- */
-const filterRecentlyUnsubscribed = async (tenantId, emailAddresses) => {
-  try {
-    const result = await sendWithRetry(async () => {
-      return await ddb.send(new QueryCommand({
-        TableName: process.env.TABLE_NAME,
-        KeyConditionExpression: 'pk = :pk',
-        ExpressionAttributeValues: marshall({
-          ':pk': `${tenantId}#recent-unsubscribes`
-        })
-      }));
-    }, 'Query recent unsubscribes');
-
-    if (!result.Items || result.Items.length === 0) {
-      return emailAddresses; // No recent unsubscribes
-    }
-
-    // Extract recently unsubscribed emails
-    const recentlyUnsubscribed = new Set();
-    for (const item of result.Items) {
-      const record = unmarshall(item);
-      if (record.email) {
-        recentlyUnsubscribed.add(record.email.toLowerCase());
-      }
-    }
-
-    // Filter out recently unsubscribed emails
-    return emailAddresses.filter(email =>
-      !recentlyUnsubscribed.has(email.toLowerCase())
-    );
-  } catch (error) {
-    console.error('Error filtering recently unsubscribed emails:', error);
-    // If filtering fails, return original list to avoid blocking email sends
-    return emailAddresses;
-  }
-};
-
-/**
- * Retrieve contacts from API with pagination logging
- * @param {string} listName - Name of the contact list
  * @returns {Promise<string[]>} Array of email addresses
  */
-const retrieveContactsFromAPI = async (listName) => {
-  try {
-    const contacts = [];
-    let nextToken;
-    let pageNum = 0;
+const retrieveSubscribersPhase = async (tenantId) => {
+  console.log(`[SUBSCRIBERS] Starting retrieval - tenantId: ${tenantId}`);
 
-    do {
-      pageNum++;
-      const pageStart = Date.now();
-      console.log(`[CONTACTS] API request - page ${pageNum}`);
+  const emailAddresses = [];
+  let lastEvaluatedKey = undefined;
+  let pageNum = 0;
 
-      const response = await sendWithRetry(async () => {
-        return await ses.send(new ListContactsCommand({
-          ContactListName: listName,
-          NextToken: nextToken
-        }));
-      }, 'Retrieve contact list page');
+  do {
+    pageNum++;
+    const pageStart = Date.now();
+    console.log(`[SUBSCRIBERS] Query page ${pageNum}`);
 
-      const pageDuration = Date.now() - pageStart;
-      console.log(`[CONTACTS] Page ${pageNum} completed in ${pageDuration}ms - received ${response.Contacts?.length || 0} contacts`);
+    const result = await listSubscribers(tenantId, { exclusiveStartKey: lastEvaluatedKey });
 
-      if (response.Contacts?.length) {
-        contacts.push(...response.Contacts.map(c => c.EmailAddress));
-      }
-      nextToken = response.NextToken;
-    } while (nextToken);
+    const pageDuration = Date.now() - pageStart;
+    console.log(`[SUBSCRIBERS] Page ${pageNum} completed in ${pageDuration}ms - received ${result.subscribers.length} subscribers`);
 
-    console.log(`[CONTACTS] API retrieval complete - total contacts: ${contacts.length}`);
-    return contacts;
-  } catch (error) {
-    console.error(`[CONTACTS] Failed to retrieve contacts from API for list ${listName}:`, error);
-    throw new Error(`Failed to retrieve contacts from SES API: ${error.message}`);
-  }
-};
+    if (result.subscribers.length > 0) {
+      emailAddresses.push(...result.subscribers.map(s => s.email));
+    }
 
-/**
- * Retrieve contacts for a list using cache-first strategy
- * @param {string} listName - Name of the contact list
- * @param {string} tenantId - Tenant identifier (for unsubscribe filtering)
- * @returns {Promise<string[]>} Array of email addresses
- */
-const retrieveContactsPhase = async (listName, tenantId) => {
-  console.log(`[CONTACTS] Starting retrieval - list: ${listName}`);
-
-  // Try cache first
-  const cacheResult = await tryGetContactsFromCache(listName);
-
-  let emailAddresses = [];
-
-  if (cacheResult.success) {
-    console.log(`[CONTACTS] Cache hit - file age: ${cacheResult.ageHours}h, contacts: ${cacheResult.contacts.length}`);
-    emailAddresses = cacheResult.contacts;
-  } else {
-    console.log(`[CONTACTS] Cache miss - reason: ${cacheResult.reason}`);
-    console.log(`[CONTACTS] Falling back to API`);
-    emailAddresses = await retrieveContactsFromAPI(listName);
-  }
+    lastEvaluatedKey = result.lastEvaluatedKey;
+  } while (lastEvaluatedKey);
 
   if (emailAddresses.length === 0) {
-    throw new Error(`No contacts found in list: ${listName}`);
+    throw new Error(`No subscribers found for tenant: ${tenantId}`);
   }
 
-  // Filter out recently unsubscribed emails (30-day buffer for safety)
-  const filteredAddresses = await filterRecentlyUnsubscribed(tenantId, emailAddresses);
-  const excludedCount = emailAddresses.length - filteredAddresses.length;
-  if (excludedCount > 0) {
-    console.log(`[CONTACTS] Excluded ${excludedCount} recently unsubscribed emails from send`);
-  }
-  emailAddresses = filteredAddresses;
-
-  console.log(`[CONTACTS] Retrieval complete - total contacts: ${emailAddresses.length}`);
+  console.log(`[SUBSCRIBERS] Retrieval complete - total subscribers: ${emailAddresses.length}`);
   return emailAddresses;
 };
 
@@ -434,9 +350,9 @@ export const handler = async (event) => {
     if (to.email) {
       emailAddresses = [to.email];
     } else if (to.list) {
-      // Phase 2: Contact Retrieval
-      emailAddresses = await executePhase('Contact Retrieval', async () => {
-        return await retrieveContactsPhase(to.list, tenantId);
+      // Phase 2: Subscriber Retrieval
+      emailAddresses = await executePhase('Subscriber Retrieval', async () => {
+        return await retrieveSubscribersPhase(tenantId);
       });
     }
 

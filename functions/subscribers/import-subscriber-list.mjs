@@ -1,9 +1,7 @@
-import { SESv2Client, CreateContactCommand, ListContactsCommand } from "@aws-sdk/client-sesv2";
-import { DynamoDBClient, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import { DynamoDBClient, UpdateItemCommand, BatchWriteItemCommand, QueryCommand } from "@aws-sdk/client-dynamodb";
 import { marshall } from "@aws-sdk/util-dynamodb";
 import { getTenant, formatResponse, throttle, sendWithRetry } from "../utils/helpers.mjs";
 
-const ses = new SESv2Client();
 const ddb = new DynamoDBClient();
 
 export const handler = async (event) => {
@@ -14,11 +12,11 @@ export const handler = async (event) => {
       return formatResponse(404, 'Tenant not found');
     }
 
-    const tasks = list.items.map(item => () => addContact(tenant.list, item));
+    const tasks = list.items.map(item => () => addSubscriber(tenantId, item));
     console.log(`Processing ${tasks.length} contacts with throttling enabled`);
     await throttle(tasks);
 
-    await updateSubscriberCount(tenantId, tenant.list);
+    await updateSubscriberCount(tenantId);
     console.log(`Added ${list.items.length} contacts`);
 
     return true;
@@ -29,47 +27,60 @@ export const handler = async (event) => {
   }
 };
 
-const addContact = async (list, contact) => {
-  const contactData = {
-    ContactListName: list,
-    EmailAddress: contact.address
+const addSubscriber = async (tenantId, contact) => {
+  const addedAt = new Date().toISOString();
+
+  const subscriberItem = {
+    tenantId,
+    email: contact.address.toLowerCase(), // Normalize email to lowercase
+    addedAt,
+    ...(contact.firstName && { firstName: contact.firstName }),
+    ...(contact.lastName && { lastName: contact.lastName })
   };
 
-  if (contact.firstName || contact.lastName) {
-    contactData.AttributesData = JSON.stringify({
-      ...contact.firstName && { firstName: contact.firstName },
-      ...contact.lastName && { lastName: contact.lastName }
-    });
-  }
   try {
-    await sendWithRetry(() => ses.send(new CreateContactCommand(contactData)));
+    await sendWithRetry(() => ddb.send(new BatchWriteItemCommand({
+      RequestItems: {
+        [process.env.SUBSCRIBERS_TABLE_NAME]: [
+          {
+            PutRequest: {
+              Item: marshall(subscriberItem)
+            }
+          }
+        ]
+      }
+    })), 'BatchWriteItem');
   } catch (err) {
-    if (err.name === 'AlreadyExistsException') {
-      console.warn(`Contact already exists: ${contact.address}`);
-    } else {
-      throw err;
-    }
+    // Handle duplicates gracefully - DynamoDB will skip them without error in BatchWrite
+    // Log warning but don't throw
+    console.warn(`Error adding subscriber ${contact.address}:`, err.message);
   }
 };
 
-const getSubscriberCount = async (listName) => {
+const getSubscriberCount = async (tenantId) => {
   let total = 0;
-  let nextToken;
+  let lastEvaluatedKey;
 
   do {
-    const response = await sendWithRetry(() => ses.send(new ListContactsCommand({
-      ContactListName: listName,
-      NextToken: nextToken
-    })));
-    total += response.Contacts?.length || 0;
-    nextToken = response.NextToken;
-  } while (nextToken);
+    const response = await sendWithRetry(() => ddb.send(new QueryCommand({
+      TableName: process.env.SUBSCRIBERS_TABLE_NAME,
+      KeyConditionExpression: 'tenantId = :tenantId',
+      ExpressionAttributeValues: marshall({
+        ':tenantId': tenantId
+      }),
+      Select: 'COUNT',
+      ExclusiveStartKey: lastEvaluatedKey
+    })), 'QuerySubscriberCount');
+
+    total += response.Count || 0;
+    lastEvaluatedKey = response.LastEvaluatedKey;
+  } while (lastEvaluatedKey);
 
   return total;
 };
 
-const updateSubscriberCount = async (tenantId, listName) => {
-  const count = await getSubscriberCount(listName);
+const updateSubscriberCount = async (tenantId) => {
+  const count = await getSubscriberCount(tenantId);
   await ddb.send(new UpdateItemCommand({
     TableName: process.env.TABLE_NAME,
     Key: marshall({

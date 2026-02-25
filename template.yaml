@@ -92,6 +92,7 @@ Globals:
     Environment:
       Variables:
         TABLE_NAME: !Ref NewsletterTable
+        SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
         ORIGIN: !Ref Origin
         RUST_LOG: info
         RUST_BACKTRACE: "1"
@@ -342,6 +343,21 @@ Resources:
         AttributeName: ttl
         Enabled: true
 
+  SubscribersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      KeySchema:
+        - AttributeName: tenantId
+          KeyType: HASH
+        - AttributeName: email
+          KeyType: RANGE
+      AttributeDefinitions:
+        - AttributeName: tenantId
+          AttributeType: S
+        - AttributeName: email
+          AttributeType: S
+
   NewsletterBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -351,11 +367,6 @@ Resources:
             Status: Enabled
             ExpirationInDays: 7
             NoncurrentVersionExpirationInDays: 7
-          - Id: ContactListsCacheExpiration
-            Status: Enabled
-            Prefix: contact-lists/
-            ExpirationInDays: 10
-            NoncurrentVersionExpirationInDays: 1
       VersioningConfiguration:
         Status: Enabled
 
@@ -858,9 +869,6 @@ Resources:
             - Effect: Allow
               Action: dynamodb:PutItem
               Resource: !GetAtt NewsletterTable.Arn
-            - Effect: Allow
-              Action: ses:CreateContactList
-              Resource: "*"
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
@@ -969,17 +977,19 @@ Resources:
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: ses:CreateContact
-              Resource: "*"
-            - Effect: Allow
               Action:
                 - dynamodb:GetItem
                 - dynamodb:UpdateItem
                 - dynamodb:PutItem
               Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+              Resource: !GetAtt SubscribersTable.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
       Events:
         FromApi:
           Type: Api
@@ -1273,17 +1283,18 @@ Resources:
           Statement:
             - Effect: Allow
               Action:
-                - ses:CreateContact
-                - ses:ListContacts
-              Resource: "*"
-            - Effect: Allow
-              Action:
                 - dynamodb:UpdateItem
                 - dynamodb:GetItem
               Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:BatchWriteItem
+                - dynamodb:Query
+              Resource: !GetAtt SubscribersTable.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
 
   ExportSubscribersFunction:
     Type: AWS::Serverless::Function
@@ -1301,9 +1312,6 @@ Resources:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
           Statement:
-            - Effect: Allow
-              Action: ses:ListContacts
-              Resource: "*"
             - Effect: Allow
               Action: dynamodb:GetItem
               Resource: !GetAtt NewsletterTable.Arn
@@ -1380,16 +1388,17 @@ Resources:
                 - dynamodb:UpdateItem
               Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
-              Action:
-                - ses:DeleteContact
-                - ses:ListContacts
-              Resource: "*"
-            - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
+            - Effect: Allow
+              Action:
+                - dynamodb:DeleteItem
+                - dynamodb:Query
+              Resource: !GetAtt SubscribersTable.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
       Events:
         CleanBouncedEvent:
           Type: EventBridgeRule
@@ -1480,9 +1489,6 @@ Resources:
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: ses:DeleteContact
-              Resource: "*"
-            - Effect: Allow
               Action:
                 - dynamodb:UpdateItem
                 - dynamodb:GetItem
@@ -1491,10 +1497,15 @@ Resources:
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+            - Effect: Allow
+              Action:
+                - dynamodb:DeleteItem
+              Resource: !GetAtt SubscribersTable.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           EMAIL_ENCRYPTION_KEY: !Ref EncryptionKey
+          SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
       Events:
         FromApi:
           Type: Api
@@ -1522,9 +1533,6 @@ Resources:
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: ses:DeleteContact
-              Resource: "*"
-            - Effect: Allow
               Action:
                 - dynamodb:UpdateItem
                 - dynamodb:GetItem
@@ -1533,9 +1541,14 @@ Resources:
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+            - Effect: Allow
+              Action:
+                - dynamodb:DeleteItem
+              Resource: !GetAtt SubscribersTable.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
       Events:
         FromApi:
           Type: Api
@@ -1543,44 +1556,6 @@ Resources:
             RestApiId: !Ref NewsletterApi
             Path: /{tenant}/unsubscribe
             Method: POST
-
-  MonthlyUnsubscribeCleanupFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - subscribers/monthly-unsubscribe-cleanup.mjs
-    Properties:
-      Runtime: nodejs22.x
-      CodeUri: functions
-      Handler: subscribers/monthly-unsubscribe-cleanup.handler
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - dynamodb:Query
-                - dynamodb:DeleteItem
-                - dynamodb:GetItem
-              Resource: !GetAtt NewsletterTable.Arn
-            - Effect: Allow
-              Action:
-                - ses:ListContacts
-                - ses:DeleteContact
-              Resource: "*"
-      Environment:
-        Variables:
-          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
-      Events:
-        MonthlySchedule:
-          Type: Schedule
-          Properties:
-            Schedule: cron(0 6 1 * ? *)  # Run at 6 AM UTC on the 1st of every month
-            Description: Monthly cleanup of stale unsubscribe records
-            Enabled: true
 
   BuildReportDataFunction:
     Type: AWS::Serverless::Function
@@ -1775,7 +1750,6 @@ Resources:
             - Effect: Allow
               Action:
                 - ses:SendEmail
-                - ses:ListContacts
               Resource: "*"
             - Effect: Allow
               Action: scheduler:CreateSchedule
@@ -1792,8 +1766,9 @@ Resources:
               Action: dynamodb:Query
               Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}/index/GSI1
             - Effect: Allow
-              Action: s3:GetObject
-              Resource: !Sub "${NewsletterBucket.Arn}/contact-lists/*"
+              Action:
+                - dynamodb:Query
+              Resource: !GetAtt SubscribersTable.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
@@ -1803,6 +1778,7 @@ Resources:
           CONFIGURATION_SET: !Ref ConfigurationSet
           NEWSLETTER_BUCKET: !Ref NewsletterBucket
           CACHE_MAX_AGE_DAYS: "8"
+          SUBSCRIBER_TABLE_NAME: !Ref SubscribersTable
       Events:
         EmailEvent:
           Type: EventBridgeRule
@@ -1813,18 +1789,18 @@ Resources:
               detail-type:
                 - Send Email v2
 
-  ExportContactsFunction:
+  MigrateContactsFunction:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
         <<: *esbuild-properties
         EntryPoints:
-          - export-contacts.mjs
+          - migrate-contacts-to-dynamodb.mjs
     Properties:
       Runtime: nodejs22.x
       CodeUri: functions
-      Handler: export-contacts.handler
+      Handler: migrate-contacts-to-dynamodb.handler
       Timeout: 900
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -1837,18 +1813,22 @@ Resources:
               Resource: "*"
             - Effect: Allow
               Action:
-                - s3:PutObject
-                - s3:DeleteObject
-              Resource: !Sub "${NewsletterBucket.Arn}/contact-lists/*"
+                - dynamodb:BatchWriteItem
+              Resource: !GetAtt SubscribersTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:Query
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource: !GetAtt SubscribersTable.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
-          NEWSLETTER_BUCKET: !Ref NewsletterBucket
-      Events:
-        WeeklySchedule:
-          Type: Schedule
-          Properties:
-            Schedule: cron(0 2 ? * SUN *)  # Run at 2 AM UTC every Sunday
+          SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
+          TABLE_NAME: !Ref NewsletterTable
 
   ParseMdToJsonFunction:
     Type: AWS::Serverless::Function
@@ -3297,10 +3277,12 @@ Resources:
               Action:
                 - dynamodb:PutItem
                 - dynamodb:GetItem
+                - dynamodb:UpdateItem
               Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
-              Action: ses:DeleteContact
-              Resource: "*"
+              Action:
+                - dynamodb:DeleteItem
+              Resource: !GetAtt SubscribersTable.Arn
       Environment:
         Variables:
           UNSUBSCRIBE_LOG_GROUP_NAME: !Sub "/aws/lambda/${UnsubscribeFunction}"
@@ -3322,9 +3304,6 @@ Resources:
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: ses:DeleteContact
-              Resource: "*"
-            - Effect: Allow
               Action:
                 - dynamodb:UpdateItem
                 - dynamodb:GetItem
@@ -3333,6 +3312,10 @@ Resources:
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+            - Effect: Allow
+              Action:
+                - dynamodb:DeleteItem
+              Resource: !GetAtt SubscribersTable.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
@@ -3525,3 +3508,7 @@ Outputs:
       - DeployFrontendCustomDomain
       - !Sub "https://${FrontendCustomDomain}"
       - !Sub "https://${FrontendDistribution.DomainName}"
+
+  SubscribersTableName:
+    Description: DynamoDB table name for subscriber storage
+    Value: !Ref SubscribersTable

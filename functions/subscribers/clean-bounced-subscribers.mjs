@@ -1,11 +1,9 @@
-import { DynamoDBClient, GetItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
-import { SESv2Client, DeleteContactCommand, ListContactsCommand } from "@aws-sdk/client-sesv2";
+import { DynamoDBClient, GetItemCommand, UpdateItemCommand, DeleteItemCommand, QueryCommand } from "@aws-sdk/client-dynamodb";
 import { EventBridgeClient, PutEventsCommand } from "@aws-sdk/client-eventbridge";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { getTenant, sendWithRetry, throttle } from "../utils/helpers.mjs";
 
 const ddb = new DynamoDBClient();
-const ses = new SESv2Client();
 const eventBridge = new EventBridgeClient();
 
 const padIssueNumber = (issueNumber) => {
@@ -59,22 +57,25 @@ export const handler = async (event) => {
 
     console.log(`Found ${persistentFailures.length} addresses to clean up:`, persistentFailures);
 
-    // Get tenant information to determine which SES contact list to use
+    // Get tenant information
     const tenant = await getTenant(tenantId.id);
 
-    // Remove each persistent failure from SES using throttle to avoid rate limits
+    // Remove each persistent failure from Subscribers table using throttle to avoid rate limits
     let successfulRemovals = 0;
     const removeTasks = persistentFailures.map((emailAddress) => async () => {
       try {
-        await sendWithRetry(() => ses.send(new DeleteContactCommand({
-          ContactListName: tenant.list,
-          EmailAddress: emailAddress
+        await sendWithRetry(() => ddb.send(new DeleteItemCommand({
+          TableName: process.env.SUBSCRIBERS_TABLE_NAME,
+          Key: marshall({
+            tenantId: tenantId.id,
+            email: emailAddress.toLowerCase()
+          })
         })));
         successfulRemovals++;
-        console.log(`Successfully removed ${emailAddress} from contact list`);
+        console.log(`Successfully removed ${emailAddress} from Subscribers table`);
         return true;
       } catch (error) {
-        console.error(`Failed to remove ${emailAddress} from contact list:`, error);
+        console.error(`Failed to remove ${emailAddress} from Subscribers table:`, error);
         return false;
       }
     });
@@ -83,8 +84,8 @@ export const handler = async (event) => {
 
     console.log(`Successfully removed ${successfulRemovals}/${persistentFailures.length} addresses`);
 
-    // Update subscriber count by getting actual count from SES
-    const subscriberCount = await updateSubscriberCount(tenant);
+    // Update subscriber count by getting actual count from Subscribers table
+    const subscriberCount = await updateSubscriberCount(tenantId.id);
 
     // Update the current issue stats record with cleaned count (use actual successful removals)
     await updateCleanedCount(currentIssue, successfulRemovals);
@@ -119,27 +120,37 @@ const loadStatsRecord = async (issueId) => {
   }
 };
 
-const updateSubscriberCount = async (tenant) => {
+const updateSubscriberCount = async (tenantId) => {
   try {
     let totalCount = 0;
-    let nextToken;
+    let lastEvaluatedKey;
 
+    // Query Subscribers table to count all subscribers for this tenant
     do {
-      const contacts = await sendWithRetry(() => ses.send(new ListContactsCommand({
-        ContactListName: tenant.list,
-        NextToken: nextToken
-      })));
+      const queryParams = {
+        TableName: process.env.SUBSCRIBERS_TABLE_NAME,
+        KeyConditionExpression: 'tenantId = :tenantId',
+        ExpressionAttributeValues: marshall({
+          ':tenantId': tenantId
+        }),
+        Select: 'COUNT'
+      };
 
-      if (contacts.Contacts?.length) {
-        totalCount += contacts.Contacts.length;
+      if (lastEvaluatedKey) {
+        queryParams.ExclusiveStartKey = lastEvaluatedKey;
       }
-      nextToken = contacts.NextToken;
-    } while (nextToken);
 
+      const result = await sendWithRetry(() => ddb.send(new QueryCommand(queryParams)));
+
+      totalCount += result.Count || 0;
+      lastEvaluatedKey = result.LastEvaluatedKey;
+    } while (lastEvaluatedKey);
+
+    // Update the tenant record with the actual count
     await ddb.send(new UpdateItemCommand({
       TableName: process.env.TABLE_NAME,
       Key: marshall({
-        pk: tenant.pk,
+        pk: tenantId,
         sk: 'tenant'
       }),
       UpdateExpression: 'SET #subscribers = :count',

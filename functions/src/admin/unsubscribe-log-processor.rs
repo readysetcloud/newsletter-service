@@ -403,23 +403,40 @@ async fn unsubscribe_user(tenant_id: &str, email_address: &str, _method: &str) -
 
     let ddb_client = aws_clients::get_dynamodb_client().await;
 
-    // Delete subscriber from Subscribers table
+    // Delete subscriber from Subscribers table and check if it existed
     let delete_result = ddb_client
         .delete_item()
         .table_name(&subscribers_table_name)
         .key("tenantId", AttributeValue::S(tenant_id.to_string()))
         .key("email", AttributeValue::S(email_address.to_lowercase()))
+        .return_values(aws_sdk_dynamodb::types::ReturnValue::AllOld)
         .send()
         .await;
 
-    if let Err(err) = delete_result {
-        tracing::error!(
+    let item_existed = match delete_result {
+        Ok(output) => {
+            // If attributes are returned, the item existed
+            output.attributes().is_some() && !output.attributes().unwrap().is_empty()
+        }
+        Err(err) => {
+            tracing::error!(
+                tenant_id = %tenant_id,
+                email_address = %email_address,
+                error = %err,
+                "Failed to delete subscriber from Subscribers table"
+            );
+            return false;
+        }
+    };
+
+    // Only decrement if the subscriber actually existed
+    if !item_existed {
+        tracing::info!(
             tenant_id = %tenant_id,
             email_address = %email_address,
-            error = %err,
-            "Failed to delete subscriber from Subscribers table"
+            "Subscriber already removed, skipping counter decrement"
         );
-        return false;
+        return true;
     }
 
     // Decrement subscriber count in Newsletter table

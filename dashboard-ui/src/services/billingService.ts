@@ -62,7 +62,7 @@ export class BillingService {
       if (!validation.success) {
         return {
           success: false,
-          error: validation.error.errors[0]?.message || 'Invalid checkout request',
+          error: validation.error.issues[0]?.message || 'Invalid checkout request',
         };
       }
 
@@ -97,7 +97,7 @@ export class BillingService {
       if (!validation.success) {
         return {
           success: false,
-          error: validation.error.errors[0]?.message || 'Invalid portal request',
+          error: validation.error.issues[0]?.message || 'Invalid portal request',
         };
       }
 
@@ -132,7 +132,7 @@ export class BillingService {
       if (!validation.success) {
         return {
           success: false,
-          error: validation.error.errors[0]?.message || 'Invalid plan change request',
+          error: validation.error.issues[0]?.message || 'Invalid plan change request',
         };
       }
 

@@ -1,8 +1,9 @@
-import { SESv2Client, ListContactsCommand } from "@aws-sdk/client-sesv2";
+import { DynamoDBClient, QueryCommand } from "@aws-sdk/client-dynamodb";
+import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getTenant, sendWithRetry } from "../utils/helpers.mjs";
 
-const ses = new SESv2Client();
+const ddb = new DynamoDBClient();
 const s3 = new S3Client();
 
 export const handler = async (event) => {
@@ -12,18 +13,31 @@ export const handler = async (event) => {
     if (!tenant) {
       return { message: 'Tenant not found' };
     }
+
     const emailAddresses = [];
-    let nextToken;
+    let exclusiveStartKey;
+
     do {
-      const contacts = await sendWithRetry(() => ses.send(new ListContactsCommand({
-        ContactListName: tenant.list,
-        NextToken: nextToken
-      })));
-      if (contacts.Contacts?.length) {
-        emailAddresses.push(...contacts.Contacts.map(c => c.EmailAddress));
+      const queryParams = {
+        TableName: process.env.SUBSCRIBERS_TABLE_NAME,
+        KeyConditionExpression: 'tenantId = :tenantId',
+        ExpressionAttributeValues: marshall({
+          ':tenantId': tenantId
+        })
+      };
+
+      if (exclusiveStartKey) {
+        queryParams.ExclusiveStartKey = exclusiveStartKey;
       }
-      nextToken = contacts.NextToken;
-    } while (nextToken);
+
+      const response = await sendWithRetry(() => ddb.send(new QueryCommand(queryParams)));
+
+      if (response.Items?.length) {
+        emailAddresses.push(...response.Items.map(item => unmarshall(item).email));
+      }
+
+      exclusiveStartKey = response.LastEvaluatedKey;
+    } while (exclusiveStartKey);
 
     const report = {
       total: emailAddresses.length,

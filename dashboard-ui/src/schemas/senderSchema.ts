@@ -28,7 +28,7 @@ export const createSenderSchema = z.object({
   email: emailSchema,
   name: senderNameSchema,
   verificationType: z.enum(['mailbox', 'domain'], {
-    required_error: 'Please select a verification type'
+    message: 'Please select a verification type'
   })
 });
 

@@ -2,25 +2,19 @@ import { jest, describe, it, expect, beforeEach } from '@jest/globals';
 
 let handler;
 let ddbSend;
-let sesSend;
 let eventBridgeSend;
 
 const loadIsolated = async () => {
   await jest.isolateModulesAsync(async () => {
     ddbSend = jest.fn();
-    sesSend = jest.fn();
     eventBridgeSend = jest.fn();
 
     jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
       DynamoDBClient: jest.fn(() => ({ send: ddbSend })),
       GetItemCommand: jest.fn((params) => ({ __type: 'GetItem', ...params })),
       UpdateItemCommand: jest.fn((params) => ({ __type: 'UpdateItem', ...params })),
-    }));
-
-    jest.unstable_mockModule('@aws-sdk/client-sesv2', () => ({
-      SESv2Client: jest.fn(() => ({ send: sesSend })),
-      DeleteContactCommand: jest.fn((params) => ({ __type: 'DeleteContact', ...params })),
-      ListContactsCommand: jest.fn((params) => ({ __type: 'ListContacts', ...params })),
+      DeleteItemCommand: jest.fn((params) => ({ __type: 'DeleteItem', ...params })),
+      QueryCommand: jest.fn((params) => ({ __type: 'Query', ...params })),
     }));
 
     jest.unstable_mockModule('@aws-sdk/client-eventbridge', () => ({
@@ -79,6 +73,7 @@ describe('clean-bounced-subscribers', () => {
   beforeEach(async () => {
     jest.resetModules();
     process.env.TABLE_NAME = 'test-table';
+    process.env.SUBSCRIBERS_TABLE_NAME = 'test-subscribers-table';
     await loadIsolated();
   });
 
@@ -101,7 +96,7 @@ describe('clean-bounced-subscribers', () => {
         })
         .mockResolvedValueOnce({})
         .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({ Contacts: [] })
+        .mockResolvedValueOnce({ Count: 0 })
         .mockResolvedValueOnce({})
         .mockResolvedValueOnce({})
         .mockResolvedValueOnce({});
@@ -145,7 +140,7 @@ describe('clean-bounced-subscribers', () => {
           }
         })
         .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({ Contacts: [] })
+        .mockResolvedValueOnce({ Count: 0 })
         .mockResolvedValueOnce({})
         .mockResolvedValueOnce({})
         .mockResolvedValueOnce({});
@@ -196,7 +191,50 @@ describe('clean-bounced-subscribers', () => {
 
       await handler(event);
 
-      expect(sesSend).not.toHaveBeenCalled();
+      const deleteCalls = ddbSend.mock.calls.filter(call => call[0].__type === 'DeleteItem');
+      expect(deleteCalls.length).toBe(0);
+    });
+
+    it('should not count already-absent subscribers as cleaned', async () => {
+      ddbSend
+        .mockResolvedValueOnce({
+          Item: {
+            pk: { S: 'tenant123#42' },
+            sk: { S: 'stats' },
+            failedAddresses: { L: [{ S: 'bounce1@example.com' }, { S: 'bounce2@example.com' }] }
+          }
+        })
+        .mockResolvedValueOnce({
+          Item: {
+            pk: { S: 'tenant123#41' },
+            sk: { S: 'stats' },
+            failedAddresses: { L: [{ S: 'bounce1@example.com' }, { S: 'bounce2@example.com' }] }
+          }
+        })
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({ Count: 0 })
+        .mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          currentIssue: 'tenant123#42',
+          previousIssue: 'tenant123#41',
+          tenantId: { id: 'tenant123' }
+        }
+      };
+
+      await handler(event);
+
+      const cleanedUpdateCall = ddbSend.mock.calls.find(call =>
+        call[0].__type === 'UpdateItem' &&
+        call[0].UpdateExpression &&
+        call[0].UpdateExpression.includes('cleaned')
+      );
+
+      expect(cleanedUpdateCall).toBeDefined();
+      expect(cleanedUpdateCall[0].ExpressionAttributeValues[':count'].N).toBe('0');
+      expect(eventBridgeSend).not.toHaveBeenCalled();
     });
   });
 });

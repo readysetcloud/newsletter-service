@@ -1,10 +1,8 @@
-import { SESv2Client, CreateContactCommand } from '@aws-sdk/client-sesv2';
 import { DynamoDBClient, UpdateItemCommand, PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
 import { formatResponse, getTenant } from '../utils/helpers.mjs';
 import { publishSubscriberEvent, EVENT_TYPES } from '../utils/event-publisher.mjs';
 
-const ses = new SESv2Client();
 const ddb = new DynamoDBClient();
 
 export const handler = async (event) => {
@@ -25,7 +23,7 @@ export const handler = async (event) => {
       return formatResponse(400, 'Email is required');
     }
 
-    const shouldUpdateCount = await addContact(tenant.list, contact);
+    const shouldUpdateCount = await addSubscriber(tenantId, contact);
     if (shouldUpdateCount) {
       const addedAt = new Date().toISOString();
       const timestamp = Date.now();
@@ -58,30 +56,32 @@ export const handler = async (event) => {
   }
 };
 
-const addContact = async (list, contact) => {
-  const contactData = {
-    ContactListName: list,
-    EmailAddress: contact.email
+const addSubscriber = async (tenantId, contact) => {
+  const addedAt = new Date().toISOString();
+
+  const subscriberItem = {
+    tenantId,
+    email: contact.email.toLowerCase(), // Normalize email to lowercase
+    addedAt,
+    ...(contact.firstName && { firstName: contact.firstName }),
+    ...(contact.lastName && { lastName: contact.lastName })
   };
 
-  if (contact.firstName || contact.lastName) {
-    contactData.AttributesData = JSON.stringify({
-      ...contact.firstName && { firstName: contact.firstName },
-      ...contact.lastName && { lastName: contact.lastName }
-    });
-  }
-
   try {
-    await ses.send(new CreateContactCommand(contactData));
+    await ddb.send(new PutItemCommand({
+      TableName: process.env.SUBSCRIBERS_TABLE_NAME,
+      Item: marshall(subscriberItem),
+      ConditionExpression: 'attribute_not_exists(tenantId)'
+    }));
+    return true;
   } catch (err) {
-    if (err.name === 'AlreadyExistsException') {
-      console.warn(`Contact already exists: ${contact.address}`);
+    if (err.name === 'ConditionalCheckFailedException') {
+      console.warn(`Subscriber already exists: ${contact.email}`);
       return false;
     } else {
       throw err;
     }
   }
-  return true;
 };
 
 const updateSubscriberCount = async (tenantId) => {

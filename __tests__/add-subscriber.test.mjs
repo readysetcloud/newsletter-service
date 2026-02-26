@@ -2,9 +2,7 @@
 import { jest, describe, test, expect, beforeEach } from '@jest/globals';
 
 let handler;
-let sesInstance;
 let ddbInstance;
-let CreateContactCommand;
 let UpdateItemCommand;
 let PutItemCommand;
 let marshall;
@@ -16,14 +14,7 @@ let mockFormatResponse;
 async function loadIsolated() {
   await jest.isolateModulesAsync(async () => {
     // Shared client instances captured at import time
-    sesInstance = { send: jest.fn() };
     ddbInstance = { send: jest.fn() };
-
-    // SES
-    jest.unstable_mockModule('@aws-sdk/client-sesv2', () => ({
-      SESv2Client: jest.fn(() => sesInstance),
-      CreateContactCommand: jest.fn((params) => ({ __type: 'CreateContact', ...params })),
-    }));
 
     // DDB
     jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
@@ -61,7 +52,6 @@ async function loadIsolated() {
 
     // Import AFTER mocks, inside isolation
     ({ handler } = await import('../functions/subscribers/add-subscriber.mjs'));
-    ({ CreateContactCommand } = await import('@aws-sdk/client-sesv2'));
     ({ UpdateItemCommand, PutItemCommand } = await import('@aws-sdk/client-dynamodb'));
     ({ marshall } = await import('@aws-sdk/util-dynamodb'));
     ({ publishSubscriberEvent, EVENT_TYPES } = await import('../functions/utils/event-publisher.mjs'));
@@ -69,9 +59,7 @@ async function loadIsolated() {
 
   return {
     handler,
-    sesInstance,
     ddbInstance,
-    CreateContactCommand,
     UpdateItemCommand,
     PutItemCommand,
     marshall,
@@ -86,6 +74,7 @@ describe('add-subscriber handler (isolated)', () => {
   beforeEach(async () => {
     jest.resetModules(); // clear module cache between tests
     process.env.TABLE_NAME = 'test-table';
+    process.env.SUBSCRIBERS_TABLE_NAME = 'test-subscribers-table';
     process.env.ORIGIN = 'https://www.readysetcloud.io';
     await loadIsolated();
   });
@@ -101,7 +90,6 @@ describe('add-subscriber handler (isolated)', () => {
     const res = await handler(event);
     expect(mockGetTenant).toHaveBeenCalledWith('missing-tenant');
     expect(res && res.statusCode).toBe(404);
-    expect(sesInstance.send).not.toHaveBeenCalled();
     expect(ddbInstance.send).not.toHaveBeenCalled();
     expect(publishSubscriberEvent).not.toHaveBeenCalled();
   });
@@ -113,7 +101,6 @@ describe('add-subscriber handler (isolated)', () => {
     const res = await handler(event);
 
     expect(res && res.statusCode).toBe(400);
-    expect(sesInstance.send).not.toHaveBeenCalled();
     expect(ddbInstance.send).not.toHaveBeenCalled();
     expect(publishSubscriberEvent).not.toHaveBeenCalled();
   });
@@ -129,15 +116,13 @@ describe('add-subscriber handler (isolated)', () => {
     const res = await handler(event);
 
     expect(res && res.statusCode).toBe(400);
-    expect(sesInstance.send).not.toHaveBeenCalled();
     expect(ddbInstance.send).not.toHaveBeenCalled();
     expect(publishSubscriberEvent).not.toHaveBeenCalled();
   });
 
-  test('adds contact, increments count, creates event record, and publishes event', async () => {
+  test('adds subscriber, increments count, creates event record, and publishes event', async () => {
     const tenant = { id: 't1', list: 'list-1', subscribers: 5 };
     mockGetTenant.mockResolvedValue(tenant);
-    sesInstance.send.mockResolvedValue({});
     ddbInstance.send.mockResolvedValue({});
 
     const event = {
@@ -152,37 +137,43 @@ describe('add-subscriber handler (isolated)', () => {
     const res = await handler(event);
     expect(res && res.statusCode).toBe(201);
 
-    // SES
-    expect(sesInstance.send).toHaveBeenCalledTimes(1);
-    const sesArg = sesInstance.send.mock.calls[0][0];
-    expect(sesArg.__type).toBe('CreateContact');
-    expect(sesArg.ContactListName).toBe('list-1');
-    expect(sesArg.EmailAddress).toBe('test@example.com');
-    expect(JSON.parse(sesArg.AttributesData)).toEqual({ firstName: 'John', lastName: 'Doe' });
+    // DDB calls: PutItem (subscriber) + UpdateItem (increment) + PutItem (event record)
+    expect(ddbInstance.send).toHaveBeenCalledTimes(3);
 
-    // DDB calls: UpdateItem (increment) + PutItem (event record)
-    expect(ddbInstance.send).toHaveBeenCalledTimes(2);
+    // First call: PutItem for subscriber in Subscribers table
+    const subscriberPutArg = ddbInstance.send.mock.calls[0][0];
+    expect(subscriberPutArg.__type).toBe('PutItem');
+    expect(subscriberPutArg.TableName).toBe('test-subscribers-table');
+    expect(subscriberPutArg.ConditionExpression).toBe('attribute_not_exists(tenantId)');
 
-    // First call: UpdateItem for subscriber count
-    const updateArg = ddbInstance.send.mock.calls[0][0];
+    // Verify subscriber item structure
+    const subscriberItem = subscriberPutArg.Item;
+    expect(subscriberItem.tenantId).toBe('t1');
+    expect(subscriberItem.email).toBe('test@example.com');
+    expect(subscriberItem.firstName).toBe('John');
+    expect(subscriberItem.lastName).toBe('Doe');
+    expect(typeof subscriberItem.addedAt).toBe('string');
+
+    // Second call: UpdateItem for subscriber count
+    const updateArg = ddbInstance.send.mock.calls[1][0];
     expect(updateArg.__type).toBe('UpdateItem');
     expect(updateArg.TableName).toBe('test-table');
     expect(updateArg.UpdateExpression).toBe('SET #subscribers = #subscribers + :val');
 
-    // Second call: PutItem for subscriber event record
-    const putArg = ddbInstance.send.mock.calls[1][0];
-    expect(putArg.__type).toBe('PutItem');
-    expect(putArg.TableName).toBe('test-table');
+    // Third call: PutItem for subscriber event record
+    const eventPutArg = ddbInstance.send.mock.calls[2][0];
+    expect(eventPutArg.__type).toBe('PutItem');
+    expect(eventPutArg.TableName).toBe('test-table');
 
     // Verify the event record structure
-    const putItem = putArg.Item;
-    expect(putItem.pk).toBe('t1');
-    expect(putItem.sk).toMatch(/^subscriber#\d+#test@example\.com$/);
-    expect(putItem.GSI1PK).toBe('t1');
-    expect(putItem.GSI1SK).toMatch(/^subscriber#\d+$/);
-    expect(putItem.email).toBe('test@example.com');
-    expect(typeof putItem.addedAt).toBe('string');
-    expect(typeof putItem.ttl).toBe('number');
+    const eventItem = eventPutArg.Item;
+    expect(eventItem.pk).toBe('t1');
+    expect(eventItem.sk).toMatch(/^subscriber#\d+#test@example\.com$/);
+    expect(eventItem.GSI1PK).toBe('t1');
+    expect(eventItem.GSI1SK).toMatch(/^subscriber#\d+$/);
+    expect(eventItem.email).toBe('test@example.com');
+    expect(typeof eventItem.addedAt).toBe('string');
+    expect(typeof eventItem.ttl).toBe('number');
 
     // Event
     expect(publishSubscriberEvent).toHaveBeenCalledTimes(1);
@@ -199,10 +190,10 @@ describe('add-subscriber handler (isolated)', () => {
     expect(typeof details.addedAt).toBe('string');
   });
 
-  test('AlreadyExistsException → still 201, no DDB increment or event', async () => {
+  test('ConditionalCheckFailedException → still 201, no DDB increment or event', async () => {
     const tenant = { id: 't1', list: 'list-1', subscribers: 5 };
     mockGetTenant.mockResolvedValue(tenant);
-    sesInstance.send.mockRejectedValue(Object.assign(new Error('exists'), { name: 'AlreadyExistsException' }));
+    ddbInstance.send.mockRejectedValue(Object.assign(new Error('exists'), { name: 'ConditionalCheckFailedException' }));
 
     const event = {
       pathParameters: { tenant: 't1' },
@@ -211,14 +202,16 @@ describe('add-subscriber handler (isolated)', () => {
 
     const res = await handler(event);
     expect(res && res.statusCode).toBe(201);
-    expect(ddbInstance.send).not.toHaveBeenCalled();
+
+    // Only one DDB call (the failed PutItem for subscriber)
+    expect(ddbInstance.send).toHaveBeenCalledTimes(1);
     expect(publishSubscriberEvent).not.toHaveBeenCalled();
   });
 
-  test('unexpected SES error → 500', async () => {
+  test('unexpected DDB error → 500', async () => {
     const tenant = { id: 't1', list: 'list-1', subscribers: 5 };
     mockGetTenant.mockResolvedValue(tenant);
-    sesInstance.send.mockRejectedValue(new Error('SES blew up'));
+    ddbInstance.send.mockRejectedValue(new Error('DDB blew up'));
 
     const event = {
       pathParameters: { tenant: 't1' },
@@ -227,7 +220,6 @@ describe('add-subscriber handler (isolated)', () => {
 
     const res = await handler(event);
     expect(res && res.statusCode).toBe(500);
-    expect(ddbInstance.send).not.toHaveBeenCalled();
     expect(publishSubscriberEvent).not.toHaveBeenCalled();
   });
 });
@@ -239,6 +231,7 @@ describe('add-subscriber property-based tests', () => {
   beforeEach(async () => {
     jest.resetModules();
     process.env.TABLE_NAME = 'test-table';
+    process.env.SUBSCRIBERS_TABLE_NAME = 'test-subscribers-table';
     process.env.ORIGIN = 'https://www.readysetcloud.io';
     await loadIsolated();
   });
@@ -256,9 +249,9 @@ describe('add-subscriber property-based tests', () => {
           const tenant = { id: 'test-tenant', list: 'test-list', subscribers: subscriberCount };
           mockGetTenant.mockResolvedValue(tenant);
 
-          // Simulate AlreadyExistsException for duplicate subscriber
-          sesInstance.send.mockRejectedValue(
-            Object.assign(new Error('Contact already exists'), { name: 'AlreadyExistsException' })
+          // Simulate ConditionalCheckFailedException for duplicate subscriber
+          ddbInstance.send.mockRejectedValue(
+            Object.assign(new Error('Subscriber already exists'), { name: 'ConditionalCheckFailedException' })
           );
 
           const event = {
@@ -271,8 +264,8 @@ describe('add-subscriber property-based tests', () => {
           // Should still return 201 (success response)
           expect(res && res.statusCode).toBe(201);
 
-          // Should NOT call DynamoDB (no count increment, no event record)
-          expect(ddbInstance.send).not.toHaveBeenCalled();
+          // Should only call DynamoDB once (the failed PutItem for subscriber)
+          expect(ddbInstance.send).toHaveBeenCalledTimes(1);
 
           // Should NOT publish subscriber added event
           expect(publishSubscriberEvent).not.toHaveBeenCalled();

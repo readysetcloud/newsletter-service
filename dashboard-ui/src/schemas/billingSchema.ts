@@ -8,7 +8,7 @@ export const planSelectionSchema = z.object({
 
   billingCycle: z
     .enum(['monthly', 'yearly'], {
-      required_error: 'Please select a billing cycle'
+      message: 'Please select a billing cycle'
     })
     .default('monthly')
 });

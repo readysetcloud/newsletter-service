@@ -41,7 +41,7 @@ export function prefetchData(url: string): void {
     fetch(url, {
       method: 'GET',
       credentials: 'include',
-      priority: 'low' as RequestPriority,
+      priority: 'low',
     }).catch((error) => {
       console.warn('Failed to prefetch data:', error);
     });

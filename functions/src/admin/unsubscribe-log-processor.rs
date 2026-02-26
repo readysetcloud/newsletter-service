@@ -1,7 +1,6 @@
 use aws_sdk_cloudwatchlogs::types::{QueryStatus, ResultField};
 use aws_sdk_cloudwatchlogs::Client as CloudWatchLogsClient;
 use aws_sdk_dynamodb::types::AttributeValue;
-use aws_sdk_sesv2::Client as SesClient;
 use chrono::{Duration, Utc};
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use newsletter::admin::aws_clients;
@@ -15,7 +14,6 @@ use tokio::task::JoinSet;
 use tokio::time::{sleep, Duration as TokioDuration};
 
 static LOGS_CLIENT: OnceCell<CloudWatchLogsClient> = OnceCell::const_new();
-static SES_CLIENT: OnceCell<SesClient> = OnceCell::const_new();
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -386,15 +384,7 @@ async fn process_individual_unsubscribe(
     }
 }
 
-async fn unsubscribe_user(tenant_id: &str, email_address: &str, method: &str) -> bool {
-    let tenant_list = match get_tenant_list(tenant_id).await {
-        Some(list) => list,
-        None => {
-            tracing::error!("Tenant not found: {}", tenant_id);
-            return false;
-        }
-    };
-
+async fn unsubscribe_user(tenant_id: &str, email_address: &str, _method: &str) -> bool {
     let table_name = match env::var("TABLE_NAME") {
         Ok(value) => value,
         Err(err) => {
@@ -403,127 +393,80 @@ async fn unsubscribe_user(tenant_id: &str, email_address: &str, method: &str) ->
         }
     };
 
-    let now = Utc::now();
-    let ttl = (now + Duration::days(30)).timestamp();
-
-    let mut item = HashMap::new();
-    item.insert(
-        "pk".to_string(),
-        AttributeValue::S(format!("{}#recent-unsubscribes", tenant_id)),
-    );
-    item.insert(
-        "sk".to_string(),
-        AttributeValue::S(email_address.to_lowercase()),
-    );
-    item.insert(
-        "email".to_string(),
-        AttributeValue::S(email_address.to_string()),
-    );
-    item.insert(
-        "unsubscribedAt".to_string(),
-        AttributeValue::S(now.to_rfc3339()),
-    );
-    item.insert("ttl".to_string(), AttributeValue::N(ttl.to_string()));
-    item.insert("method".to_string(), AttributeValue::S(method.to_string()));
+    let subscribers_table_name = match env::var("SUBSCRIBERS_TABLE_NAME") {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::error!(error = %err, "SUBSCRIBERS_TABLE_NAME not set");
+            return false;
+        }
+    };
 
     let ddb_client = aws_clients::get_dynamodb_client().await;
-    let put_result = ddb_client
-        .put_item()
-        .table_name(&table_name)
-        .set_item(Some(item))
+
+    // Delete subscriber from Subscribers table and check if it existed
+    let delete_result = ddb_client
+        .delete_item()
+        .table_name(&subscribers_table_name)
+        .key("tenantId", AttributeValue::S(tenant_id.to_string()))
+        .key("email", AttributeValue::S(email_address.to_lowercase()))
+        .return_values(aws_sdk_dynamodb::types::ReturnValue::AllOld)
         .send()
         .await;
 
-    if let Err(err) = put_result {
-        let is_conditional = err
-            .as_service_error()
-            .map(|service_error| {
-                matches!(
-                    service_error,
-                    aws_sdk_dynamodb::operation::put_item::PutItemError::ConditionalCheckFailedException(_)
-                )
-            })
-            .unwrap_or(false);
-
-        if is_conditional {
-            tracing::info!(
-                tenant_id = %tenant_id,
-                email = "[REDACTED]",
-                "Email already unsubscribed"
-            );
-            return true;
+    let item_existed = match delete_result {
+        Ok(output) => {
+            // If attributes are returned, the item existed
+            output.attributes().is_some() && !output.attributes().unwrap().is_empty()
         }
+        Err(err) => {
+            tracing::error!(
+                tenant_id = %tenant_id,
+                email_address = %email_address,
+                error = %err,
+                "Failed to delete subscriber from Subscribers table"
+            );
+            return false;
+        }
+    };
 
-        tracing::error!(error = %err, "Unsubscribe failed");
+    // Only decrement if the subscriber actually existed
+    if !item_existed {
+        tracing::info!(
+            tenant_id = %tenant_id,
+            email_address = %email_address,
+            "Subscriber already removed, skipping counter decrement"
+        );
+        return true;
+    }
+
+    // Decrement subscriber count in Newsletter table
+    let update_result = ddb_client
+        .update_item()
+        .table_name(&table_name)
+        .key("pk", AttributeValue::S(tenant_id.to_string()))
+        .key("sk", AttributeValue::S("tenant".to_string()))
+        .update_expression("SET subscribers = if_not_exists(subscribers, :zero) - :dec")
+        .expression_attribute_values(":dec", AttributeValue::N("1".to_string()))
+        .expression_attribute_values(":zero", AttributeValue::N("0".to_string()))
+        .send()
+        .await;
+
+    if let Err(err) = update_result {
+        tracing::error!(
+            tenant_id = %tenant_id,
+            error = %err,
+            "Failed to decrement subscriber count"
+        );
         return false;
     }
 
-    let ses_client = get_ses_client().await;
-    let delete_result = ses_client
-        .delete_contact()
-        .contact_list_name(&tenant_list)
-        .email_address(email_address)
-        .send()
-        .await;
-
-    match delete_result {
-        Ok(_) => {
-            tracing::info!(
-                tenant_id = %tenant_id,
-                email_address = %email_address,
-                ses_removed = true,
-                "Unsubscribe successful"
-            );
-        }
-        Err(err) => {
-            let is_not_found = err
-                .as_service_error()
-                .map(|service_error| {
-                    matches!(
-                        service_error,
-                        aws_sdk_sesv2::operation::delete_contact::DeleteContactError::NotFoundException(_)
-                    )
-                })
-                .unwrap_or(false);
-
-            if is_not_found {
-                tracing::info!(
-                    tenant_id = %tenant_id,
-                    email_address = %email_address,
-                    ses_removed = "already_removed",
-                    "Unsubscribe successful"
-                );
-            } else {
-                tracing::error!(
-                    tenant_id = %tenant_id,
-                    email_address = %email_address,
-                    error = %err,
-                    "SES removal failed but unsubscribe protected"
-                );
-            }
-        }
-    }
+    tracing::info!(
+        tenant_id = %tenant_id,
+        email_address = %email_address,
+        "Unsubscribe successful"
+    );
 
     true
-}
-
-async fn get_tenant_list(tenant_id: &str) -> Option<String> {
-    let table_name = env::var("TABLE_NAME").ok()?;
-    let ddb_client = aws_clients::get_dynamodb_client().await;
-
-    let response = ddb_client
-        .get_item()
-        .table_name(table_name)
-        .key("pk", AttributeValue::S(tenant_id.to_string()))
-        .key("sk", AttributeValue::S("tenant".to_string()))
-        .send()
-        .await
-        .ok()?;
-
-    let item = response.item()?;
-    item.get("list")
-        .and_then(|value| value.as_s().ok())
-        .map(|value| value.to_string())
 }
 
 async fn get_logs_client() -> &'static CloudWatchLogsClient {
@@ -531,15 +474,6 @@ async fn get_logs_client() -> &'static CloudWatchLogsClient {
         .get_or_init(|| async {
             let config = aws_config::load_from_env().await;
             CloudWatchLogsClient::new(&config)
-        })
-        .await
-}
-
-async fn get_ses_client() -> &'static SesClient {
-    SES_CLIENT
-        .get_or_init(|| async {
-            let config = aws_config::load_from_env().await;
-            SesClient::new(&config)
         })
         .await
 }

@@ -62,17 +62,25 @@ export const handler = async (event) => {
 
     // Remove each persistent failure from Subscribers table using throttle to avoid rate limits
     let successfulRemovals = 0;
+    const removedAddresses = [];
     const removeTasks = persistentFailures.map((emailAddress) => async () => {
       try {
-        await sendWithRetry(() => ddb.send(new DeleteItemCommand({
+        const deleteResult = await sendWithRetry(() => ddb.send(new DeleteItemCommand({
           TableName: process.env.SUBSCRIBERS_TABLE_NAME,
           Key: marshall({
             tenantId: tenantId.id,
             email: emailAddress.toLowerCase()
-          })
+          }),
+          ReturnValues: 'ALL_OLD'
         })));
-        successfulRemovals++;
-        console.log(`Successfully removed ${emailAddress} from Subscribers table`);
+
+        if (deleteResult.Attributes) {
+          successfulRemovals++;
+          removedAddresses.push(emailAddress);
+          console.log(`Successfully removed ${emailAddress} from Subscribers table`);
+        } else {
+          console.log(`Skipped ${emailAddress}; address was already absent from Subscribers table`);
+        }
         return true;
       } catch (error) {
         console.error(`Failed to remove ${emailAddress} from Subscribers table:`, error);
@@ -92,7 +100,7 @@ export const handler = async (event) => {
 
     // Send notification email to tenant if any subscribers were removed
     if (successfulRemovals > 0) {
-      await sendNotificationEmail(tenant, persistentFailures, successfulRemovals, subscriberCount, tenantId.id);
+      await sendNotificationEmail(tenant, removedAddresses, successfulRemovals, subscriberCount, tenantId.id);
     }
 
     console.log(`Successfully cleaned up ${successfulRemovals} bounced subscribers`);

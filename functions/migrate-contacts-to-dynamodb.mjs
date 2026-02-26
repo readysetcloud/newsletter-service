@@ -27,10 +27,9 @@ const getAllContactLists = async () => {
     }, 'ListContactLists');
 
     if (response.ContactLists?.length) {
-      // Extract tenant ID from contact list name (assuming format: tenant-{tenantId})
+      // Contact list name is the tenant ID in current tenant setup flow
       for (const list of response.ContactLists) {
         const listName = list.ContactListName;
-        // Try to extract tenant ID from list name
         const tenantId = extractTenantIdFromListName(listName);
         if (tenantId) {
           lists.push({ name: listName, tenantId });
@@ -48,16 +47,14 @@ const getAllContactLists = async () => {
 
 /**
  * Extract tenant ID from contact list name
- * Assumes format like "tenant-{tenantId}" or just returns the list name as tenant ID
+ * Current flow creates SES contact lists with ContactListName === tenantId
  * @param {string} listName - Contact list name
  * @returns {string|null} Tenant ID or null if cannot extract
  */
 const extractTenantIdFromListName = (listName) => {
-  // If list name starts with "tenant-", extract the part after
-  if (listName.startsWith('tenant-')) {
-    return listName.substring(7);
+  if (!listName || typeof listName !== 'string') {
+    return null;
   }
-  // Otherwise, use the list name as tenant ID
   return listName;
 };
 

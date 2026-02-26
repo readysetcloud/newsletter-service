@@ -194,5 +194,47 @@ describe('clean-bounced-subscribers', () => {
       const deleteCalls = ddbSend.mock.calls.filter(call => call[0].__type === 'DeleteItem');
       expect(deleteCalls.length).toBe(0);
     });
+
+    it('should not count already-absent subscribers as cleaned', async () => {
+      ddbSend
+        .mockResolvedValueOnce({
+          Item: {
+            pk: { S: 'tenant123#42' },
+            sk: { S: 'stats' },
+            failedAddresses: { L: [{ S: 'bounce1@example.com' }, { S: 'bounce2@example.com' }] }
+          }
+        })
+        .mockResolvedValueOnce({
+          Item: {
+            pk: { S: 'tenant123#41' },
+            sk: { S: 'stats' },
+            failedAddresses: { L: [{ S: 'bounce1@example.com' }, { S: 'bounce2@example.com' }] }
+          }
+        })
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({ Count: 0 })
+        .mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          currentIssue: 'tenant123#42',
+          previousIssue: 'tenant123#41',
+          tenantId: { id: 'tenant123' }
+        }
+      };
+
+      await handler(event);
+
+      const cleanedUpdateCall = ddbSend.mock.calls.find(call =>
+        call[0].__type === 'UpdateItem' &&
+        call[0].UpdateExpression &&
+        call[0].UpdateExpression.includes('cleaned')
+      );
+
+      expect(cleanedUpdateCall).toBeDefined();
+      expect(cleanedUpdateCall[0].ExpressionAttributeValues[':count'].N).toBe('0');
+      expect(eventBridgeSend).not.toHaveBeenCalled();
+    });
   });
 });

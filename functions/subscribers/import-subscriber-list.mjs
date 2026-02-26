@@ -15,8 +15,17 @@ export const handler = async (event) => {
     const tasks = list.items.map(item => () => addSubscriber(tenantId, item));
     console.log(`Processing ${tasks.length} contacts with throttling enabled`);
 
-    // Track failures during import
-    const results = await Promise.allSettled(tasks.map(task => task()));
+    // Track failures during import while keeping bounded concurrency
+    const results = [];
+    const trackedTasks = tasks.map(task => async () => {
+      try {
+        await task();
+        results.push({ status: 'fulfilled' });
+      } catch (error) {
+        results.push({ status: 'rejected', reason: error });
+      }
+    });
+    await throttle(trackedTasks, 5);
     const failures = results.filter(r => r.status === 'rejected');
 
     if (failures.length > 0) {

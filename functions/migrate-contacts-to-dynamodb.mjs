@@ -1,6 +1,6 @@
-import { SESv2Client, ListContactListsCommand, ListContactsCommand } from "@aws-sdk/client-sesv2";
-import { DynamoDBClient, BatchWriteItemCommand, UpdateItemCommand, QueryCommand } from "@aws-sdk/client-dynamodb";
-import { marshall } from "@aws-sdk/util-dynamodb";
+import { SESv2Client, ListContactsCommand } from "@aws-sdk/client-sesv2";
+import { DynamoDBClient, BatchWriteItemCommand, UpdateItemCommand, QueryCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
+import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { sendWithRetry } from './utils/helpers.mjs';
 
 const ses = new SESv2Client();
@@ -11,51 +11,22 @@ const BATCH_SIZE = 25;
 // Delay between batches to avoid throttling (milliseconds)
 const BATCH_DELAY = 100;
 
-/**
- * Get all contact lists from SESv2 with pagination
- * @returns {Promise<Array<{name: string, tenantId: string}>>} Array of contact list info
- */
-const getAllContactLists = async () => {
-  const lists = [];
-  let nextToken;
+const getTenantRecord = async (tenantId) => {
+  const response = await sendWithRetry(async () => {
+    return await ddb.send(new GetItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({
+        pk: tenantId,
+        sk: 'tenant'
+      })
+    }));
+  }, 'GetTenantRecord');
 
-  console.log('[MIGRATION] Fetching contact lists from SESv2...');
-
-  do {
-    const response = await sendWithRetry(async () => {
-      return await ses.send(new ListContactListsCommand({ NextToken: nextToken }));
-    }, 'ListContactLists');
-
-    if (response.ContactLists?.length) {
-      // Contact list name is the tenant ID in current tenant setup flow
-      for (const list of response.ContactLists) {
-        const listName = list.ContactListName;
-        const tenantId = extractTenantIdFromListName(listName);
-        if (tenantId) {
-          lists.push({ name: listName, tenantId });
-        } else {
-          console.warn(`[MIGRATION] Could not extract tenant ID from list: ${listName}`);
-        }
-      }
-    }
-    nextToken = response.NextToken;
-  } while (nextToken);
-
-  console.log(`[MIGRATION] Found ${lists.length} contact lists`);
-  return lists;
-};
-
-/**
- * Extract tenant ID from contact list name
- * Current flow creates SES contact lists with ContactListName === tenantId
- * @param {string} listName - Contact list name
- * @returns {string|null} Tenant ID or null if cannot extract
- */
-const extractTenantIdFromListName = (listName) => {
-  if (!listName || typeof listName !== 'string') {
+  if (!response.Item) {
     return null;
   }
-  return listName;
+
+  return unmarshall(response.Item);
 };
 
 /**
@@ -246,7 +217,7 @@ const getActualSubscriberCount = async (tenantId) => {
 
 /**
  * Migrate a single tenant's contacts from SESv2 to DynamoDB
- * @param {string} listName - Contact list name
+ * @param {string} listName - SES contact list name
  * @param {string} tenantId - Tenant ID
  * @returns {Promise<Object>} Migration result for this tenant
  */
@@ -301,7 +272,7 @@ const migrateTenant = async (listName, tenantId) => {
 /**
  * Main handler for migration Lambda function
  * Migrates all SESv2 contacts to DynamoDB Subscribers table
- * @param {Object} event - Lambda event (optional tenantId to migrate specific tenant)
+ * @param {Object} event - Lambda event (requires tenantId to migrate a specific tenant)
  * @returns {Promise<Object>} Migration report
  */
 export const handler = async (event = {}) => {
@@ -317,32 +288,10 @@ export const handler = async (event = {}) => {
   console.log('[MIGRATION] Starting SESv2 to DynamoDB migration');
 
   try {
-    // Get all contact lists
-    const contactLists = await getAllContactLists();
-
-    if (contactLists.length === 0) {
-      console.log('[MIGRATION] No contact lists found');
-      return {
-        success: true,
-        startedAt: new Date(migrationStartTime).toISOString(),
-        completedAt: new Date().toISOString(),
-        tenants: [],
-        totalSubscribers: 0,
-        totalErrors: 0,
-        durationMs: Date.now() - migrationStartTime
-      };
-    }
-
-    // Filter to specific tenant if provided
-    const listsToMigrate = event.tenantId
-      ? contactLists.filter(list => list.tenantId === event.tenantId)
-      : contactLists;
-
-    if (event.tenantId && listsToMigrate.length === 0) {
-      console.warn(`[MIGRATION] No contact list found for tenant: ${event.tenantId}`);
+    if (!event.tenantId) {
       return {
         success: false,
-        error: `No contact list found for tenant: ${event.tenantId}`,
+        error: 'tenantId is required',
         startedAt: new Date(migrationStartTime).toISOString(),
         completedAt: new Date().toISOString(),
         tenants: [],
@@ -352,14 +301,37 @@ export const handler = async (event = {}) => {
       };
     }
 
-    console.log(`[MIGRATION] Migrating ${listsToMigrate.length} tenant(s)`);
-
-    // Migrate each tenant
-    const results = [];
-    for (const { name, tenantId } of listsToMigrate) {
-      const result = await migrateTenant(name, tenantId);
-      results.push(result);
+    const tenant = await getTenantRecord(event.tenantId);
+    if (!tenant) {
+      console.warn(`[MIGRATION] Tenant record not found: ${event.tenantId}`);
+      return {
+        success: false,
+        error: `Tenant record not found: ${event.tenantId}`,
+        startedAt: new Date(migrationStartTime).toISOString(),
+        completedAt: new Date().toISOString(),
+        tenants: [],
+        totalSubscribers: 0,
+        totalErrors: 0,
+        durationMs: Date.now() - migrationStartTime
+      };
     }
+
+    if (!tenant.list) {
+      console.warn(`[MIGRATION] No list configured on tenant record: ${event.tenantId}`);
+      return {
+        success: false,
+        error: `No list configured on tenant record: ${event.tenantId}`,
+        startedAt: new Date(migrationStartTime).toISOString(),
+        completedAt: new Date().toISOString(),
+        tenants: [],
+        totalSubscribers: 0,
+        totalErrors: 0,
+        durationMs: Date.now() - migrationStartTime
+      };
+    }
+
+    console.log(`[MIGRATION] Migrating tenant ${event.tenantId} using list "${tenant.list}"`);
+    const results = [await migrateTenant(tenant.list, event.tenantId)];
 
     // Generate summary report
     const totalSubscribers = results.reduce((sum, r) => sum + r.subscribersMigrated, 0);

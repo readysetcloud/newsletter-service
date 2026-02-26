@@ -63,33 +63,48 @@ export const unsubscribeUser = async (tenantId, emailAddress, method = 'encrypte
   try {
     const email = emailAddress.toLowerCase();
 
-    // Delete subscriber from Subscribers table
-    await ddb.send(new DeleteItemCommand({
+    // Delete subscriber from Subscribers table only if it exists
+    // Using ReturnValues to check if an item was actually deleted
+    const deleteResult = await ddb.send(new DeleteItemCommand({
       TableName: process.env.SUBSCRIBERS_TABLE_NAME,
       Key: marshall({
         tenantId: tenantId,
         email: email
-      })
-    }));
-
-    // Decrement subscriber count in Newsletter table
-    await ddb.send(new UpdateItemCommand({
-      TableName: process.env.TABLE_NAME,
-      Key: marshall({
-        pk: tenantId,
-        sk: 'tenant'
       }),
-      UpdateExpression: 'SET subscribers = if_not_exists(subscribers, :zero) - :dec',
-      ExpressionAttributeValues: marshall({
-        ':dec': 1,
-        ':zero': 0
-      })
+      ReturnValues: 'ALL_OLD'
     }));
 
-    console.log('Unsubscribe successful:', { tenantId, emailAddress });
+    // Only decrement count if a subscriber was actually removed
+    if (deleteResult.Attributes) {
+      await ddb.send(new UpdateItemCommand({
+        TableName: process.env.TABLE_NAME,
+        Key: marshall({
+          pk: tenantId,
+          sk: 'tenant'
+        }),
+        UpdateExpression: 'SET subscribers = if_not_exists(subscribers, :zero) - :dec',
+        ExpressionAttributeValues: marshall({
+          ':dec': 1,
+          ':zero': 0
+        }),
+        // Prevent count from going below zero
+        ConditionExpression: 'if_not_exists(subscribers, :zero) >= :dec'
+      }));
+
+      console.log('Unsubscribe successful:', { tenantId, emailAddress });
+    } else {
+      console.log('Unsubscribe skipped - subscriber not found:', { tenantId, emailAddress });
+    }
+
     return true;
 
   } catch (error) {
+    // If the condition fails (count would go negative), log but still return success
+    if (error.name === 'ConditionalCheckFailedException') {
+      console.warn('Subscriber count already at minimum:', { tenantId });
+      return true;
+    }
+
     console.error('Unsubscribe failed:', {
       tenantId,
       email: '[REDACTED]',

@@ -1316,12 +1316,17 @@ Resources:
               Action: dynamodb:GetItem
               Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
+              Action: dynamodb:Query
+              Resource: !GetAtt SubscribersTable.Arn
+            - Effect: Allow
               Action: s3:PutObject
               Resource: !Sub "${NewsletterBucket.Arn}/reports/*"
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           BUCKET: !Ref NewsletterBucket
+          TABLE_NAME: !Ref NewsletterTable
+          SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
 
   HandleEmailStatusFunction:
     Type: AWS::Serverless::Function

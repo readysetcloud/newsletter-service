@@ -134,7 +134,7 @@ const writeSubscribersToDynamoDB = async (tenantId, subscribers) => {
     }));
 
     try {
-      await sendWithRetry(async () => {
+      const response = await sendWithRetry(async () => {
         return await ddb.send(new BatchWriteItemCommand({
           RequestItems: {
             [process.env.SUBSCRIBERS_TABLE_NAME]: putRequests
@@ -142,8 +142,26 @@ const writeSubscribersToDynamoDB = async (tenantId, subscribers) => {
         }));
       }, 'BatchWriteItem');
 
-      successCount += batch.length;
-      console.log(`[MIGRATION] Wrote batch ${Math.floor(i / BATCH_SIZE) + 1}: ${batch.length} subscribers for tenant ${tenantId}`);
+      // Check for unprocessed items
+      const unprocessedCount = response.UnprocessedItems?.[process.env.SUBSCRIBERS_TABLE_NAME]?.length || 0;
+      const processedCount = batch.length - unprocessedCount;
+
+      successCount += processedCount;
+
+      if (unprocessedCount > 0) {
+        console.warn(`[MIGRATION] Batch ${Math.floor(i / BATCH_SIZE) + 1}: ${unprocessedCount} unprocessed items for tenant ${tenantId}`);
+        // Track unprocessed items as errors
+        const unprocessedEmails = response.UnprocessedItems[process.env.SUBSCRIBERS_TABLE_NAME]
+          .map(item => item.PutRequest.Item.email.S);
+        unprocessedEmails.forEach(email => {
+          errors.push({
+            email,
+            error: 'Unprocessed by DynamoDB (throttled or capacity exceeded)'
+          });
+        });
+      }
+
+      console.log(`[MIGRATION] Wrote batch ${Math.floor(i / BATCH_SIZE) + 1}: ${processedCount}/${batch.length} subscribers for tenant ${tenantId}`);
 
       // Throttle to avoid overwhelming DynamoDB
       if (i + BATCH_SIZE < subscribers.length) {
@@ -202,18 +220,27 @@ const updateSubscriberCount = async (tenantId, count) => {
  */
 const getActualSubscriberCount = async (tenantId) => {
   try {
-    const response = await sendWithRetry(async () => {
-      return await ddb.send(new QueryCommand({
-        TableName: process.env.SUBSCRIBERS_TABLE_NAME,
-        KeyConditionExpression: 'tenantId = :tenantId',
-        ExpressionAttributeValues: marshall({
-          ':tenantId': tenantId
-        }),
-        Select: 'COUNT'
-      }));
-    }, 'QuerySubscriberCount');
+    let totalCount = 0;
+    let lastEvaluatedKey;
 
-    return response.Count || 0;
+    do {
+      const response = await sendWithRetry(async () => {
+        return await ddb.send(new QueryCommand({
+          TableName: process.env.SUBSCRIBERS_TABLE_NAME,
+          KeyConditionExpression: 'tenantId = :tenantId',
+          ExpressionAttributeValues: marshall({
+            ':tenantId': tenantId
+          }),
+          Select: 'COUNT',
+          ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey })
+        }));
+      }, 'QuerySubscriberCount');
+
+      totalCount += response.Count || 0;
+      lastEvaluatedKey = response.LastEvaluatedKey;
+    } while (lastEvaluatedKey);
+
+    return totalCount;
   } catch (err) {
     console.error(`[MIGRATION] Failed to query subscriber count for tenant ${tenantId}:`, err);
     return 0;

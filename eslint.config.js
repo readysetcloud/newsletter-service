@@ -1,4 +1,5 @@
 export default [
+  { ignores: ["dashboard-ui/**"]},
   {
     files: ['**/*.mjs'],
     ignores: ['**/*.test.mjs'],

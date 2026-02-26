@@ -8,6 +8,8 @@
   "scripts": {
     "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js",
     "lint": "eslint .",
+    "lint:ui": "npm --prefix dashboard-ui run lint",
+    "lint:all": "npm run lint && npm run lint:ui",
     "coverage": "c8 npm test",
     "test:rust": "cargo test --workspace",
     "lint:rust": "cargo clippy --workspace --all-targets",

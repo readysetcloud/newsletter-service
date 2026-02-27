@@ -1773,6 +1773,8 @@ Resources:
             - Effect: Allow
               Action:
                 - dynamodb:Query
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
               Resource: !GetAtt SubscribersTable.Arn
       Environment:
         Variables:

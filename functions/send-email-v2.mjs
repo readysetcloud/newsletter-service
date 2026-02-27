@@ -308,7 +308,7 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
 
 /**
  * Update subscriber tracking fields (lastSentAt, lastIssueSent) after send completes.
- * This runs outside the critical send path and never throws.
+ * Throws when subscriber metadata persistence fails for known subscribers.
  * @param {string} tenantId - Tenant identifier
  * @param {string[]} sentRecipients - Recipients that were successfully sent
  * @param {string|undefined} issueIdentifier - Issue identifier/reference that was sent
@@ -318,20 +318,54 @@ const updateSubscriberTrackingPhase = async (tenantId, sentRecipients, issueIden
     return;
   }
 
-  const updates = sentRecipients.map(email => {
-    return updateSubscriberSendMetadata(tenantId, email, issueIdentifier)
-      .catch((error) => {
-        console.error('[SUBSCRIBER TRACKING] Update failed', {
-          tenantId,
-          email,
-          issueIdentifier,
-          error: error.message
-        });
-      });
+  const results = await Promise.allSettled(
+    sentRecipients.map((email) => sendWithRetry(
+      () => updateSubscriberSendMetadata(tenantId, email, issueIdentifier),
+      `Update subscriber tracking for ${email}`
+    ))
+  );
+
+  const nonSubscriberSkips = [];
+  const failedUpdates = [];
+
+  results.forEach((result, index) => {
+    if (result.status === 'fulfilled') {
+      return;
+    }
+
+    const email = sentRecipients[index];
+    const error = result.reason;
+
+    if (error?.name === 'ConditionalCheckFailedException') {
+      nonSubscriberSkips.push(email);
+      return;
+    }
+
+    failedUpdates.push({
+      email,
+      error: error?.message || 'Unknown error'
+    });
   });
 
-  await Promise.all(updates);
-  console.log(`[SUBSCRIBER TRACKING] Updated ${sentRecipients.length} subscriber records`);
+  if (failedUpdates.length > 0) {
+    console.error('[SUBSCRIBER TRACKING] Failed updates detected', {
+      tenantId,
+      failedCount: failedUpdates.length,
+      failedUpdates
+    });
+
+    throw new Error(
+      `Failed to persist subscriber tracking for ${failedUpdates.length} recipient(s)`
+    );
+  }
+
+  const updatedCount = sentRecipients.length - nonSubscriberSkips.length;
+  console.log(
+    `[SUBSCRIBER TRACKING] Updated ${updatedCount} subscriber records` +
+    (nonSubscriberSkips.length > 0
+      ? `, skipped ${nonSubscriberSkips.length} non-subscriber recipient(s)`
+      : '')
+  );
 };
 
 export const handler = async (event) => {

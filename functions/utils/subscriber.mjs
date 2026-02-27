@@ -172,6 +172,7 @@ export const updateSubscriberSendMetadata = async (tenantId, emailAddress, issue
         email
       }),
       UpdateExpression: updateExpression,
+      ConditionExpression: 'attribute_exists(tenantId) AND attribute_exists(email)',
       ExpressionAttributeNames: expressionAttributeNames,
       ExpressionAttributeValues: marshall(expressionAttributeValues)
     }));
@@ -185,3 +186,4 @@ export const updateSubscriberSendMetadata = async (tenantId, emailAddress, issue
     throw error;
   }
 };
+

@@ -1290,6 +1290,43 @@ paths:
         "500":
           $ref: "#/components/responses/UnknownError"
 
+  /issues/{id}/resend:
+    post:
+      summary: Resend a published issue
+      description: Queues a resend workflow for an existing published issue
+      tags:
+        - Issues
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The issue ID
+      responses:
+        "202":
+          description: Resend workflow queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: queued
+                  issueId:
+                    type: string
+                  issueNumber:
+                    type: integer
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
 components:
   parameters:
     Tenant:

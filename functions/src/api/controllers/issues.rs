@@ -287,6 +287,16 @@ pub async fn rebuild_issue_analytics(
     }
 }
 
+pub async fn resend_issue(
+    event: Request,
+    issue_id: Option<String>,
+) -> Result<Response<Body>, Error> {
+    match handle_resend_issue(event, issue_id).await {
+        Ok(response) => Ok(response),
+        Err(e) => Ok(response::format_error_response(&e)),
+    }
+}
+
 pub async fn get_trends(event: Request) -> Result<Response<Body>, Error> {
     match handle_get_trends(event).await {
         Ok(response) => Ok(response),
@@ -390,6 +400,51 @@ async fn handle_rebuild_issue_analytics(
         issue.issue_number,
         &issue.subject,
         &published_at,
+    )
+    .await?;
+
+    response::format_response(
+        202,
+        serde_json::json!({
+            "status": "queued",
+            "issueId": issue_id,
+            "issueNumber": issue.issue_number
+        }),
+    )
+}
+
+async fn handle_resend_issue(
+    event: Request,
+    issue_id: Option<String>,
+) -> Result<Response<Body>, AppError> {
+    let user_context = auth::get_user_context(&event)?;
+    let tenant_id = user_context
+        .tenant_id
+        .ok_or_else(|| AppError::Unauthorized("Tenant access required".to_string()))?;
+
+    if user_context.email.trim().is_empty() {
+        return Err(AppError::BadRequest(
+            "Email is required to resend issues".to_string(),
+        ));
+    }
+
+    let issue_id =
+        issue_id.ok_or_else(|| AppError::BadRequest("Issue ID is required".to_string()))?;
+
+    let issue = get_issue_by_id(&tenant_id, &issue_id).await?;
+
+    if issue.status != "published" {
+        return Err(AppError::BadRequest(
+            "Only published issues can be resent".to_string(),
+        ));
+    }
+
+    start_issue_schedule(
+        &tenant_id,
+        user_context.email.as_str(),
+        issue.issue_number,
+        &issue.content,
+        None,
     )
     .await?;
 

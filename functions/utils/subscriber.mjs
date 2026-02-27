@@ -1,7 +1,32 @@
-import { DynamoDBClient, PutItemCommand, QueryCommand, DeleteItemCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, PutItemCommand, QueryCommand, DeleteItemCommand, UpdateItemCommand, GetItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 
 const ddb = new DynamoDBClient();
+
+
+/**
+ * Get a subscriber by email for a tenant.
+ * @param {string} tenantId - Tenant identifier
+ * @param {string} emailAddress - Subscriber email address
+ * @returns {Promise<object|null>} Subscriber object or null when not found
+ */
+export const getSubscriberByEmail = async (tenantId, emailAddress) => {
+  const email = emailAddress.toLowerCase();
+
+  const result = await ddb.send(new GetItemCommand({
+    TableName: process.env.SUBSCRIBERS_TABLE_NAME,
+    Key: marshall({
+      tenantId,
+      email
+    })
+  }));
+
+  if (!result.Item) {
+    return null;
+  }
+
+  return unmarshall(result.Item);
+};
 
 /**
  * List all subscribers for a tenant
@@ -34,7 +59,9 @@ export const listSubscribers = async (tenantId, options = {}) => {
         email: subscriber.email,
         firstName: subscriber.firstName || null,
         lastName: subscriber.lastName || null,
-        addedAt: subscriber.addedAt
+        addedAt: subscriber.addedAt,
+        lastSentAt: subscriber.lastSentAt || null,
+        lastIssueSent: subscriber.lastIssueSent || null
       };
     });
 
@@ -111,5 +138,50 @@ export const unsubscribeUser = async (tenantId, emailAddress, method = 'encrypte
       error: error.message
     });
     return false;
+  }
+};
+
+/**
+ * Update subscriber delivery metadata after an email is sent.
+ * @param {string} tenantId - Tenant identifier
+ * @param {string} emailAddress - Subscriber email address
+ * @param {string|undefined} issueIdentifier - Issue identifier/reference that was sent
+ * @returns {Promise<void>}
+ */
+export const updateSubscriberSendMetadata = async (tenantId, emailAddress, issueIdentifier) => {
+  try {
+    const email = emailAddress.toLowerCase();
+    const expressionAttributeNames = {};
+    const expressionAttributeValues = {
+      ':lastSentAt': new Date().toISOString()
+    };
+
+    let updateExpression = 'SET #lastSentAt = :lastSentAt';
+    expressionAttributeNames['#lastSentAt'] = 'lastSentAt';
+
+    if (issueIdentifier) {
+      updateExpression += ', #lastIssueSent = :lastIssueSent';
+      expressionAttributeNames['#lastIssueSent'] = 'lastIssueSent';
+      expressionAttributeValues[':lastIssueSent'] = issueIdentifier;
+    }
+
+    await ddb.send(new UpdateItemCommand({
+      TableName: process.env.SUBSCRIBERS_TABLE_NAME,
+      Key: marshall({
+        tenantId,
+        email
+      }),
+      UpdateExpression: updateExpression,
+      ExpressionAttributeNames: expressionAttributeNames,
+      ExpressionAttributeValues: marshall(expressionAttributeValues)
+    }));
+  } catch (error) {
+    console.error('Update subscriber send metadata failed:', {
+      tenantId,
+      email: '[REDACTED]',
+      issueIdentifier,
+      error: error.message
+    });
+    throw error;
   }
 };

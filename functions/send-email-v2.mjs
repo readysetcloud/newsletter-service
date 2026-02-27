@@ -3,7 +3,7 @@ import { SchedulerClient, CreateScheduleCommand } from "@aws-sdk/client-schedule
 import { DynamoDBClient, QueryCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { encrypt, sendWithRetry } from './utils/helpers.mjs';
-import { listSubscribers } from './utils/subscriber.mjs';
+import { listSubscribers, getSubscriberByEmail, updateSubscriberSendMetadata } from './utils/subscriber.mjs';
 
 // Key patterns for DynamoDB (previously from ./senders/types.mjs)
 const KEY_PATTERNS = {
@@ -176,12 +176,12 @@ const validateSenderPhase = async (tenantId, fromEmail) => {
 /**
  * Retrieve subscribers for a tenant from Subscribers table
  * @param {string} tenantId - Tenant identifier
- * @returns {Promise<string[]>} Array of email addresses
+ * @returns {Promise<object[]>} Array of subscriber objects
  */
 const retrieveSubscribersPhase = async (tenantId) => {
   console.log(`[SUBSCRIBERS] Starting retrieval - tenantId: ${tenantId}`);
 
-  const emailAddresses = [];
+  const subscribers = [];
   let lastEvaluatedKey = undefined;
   let pageNum = 0;
 
@@ -196,20 +196,43 @@ const retrieveSubscribersPhase = async (tenantId) => {
     console.log(`[SUBSCRIBERS] Page ${pageNum} completed in ${pageDuration}ms - received ${result.subscribers.length} subscribers`);
 
     if (result.subscribers.length > 0) {
-      emailAddresses.push(...result.subscribers.map(s => s.email));
+      subscribers.push(...result.subscribers);
     }
 
     lastEvaluatedKey = result.lastEvaluatedKey;
   } while (lastEvaluatedKey);
 
-  if (emailAddresses.length === 0) {
+  if (subscribers.length === 0) {
     throw new Error(`No subscribers found for tenant: ${tenantId}`);
   }
 
-  console.log(`[SUBSCRIBERS] Retrieval complete - total subscribers: ${emailAddresses.length}`);
-  return emailAddresses;
+  console.log(`[SUBSCRIBERS] Retrieval complete - total subscribers: ${subscribers.length}`);
+  return subscribers;
 };
 
+
+
+/**
+ * Filter recipients to avoid duplicate sends for an issue reference.
+ * @param {string} tenantId - Tenant identifier
+ * @param {object[]} subscribers - Subscriber records
+ * @param {string|undefined} issueIdentifier - Issue identifier/reference
+ * @returns {Promise<{recipients: string[], skippedCount: number}>}
+ */
+const filterIdempotentRecipientsPhase = async (tenantId, subscribers, issueIdentifier) => {
+  if (!issueIdentifier) {
+    return { recipients: subscribers.map(subscriber => subscriber.email), skippedCount: 0 };
+  }
+
+  const recipients = subscribers
+    .filter(subscriber => subscriber.lastIssueSent !== issueIdentifier)
+    .map(subscriber => subscriber.email);
+
+  const skippedCount = subscribers.length - recipients.length;
+  console.log(`[IDEMPOTENCY] Filtered recipients for issue ${issueIdentifier} - send: ${recipients.length}, skipped: ${skippedCount}`);
+
+  return { recipients, skippedCount };
+};
 /**
  * Send emails to recipients with personalization and TPS throttling
  * @param {string[]} emailAddresses - Array of recipient email addresses
@@ -219,12 +242,13 @@ const retrieveSubscribersPhase = async (tenantId) => {
  * @param {Object} emailConfig.replacements - Replacement tokens for personalization
  * @param {string} emailConfig.referenceNumber - Optional reference number for tracking
  * @param {string} senderEmail - Sender email address
- * @returns {Promise<number>} Number of emails sent
+ * @returns {Promise<{sentCount: number, sentRecipients: string[]}>} Send stats and sent recipients
  */
 const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
   console.log(`[SENDING] Starting - recipients: ${emailAddresses.length}, TPS: ${tpsLimit}, sender: ${senderEmail}`);
 
   let sentCount = 0;
+  const sentRecipients = [];
   const totalCount = emailAddresses.length;
 
   // Calculate progress logging interval: every 10% or every 50 emails, whichever is smaller
@@ -267,6 +291,7 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
     }, `Send email to ${email}`);
 
     sentCount++;
+    sentRecipients.push(email);
 
     // Log progress at intervals or when complete
     if (sentCount % logInterval === 0 || sentCount === totalCount) {
@@ -278,7 +303,35 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
   }
 
   console.log(`[SENDING] Complete - sent ${sentCount} emails`);
-  return sentCount;
+  return { sentCount, sentRecipients };
+};
+
+/**
+ * Update subscriber tracking fields (lastSentAt, lastIssueSent) after send completes.
+ * This runs outside the critical send path and never throws.
+ * @param {string} tenantId - Tenant identifier
+ * @param {string[]} sentRecipients - Recipients that were successfully sent
+ * @param {string|undefined} issueIdentifier - Issue identifier/reference that was sent
+ */
+const updateSubscriberTrackingPhase = async (tenantId, sentRecipients, issueIdentifier) => {
+  if (!tenantId || sentRecipients.length === 0) {
+    return;
+  }
+
+  const updates = sentRecipients.map(email => {
+    return updateSubscriberSendMetadata(tenantId, email, issueIdentifier)
+      .catch((error) => {
+        console.error('[SUBSCRIBER TRACKING] Update failed', {
+          tenantId,
+          email,
+          issueIdentifier,
+          error: error.message
+        });
+      });
+  });
+
+  await Promise.all(updates);
+  console.log(`[SUBSCRIBER TRACKING] Updated ${sentRecipients.length} subscriber records`);
 };
 
 export const handler = async (event) => {
@@ -346,24 +399,49 @@ export const handler = async (event) => {
       }
     }
 
-    let emailAddresses = [];
+    let subscribers = [];
     if (to.email) {
-      emailAddresses = [to.email];
+      const subscriber = await getSubscriberByEmail(tenantId, to.email);
+      if (subscriber) {
+        subscribers = [subscriber];
+      } else {
+        subscribers = [{ email: to.email }];
+      }
     } else if (to.list) {
       // Phase 2: Subscriber Retrieval
-      emailAddresses = await executePhase('Subscriber Retrieval', async () => {
+      subscribers = await executePhase('Subscriber Retrieval', async () => {
         return await retrieveSubscribersPhase(tenantId);
       });
     }
 
+    const { recipients: emailAddresses, skippedCount } = await executePhase('Idempotency Filter', async () => {
+      return await filterIdempotentRecipientsPhase(tenantId, subscribers, data.referenceNumber);
+    });
+
+    if (emailAddresses.length === 0) {
+      console.log('[EXECUTION COMPLETE] No recipients to send after idempotency filtering');
+      return {
+        sent: true,
+        recipients: 0,
+        skipped: skippedCount,
+        senderEmail,
+        senderId: senderRecord?.senderId
+      };
+    }
+
     // Phase 3: Email Sending
-    const sentCount = await executePhase('Email Sending', async () => {
+    const { sentCount, sentRecipients } = await executePhase('Email Sending', async () => {
       return await sendEmailsPhase(emailAddresses, {
         subject,
         html,
         replacements,
         referenceNumber: data.referenceNumber
       }, senderEmail);
+    });
+
+    // Phase 3.5: Subscriber Tracking Update (non-critical)
+    await executePhase('Subscriber Tracking Update', async () => {
+      return await updateSubscriberTrackingPhase(tenantId, sentRecipients, data.referenceNumber);
     });
 
     // Phase 4: Metrics Update
@@ -380,7 +458,8 @@ export const handler = async (event) => {
       sent: true,
       recipients: sentCount,
       senderEmail: senderEmail,
-      senderId: senderRecord?.senderId
+      senderId: senderRecord?.senderId,
+      skipped: skippedCount
     };
   } catch (err) {
     const executionDuration = Date.now() - executionStart;

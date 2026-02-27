@@ -38,14 +38,16 @@ jest.unstable_mockModule('../functions/utils/subscriber.mjs', () => ({
   listSubscribers: jest.fn(() => Promise.resolve({
     subscribers: [],
     lastEvaluatedKey: undefined
-  }))
+  })),
+  getSubscriberByEmail: jest.fn(() => Promise.resolve(null)),
+  updateSubscriberSendMetadata: jest.fn(() => Promise.resolve())
 }));
 
 // Note: KEY_PATTERNS is now defined inline in send-email-v2.mjs (no longer imported from senders/types.mjs)
 
 // Import after mocks
 const { handler } = await import('../functions/send-email-v2.mjs');
-const { listSubscribers } = await import('../functions/utils/subscriber.mjs');
+const { listSubscribers, getSubscriberByEmail, updateSubscriberSendMetadata } = await import('../functions/utils/subscriber.mjs');
 
 describe('send-email-v2', () => {
   beforeAll(() => {
@@ -63,6 +65,8 @@ describe('send-email-v2', () => {
       subscribers: [],
       lastEvaluatedKey: undefined
     });
+
+    getSubscriberByEmail.mockResolvedValue(null);
   });
 
   describe('sender email validation', () => {
@@ -264,6 +268,129 @@ describe('send-email-v2', () => {
       const metricsCall = ddbInstance.send.mock.calls[1][0];
       expect(metricsCall.__type).toBe('UpdateItem');
       expect(metricsCall.UpdateExpression).toBe('ADD emailsSent :count SET lastSentAt = :timestamp');
+
+      expect(updateSubscriberSendMetadata).toHaveBeenCalledWith(
+        'tenant-123',
+        'recipient@example.com',
+        undefined
+      );
+    });
+
+    test('tracks lastIssueSent and lastSentAt for issue sends', async () => {
+      const event = {
+        detail: {
+          subject: 'Issue Subject',
+          html: '<p>Issue content</p>',
+          to: { email: 'recipient@example.com' },
+          from: 'sender@example.com',
+          tenantId: 'tenant-123',
+          referenceNumber: 'tenant-123_42'
+        }
+      };
+
+      ddbInstance.send.mockResolvedValueOnce({
+        Items: [{
+          unmarshalled: {
+            senderId: 'sender-123',
+            email: 'sender@example.com',
+            verificationStatus: 'verified',
+            isDefault: false
+          }
+        }]
+      });
+
+      sesInstance.send.mockResolvedValue({ MessageId: 'msg-123' });
+      ddbInstance.send.mockResolvedValueOnce({});
+
+      await handler(event);
+
+      expect(updateSubscriberSendMetadata).toHaveBeenCalledWith(
+        'tenant-123',
+        'recipient@example.com',
+        'tenant-123_42'
+      );
+    });
+
+
+
+    test('skips send when single recipient already received issue reference', async () => {
+      const event = {
+        detail: {
+          subject: 'Issue Subject',
+          html: '<p>Issue content</p>',
+          to: { email: 'recipient@example.com' },
+          from: 'sender@example.com',
+          tenantId: 'tenant-123',
+          referenceNumber: 'tenant-123_42'
+        }
+      };
+
+      ddbInstance.send.mockResolvedValueOnce({
+        Items: [{
+          unmarshalled: {
+            senderId: 'sender-123',
+            email: 'sender@example.com',
+            verificationStatus: 'verified',
+            isDefault: false
+          }
+        }]
+      });
+
+      getSubscriberByEmail.mockResolvedValue({
+        email: 'recipient@example.com',
+        lastIssueSent: 'tenant-123_42'
+      });
+
+      const result = await handler(event);
+
+      expect(result.sent).toBe(true);
+      expect(result.recipients).toBe(0);
+      expect(result.skipped).toBe(1);
+      expect(sesInstance.send).not.toHaveBeenCalled();
+      expect(updateSubscriberSendMetadata).not.toHaveBeenCalled();
+    });
+
+    test('filters out subscribers already sent current issue for list sends', async () => {
+      const event = {
+        detail: {
+          subject: 'Issue Subject',
+          html: '<p>Issue content</p>',
+          to: { list: 'main-list' },
+          from: 'sender@example.com',
+          tenantId: 'tenant-123',
+          referenceNumber: 'tenant-123_42'
+        }
+      };
+
+      ddbInstance.send.mockResolvedValueOnce({
+        Items: [{
+          unmarshalled: {
+            senderId: 'sender-123',
+            email: 'sender@example.com',
+            verificationStatus: 'verified',
+            isDefault: false
+          }
+        }]
+      });
+
+      listSubscribers.mockResolvedValue({
+        subscribers: [
+          { email: 'new@example.com', lastIssueSent: null },
+          { email: 'already@example.com', lastIssueSent: 'tenant-123_42' }
+        ],
+        lastEvaluatedKey: undefined
+      });
+
+      sesInstance.send.mockResolvedValue({ MessageId: 'msg-123' });
+      ddbInstance.send.mockResolvedValueOnce({});
+
+      const result = await handler(event);
+
+      expect(result.recipients).toBe(1);
+      expect(result.skipped).toBe(1);
+      expect(sesInstance.send).toHaveBeenCalledTimes(1);
+      expect(updateSubscriberSendMetadata).toHaveBeenCalledTimes(1);
+      expect(updateSubscriberSendMetadata).toHaveBeenCalledWith('tenant-123', 'new@example.com', 'tenant-123_42');
     });
 
     test('continues even if metrics update fails', async () => {
@@ -354,6 +481,8 @@ describe('send-email-v2 property-based tests', () => {
       subscribers: [],
       lastEvaluatedKey: undefined
     });
+
+    getSubscriberByEmail.mockResolvedValue(null);
 
     // Suppress console logs during property tests
     jest.spyOn(console, 'log').mockImplementation(() => {});

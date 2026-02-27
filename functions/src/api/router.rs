@@ -83,6 +83,13 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
                 .map(|value| value.to_string());
             issues::rebuild_issue_analytics(event, issue_id).await
         }
+        (&Method::POST, path) if path.starts_with("/issues/") && path.ends_with("/resend") => {
+            let issue_id = path
+                .strip_prefix("/issues/")
+                .and_then(|value| value.strip_suffix("/resend"))
+                .map(|value| value.to_string());
+            issues::resend_issue(event, issue_id).await
+        }
         (&Method::GET, path) if path.starts_with("/issues/") => {
             let issue_id = extract_path_param(path, "/issues/");
             issues::get_issue(event, issue_id).await
@@ -311,6 +318,8 @@ mod tests {
         assert!(is_valid_api_path("/issues/trends"));
         assert!(is_valid_api_path("/issues/issue-123"));
         assert!(is_valid_api_path("/issues/tenant-abc#456"));
+        assert!(is_valid_api_path("/issues/issue-123/resend"));
+        assert!(is_valid_api_path("/issues/issue-123/analytics/rebuild"));
     }
 
     #[test]
@@ -404,7 +413,7 @@ mod tests {
 
     #[test]
     fn test_method_validation_issues_endpoints() {
-        // Issues: GET list, GET trends, GET single, POST create, PUT update, DELETE
+        // Issues: GET list, GET trends, GET single, POST create/rebuild/resend, PUT update, DELETE
         assert!(is_valid_api_path("/issues"));
         assert!(is_valid_api_path("/issues/trends"));
         assert!(is_valid_api_path("/issues/issue-123"));

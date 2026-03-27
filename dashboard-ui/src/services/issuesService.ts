@@ -55,6 +55,15 @@ class IssuesService {
     const response = await apiClient.get<Issue>(`/issues/${id}`);
 
     if (response.success && response.data?.stats) {
+      // The API may return analytics in an enriched envelope with nested
+      // eventAnalytics, benchmarks, insights, etc.  The frontend only needs
+      // the eventAnalytics slice which matches the IssueAnalytics shape.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const rawAnalytics = response.data.stats.analytics as any;
+      if (rawAnalytics?.eventAnalytics) {
+        response.data.stats.analytics = rawAnalytics.eventAnalytics;
+      }
+
       if (!validateIssueStats(response.data.stats)) {
         return {
           success: false,

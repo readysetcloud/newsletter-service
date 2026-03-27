@@ -54,6 +54,7 @@ export const handler = async (event) => {
       case 'click':
         stat = 'clicks';
         await trackLinkClick(issueId, detail.click.link, detail.click.ipAddress);
+        await captureClickEvent(issueId, detail.mail.destination[0], detail.click);
         break;
       default:
         console.warn(`Unsupported stat ${detail.eventType} was provided`);
@@ -287,5 +288,43 @@ const trackLinkClick = async (issueId, link, ipAddress) => {
       ':zero': 0,
       ':country': country
     })
+  }));
+};
+
+const captureClickEvent = async (issueId, subscriberEmail, clickEvent) => {
+  const clickedAt = clickEvent?.timestamp ? new Date(clickEvent.timestamp) : new Date();
+  const timestamp = clickedAt.toISOString();
+
+  const subscriberEmailHash = hashEmail(subscriberEmail);
+  const linkUrl = clickEvent?.link || 'unknown';
+  const linkId = crypto.createHash('md5').update(linkUrl).digest('hex').substring(0, 8);
+  const eventId = ulid();
+
+  const ipAddress = clickEvent?.ipAddress || null;
+  const countryData = ipAddress ? await lookupCountry(ipAddress) : null;
+  const country = countryData?.countryCode || 'unknown';
+
+  const userAgent = clickEvent?.userAgent || null;
+  const device = detectDevice(userAgent);
+  const trafficSource = 'email';
+
+  const clickEventRecord = {
+    pk: issueId,
+    sk: `click#${timestamp}#${subscriberEmailHash}#${linkId}#${eventId}`,
+    eventType: 'click',
+    timestamp,
+    subscriberEmailHash,
+    linkUrl,
+    linkPosition: null,
+    trafficSource,
+    device,
+    country,
+    timeToClick: null,
+    ttl: Math.floor(Date.now() / 1000) + (90 * 24 * 60 * 60)
+  };
+
+  await ddb.send(new PutItemCommand({
+    TableName: process.env.TABLE_NAME,
+    Item: marshall(clickEventRecord)
   }));
 };

@@ -1041,6 +1041,7 @@ describe('handle-email-status', () => {
     it('should handle click events', async () => {
       ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({});
 
       const event = {
         detail: {
@@ -1061,7 +1062,7 @@ describe('handle-email-status', () => {
       const result = await handler(event);
 
       expect(result).toBe(true);
-      expect(ddbSend).toHaveBeenCalledTimes(2);
+      expect(ddbSend).toHaveBeenCalledTimes(3);
     });
   });
 
@@ -1235,6 +1236,18 @@ describe('handle-email-status', () => {
         lookupCountry: mockLookupCountry,
       }));
 
+      jest.unstable_mockModule('../functions/utils/hash-email.mjs', () => ({
+        hashEmail: jest.fn((email) => `hashed_${email}`),
+      }));
+
+      jest.unstable_mockModule('../functions/utils/detect-device.mjs', () => ({
+        detectDevice: jest.fn(() => 'unknown'),
+      }));
+
+      jest.unstable_mockModule('ulid', () => ({
+        ulid: jest.fn(() => '01HQZX3Y4K5M6N7P8Q9R0S1T2U'),
+      }));
+
       ({ handler } = await import('../functions/handle-email-status.mjs'));
     });
 
@@ -1244,6 +1257,7 @@ describe('handle-email-status', () => {
         countryName: 'United States'
       });
 
+      ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
 
@@ -1266,7 +1280,7 @@ describe('handle-email-status', () => {
       await handler(event);
 
       expect(mockLookupCountry).toHaveBeenCalledWith('8.8.8.8');
-      expect(ddbSend).toHaveBeenCalledTimes(2);
+      expect(ddbSend).toHaveBeenCalledTimes(3);
 
       const linkUpdateCall = ddbSend.mock.calls[0][0];
       expect(linkUpdateCall.__type).toBe('UpdateItem');
@@ -1274,6 +1288,7 @@ describe('handle-email-status', () => {
     });
 
     it('should handle missing IP gracefully', async () => {
+      ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
 
@@ -1295,7 +1310,7 @@ describe('handle-email-status', () => {
       await handler(event);
 
       expect(mockLookupCountry).not.toHaveBeenCalled();
-      expect(ddbSend).toHaveBeenCalledTimes(2);
+      expect(ddbSend).toHaveBeenCalledTimes(3);
 
       const linkUpdateCall = ddbSend.mock.calls[0][0];
       expect(linkUpdateCall.ExpressionAttributeValues[':country'].S).toBe('unknown');
@@ -1304,6 +1319,7 @@ describe('handle-email-status', () => {
     it('should handle lookup failure gracefully', async () => {
       mockLookupCountry.mockResolvedValue(null);
 
+      ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
 
@@ -1326,7 +1342,7 @@ describe('handle-email-status', () => {
       await handler(event);
 
       expect(mockLookupCountry).toHaveBeenCalledWith('10.0.0.1');
-      expect(ddbSend).toHaveBeenCalledTimes(2);
+      expect(ddbSend).toHaveBeenCalledTimes(3);
 
       const linkUpdateCall = ddbSend.mock.calls[0][0];
       expect(linkUpdateCall.ExpressionAttributeValues[':country'].S).toBe('unknown');
@@ -1338,6 +1354,7 @@ describe('handle-email-status', () => {
         countryName: 'United Kingdom'
       });
 
+      ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
 

@@ -4,6 +4,7 @@ let handler;
 let ddbSend;
 let PutItemCommand;
 let UpdateItemCommand;
+let GetItemCommand;
 
 const loadIsolated = async () => {
   await jest.isolateModulesAsync(async () => {
@@ -13,6 +14,7 @@ const loadIsolated = async () => {
       DynamoDBClient: jest.fn(() => ({ send: ddbSend })),
       PutItemCommand: jest.fn((params) => ({ __type: 'PutItem', ...params })),
       UpdateItemCommand: jest.fn((params) => ({ __type: 'UpdateItem', ...params })),
+      GetItemCommand: jest.fn((params) => ({ __type: 'GetItem', ...params })),
     }));
 
     jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
@@ -26,6 +28,15 @@ const loadIsolated = async () => {
           } else if (Array.isArray(value)) {
             result[key] = { L: value.map(v => ({ S: v })) };
           }
+        }
+        return result;
+      },
+      unmarshall: (item) => {
+        const result = {};
+        for (const [key, value] of Object.entries(item)) {
+          if (value.S !== undefined) result[key] = value.S;
+          else if (value.N !== undefined) result[key] = Number(value.N);
+          else result[key] = value;
         }
         return result;
       },
@@ -49,7 +60,7 @@ const loadIsolated = async () => {
     }));
 
     ({ handler } = await import('../functions/handle-email-status.mjs'));
-    ({ PutItemCommand, UpdateItemCommand } = await import('@aws-sdk/client-dynamodb'));
+    ({ PutItemCommand, UpdateItemCommand, GetItemCommand } = await import('@aws-sdk/client-dynamodb'));
   });
 };
 
@@ -62,6 +73,8 @@ describe('handle-email-status', () => {
 
   describe('Open event tracking', () => {
     it('should track first open with userAgent and ipAddress', async () => {
+      // GetItem (publishedAt lookup), PutItem (capture open), PutItem (track unique), UpdateItem (stats)
+      ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem - no publishedAt
       ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
@@ -87,9 +100,9 @@ describe('handle-email-status', () => {
       const result = await handler(event);
 
       expect(result).toBe(true);
-      expect(ddbSend).toHaveBeenCalledTimes(3);
+      expect(ddbSend).toHaveBeenCalledTimes(4);
 
-      const trackCall = ddbSend.mock.calls[1][0];
+      const trackCall = ddbSend.mock.calls[2][0];
       expect(trackCall.__type).toBe('PutItem');
       expect(trackCall.Item.pk.S).toBe('tenant123#issue-456');
       expect(trackCall.Item.sk.S).toBe('opens#subscriber@example.com');
@@ -99,11 +112,12 @@ describe('handle-email-status', () => {
       expect(trackCall.Item.createdAt.S).toBeDefined();
       expect(trackCall.Item.ttl.N).toBeDefined();
 
-      const updateCall = ddbSend.mock.calls[2][0];
+      const updateCall = ddbSend.mock.calls[3][0];
       expect(updateCall.__type).toBe('UpdateItem');
     });
 
     it('should track first open without optional fields', async () => {
+      ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem - no publishedAt
       ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
@@ -126,7 +140,7 @@ describe('handle-email-status', () => {
 
       expect(result).toBe(true);
 
-      const trackCall = ddbSend.mock.calls[1][0];
+      const trackCall = ddbSend.mock.calls[2][0];
       expect(trackCall.Item.pk.S).toBe('tenant123#issue-456');
       expect(trackCall.Item.sk.S).toBe('opens#subscriber@example.com');
       expect(trackCall.Item.userAgent).toBeUndefined();
@@ -136,6 +150,7 @@ describe('handle-email-status', () => {
     });
 
     it('should detect reopens and increment reopens stat', async () => {
+      ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem - no publishedAt
       ddbSend.mockResolvedValueOnce({});
 
       const conditionalError = new Error('ConditionalCheckFailedException');
@@ -165,19 +180,23 @@ describe('handle-email-status', () => {
       const result = await handler(event);
 
       expect(result).toBe(true);
-      expect(ddbSend).toHaveBeenCalledTimes(3);
+      expect(ddbSend).toHaveBeenCalledTimes(4);
 
-      const updateCall = ddbSend.mock.calls[2][0];
+      const updateCall = ddbSend.mock.calls[3][0];
       expect(updateCall.__type).toBe('UpdateItem');
       expect(updateCall.ExpressionAttributeNames['#stat']).toBe('reopens');
     });
   });
 
   describe('Open event capture (analytics)', () => {
-    it('should capture open event with full metadata when sentAt is available', async () => {
-      ddbSend.mockResolvedValueOnce({});
-      ddbSend.mockResolvedValueOnce({});
-      ddbSend.mockResolvedValueOnce({});
+    it('should capture open event with timeToOpen from publishedAt', async () => {
+      // GetItem returns publishedAt
+      ddbSend.mockResolvedValueOnce({
+        Item: { publishedAt: { S: '2025-01-21T10:00:00.000Z' } }
+      });
+      ddbSend.mockResolvedValueOnce({}); // PutItem (capture open)
+      ddbSend.mockResolvedValueOnce({}); // PutItem (track unique)
+      ddbSend.mockResolvedValueOnce({}); // UpdateItem (stats)
 
       const event = {
         detail: {
@@ -202,9 +221,13 @@ describe('handle-email-status', () => {
       const result = await handler(event);
 
       expect(result).toBe(true);
-      expect(ddbSend).toHaveBeenCalledTimes(3);
+      expect(ddbSend).toHaveBeenCalledTimes(4);
 
-      const captureCall = ddbSend.mock.calls[0][0];
+      // First call is GetItemCommand for publishedAt
+      const getCall = ddbSend.mock.calls[0][0];
+      expect(getCall.__type).toBe('GetItem');
+
+      const captureCall = ddbSend.mock.calls[1][0];
       expect(captureCall.__type).toBe('PutItem');
       expect(captureCall.Item.pk.S).toBe('tenant123#issue-456');
       expect(captureCall.Item.sk.S).toMatch(/^open#\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z#[a-f0-9]{64}#01HQZX3Y4K5M6N7P8Q9R0S1T2U$/);
@@ -216,10 +239,46 @@ describe('handle-email-status', () => {
       expect(captureCall.Item.ttl.N).toBeDefined();
     });
 
-    it('should capture open event with timeToOpen as null when sentAt is missing', async () => {
-      ddbSend.mockResolvedValueOnce({});
-      ddbSend.mockResolvedValueOnce({});
-      ddbSend.mockResolvedValueOnce({});
+    it('should fall back to commonHeaders.date when publishedAt is not available', async () => {
+      // GetItem returns no publishedAt
+      ddbSend.mockResolvedValueOnce({ Item: null });
+      ddbSend.mockResolvedValueOnce({}); // PutItem (capture open)
+      ddbSend.mockResolvedValueOnce({}); // PutItem (track unique)
+      ddbSend.mockResolvedValueOnce({}); // UpdateItem (stats)
+
+      const event = {
+        detail: {
+          eventType: 'Open',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['subscriber@example.com'],
+            commonHeaders: {
+              date: '2025-01-21T10:00:00.000Z'
+            }
+          },
+          open: {
+            timestamp: '2025-01-21T10:30:00.000Z',
+            userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)',
+            ipAddress: '192.0.2.1'
+          }
+        }
+      };
+
+      const result = await handler(event);
+
+      expect(result).toBe(true);
+
+      const captureCall = ddbSend.mock.calls[1][0];
+      expect(captureCall.Item.timeToOpen.N).toBe('1800');
+    });
+
+    it('should capture open event with timeToOpen as null when no publishedAt or sentAt', async () => {
+      ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem - no publishedAt
+      ddbSend.mockResolvedValueOnce({}); // PutItem (capture open)
+      ddbSend.mockResolvedValueOnce({}); // PutItem (track unique)
+      ddbSend.mockResolvedValueOnce({}); // UpdateItem (stats)
 
       const event = {
         detail: {
@@ -242,12 +301,13 @@ describe('handle-email-status', () => {
 
       expect(result).toBe(true);
 
-      const captureCall = ddbSend.mock.calls[0][0];
+      const captureCall = ddbSend.mock.calls[1][0];
       expect(captureCall.__type).toBe('PutItem');
       expect(captureCall.Item.timeToOpen).toBeUndefined();
     });
 
     it('should use full SHA-256 hash for subscriber email', async () => {
+      ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem
       ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
@@ -268,12 +328,13 @@ describe('handle-email-status', () => {
 
       await handler(event);
 
-      const captureCall = ddbSend.mock.calls[0][0];
+      const captureCall = ddbSend.mock.calls[1][0];
       expect(captureCall.Item.subscriberEmailHash.S).toMatch(/^[a-f0-9]{64}$/);
       expect(captureCall.Item.subscriberEmailHash.S.length).toBe(64);
     });
 
     it('should detect device type from user agent', async () => {
+      ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem
       ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
@@ -296,11 +357,12 @@ describe('handle-email-status', () => {
 
       await handler(event);
 
-      const captureCall = ddbSend.mock.calls[0][0];
+      const captureCall = ddbSend.mock.calls[1][0];
       expect(captureCall.Item.device.S).toBe('tablet');
     });
 
     it('should set device to unknown when userAgent is missing', async () => {
+      ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem
       ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
@@ -321,11 +383,12 @@ describe('handle-email-status', () => {
 
       await handler(event);
 
-      const captureCall = ddbSend.mock.calls[0][0];
+      const captureCall = ddbSend.mock.calls[1][0];
       expect(captureCall.Item.device.S).toBe('unknown');
     });
 
     it('should set TTL to 90 days from now', async () => {
+      ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem
       ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
@@ -349,13 +412,14 @@ describe('handle-email-status', () => {
 
       await handler(event);
 
-      const captureCall = ddbSend.mock.calls[0][0];
+      const captureCall = ddbSend.mock.calls[1][0];
       const actualTTL = parseInt(captureCall.Item.ttl.N);
       expect(actualTTL).toBeGreaterThanOrEqual(expectedTTL - 5);
       expect(actualTTL).toBeLessThanOrEqual(expectedTTL + 5);
     });
 
     it('should include ULID in sort key for uniqueness', async () => {
+      ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem
       ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
@@ -376,8 +440,42 @@ describe('handle-email-status', () => {
 
       await handler(event);
 
-      const captureCall = ddbSend.mock.calls[0][0];
+      const captureCall = ddbSend.mock.calls[1][0];
       expect(captureCall.Item.sk.S).toContain('01HQZX3Y4K5M6N7P8Q9R0S1T2U');
+    });
+
+    it('should still compute timeToOpen when GetItem fails', async () => {
+      // GetItem fails, but commonHeaders.date is available as fallback
+      ddbSend.mockRejectedValueOnce(new Error('DynamoDB error'));
+      ddbSend.mockResolvedValueOnce({}); // PutItem (capture open)
+      ddbSend.mockResolvedValueOnce({}); // PutItem (track unique)
+      ddbSend.mockResolvedValueOnce({}); // UpdateItem (stats)
+
+      const event = {
+        detail: {
+          eventType: 'Open',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['subscriber@example.com'],
+            commonHeaders: {
+              date: '2025-01-21T10:00:00.000Z'
+            }
+          },
+          open: {
+            timestamp: '2025-01-21T10:30:00.000Z',
+            userAgent: 'Mozilla/5.0',
+            ipAddress: '192.0.2.1'
+          }
+        }
+      };
+
+      const result = await handler(event);
+
+      expect(result).toBe(true);
+      const captureCall = ddbSend.mock.calls[1][0];
+      expect(captureCall.Item.timeToOpen.N).toBe('1800');
     });
   });
 
@@ -1039,9 +1137,10 @@ describe('handle-email-status', () => {
     });
 
     it('should handle click events', async () => {
-      ddbSend.mockResolvedValueOnce({});
-      ddbSend.mockResolvedValueOnce({});
-      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({}); // trackLinkClick UpdateItem
+      ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem (publishedAt lookup)
+      ddbSend.mockResolvedValueOnce({}); // captureClickEvent PutItem
+      ddbSend.mockResolvedValueOnce({}); // stats UpdateItem
 
       const event = {
         detail: {
@@ -1062,7 +1161,7 @@ describe('handle-email-status', () => {
       const result = await handler(event);
 
       expect(result).toBe(true);
-      expect(ddbSend).toHaveBeenCalledTimes(3);
+      expect(ddbSend).toHaveBeenCalledTimes(4);
     });
   });
 
@@ -1178,7 +1277,9 @@ describe('handle-email-status', () => {
     });
 
     it('should return false on unexpected errors', async () => {
-      ddbSend.mockRejectedValueOnce(new Error('Unexpected error'));
+      // GetItem succeeds, but PutItem (captureOpenEvent) fails
+      ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem
+      ddbSend.mockRejectedValueOnce(new Error('Unexpected error')); // PutItem fails
 
       const event = {
         detail: {
@@ -1210,6 +1311,7 @@ describe('handle-email-status', () => {
         DynamoDBClient: jest.fn(() => ({ send: ddbSend })),
         PutItemCommand: jest.fn((params) => ({ __type: 'PutItem', ...params })),
         UpdateItemCommand: jest.fn((params) => ({ __type: 'UpdateItem', ...params })),
+        GetItemCommand: jest.fn((params) => ({ __type: 'GetItem', ...params })),
       }));
 
       jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
@@ -1223,6 +1325,15 @@ describe('handle-email-status', () => {
             } else if (Array.isArray(value)) {
               result[key] = { L: value.map(v => ({ S: v })) };
             }
+          }
+          return result;
+        },
+        unmarshall: (item) => {
+          const result = {};
+          for (const [key, value] of Object.entries(item)) {
+            if (value.S !== undefined) result[key] = value.S;
+            else if (value.N !== undefined) result[key] = Number(value.N);
+            else result[key] = value;
           }
           return result;
         },
@@ -1257,9 +1368,10 @@ describe('handle-email-status', () => {
         countryName: 'United States'
       });
 
-      ddbSend.mockResolvedValueOnce({});
-      ddbSend.mockResolvedValueOnce({});
-      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({}); // trackLinkClick UpdateItem
+      ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem (publishedAt)
+      ddbSend.mockResolvedValueOnce({}); // captureClickEvent PutItem
+      ddbSend.mockResolvedValueOnce({}); // stats UpdateItem
 
       const event = {
         detail: {
@@ -1280,7 +1392,7 @@ describe('handle-email-status', () => {
       await handler(event);
 
       expect(mockLookupCountry).toHaveBeenCalledWith('8.8.8.8');
-      expect(ddbSend).toHaveBeenCalledTimes(3);
+      expect(ddbSend).toHaveBeenCalledTimes(4);
 
       const linkUpdateCall = ddbSend.mock.calls[0][0];
       expect(linkUpdateCall.__type).toBe('UpdateItem');
@@ -1288,9 +1400,10 @@ describe('handle-email-status', () => {
     });
 
     it('should handle missing IP gracefully', async () => {
-      ddbSend.mockResolvedValueOnce({});
-      ddbSend.mockResolvedValueOnce({});
-      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({}); // trackLinkClick
+      ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem
+      ddbSend.mockResolvedValueOnce({}); // captureClickEvent
+      ddbSend.mockResolvedValueOnce({}); // stats
 
       const event = {
         detail: {
@@ -1310,7 +1423,7 @@ describe('handle-email-status', () => {
       await handler(event);
 
       expect(mockLookupCountry).not.toHaveBeenCalled();
-      expect(ddbSend).toHaveBeenCalledTimes(3);
+      expect(ddbSend).toHaveBeenCalledTimes(4);
 
       const linkUpdateCall = ddbSend.mock.calls[0][0];
       expect(linkUpdateCall.ExpressionAttributeValues[':country'].S).toBe('unknown');
@@ -1319,9 +1432,10 @@ describe('handle-email-status', () => {
     it('should handle lookup failure gracefully', async () => {
       mockLookupCountry.mockResolvedValue(null);
 
-      ddbSend.mockResolvedValueOnce({});
-      ddbSend.mockResolvedValueOnce({});
-      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({}); // trackLinkClick
+      ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem
+      ddbSend.mockResolvedValueOnce({}); // captureClickEvent
+      ddbSend.mockResolvedValueOnce({}); // stats
 
       const event = {
         detail: {
@@ -1342,7 +1456,7 @@ describe('handle-email-status', () => {
       await handler(event);
 
       expect(mockLookupCountry).toHaveBeenCalledWith('10.0.0.1');
-      expect(ddbSend).toHaveBeenCalledTimes(3);
+      expect(ddbSend).toHaveBeenCalledTimes(4);
 
       const linkUpdateCall = ddbSend.mock.calls[0][0];
       expect(linkUpdateCall.ExpressionAttributeValues[':country'].S).toBe('unknown');
@@ -1354,9 +1468,10 @@ describe('handle-email-status', () => {
         countryName: 'United Kingdom'
       });
 
-      ddbSend.mockResolvedValueOnce({});
-      ddbSend.mockResolvedValueOnce({});
-      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({}); // trackLinkClick
+      ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem
+      ddbSend.mockResolvedValueOnce({}); // captureClickEvent
+      ddbSend.mockResolvedValueOnce({}); // stats
 
       const event = {
         detail: {

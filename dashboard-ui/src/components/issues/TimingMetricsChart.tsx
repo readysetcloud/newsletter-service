@@ -39,19 +39,22 @@ const getEngagementSpeed = (medianTime: number): { color: string; label: string 
 };
 
 export const TimingMetricsChart: React.FC<TimingMetricsChartProps> = ({ timingMetrics }) => {
+  const hasOpenData = timingMetrics.medianTimeToOpen > 0 || timingMetrics.p95TimeToOpen > 0;
+  const hasClickData = timingMetrics.medianTimeToClick > 0 || timingMetrics.p95TimeToClick > 0;
+
   const data = [
-    {
+    ...(hasOpenData ? [{
       name: 'Time to Open',
       median: timingMetrics.medianTimeToOpen,
       p95: timingMetrics.p95TimeToOpen,
       type: 'open'
-    },
-    {
+    }] : []),
+    ...(hasClickData ? [{
       name: 'Time to Click',
       median: timingMetrics.medianTimeToClick,
       p95: timingMetrics.p95TimeToClick,
       type: 'click'
-    }
+    }] : [])
   ];
 
   const openSpeed = getEngagementSpeed(timingMetrics.medianTimeToOpen);
@@ -74,8 +77,15 @@ export const TimingMetricsChart: React.FC<TimingMetricsChartProps> = ({ timingMe
         />
       </div>
 
-      <div className="h-52 sm:h-60">
-        <ResponsiveContainer width="100%" height="100%">
+      {!hasOpenData && !hasClickData && (
+        <div className="flex items-center justify-center h-52 sm:h-60">
+          <p className="text-sm text-muted-foreground">No engagement timing data available yet</p>
+        </div>
+      )}
+
+      {data.length > 0 && (
+        <div className="h-52 sm:h-60">
+          <ResponsiveContainer width="100%" height="100%">
           <BarChart
             data={data}
             layout="horizontal"
@@ -111,43 +121,56 @@ export const TimingMetricsChart: React.FC<TimingMetricsChartProps> = ({ timingMe
             <Bar dataKey="p95" fill="#f59e0b" radius={[0, 4, 4, 0]} />
           </BarChart>
         </ResponsiveContainer>
-      </div>
+        </div>
+      )}
 
       <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="bg-muted/30 p-3 rounded-lg">
           <div className="flex items-center justify-between mb-2">
             <p className="text-xs font-semibold text-foreground">Opens</p>
-            <span
-              className="text-xs font-semibold px-2 py-1 rounded"
-              style={{ backgroundColor: `${openSpeed.color}20`, color: openSpeed.color }}
-            >
-              {openSpeed.label}
-            </span>
+            {hasOpenData ? (
+              <span
+                className="text-xs font-semibold px-2 py-1 rounded"
+                style={{ backgroundColor: `${openSpeed.color}20`, color: openSpeed.color }}
+              >
+                {openSpeed.label}
+              </span>
+            ) : null}
           </div>
-          <p className="text-sm text-muted-foreground">
-            50% of opens happened within{' '}
-            <span className="font-semibold text-foreground">
-              {formatSecondsDetailed(timingMetrics.medianTimeToOpen)}
-            </span>
-          </p>
+          {hasOpenData ? (
+            <p className="text-sm text-muted-foreground">
+              50% of opens happened within{' '}
+              <span className="font-semibold text-foreground">
+                {formatSecondsDetailed(timingMetrics.medianTimeToOpen)}
+              </span>
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">No open timing data available</p>
+          )}
         </div>
 
         <div className="bg-muted/30 p-3 rounded-lg">
           <div className="flex items-center justify-between mb-2">
             <p className="text-xs font-semibold text-foreground">Clicks</p>
-            <span
-              className="text-xs font-semibold px-2 py-1 rounded"
-              style={{ backgroundColor: `${clickSpeed.color}20`, color: clickSpeed.color }}
-            >
-              {clickSpeed.label}
-            </span>
+            {hasClickData ? (
+              <span
+                className="text-xs font-semibold px-2 py-1 rounded"
+                style={{ backgroundColor: `${clickSpeed.color}20`, color: clickSpeed.color }}
+              >
+                {clickSpeed.label}
+              </span>
+            ) : null}
           </div>
-          <p className="text-sm text-muted-foreground">
-            50% of clicks happened within{' '}
-            <span className="font-semibold text-foreground">
-              {formatSecondsDetailed(timingMetrics.medianTimeToClick)}
-            </span>
-          </p>
+          {hasClickData ? (
+            <p className="text-sm text-muted-foreground">
+              50% of clicks happened within{' '}
+              <span className="font-semibold text-foreground">
+                {formatSecondsDetailed(timingMetrics.medianTimeToClick)}
+              </span>
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">No click timing data available</p>
+          )}
         </div>
       </div>
     </div>

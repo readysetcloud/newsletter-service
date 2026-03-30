@@ -694,7 +694,7 @@ export const IssueDetailPage: React.FC = () => {
                   {issue.publishedAt && (
                     <>
                       <span className="hidden sm:inline">•</span>
-                      <span className="text-success-600 dark:text-success-400 font-medium">Published {formatDate(issue.publishedAt)}</span>
+                      <span className="text-success-600 dark:text-success-400 font-medium">Sent {formatDate(issue.publishedAt)}</span>
                     </>
                   )}
                   {issue.scheduledAt && !issue.publishedAt && (
@@ -879,14 +879,12 @@ export const IssueDetailPage: React.FC = () => {
                       </AsyncErrorBoundary>
                     </FadeIn>
                   </Suspense>
-                  <MaxMindAttribution />
                 </section>
               )}
 
               {/* Link Performance */}
               {analytics.links && analytics.links.length > 0 && (
                 <section aria-labelledby="link-performance-heading">
-                  <h3 id="link-performance-heading" className="text-lg font-semibold text-foreground mb-4">Link Performance</h3>
                   <Suspense fallback={<LinkPerformanceSkeleton />}>
                     <FadeIn variant="fade" speed="normal">
                       <AsyncErrorBoundary onRetry={loadIssue}>
@@ -917,7 +915,6 @@ export const IssueDetailPage: React.FC = () => {
               {/* Click Decay Chart */}
               {analytics.clickDecay && analytics.clickDecay.length > 0 && (
                 <section aria-labelledby="click-activity-heading">
-                  <h3 id="click-activity-heading" className="text-lg font-semibold text-foreground mb-4">Click Activity Over Time</h3>
                   <Suspense fallback={<DecayChartSkeleton />}>
                     <FadeIn variant="fade" speed="normal">
                       <AsyncErrorBoundary onRetry={loadIssue}>
@@ -931,7 +928,6 @@ export const IssueDetailPage: React.FC = () => {
               {/* Open Decay Chart */}
               {analytics.openDecay && analytics.openDecay.length > 0 && (
                 <section aria-labelledby="open-activity-heading">
-                  <h3 id="open-activity-heading" className="text-lg font-semibold text-foreground mb-4">Open Activity Over Time</h3>
                   <Suspense fallback={<DecayChartSkeleton />}>
                     <FadeIn variant="fade" speed="normal">
                       <AsyncErrorBoundary onRetry={loadIssue}>

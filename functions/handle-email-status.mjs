@@ -1,5 +1,5 @@
-import { DynamoDBClient, UpdateItemCommand, PutItemCommand } from '@aws-sdk/client-dynamodb';
-import { marshall } from '@aws-sdk/util-dynamodb';
+import { DynamoDBClient, UpdateItemCommand, PutItemCommand, GetItemCommand } from '@aws-sdk/client-dynamodb';
+import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { hash } from './utils/helpers.mjs';
 import { hashEmail } from './utils/hash-email.mjs';
 import { detectDevice } from './utils/detect-device.mjs';
@@ -101,9 +101,27 @@ const captureOpenEvent = async (issueId, subscriberEmail, openEvent, commonHeade
   const userAgent = openEvent?.userAgent || null;
 
   const device = detectDevice(userAgent);
-  const country = 'unknown';
 
-  const sentAt = commonHeaders?.date || null;
+  const ipAddress = openEvent?.ipAddress || null;
+  const countryData = ipAddress ? await lookupCountry(ipAddress) : null;
+  const country = countryData?.countryCode || 'unknown';
+
+  let publishedAt = null;
+  try {
+    const statsResult = await ddb.send(new GetItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({ pk: issueId, sk: 'stats' }),
+      ProjectionExpression: 'publishedAt'
+    }));
+    if (statsResult.Item) {
+      const stats = unmarshall(statsResult.Item);
+      publishedAt = stats.publishedAt || null;
+    }
+  } catch (err) {
+    console.error('Failed to fetch publishedAt for timeToOpen', { issueId, error: err.message });
+  }
+
+  const sentAt = publishedAt || commonHeaders?.date || null;
   const timeToOpen = sentAt
     ? Math.floor((openedAt - new Date(sentAt)) / 1000)
     : null;
@@ -308,6 +326,25 @@ const captureClickEvent = async (issueId, subscriberEmail, clickEvent) => {
   const device = detectDevice(userAgent);
   const trafficSource = 'email';
 
+  let publishedAt = null;
+  try {
+    const statsResult = await ddb.send(new GetItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({ pk: issueId, sk: 'stats' }),
+      ProjectionExpression: 'publishedAt'
+    }));
+    if (statsResult.Item) {
+      const stats = unmarshall(statsResult.Item);
+      publishedAt = stats.publishedAt || null;
+    }
+  } catch (err) {
+    console.error('Failed to fetch publishedAt for timeToClick', { issueId, error: err.message });
+  }
+
+  const timeToClick = publishedAt
+    ? Math.floor((clickedAt - new Date(publishedAt)) / 1000)
+    : null;
+
   const clickEventRecord = {
     pk: issueId,
     sk: `click#${timestamp}#${subscriberEmailHash}#${linkId}#${eventId}`,
@@ -319,7 +356,7 @@ const captureClickEvent = async (issueId, subscriberEmail, clickEvent) => {
     trafficSource,
     device,
     country,
-    timeToClick: null,
+    timeToClick,
     ttl: Math.floor(Date.now() / 1000) + (90 * 24 * 60 * 60)
   };
 

@@ -203,38 +203,46 @@ export const AudienceInsightsPanel: React.FC<AudienceInsightsPanelProps> = ({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
           <div className="bg-muted/30 rounded-lg p-3 sm:p-4 border border-border">
             <div className="text-xs sm:text-sm text-muted-foreground mb-2">Time to Open</div>
-            <div className="space-y-2">
-              <div className="flex justify-between items-center gap-2">
-                <span className="text-xs sm:text-sm font-medium text-foreground">Median:</span>
-                <span className="text-base sm:text-lg font-semibold text-primary-600" aria-label={`Median time to open: ${formatTime(timingMetrics.medianTimeToOpen)}`}>
-                  {formatTime(timingMetrics.medianTimeToOpen)}
-                </span>
+            {timingMetrics.medianTimeToOpen === 0 && timingMetrics.p95TimeToOpen === 0 ? (
+              <p className="text-sm text-muted-foreground">No open timing data available</p>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex justify-between items-center gap-2">
+                  <span className="text-xs sm:text-sm font-medium text-foreground">Median:</span>
+                  <span className="text-base sm:text-lg font-semibold text-primary-600" aria-label={`Median time to open: ${formatTime(timingMetrics.medianTimeToOpen)}`}>
+                    {formatTime(timingMetrics.medianTimeToOpen)}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center gap-2">
+                  <span className="text-xs sm:text-sm font-medium text-foreground">95th %ile:</span>
+                  <span className="text-base sm:text-lg font-semibold text-muted-foreground" aria-label={`95th percentile time to open: ${formatTime(timingMetrics.p95TimeToOpen)}`}>
+                    {formatTime(timingMetrics.p95TimeToOpen)}
+                  </span>
+                </div>
               </div>
-              <div className="flex justify-between items-center gap-2">
-                <span className="text-xs sm:text-sm font-medium text-foreground">95th %ile:</span>
-                <span className="text-base sm:text-lg font-semibold text-muted-foreground" aria-label={`95th percentile time to open: ${formatTime(timingMetrics.p95TimeToOpen)}`}>
-                  {formatTime(timingMetrics.p95TimeToOpen)}
-                </span>
-              </div>
-            </div>
+            )}
           </div>
 
           <div className="bg-muted/30 rounded-lg p-3 sm:p-4 border border-border">
             <div className="text-xs sm:text-sm text-muted-foreground mb-2">Time to Click</div>
-            <div className="space-y-2">
-              <div className="flex justify-between items-center gap-2">
-                <span className="text-xs sm:text-sm font-medium text-foreground">Median:</span>
-                <span className="text-base sm:text-lg font-semibold text-primary-600" aria-label={`Median time to click: ${formatTime(timingMetrics.medianTimeToClick)}`}>
-                  {formatTime(timingMetrics.medianTimeToClick)}
-                </span>
+            {timingMetrics.medianTimeToClick === 0 && timingMetrics.p95TimeToClick === 0 ? (
+              <p className="text-sm text-muted-foreground">No click timing data available</p>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex justify-between items-center gap-2">
+                  <span className="text-xs sm:text-sm font-medium text-foreground">Median:</span>
+                  <span className="text-base sm:text-lg font-semibold text-primary-600" aria-label={`Median time to click: ${formatTime(timingMetrics.medianTimeToClick)}`}>
+                    {formatTime(timingMetrics.medianTimeToClick)}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center gap-2">
+                  <span className="text-xs sm:text-sm font-medium text-foreground">95th %ile:</span>
+                  <span className="text-base sm:text-lg font-semibold text-muted-foreground" aria-label={`95th percentile time to click: ${formatTime(timingMetrics.p95TimeToClick)}`}>
+                    {formatTime(timingMetrics.p95TimeToClick)}
+                  </span>
+                </div>
               </div>
-              <div className="flex justify-between items-center gap-2">
-                <span className="text-xs sm:text-sm font-medium text-foreground">95th %ile:</span>
-                <span className="text-base sm:text-lg font-semibold text-muted-foreground" aria-label={`95th percentile time to click: ${formatTime(timingMetrics.p95TimeToClick)}`}>
-                  {formatTime(timingMetrics.p95TimeToClick)}
-                </span>
-              </div>
-            </div>
+            )}
           </div>
         </div>
       </div>

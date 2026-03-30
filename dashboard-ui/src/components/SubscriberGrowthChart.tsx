@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import type { TrendsData } from '@/types';
 
@@ -13,6 +13,14 @@ export const SubscriberGrowthChart: React.FC<SubscriberGrowthChartProps> = ({ tr
       issue: `#${issue.id}`,
       subscribers: issue.metrics.subscribers
     }));
+
+  const yDomain = useMemo(() => {
+    const values = data.map(d => d.subscribers);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const padding = Math.max(Math.round((max - min) * 0.1), 1);
+    return [min - padding, max + padding] as [number, number];
+  }, [data]);
 
   if (data.length === 0) {
     return (
@@ -33,6 +41,7 @@ export const SubscriberGrowthChart: React.FC<SubscriberGrowthChartProps> = ({ tr
             tickLine={false}
           />
           <YAxis
+            domain={yDomain}
             tick={{ fontSize: 11 }}
             axisLine={false}
             tickLine={false}
@@ -56,6 +65,7 @@ export const SubscriberGrowthChart: React.FC<SubscriberGrowthChartProps> = ({ tr
             strokeLinejoin="round"
             dot={{ r: 3, strokeWidth: 2 }}
             activeDot={{ r: 5 }}
+            connectNulls
           />
         </LineChart>
       </ResponsiveContainer>

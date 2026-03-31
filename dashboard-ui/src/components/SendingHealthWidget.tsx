@@ -6,7 +6,6 @@ import {
   CheckCircle,
   AlertTriangle,
   ShieldAlert,
-  AlertCircle,
 } from 'lucide-react';
 import {
   EnvelopeIcon,

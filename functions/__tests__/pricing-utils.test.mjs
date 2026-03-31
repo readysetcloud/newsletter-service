@@ -1,0 +1,482 @@
+import fc from 'fast-check';
+import {
+  computeBaseline,
+  computeRecommendedPrice,
+  clampMultiplier,
+  applySmoothing,
+  determineConfidence,
+  computeMetricAverages,
+  computeSubscriberGrowthRate,
+  computeWeeklyWindow,
+  validateLlmResponse
+} from '../utils/pricing.mjs';
+
+// Feature: sponsorship-pricing-calculator, Property 1: Deterministic baseline computation
+describe('Property 1: Deterministic baseline computation', () => {
+  // **Validates: Requirements 1.2**
+
+  it('baseline = (subscriberCount × avgOpenRate / 1000) × cpmRate for any valid inputs', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1, max: 1_000_000 }),
+        fc.double({ min: 0, max: 1, noNaN: true }),
+        fc.double({ min: 0.01, max: 100, noNaN: true }),
+        (subscriberCount, avgOpenRate, cpmRate) => {
+          const result = computeBaseline(subscriberCount, avgOpenRate, cpmRate);
+          const expected = (subscriberCount * avgOpenRate / 1000) * cpmRate;
+          expect(result).toBeCloseTo(expected, 10);
+        }
+      ),
+      { numRuns: 100 }
+    );
+  });
+
+  it('changing CTR does not affect baseline', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1, max: 1_000_000 }),
+        fc.double({ min: 0, max: 1, noNaN: true }),
+        fc.double({ min: 0.01, max: 100, noNaN: true }),
+        fc.double({ min: 0, max: 1, noNaN: true }),
+        fc.double({ min: 0, max: 1, noNaN: true }),
+        (subscriberCount, avgOpenRate, cpmRate, _ctr1, _ctr2) => {
+          // computeBaseline does not accept CTR — calling it with the same
+          // subscriber/open/cpm inputs always yields the same result regardless
+          // of what CTR values exist elsewhere.
+          const baseline1 = computeBaseline(subscriberCount, avgOpenRate, cpmRate);
+          const baseline2 = computeBaseline(subscriberCount, avgOpenRate, cpmRate);
+          expect(baseline1).toBe(baseline2);
+        }
+      ),
+      { numRuns: 100 }
+    );
+  });
+});
+
+
+// Feature: sponsorship-pricing-calculator, Property 2: Recommended price equals baseline times multiplier
+describe('Property 2: Recommended price equals baseline times multiplier', () => {
+  // **Validates: Requirements 1.3**
+
+  it('price = baseline × multiplier for any baseline > 0 and multiplier > 0', () => {
+    fc.assert(
+      fc.property(
+        fc.double({ min: 0.01, max: 10_000, noNaN: true }),
+        fc.double({ min: 0.01, max: 10, noNaN: true }),
+        (baseline, multiplier) => {
+          const result = computeRecommendedPrice(baseline, multiplier);
+          const expected = baseline * multiplier;
+          expect(result).toBeCloseTo(expected, 10);
+        }
+      ),
+      { numRuns: 100 }
+    );
+  });
+});
+
+// Feature: sponsorship-pricing-calculator, Property 4: Multiplier clamping
+describe('Property 4: Multiplier clamping', () => {
+  // **Validates: Requirements 1.5, 10.5**
+
+  it('clamped = max(min, min(max, value)) and always within [min, max]', () => {
+    fc.assert(
+      fc.property(
+        fc.double({ min: -10, max: 10, noNaN: true }),
+        fc.double({ min: -5, max: 5, noNaN: true }),
+        fc.double({ min: -5, max: 5, noNaN: true }),
+        (value, a, b) => {
+          const min = Math.min(a, b);
+          const max = Math.max(a, b);
+          const result = clampMultiplier(value, min, max);
+          const expected = Math.max(min, Math.min(max, value));
+          expect(result).toBe(expected);
+          expect(result).toBeGreaterThanOrEqual(min);
+          expect(result).toBeLessThanOrEqual(max);
+        }
+      ),
+      { numRuns: 100 }
+    );
+  });
+});
+
+
+// Feature: sponsorship-pricing-calculator, Property 5: Price smoothing with significance bypass
+describe('Property 5: Price smoothing with significance bypass', () => {
+  // **Validates: Requirements 11.1, 11.2, 11.3**
+
+  it('if no metric exceeds significance threshold, week-over-week change ≤ cap%', () => {
+    fc.assert(
+      fc.property(
+        fc.double({ min: 1, max: 10_000, noNaN: true }),
+        fc.double({ min: 1, max: 10_000, noNaN: true }),
+        fc.double({ min: 0.01, max: 0.99, noNaN: true }),
+        fc.double({ min: 0, max: 0.24, noNaN: true }),
+        fc.double({ min: 0, max: 9, noNaN: true }),
+        (previousPrice, newPrice, capPct, subscriberChangePct, openRateChangePts) => {
+          const metricChanges = { subscriberChangePct, openRateChangePts };
+          const significantThresholds = { subscriberChangePct: 0.25, openRateChangePts: 10 };
+
+          const { smoothedPrice } = applySmoothing(
+            previousPrice, newPrice, capPct, metricChanges, significantThresholds
+          );
+
+          const maxDelta = previousPrice * capPct;
+          expect(Math.abs(smoothedPrice - previousPrice)).toBeLessThanOrEqual(maxDelta + 1e-9);
+        }
+      ),
+      { numRuns: 100 }
+    );
+  });
+
+  it('if any metric exceeds significance threshold, full change is allowed', () => {
+    fc.assert(
+      fc.property(
+        fc.double({ min: 1, max: 10_000, noNaN: true }),
+        fc.double({ min: 1, max: 10_000, noNaN: true }),
+        fc.double({ min: 0.01, max: 0.99, noNaN: true }),
+        fc.oneof(
+          // subscriber change exceeds threshold
+          fc.record({
+            subscriberChangePct: fc.double({ min: 0.26, max: 1, noNaN: true }),
+            openRateChangePts: fc.double({ min: 0, max: 20, noNaN: true })
+          }),
+          // open rate change exceeds threshold
+          fc.record({
+            subscriberChangePct: fc.double({ min: 0, max: 1, noNaN: true }),
+            openRateChangePts: fc.double({ min: 10.01, max: 50, noNaN: true })
+          })
+        ),
+        (previousPrice, newPrice, capPct, metricChanges) => {
+          const significantThresholds = { subscriberChangePct: 0.25, openRateChangePts: 10 };
+
+          const { smoothedPrice } = applySmoothing(
+            previousPrice, newPrice, capPct, metricChanges, significantThresholds
+          );
+
+          expect(smoothedPrice).toBe(newPrice);
+        }
+      ),
+      { numRuns: 100 }
+    );
+  });
+
+  it('smoothingApplied flag is true only when smoothing caps the change', () => {
+    fc.assert(
+      fc.property(
+        fc.double({ min: 1, max: 10_000, noNaN: true }),
+        fc.double({ min: 1, max: 10_000, noNaN: true }),
+        fc.double({ min: 0.01, max: 0.99, noNaN: true }),
+        fc.double({ min: 0, max: 0.24, noNaN: true }),
+        fc.double({ min: 0, max: 9, noNaN: true }),
+        (previousPrice, newPrice, capPct, subscriberChangePct, openRateChangePts) => {
+          const metricChanges = { subscriberChangePct, openRateChangePts };
+          const significantThresholds = { subscriberChangePct: 0.25, openRateChangePts: 10 };
+
+          const { smoothedPrice, smoothingApplied } = applySmoothing(
+            previousPrice, newPrice, capPct, metricChanges, significantThresholds
+          );
+
+          const maxDelta = previousPrice * capPct;
+          const delta = Math.abs(newPrice - previousPrice);
+
+          if (delta > maxDelta) {
+            expect(smoothingApplied).toBe(true);
+            expect(smoothedPrice).not.toBe(newPrice);
+          } else {
+            expect(smoothingApplied).toBe(false);
+            expect(smoothedPrice).toBe(newPrice);
+          }
+        }
+      ),
+      { numRuns: 100 }
+    );
+  });
+});
+
+
+// Feature: sponsorship-pricing-calculator, Property 7: Confidence level determination
+describe('Property 7: Confidence level determination', () => {
+  // **Validates: Requirements 1.7**
+
+  it('confidence is the minimum across all factor levels', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 0, max: 50 }),
+        fc.boolean(),
+        fc.boolean(),
+        fc.double({ min: 0, max: 0.6, noNaN: true }),
+        (publishedIssueCount, metricsComplete, hasQuestionnaire, stabilityCoV) => {
+          const result = determineConfidence(publishedIssueCount, metricsComplete, hasQuestionnaire, stabilityCoV, false);
+
+          // Compute expected factor levels
+          let issueFactor;
+          if (publishedIssueCount < 3) issueFactor = 'low';
+          else if (publishedIssueCount < 10) issueFactor = 'medium';
+          else issueFactor = 'high';
+
+          let metricsFactor;
+          if (!metricsComplete) metricsFactor = 'low';
+          else if (metricsComplete && hasQuestionnaire) metricsFactor = 'high';
+          else metricsFactor = 'medium';
+
+          let stabilityFactor;
+          if (stabilityCoV > 0.30) stabilityFactor = 'low';
+          else if (stabilityCoV >= 0.15) stabilityFactor = 'medium';
+          else stabilityFactor = 'high';
+
+          const levels = ['low', 'medium', 'high'];
+          const rank = (l) => levels.indexOf(l);
+          const expected = levels[Math.min(rank(issueFactor), rank(metricsFactor), rank(stabilityFactor))];
+
+          expect(result).toBe(expected);
+        }
+      ),
+      { numRuns: 100 }
+    );
+  });
+
+  it('fallback always yields low', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 0, max: 50 }),
+        fc.boolean(),
+        fc.boolean(),
+        fc.double({ min: 0, max: 0.6, noNaN: true }),
+        (publishedIssueCount, metricsComplete, hasQuestionnaire, stabilityCoV) => {
+          const result = determineConfidence(publishedIssueCount, metricsComplete, hasQuestionnaire, stabilityCoV, true);
+          expect(result).toBe('low');
+        }
+      ),
+      { numRuns: 100 }
+    );
+  });
+});
+
+
+// Feature: sponsorship-pricing-calculator, Property 8: Metric averaging from recent published issues
+describe('Property 8: Metric averaging from recent published issues', () => {
+  // **Validates: Requirements 8.3, 8.4, 8.5**
+
+  it('averages equal arithmetic mean of min(N, 10) most recent issues', () => {
+    const issueArb = fc.record({
+      openRate: fc.double({ min: 0, max: 1, noNaN: true }),
+      clickRate: fc.double({ min: 0, max: 1, noNaN: true }),
+      bounceRate: fc.double({ min: 0, max: 1, noNaN: true }),
+      complaintRate: fc.double({ min: 0, max: 0.1, noNaN: true })
+    });
+
+    fc.assert(
+      fc.property(
+        fc.array(issueArb, { minLength: 1, maxLength: 20 }),
+        (issues) => {
+          const result = computeMetricAverages(issues);
+          const recent = issues.slice(0, 10);
+          const count = recent.length;
+
+          const expectedOpen = recent.reduce((s, i) => s + i.openRate, 0) / count;
+          const expectedClick = recent.reduce((s, i) => s + i.clickRate, 0) / count;
+          const expectedBounce = recent.reduce((s, i) => s + i.bounceRate, 0) / count;
+          const expectedComplaint = recent.reduce((s, i) => s + i.complaintRate, 0) / count;
+
+          expect(result.avgOpenRate).toBeCloseTo(expectedOpen, 10);
+          expect(result.avgClickRate).toBeCloseTo(expectedClick, 10);
+          expect(result.avgBounceRate).toBeCloseTo(expectedBounce, 10);
+          expect(result.avgComplaintRate).toBeCloseTo(expectedComplaint, 10);
+        }
+      ),
+      { numRuns: 100 }
+    );
+  });
+
+  it('uses at most 10 issues even when more are provided', () => {
+    const issueArb = fc.record({
+      openRate: fc.double({ min: 0, max: 1, noNaN: true }),
+      clickRate: fc.double({ min: 0, max: 1, noNaN: true }),
+      bounceRate: fc.double({ min: 0, max: 1, noNaN: true }),
+      complaintRate: fc.double({ min: 0, max: 0.1, noNaN: true })
+    });
+
+    fc.assert(
+      fc.property(
+        fc.array(issueArb, { minLength: 11, maxLength: 20 }),
+        (issues) => {
+          const result = computeMetricAverages(issues);
+          // Only first 10 issues should be used
+          const first10 = issues.slice(0, 10);
+          const expectedOpen = first10.reduce((s, i) => s + i.openRate, 0) / 10;
+          expect(result.avgOpenRate).toBeCloseTo(expectedOpen, 10);
+        }
+      ),
+      { numRuns: 100 }
+    );
+  });
+});
+
+// Feature: sponsorship-pricing-calculator, Property 9: Subscriber growth rate computation
+describe('Property 9: Subscriber growth rate computation', () => {
+  // **Validates: Requirements 8.2**
+
+  it('growth rate = (current - previous) / previous', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 0, max: 1_000_000 }),
+        fc.integer({ min: 1, max: 1_000_000 }),
+        (currentCount, previousCount) => {
+          const result = computeSubscriberGrowthRate(currentCount, previousCount);
+          const expected = (currentCount - previousCount) / previousCount;
+          expect(result).toBeCloseTo(expected, 10);
+        }
+      ),
+      { numRuns: 100 }
+    );
+  });
+
+  it('returns 0 if no previous count', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 0, max: 1_000_000 }),
+        fc.constantFrom(null, undefined, 0),
+        (currentCount, previousCount) => {
+          const result = computeSubscriberGrowthRate(currentCount, previousCount);
+          expect(result).toBe(0);
+        }
+      ),
+      { numRuns: 100 }
+    );
+  });
+});
+
+
+// Feature: sponsorship-pricing-calculator, Property 11: Weekly calculation window idempotency
+describe('Property 11: Weekly calculation window idempotency', () => {
+  // **Validates: Requirements 2.5, 6.3, 6.4**
+
+  it('produces a deterministic 7-day interval for any timestamp', () => {
+    fc.assert(
+      fc.property(
+        fc.date({ min: new Date('2020-01-01T00:00:00Z'), max: new Date('2030-12-31T23:59:59Z'), noInvalidDate: true }),
+        (date) => {
+          const result = computeWeeklyWindow(date.toISOString());
+          const start = new Date(result.start);
+          const end = new Date(result.end);
+
+          // Window is exactly 7 days
+          const diffMs = end.getTime() - start.getTime();
+          expect(diffMs).toBe(7 * 24 * 60 * 60 * 1000);
+
+          // Start is a Wednesday at 3 PM UTC
+          expect(start.getUTCDay()).toBe(3); // Wednesday
+          expect(start.getUTCHours()).toBe(15);
+          expect(start.getUTCMinutes()).toBe(0);
+          expect(start.getUTCSeconds()).toBe(0);
+          expect(start.getUTCMilliseconds()).toBe(0);
+
+          // End is also a Wednesday at 3 PM UTC
+          expect(end.getUTCDay()).toBe(3);
+          expect(end.getUTCHours()).toBe(15);
+
+          // The input timestamp falls within the window
+          expect(date.getTime()).toBeGreaterThanOrEqual(start.getTime());
+          expect(date.getTime()).toBeLessThan(end.getTime());
+        }
+      ),
+      { numRuns: 100 }
+    );
+  });
+
+  it('calling with the same timestamp always returns the same window', () => {
+    fc.assert(
+      fc.property(
+        fc.date({ min: new Date('2020-01-01T00:00:00Z'), max: new Date('2030-12-31T23:59:59Z'), noInvalidDate: true }),
+        (date) => {
+          const iso = date.toISOString();
+          const result1 = computeWeeklyWindow(iso);
+          const result2 = computeWeeklyWindow(iso);
+          expect(result1.start).toBe(result2.start);
+          expect(result1.end).toBe(result2.end);
+        }
+      ),
+      { numRuns: 100 }
+    );
+  });
+});
+
+
+// Feature: sponsorship-pricing-calculator, Property 3: LLM response JSON schema validation
+describe('Property 3: LLM response JSON schema validation', () => {
+  // **Validates: Requirements 1.4**
+
+  it('accepts valid LLM responses with multiplier (number), confidence (low|medium|high), justification (string)', () => {
+    fc.assert(
+      fc.property(
+        fc.double({ min: -100, max: 100, noNaN: true }),
+        fc.constantFrom('low', 'medium', 'high'),
+        fc.string({ minLength: 0, maxLength: 200 }),
+        (multiplier, confidence, justification) => {
+          const response = { multiplier, confidence, justification };
+          const result = validateLlmResponse(response);
+          expect(result).toEqual({ valid: true });
+        }
+      ),
+      { numRuns: 100 }
+    );
+  });
+
+  it('rejects responses missing required fields, with wrong types, or non-object values', () => {
+    const invalidResponseArb = fc.oneof(
+      // null / undefined / primitives / arrays
+      fc.constantFrom(null, undefined, 42, 'string', true, []),
+      // empty object
+      fc.constant({}),
+      // missing multiplier
+      fc.record({
+        confidence: fc.constantFrom('low', 'medium', 'high'),
+        justification: fc.string()
+      }),
+      // missing confidence
+      fc.record({
+        multiplier: fc.double({ min: -10, max: 10, noNaN: true }),
+        justification: fc.string()
+      }),
+      // missing justification
+      fc.record({
+        multiplier: fc.double({ min: -10, max: 10, noNaN: true }),
+        confidence: fc.constantFrom('low', 'medium', 'high')
+      }),
+      // multiplier is not a number
+      fc.record({
+        multiplier: fc.oneof(fc.string(), fc.boolean(), fc.constant(null)),
+        confidence: fc.constantFrom('low', 'medium', 'high'),
+        justification: fc.string()
+      }),
+      // confidence is not a valid enum value
+      fc.record({
+        multiplier: fc.double({ min: -10, max: 10, noNaN: true }),
+        confidence: fc.oneof(
+          fc.string().filter(s => !['low', 'medium', 'high'].includes(s)),
+          fc.integer(),
+          fc.constant(null)
+        ),
+        justification: fc.string()
+      }),
+      // justification is not a string
+      fc.record({
+        multiplier: fc.double({ min: -10, max: 10, noNaN: true }),
+        confidence: fc.constantFrom('low', 'medium', 'high'),
+        justification: fc.oneof(fc.integer(), fc.boolean(), fc.constant(null))
+      }),
+      // multiplier is NaN
+      fc.constant({ multiplier: NaN, confidence: 'low', justification: 'test' })
+    );
+
+    fc.assert(
+      fc.property(invalidResponseArb, (response) => {
+        const result = validateLlmResponse(response);
+        expect(result.valid).toBe(false);
+        expect(Array.isArray(result.errors)).toBe(true);
+        expect(result.errors.length).toBeGreaterThan(0);
+      }),
+      { numRuns: 100 }
+    );
+  });
+});

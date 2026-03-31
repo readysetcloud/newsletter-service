@@ -18,6 +18,7 @@ import {
   LazyIssuesListPage,
   LazyIssueDetailPage,
   LazyIssueFormPage,
+  LazySponsorshipPricingPage,
   preloadCriticalRoutes
 } from '@/utils/lazyImports';
 import { BrandOnboardingPage, ProfileOnboardingPage, SenderOnboardingPage } from '@/pages/onboarding';
@@ -188,6 +189,20 @@ function App() {
                           <OnboardingGuard>
                             <PageLoader>
                               <LazyBillingPage />
+                            </PageLoader>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/pricing"
+                    element={
+                      <RouteErrorBoundary routeName="Sponsorship Pricing">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <PageLoader>
+                              <LazySponsorshipPricingPage />
                             </PageLoader>
                           </OnboardingGuard>
                         </ProtectedRoute>

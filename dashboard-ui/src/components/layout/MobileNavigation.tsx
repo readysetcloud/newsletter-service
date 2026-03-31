@@ -11,6 +11,7 @@ import {
   KeyIcon,
   EnvelopeIcon,
   CreditCardIcon,
+  CurrencyDollarIcon,
   Bars3Icon,
   XMarkIcon
 } from '@heroicons/react/24/outline';
@@ -31,6 +32,7 @@ export const MobileNavigation: React.FC = () => {
     { name: 'Profile', href: '/profile', icon: UserIcon, preloadKey: 'profile' },
     { name: 'Sender Emails', href: '/senders', icon: EnvelopeIcon, preloadKey: 'senders' },
     { name: 'API Keys', href: '/api-keys', icon: KeyIcon, preloadKey: 'api-keys' },
+    { name: 'Sponsorship Pricing', href: '/pricing', icon: CurrencyDollarIcon, preloadKey: 'pricing' },
   ];
 
   // Add billing navigation for admin users only

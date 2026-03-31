@@ -181,7 +181,10 @@ pub async fn recalculate(event: Request) -> Result<Response<Body>, Error> {
 }
 
 /// GET /pricing/recalculate/:jobId
-pub async fn get_job_status(event: Request, job_id: Option<String>) -> Result<Response<Body>, Error> {
+pub async fn get_job_status(
+    event: Request,
+    job_id: Option<String>,
+) -> Result<Response<Body>, Error> {
     match handle_get_job_status(event, job_id).await {
         Ok(resp) => Ok(resp),
         Err(e) => Ok(response::format_error_response(&e)),
@@ -221,7 +224,10 @@ async fn handle_get_pricing(event: Request) -> Result<Response<Body>, AppError> 
         .table_name(&table_name)
         .key_condition_expression("pk = :pk AND begins_with(sk, :sk_prefix)")
         .expression_attribute_values(":pk", AttributeValue::S(tenant_id.clone()))
-        .expression_attribute_values(":sk_prefix", AttributeValue::S(PRICING_SK_PREFIX.to_string()))
+        .expression_attribute_values(
+            ":sk_prefix",
+            AttributeValue::S(PRICING_SK_PREFIX.to_string()),
+        )
         .scan_index_forward(false)
         .limit(1)
         .send()
@@ -267,23 +273,25 @@ async fn handle_get_pricing_history(event: Request) -> Result<Response<Body>, Ap
         .table_name(&table_name)
         .key_condition_expression("pk = :pk AND begins_with(sk, :sk_prefix)")
         .expression_attribute_values(":pk", AttributeValue::S(tenant_id.clone()))
-        .expression_attribute_values(":sk_prefix", AttributeValue::S(PRICING_SK_PREFIX.to_string()))
+        .expression_attribute_values(
+            ":sk_prefix",
+            AttributeValue::S(PRICING_SK_PREFIX.to_string()),
+        )
         .scan_index_forward(false)
         .limit(PRICING_HISTORY_LIMIT)
         .send()
         .await?;
 
-    let records: Vec<Value> = result
-        .items()
-        .iter()
-        .map(dynamodb_item_to_json)
-        .collect();
+    let records: Vec<Value> = result.items().iter().map(dynamodb_item_to_json).collect();
 
     let count = records.len();
 
     response::format_response(
         200,
-        PricingHistoryResponse { history: records, count },
+        PricingHistoryResponse {
+            history: records,
+            count,
+        },
     )
 }
 
@@ -328,8 +336,7 @@ async fn handle_get_job_status(
         .tenant_id
         .ok_or_else(|| AppError::Forbidden("Tenant access required".to_string()))?;
 
-    let job_id = job_id
-        .ok_or_else(|| AppError::BadRequest("Job ID is required".to_string()))?;
+    let job_id = job_id.ok_or_else(|| AppError::BadRequest("Job ID is required".to_string()))?;
 
     let table_name = get_table_name()?;
     let ddb_client = aws_clients::get_dynamodb_client().await;
@@ -384,7 +391,10 @@ async fn handle_get_questionnaire(event: Request) -> Result<Response<Body>, AppE
         .get_item()
         .table_name(&table_name)
         .key("pk", AttributeValue::S(tenant_id.clone()))
-        .key("sk", AttributeValue::S(PRICING_QUESTIONNAIRE_SK.to_string()))
+        .key(
+            "sk",
+            AttributeValue::S(PRICING_QUESTIONNAIRE_SK.to_string()),
+        )
         .send()
         .await?;
 
@@ -428,11 +438,15 @@ async fn handle_submit_questionnaire(event: Request) -> Result<Response<Body>, A
         return Err(AppError::BadRequest("version is required".to_string()));
     }
     if body.responses.is_empty() {
-        return Err(AppError::BadRequest("responses array cannot be empty".to_string()));
+        return Err(AppError::BadRequest(
+            "responses array cannot be empty".to_string(),
+        ));
     }
     for item in &body.responses {
         if item.question_id.is_empty() {
-            return Err(AppError::BadRequest("questionId is required for each response".to_string()));
+            return Err(AppError::BadRequest(
+                "questionId is required for each response".to_string(),
+            ));
         }
     }
 
@@ -453,7 +467,10 @@ async fn handle_submit_questionnaire(event: Request) -> Result<Response<Body>, A
         .put_item()
         .table_name(&table_name)
         .item("pk", AttributeValue::S(tenant_id.clone()))
-        .item("sk", AttributeValue::S(PRICING_QUESTIONNAIRE_SK.to_string()))
+        .item(
+            "sk",
+            AttributeValue::S(PRICING_QUESTIONNAIRE_SK.to_string()),
+        )
         .item("version", AttributeValue::S(body.version))
         .item("responses", AttributeValue::M(responses_map))
         .item("updatedAt", AttributeValue::S(now))
@@ -477,8 +494,7 @@ async fn handle_submit_questionnaire(event: Request) -> Result<Response<Body>, A
 // ── Helper functions ───────────────────────────────────────────────────
 
 fn get_table_name() -> Result<String, AppError> {
-    env::var("TABLE_NAME")
-        .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))
+    env::var("TABLE_NAME").map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))
 }
 
 fn parse_request_body<T: for<'de> Deserialize<'de>>(event: &Request) -> Result<T, AppError> {
@@ -503,7 +519,10 @@ async fn find_in_progress_job(tenant_id: &str) -> Result<Option<String>, AppErro
         .filter_expression("#status = :processing")
         .expression_attribute_names("#status", "status")
         .expression_attribute_values(":pk", AttributeValue::S(tenant_id.to_string()))
-        .expression_attribute_values(":sk_prefix", AttributeValue::S(PRICING_JOB_SK_PREFIX.to_string()))
+        .expression_attribute_values(
+            ":sk_prefix",
+            AttributeValue::S(PRICING_JOB_SK_PREFIX.to_string()),
+        )
         .expression_attribute_values(":processing", AttributeValue::S("processing".to_string()))
         .scan_index_forward(false)
         .limit(1)
@@ -589,7 +608,9 @@ async fn publish_pricing_event(tenant_id: &str, job_id: &str) -> Result<(), AppE
                         error_message = ?entry.error_message(),
                         "Failed to publish pricing event to EventBridge"
                     );
-                    return Err(AppError::InternalError("Failed to publish pricing event".to_string()));
+                    return Err(AppError::InternalError(
+                        "Failed to publish pricing event".to_string(),
+                    ));
                 }
             }
             Ok(())
@@ -600,7 +621,10 @@ async fn publish_pricing_event(tenant_id: &str, job_id: &str) -> Result<(), AppE
                 error = %e,
                 "Failed to send pricing event to EventBridge"
             );
-            Err(AppError::InternalError(format!("EventBridge publish failed: {}", e)))
+            Err(AppError::InternalError(format!(
+                "EventBridge publish failed: {}",
+                e
+            )))
         }
     }
 }
@@ -640,19 +664,19 @@ fn attribute_to_json(value: &AttributeValue) -> Value {
             }
             Value::Object(map)
         }
-        AttributeValue::L(l) => {
-            Value::Array(l.iter().map(attribute_to_json).collect())
-        }
+        AttributeValue::L(l) => Value::Array(l.iter().map(attribute_to_json).collect()),
         AttributeValue::Ss(ss) => {
             Value::Array(ss.iter().map(|s| Value::String(s.clone())).collect())
         }
-        AttributeValue::Ns(ns) => {
-            Value::Array(ns.iter().map(|n| {
-                n.parse::<f64>()
-                    .map(|f| json!(f))
-                    .unwrap_or_else(|_| Value::String(n.clone()))
-            }).collect())
-        }
+        AttributeValue::Ns(ns) => Value::Array(
+            ns.iter()
+                .map(|n| {
+                    n.parse::<f64>()
+                        .map(|f| json!(f))
+                        .unwrap_or_else(|_| Value::String(n.clone()))
+                })
+                .collect(),
+        ),
         _ => Value::Null,
     }
 }
@@ -664,19 +688,14 @@ fn json_value_to_attribute(value: &Value) -> AttributeValue {
         Value::Bool(b) => AttributeValue::Bool(*b),
         Value::Number(n) => AttributeValue::N(n.to_string()),
         Value::String(s) => AttributeValue::S(s.clone()),
-        Value::Array(arr) => {
-            AttributeValue::L(arr.iter().map(json_value_to_attribute).collect())
-        }
-        Value::Object(map) => {
-            AttributeValue::M(
-                map.iter()
-                    .map(|(k, v)| (k.clone(), json_value_to_attribute(v)))
-                    .collect(),
-            )
-        }
+        Value::Array(arr) => AttributeValue::L(arr.iter().map(json_value_to_attribute).collect()),
+        Value::Object(map) => AttributeValue::M(
+            map.iter()
+                .map(|(k, v)| (k.clone(), json_value_to_attribute(v)))
+                .collect(),
+        ),
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -893,7 +912,11 @@ mod tests {
             );
 
             // Each question has non-empty text
-            assert!(!q.text.is_empty(), "Question text must not be empty for {}", q.id);
+            assert!(
+                !q.text.is_empty(),
+                "Question text must not be empty for {}",
+                q.id
+            );
 
             // Each question has a non-empty type
             assert!(

@@ -485,7 +485,8 @@ mod tests {
 
     #[test]
     fn test_pricing_recalculate_job_id_extraction() {
-        let result = extract_path_param("/pricing/recalculate/job-abc-123", "/pricing/recalculate/");
+        let result =
+            extract_path_param("/pricing/recalculate/job-abc-123", "/pricing/recalculate/");
         assert_eq!(result, Some("job-abc-123".to_string()));
 
         let result = extract_path_param("/pricing/recalculate/", "/pricing/recalculate/");

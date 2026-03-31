@@ -152,6 +152,8 @@ pub struct IssueMetrics {
     open_rate: f64,
     #[serde(rename = "clickRate")]
     click_rate: f64,
+    #[serde(rename = "clickToOpenRate")]
+    click_to_open_rate: f64,
     #[serde(rename = "bounceRate")]
     bounce_rate: f64,
     delivered: i64,
@@ -195,6 +197,8 @@ pub struct TrendAggregates {
     avg_open_rate: f64,
     #[serde(rename = "avgClickRate")]
     avg_click_rate: f64,
+    #[serde(rename = "avgClickToOpenRate")]
+    avg_click_to_open_rate: f64,
     #[serde(rename = "avgBounceRate")]
     avg_bounce_rate: f64,
     #[serde(rename = "totalDelivered")]
@@ -390,9 +394,10 @@ async fn handle_rebuild_issue_analytics(
         ));
     }
 
-    let published_at = issue.published_at.clone().ok_or_else(|| {
-        AppError::BadRequest("Published timestamp is required for analytics rebuild".to_string())
-    })?;
+    let published_at = issue
+        .published_at
+        .clone()
+        .unwrap_or_else(|| issue.updated_at.clone());
 
     publish_issue_published_event(
         &tenant_id,
@@ -1265,6 +1270,12 @@ fn calculate_issue_metrics(stats: &IssueStats) -> IssueMetrics {
         0.0
     };
 
+    let click_to_open_rate = if stats.opens > 0 {
+        (stats.clicks as f64 / stats.opens as f64) * 100.0
+    } else {
+        0.0
+    };
+
     let bounce_rate = if stats.deliveries > 0 {
         (stats.bounces as f64 / stats.deliveries as f64) * 100.0
     } else {
@@ -1274,6 +1285,7 @@ fn calculate_issue_metrics(stats: &IssueStats) -> IssueMetrics {
     IssueMetrics {
         open_rate: (open_rate * 100.0).round() / 100.0,
         click_rate: (click_rate * 100.0).round() / 100.0,
+        click_to_open_rate: (click_to_open_rate * 100.0).round() / 100.0,
         bounce_rate: (bounce_rate * 100.0).round() / 100.0,
         delivered: stats.deliveries,
         opens: stats.opens,
@@ -1289,6 +1301,7 @@ fn calculate_aggregates(issues: &[IssueTrendItem]) -> TrendAggregates {
         return TrendAggregates {
             avg_open_rate: 0.0,
             avg_click_rate: 0.0,
+            avg_click_to_open_rate: 0.0,
             avg_bounce_rate: 0.0,
             total_delivered: 0,
             issue_count: 0,
@@ -1297,6 +1310,7 @@ fn calculate_aggregates(issues: &[IssueTrendItem]) -> TrendAggregates {
 
     let total_open_rate: f64 = issues.iter().map(|i| i.metrics.open_rate).sum();
     let total_click_rate: f64 = issues.iter().map(|i| i.metrics.click_rate).sum();
+    let total_click_to_open_rate: f64 = issues.iter().map(|i| i.metrics.click_to_open_rate).sum();
     let total_bounce_rate: f64 = issues.iter().map(|i| i.metrics.bounce_rate).sum();
     let total_delivered: i64 = issues.iter().map(|i| i.metrics.delivered).sum();
 
@@ -1305,6 +1319,7 @@ fn calculate_aggregates(issues: &[IssueTrendItem]) -> TrendAggregates {
     TrendAggregates {
         avg_open_rate: ((total_open_rate / count) * 100.0).round() / 100.0,
         avg_click_rate: ((total_click_rate / count) * 100.0).round() / 100.0,
+        avg_click_to_open_rate: ((total_click_to_open_rate / count) * 100.0).round() / 100.0,
         avg_bounce_rate: ((total_bounce_rate / count) * 100.0).round() / 100.0,
         total_delivered,
         issue_count: issues.len() as i32,
@@ -3142,6 +3157,7 @@ mod tests {
 
         assert_eq!(metrics.open_rate, 45.0);
         assert_eq!(metrics.click_rate, 12.5);
+        assert_eq!(metrics.click_to_open_rate, 27.78);
         assert_eq!(metrics.bounce_rate, 2.0);
         assert_eq!(metrics.delivered, 1000);
     }
@@ -3162,6 +3178,7 @@ mod tests {
 
         assert_eq!(metrics.open_rate, 0.0);
         assert_eq!(metrics.click_rate, 0.0);
+        assert_eq!(metrics.click_to_open_rate, 0.0);
         assert_eq!(metrics.bounce_rate, 0.0);
         assert_eq!(metrics.delivered, 0);
     }
@@ -3182,6 +3199,7 @@ mod tests {
 
         assert_eq!(metrics.open_rate, 33.3);
         assert_eq!(metrics.click_rate, 11.1);
+        assert_eq!(metrics.click_to_open_rate, 33.33);
         assert_eq!(metrics.bounce_rate, 0.7);
         assert_eq!(metrics.delivered, 1000);
     }
@@ -3202,6 +3220,7 @@ mod tests {
 
         assert_eq!(metrics.open_rate, 95.0);
         assert_eq!(metrics.click_rate, 80.0);
+        assert_eq!(metrics.click_to_open_rate, 84.21);
         assert_eq!(metrics.bounce_rate, 1.0);
         assert_eq!(metrics.delivered, 1000);
     }
@@ -3213,6 +3232,7 @@ mod tests {
 
         assert_eq!(aggregates.avg_open_rate, 0.0);
         assert_eq!(aggregates.avg_click_rate, 0.0);
+        assert_eq!(aggregates.avg_click_to_open_rate, 0.0);
         assert_eq!(aggregates.avg_bounce_rate, 0.0);
         assert_eq!(aggregates.total_delivered, 0);
         assert_eq!(aggregates.issue_count, 0);
@@ -3225,6 +3245,7 @@ mod tests {
             metrics: IssueMetrics {
                 open_rate: 45.0,
                 click_rate: 12.5,
+                click_to_open_rate: 27.78,
                 bounce_rate: 2.0,
                 delivered: 1000,
                 opens: 450,
@@ -3240,6 +3261,7 @@ mod tests {
 
         assert_eq!(aggregates.avg_open_rate, 45.0);
         assert_eq!(aggregates.avg_click_rate, 12.5);
+        assert_eq!(aggregates.avg_click_to_open_rate, 27.78);
         assert_eq!(aggregates.avg_bounce_rate, 2.0);
         assert_eq!(aggregates.total_delivered, 1000);
         assert_eq!(aggregates.issue_count, 1);
@@ -3253,6 +3275,7 @@ mod tests {
                 metrics: IssueMetrics {
                     open_rate: 40.0,
                     click_rate: 10.0,
+                    click_to_open_rate: 25.0,
                     bounce_rate: 2.0,
                     delivered: 1000,
                     opens: 400,
@@ -3268,6 +3291,7 @@ mod tests {
                 metrics: IssueMetrics {
                     open_rate: 50.0,
                     click_rate: 15.0,
+                    click_to_open_rate: 30.0,
                     bounce_rate: 3.0,
                     delivered: 1500,
                     opens: 750,
@@ -3283,6 +3307,7 @@ mod tests {
                 metrics: IssueMetrics {
                     open_rate: 45.0,
                     click_rate: 12.5,
+                    click_to_open_rate: 27.78,
                     bounce_rate: 2.5,
                     delivered: 1200,
                     opens: 540,
@@ -3299,6 +3324,7 @@ mod tests {
 
         assert_eq!(aggregates.avg_open_rate, 45.0);
         assert_eq!(aggregates.avg_click_rate, 12.5);
+        assert_eq!(aggregates.avg_click_to_open_rate, 27.59);
         assert_eq!(aggregates.avg_bounce_rate, 2.5);
         assert_eq!(aggregates.total_delivered, 3700);
         assert_eq!(aggregates.issue_count, 3);
@@ -3312,6 +3338,7 @@ mod tests {
                 metrics: IssueMetrics {
                     open_rate: 33.33,
                     click_rate: 11.11,
+                    click_to_open_rate: 33.33,
                     bounce_rate: 2.22,
                     delivered: 1000,
                     opens: 333,
@@ -3327,6 +3354,7 @@ mod tests {
                 metrics: IssueMetrics {
                     open_rate: 44.44,
                     click_rate: 13.33,
+                    click_to_open_rate: 29.99,
                     bounce_rate: 1.11,
                     delivered: 1500,
                     opens: 667,
@@ -3343,6 +3371,7 @@ mod tests {
 
         assert_eq!(aggregates.avg_open_rate, 38.89);
         assert_eq!(aggregates.avg_click_rate, 12.22);
+        assert_eq!(aggregates.avg_click_to_open_rate, 31.66);
         assert_eq!(aggregates.avg_bounce_rate, 1.67);
         assert_eq!(aggregates.total_delivered, 2500);
         assert_eq!(aggregates.issue_count, 2);

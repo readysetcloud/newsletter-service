@@ -31,6 +31,7 @@ export function validateIssueMetrics(data: unknown): data is IssueMetrics {
   return (
     isValidRate(metrics.openRate) &&
     isValidRate(metrics.clickRate) &&
+    (metrics.clickToOpenRate === undefined || isValidRate(metrics.clickToOpenRate)) &&
     isValidRate(metrics.bounceRate) &&
     isNonNegativeNumber(metrics.delivered) &&
     isNonNegativeNumber(metrics.opens) &&
@@ -47,6 +48,7 @@ export function validateTrendAggregates(data: unknown): data is TrendAggregates 
   return (
     isValidRate(aggregates.avgOpenRate) &&
     isValidRate(aggregates.avgClickRate) &&
+    (aggregates.avgClickToOpenRate === undefined || isValidRate(aggregates.avgClickToOpenRate)) &&
     isValidRate(aggregates.avgBounceRate) &&
     isNonNegativeNumber(aggregates.totalDelivered) &&
     isNonNegativeNumber(aggregates.issueCount)

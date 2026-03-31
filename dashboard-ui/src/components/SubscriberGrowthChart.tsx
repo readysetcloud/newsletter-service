@@ -63,9 +63,10 @@ export const SubscriberGrowthChart: React.FC<SubscriberGrowthChartProps> = ({ tr
             strokeWidth={2}
             strokeLinecap="round"
             strokeLinejoin="round"
-            dot={{ r: 3, strokeWidth: 2 }}
+            dot={{ r: 3, fill: 'hsl(var(--primary))', strokeWidth: 2 }}
             activeDot={{ r: 5 }}
             connectNulls
+            isAnimationActive={false}
           />
         </LineChart>
       </ResponsiveContainer>

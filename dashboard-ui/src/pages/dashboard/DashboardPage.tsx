@@ -8,9 +8,10 @@ import { DashboardSkeleton } from '@/components/ui/SkeletonLoader';
 import { InfoTooltip } from '@/components/ui/InfoTooltip';
 import MetricsCard from '@/components/MetricsCard';
 import { SubscriberGrowthChart } from '@/components/SubscriberGrowthChart';
-import type { TrendsData, UserProfile, TrendComparison, BestWorstIssues } from '@/types';
+import { MiniSparkline } from '@/components/MiniSparkline';
+import type { TrendsData, UserProfile, TrendComparison } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
-import { calculatePercentageDifference, calculateHealthStatus, calculateCompositeScore } from '@/utils/analyticsCalculations';
+import { calculatePercentageDifference, calculateHealthStatus } from '@/utils/analyticsCalculations';
 import {
   Mail,
   TrendingUp,
@@ -22,12 +23,12 @@ import {
 
 // Lazy load non-critical components for better initial load performance
 const IssuePerformanceChart = lazy(() => import('@/components/IssuePerformanceChart'));
-const SenderStatusWidget = lazy(() => import('@/components/senders/SenderStatusWidget').then(m => ({ default: m.SenderStatusWidget })));
-const BestWorstIssueCard = lazy(() => import('@/components/BestWorstIssueCard'));
-const DeliverabilityHealthWidget = lazy(() => import('@/components/DeliverabilityHealthWidget'));
+const SendingHealthWidget = lazy(() => import('@/components/SendingHealthWidget'));
+const ActionableInsights = lazy(() => import('@/components/ActionableInsights'));
 const QualitySignalsChart = lazy(() => import('@/components/QualitySignalsChart'));
 const EngagementTypeTrendChart = lazy(() => import('@/components/EngagementTypeTrendChart'));
 const TrafficSourceTrendChart = lazy(() => import('@/components/TrafficSourceTrendChart'));
+const TopRegionsWidget = lazy(() => import('@/components/TopRegionsWidget'));
 
 export function DashboardPage() {
   const { user } = useAuth();
@@ -40,12 +41,12 @@ export function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [issueCount, setIssueCount] = useState(5);
   const [showAllIssues, setShowAllIssues] = useState(() => searchParams.get('issues') === 'all');
-  const [rightPanelTab, setRightPanelTab] = useState<'summary' | 'quality' | 'engagement' | 'traffic'>(() => {
+  const [rightPanelTab, setRightPanelTab] = useState<'quality' | 'engagement' | 'traffic'>(() => {
     const tab = searchParams.get('insights');
     if (tab === 'quality' || tab === 'engagement' || tab === 'traffic') {
       return tab;
     }
-    return 'summary';
+    return 'quality';
   });
 
   const trendComparisons = useMemo(() => {
@@ -75,6 +76,7 @@ export function DashboardPage() {
     return {
       openRate: createComparison(current.avgOpenRate, previous.avgOpenRate),
       clickRate: createComparison(current.avgClickRate, previous.avgClickRate),
+      clickToOpenRate: createComparison(current.avgClickToOpenRate, previous.avgClickToOpenRate),
       bounceRate: createComparison(current.avgBounceRate, previous.avgBounceRate),
       delivered: createComparison(current.totalDelivered, previous.totalDelivered)
     };
@@ -91,26 +93,8 @@ export function DashboardPage() {
     return {
       openRate: calculateHealthStatus(current.avgOpenRate, previous.avgOpenRate, { good: 5, warning: 10 }),
       clickRate: calculateHealthStatus(current.avgClickRate, previous.avgClickRate, { good: 5, warning: 10 }),
+      clickToOpenRate: calculateHealthStatus(current.avgClickToOpenRate, previous.avgClickToOpenRate, { good: 5, warning: 10 }),
       bounceRate: calculateHealthStatus(current.avgBounceRate, previous.avgBounceRate, { good: 5, warning: 10 })
-    };
-  }, [trendsData]);
-
-  const bestWorstIssues = useMemo((): BestWorstIssues | null => {
-    if (!trendsData?.issues || trendsData.issues.length === 0) {
-      return null;
-    }
-
-    const issuesWithScores = trendsData.issues.map(issue => ({
-      id: issue.id,
-      issueNumber: parseInt(issue.id, 10),
-      score: calculateCompositeScore(issue.metrics)
-    }));
-
-    issuesWithScores.sort((a, b) => b.score - a.score);
-
-    return {
-      best: issuesWithScores.length > 0 ? issuesWithScores[0] : null,
-      worst: issuesWithScores.length > 0 ? issuesWithScores[issuesWithScores.length - 1] : null
     };
   }, [trendsData]);
 
@@ -212,7 +196,7 @@ export function DashboardPage() {
     } else {
       params.delete('issues');
     }
-    if (rightPanelTab !== 'summary') {
+    if (rightPanelTab !== 'quality') {
       params.set('insights', rightPanelTab);
     } else {
       params.delete('insights');
@@ -349,12 +333,12 @@ export function DashboardPage() {
                   healthStatus={healthStatuses?.openRate}
                 />
                 <MetricsCard
-                  title="Average Click Rate"
-                  value={trendsData.aggregates.avgClickRate}
+                  title="Avg Click-to-Open Rate"
+                  value={trendsData.aggregates.avgClickToOpenRate}
                   format="percentage"
                   icon={MousePointer}
-                  trendComparison={trendComparisons?.clickRate}
-                  healthStatus={healthStatuses?.clickRate}
+                  trendComparison={trendComparisons?.clickToOpenRate}
+                  healthStatus={healthStatuses?.clickToOpenRate}
                 />
                 <MetricsCard
                   title="Total Delivered"
@@ -366,16 +350,11 @@ export function DashboardPage() {
               </div>
 
               {/* Secondary Metrics Row - Compact layout */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
-                {/* Sender Status Widget */}
-                <Suspense fallback={<div className="bg-surface rounded-lg shadow p-4 animate-pulse h-32" />}>
-                  <SenderStatusWidget />
-                </Suspense>
-
-                {/* Deliverability Health Widget */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
+                {/* Consolidated Sending Health Widget */}
                 {deliverabilityMetrics && (
                   <Suspense fallback={<div className="bg-surface rounded-lg shadow p-4 animate-pulse h-32" />}>
-                    <DeliverabilityHealthWidget
+                    <SendingHealthWidget
                       totalComplaints={deliverabilityMetrics.totalComplaints}
                       complaintRate={deliverabilityMetrics.complaintRate}
                       bounceRate={deliverabilityMetrics.bounceRate}
@@ -384,15 +363,10 @@ export function DashboardPage() {
                   </Suspense>
                 )}
 
-                {/* Best/Worst Issue Card */}
-                {bestWorstIssues && (
-                  <Suspense fallback={<div className="bg-surface rounded-lg shadow p-4 animate-pulse h-32" />}>
-                    <BestWorstIssueCard
-                      bestIssue={bestWorstIssues.best}
-                      worstIssue={bestWorstIssues.worst}
-                    />
-                  </Suspense>
-                )}
+                {/* Actionable Insights */}
+                <Suspense fallback={<div className="bg-surface rounded-lg shadow p-4 animate-pulse h-32" />}>
+                  <ActionableInsights trendsData={trendsData} />
+                </Suspense>
               </div>
 
               {/* Performance Overview - Below the fold */}
@@ -424,7 +398,9 @@ export function DashboardPage() {
                         <div>
                           <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Clicks</div>
                           <div className="text-lg sm:text-xl font-semibold text-foreground">{formatNumber(trendsData.issues[0].metrics.clicks)}</div>
-                          <div className="text-xs text-muted-foreground">{formatPercentage(trendsData.issues[0].metrics.clickRate)}</div>
+                          <div className="text-xs text-muted-foreground">
+                            CTR {formatPercentage(trendsData.issues[0].metrics.clickRate)} · CTOR {formatPercentage(trendsData.issues[0].metrics.clickToOpenRate)}
+                          </div>
                         </div>
                         <div>
                           <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Bounces</div>
@@ -480,25 +456,6 @@ export function DashboardPage() {
                     </div>
                   )}
 
-                  {/* Quality Signals Over Time */}
-                  {trendsData.issues.length > 0 && (
-                    <div className="bg-surface rounded-lg shadow p-3 sm:p-4">
-                      <div className="mb-3">
-                        <h3 className="text-sm sm:text-base font-medium text-foreground flex items-center gap-2">
-                          Quality Signals
-                          <InfoTooltip
-                            label="Quality signals"
-                            description="Bounces and complaints indicate deliverability risk over time."
-                          />
-                        </h3>
-                        <p className="text-xs sm:text-sm text-muted-foreground mt-1">Bounces and complaints by issue</p>
-                      </div>
-                      <Suspense fallback={<div className="bg-muted rounded-lg h-56 animate-pulse" />}>
-                        <QualitySignalsChart trendsData={trendsData} />
-                      </Suspense>
-                    </div>
-                  )}
-
                   {/* Recent Issues */}
                   {trendsData.issues.length > 0 && (
                     <div className="bg-surface rounded-lg shadow overflow-hidden">
@@ -532,10 +489,10 @@ export function DashboardPage() {
                                 Click Rate
                               </th>
                               <th className="px-3 sm:px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider hidden lg:table-cell">
-                                Delivered
+                                Trend
                               </th>
                               <th className="px-3 sm:px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider hidden xl:table-cell">
-                                Subscribers
+                                Delivered
                               </th>
                             </tr>
                           </thead>
@@ -566,11 +523,14 @@ export function DashboardPage() {
                                 <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-xs sm:text-sm text-foreground hidden md:table-cell">
                                   {formatPercentage(issue.metrics.clickRate)}
                                 </td>
-                                <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-xs sm:text-sm text-foreground hidden lg:table-cell">
-                                  {formatNumber(issue.metrics.delivered)}
+                                <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap hidden lg:table-cell">
+                                  <MiniSparkline
+                                    value={issue.metrics.openRate}
+                                    average={trendsData.aggregates.avgOpenRate}
+                                  />
                                 </td>
                                 <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-xs sm:text-sm text-foreground hidden xl:table-cell">
-                                  {formatNumber(issue.metrics.subscribers)}
+                                  {formatNumber(issue.metrics.delivered)}
                                 </td>
                               </tr>
                             ))}
@@ -602,19 +562,24 @@ export function DashboardPage() {
                     </div>
                   )}
 
+                  {/* Top Regions */}
+                  {trendsData.issues.length > 0 && (
+                    <Suspense fallback={<div className="bg-surface rounded-lg shadow p-4 animate-pulse h-32" />}>
+                      <TopRegionsWidget latestIssueId={trendsData.issues[0].id} />
+                    </Suspense>
+                  )}
+
                   <div className="bg-surface rounded-lg shadow p-3 sm:p-4">
                     <div className="flex items-center justify-between mb-3">
                       <h3 className="text-sm sm:text-base font-medium text-foreground flex items-center gap-2">
-                        {rightPanelTab === 'summary'
-                          ? 'Performance Summary'
-                          : rightPanelTab === 'quality'
+                        {rightPanelTab === 'quality'
                             ? 'Quality Signals'
                             : rightPanelTab === 'engagement'
                               ? 'Engagement Trends'
                               : 'Traffic Source Trends'}
                         <InfoTooltip
                           label="Insights panel"
-                          description="Switch between performance, quality, engagement, and traffic trends."
+                          description="Switch between quality, engagement, and traffic trends."
                         />
                       </h3>
                       <select
@@ -623,23 +588,11 @@ export function DashboardPage() {
                         className="sm:hidden w-full text-sm border border-border rounded-md px-3 py-2 bg-surface focus:outline-none focus:ring-2 focus:ring-ring"
                         aria-label="Select insights tab"
                       >
-                        <option value="summary">Summary</option>
                         <option value="quality">Quality</option>
                         <option value="engagement">Engagement</option>
                         <option value="traffic">Traffic</option>
                       </select>
                       <div className="hidden sm:inline-flex rounded-lg border border-border overflow-hidden">
-                        <button
-                          onClick={() => setRightPanelTab('summary')}
-                          className={`px-3 py-1.5 text-xs sm:text-sm font-medium ${
-                            rightPanelTab === 'summary'
-                              ? 'bg-primary-600 text-white'
-                              : 'bg-surface text-muted-foreground hover:text-foreground'
-                          }`}
-                          aria-label="Show performance summary"
-                        >
-                          Summary
-                        </button>
                         <button
                           onClick={() => setRightPanelTab('quality')}
                           className={`px-3 py-1.5 text-xs sm:text-sm font-medium ${
@@ -676,55 +629,7 @@ export function DashboardPage() {
                       </div>
                     </div>
 
-                    {rightPanelTab === 'summary' ? (
-                      <div className="space-y-3">
-                        <div>
-                          <div className="flex justify-between text-xs sm:text-sm">
-                            <span className="text-muted-foreground">Open Rate</span>
-                            <span className="font-medium">{formatPercentage(trendsData.aggregates.avgOpenRate)}</span>
-                          </div>
-                          <div className="mt-1 w-full bg-muted rounded-full h-2">
-                            <div
-                              className="bg-primary-600 h-2 rounded-full"
-                              style={{ width: `${Math.min(trendsData.aggregates.avgOpenRate, 100)}%` }}
-                            ></div>
-                          </div>
-                        </div>
-
-                        <div>
-                          <div className="flex justify-between text-xs sm:text-sm">
-                            <span className="text-muted-foreground">Click Rate</span>
-                            <span className="font-medium">{formatPercentage(trendsData.aggregates.avgClickRate)}</span>
-                          </div>
-                          <div className="mt-1 w-full bg-muted rounded-full h-2">
-                            <div
-                              className="bg-success-600 h-2 rounded-full"
-                              style={{ width: `${Math.min(trendsData.aggregates.avgClickRate, 100)}%` }}
-                            ></div>
-                          </div>
-                        </div>
-
-                        <div>
-                          <div className="flex justify-between text-xs sm:text-sm">
-                            <span className="text-muted-foreground">Bounce Rate</span>
-                            <span className="font-medium">{formatPercentage(trendsData.aggregates.avgBounceRate)}</span>
-                          </div>
-                          <div className="mt-1 w-full bg-muted rounded-full h-2">
-                            <div
-                              className="bg-error-600 h-2 rounded-full"
-                              style={{ width: `${Math.min(trendsData.aggregates.avgBounceRate, 100)}%` }}
-                            ></div>
-                          </div>
-                        </div>
-
-                        <div className="pt-3 border-t border-border">
-                          <div className="text-xs sm:text-sm text-muted-foreground">Total Emails Delivered</div>
-                          <div className="text-lg sm:text-xl font-semibold text-foreground">
-                            {formatNumber(trendsData.aggregates.totalDelivered)}
-                          </div>
-                        </div>
-                      </div>
-                    ) : rightPanelTab === 'quality' ? (
+                    {rightPanelTab === 'quality' ? (
                       <Suspense fallback={<div className="bg-muted rounded-lg h-44 animate-pulse" />}>
                         <QualitySignalsChart trendsData={trendsData} />
                       </Suspense>

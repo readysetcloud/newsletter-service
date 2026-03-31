@@ -39,6 +39,7 @@ export interface TopPerformer {
 export interface IssueMetrics {
   openRate: number;
   clickRate: number;
+  clickToOpenRate: number;
   bounceRate: number;
   delivered: number;
   opens: number;
@@ -60,6 +61,7 @@ export interface IssueTrendItem {
 export interface TrendAggregates {
   avgOpenRate: number;
   avgClickRate: number;
+  avgClickToOpenRate: number;
   avgBounceRate: number;
   totalDelivered: number;
   issueCount: number;

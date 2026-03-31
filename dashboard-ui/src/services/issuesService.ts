@@ -176,6 +176,7 @@ class IssuesService {
       const average: IssueMetrics = {
         openRate: aggregates.avgOpenRate,
         clickRate: aggregates.avgClickRate,
+        clickToOpenRate: aggregates.avgClickToOpenRate,
         bounceRate: aggregates.avgBounceRate,
         delivered: Math.round(aggregates.totalDelivered / aggregates.issueCount),
         opens: 0,

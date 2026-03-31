@@ -46,6 +46,7 @@ export default function IssuePerformanceChart({ trendsData }: IssuePerformanceCh
     id: issue.id,
     openRate: issue.metrics.openRate,
     clickRate: issue.metrics.clickRate,
+    clickToOpenRate: issue.metrics.clickToOpenRate,
     bounceRate: issue.metrics.bounceRate
   })).reverse();
 
@@ -55,6 +56,10 @@ export default function IssuePerformanceChart({ trendsData }: IssuePerformanceCh
     }
   };
 
+  // Calculate right axis domain based on click/bounce/CTOR rate range
+  const lowScaleValues = chartData.flatMap(d => [d.clickRate, d.bounceRate, d.clickToOpenRate]);
+  const rightMax = Math.max(Math.ceil(Math.max(...lowScaleValues, 1) * 1.3), 5);
+
   return (
     <div className="bg-surface rounded-lg shadow p-6">
       <div className="flex justify-between items-center mb-4">
@@ -62,7 +67,7 @@ export default function IssuePerformanceChart({ trendsData }: IssuePerformanceCh
           Issue Performance Trends
           <InfoTooltip
             label="Performance trends"
-            description="Compares open, click, and bounce rates across recent issues."
+            description="Open rate uses the left axis. Click and bounce rates use the right axis for better visibility."
           />
         </h3>
         <span className="text-sm text-muted-foreground">
@@ -89,12 +94,22 @@ export default function IssuePerformanceChart({ trendsData }: IssuePerformanceCh
                 height={80}
               />
               <YAxis
+                yAxisId="left"
                 tick={{ fontSize: 12 }}
-                label={{ value: 'Rate (%)', angle: -90, position: 'insideLeft' }}
+                label={{ value: 'Open Rate (%)', angle: -90, position: 'insideLeft', style: { fontSize: 11 } }}
+                domain={[0, 100]}
+              />
+              <YAxis
+                yAxisId="right"
+                orientation="right"
+                tick={{ fontSize: 12 }}
+                label={{ value: 'Click / Bounce (%)', angle: 90, position: 'insideRight', style: { fontSize: 11 } }}
+                domain={[0, rightMax]}
               />
               <Tooltip content={CustomTooltip} />
               <Legend />
               <Line
+                yAxisId="left"
                 type="monotone"
                 dataKey="openRate"
                 stroke="#3b82f6"
@@ -104,15 +119,27 @@ export default function IssuePerformanceChart({ trendsData }: IssuePerformanceCh
                 activeDot={{ r: 6 }}
               />
               <Line
+                yAxisId="right"
                 type="monotone"
                 dataKey="clickRate"
                 stroke="#10b981"
                 strokeWidth={2}
-                name="Click Rate"
+                name="Click Rate (CTR)"
                 dot={{ fill: '#10b981', strokeWidth: 2, r: 4, cursor: 'pointer' }}
                 activeDot={{ r: 6 }}
               />
               <Line
+                yAxisId="right"
+                type="monotone"
+                dataKey="clickToOpenRate"
+                stroke="#8b5cf6"
+                strokeWidth={2}
+                name="Click-to-Open (CTOR)"
+                dot={{ fill: '#8b5cf6', strokeWidth: 2, r: 4, cursor: 'pointer' }}
+                activeDot={{ r: 6 }}
+              />
+              <Line
+                yAxisId="right"
                 type="monotone"
                 dataKey="bounceRate"
                 stroke="#ef4444"

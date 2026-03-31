@@ -487,6 +487,7 @@ export const IssueDetailPage: React.FC = () => {
     return {
       openRate: issue.stats.deliveries > 0 ? (issue.stats.opens / issue.stats.deliveries) * 100 : 0,
       clickRate: issue.stats.deliveries > 0 ? (issue.stats.clicks / issue.stats.deliveries) * 100 : 0,
+      clickToOpenRate: issue.stats.opens > 0 ? (issue.stats.clicks / issue.stats.opens) * 100 : 0,
       bounceRate: issue.stats.deliveries > 0 ? (issue.stats.bounces / issue.stats.deliveries) * 100 : 0,
       delivered: issue.stats.deliveries,
       opens: issue.stats.opens,
@@ -505,6 +506,7 @@ export const IssueDetailPage: React.FC = () => {
     return {
       openRate: trendsData.aggregates.avgOpenRate,
       clickRate: trendsData.aggregates.avgClickRate,
+      clickToOpenRate: trendsData.aggregates.avgClickToOpenRate,
       bounceRate: trendsData.aggregates.avgBounceRate,
       delivered: trendsData.aggregates.totalDelivered / trendsData.aggregates.issueCount,
       opens: 0,

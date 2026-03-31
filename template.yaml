@@ -542,7 +542,7 @@ Resources:
     Properties:
       FunctionName: !Sub "${AWS::StackName}-tenant-routing"
       Handler: index.handler
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       Role: !GetAtt LambdaEdgeRole.Arn
       Code:
         ZipFile: !Sub |
@@ -859,7 +859,7 @@ Resources:
         EntryPoints:
           - add-update-tenant.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: add-update-tenant.handler
       Policies:
@@ -969,7 +969,7 @@ Resources:
         EntryPoints:
           - subscribers/add-subscriber.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: subscribers/add-subscriber.handler
       Policies:
@@ -1009,7 +1009,7 @@ Resources:
         EntryPoints:
           - subscribers/send-welcome-email.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: subscribers/send-welcome-email.handler
       Policies:
@@ -1049,7 +1049,7 @@ Resources:
         EntryPoints:
           - subscribers/get-subscriber-stats.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: subscribers/get-subscriber-stats.handler
       Policies:
@@ -1171,6 +1171,10 @@ Resources:
               Action:
                 - iam:PassRole
               Resource: !GetAtt SchedulerExecutionRole.Arn
+            - Effect: Allow
+              Action:
+                - events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
@@ -1199,6 +1203,42 @@ Resources:
             RestApiId: !Ref DashboardApi
             Path: /{proxy+}
             Method: ANY
+        GetPricing:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /pricing
+            Method: GET
+        GetPricingHistory:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /pricing/history
+            Method: GET
+        PostRecalculate:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /pricing/recalculate
+            Method: POST
+        GetRecalculateStatus:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /pricing/recalculate/{jobId}
+            Method: GET
+        GetQuestionnaire:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /pricing/questionnaire
+            Method: GET
+        PostQuestionnaire:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /pricing/questionnaire
+            Method: POST
 
   S3AssetCleanupFunction:
     Type: AWS::Serverless::Function
@@ -1209,7 +1249,7 @@ Resources:
         EntryPoints:
           - utils/s3-asset-cleanup.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: utils/s3-asset-cleanup.handler
       Policies:
@@ -1243,7 +1283,7 @@ Resources:
         EntryPoints:
           - setup-email-tenant.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: setup-email-tenant.handler
       Policies:
@@ -1273,7 +1313,7 @@ Resources:
         EntryPoints:
           - subscribers/import-subscriber-list.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: subscribers/import-subscriber-list.handler
       Timeout: 900
@@ -1305,7 +1345,7 @@ Resources:
         EntryPoints:
           - subscribers/export-subscribers.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: subscribers/export-subscribers.handler
       Policies:
@@ -1337,7 +1377,7 @@ Resources:
         EntryPoints:
           - handle-email-status.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: handle-email-status.handler
       Layers:
@@ -1379,7 +1419,7 @@ Resources:
         EntryPoints:
           - subscribers/clean-bounced-subscribers.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: subscribers/clean-bounced-subscribers.handler
       Timeout: 60
@@ -1423,7 +1463,7 @@ Resources:
         EntryPoints:
           - setup-voting-options.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: setup-voting-options.handler
       Policies:
@@ -1450,7 +1490,7 @@ Resources:
         EntryPoints:
           - vote.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: vote.handler
       Policies:
@@ -1486,7 +1526,7 @@ Resources:
         EntryPoints:
           - subscribers/unsubscribe.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: subscribers/unsubscribe.handler
       Policies:
@@ -1530,7 +1570,7 @@ Resources:
         EntryPoints:
           - subscribers/manual-unsubscribe.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: subscribers/manual-unsubscribe.handler
       Policies:
@@ -1571,7 +1611,7 @@ Resources:
         EntryPoints:
           - build-report-data.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: build-report-data.handler
       Policies:
@@ -1632,7 +1672,7 @@ Resources:
         EntryPoints:
           - compile-report.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: compile-report.handler
       Policies:
@@ -1693,7 +1733,7 @@ Resources:
         EntryPoints:
           - get-next-issue-date.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: get-next-issue-date.handler
       Policies:
@@ -1716,7 +1756,7 @@ Resources:
         EntryPoints:
           - publish-issue.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: publish-issue.handler
       Policies:
@@ -1744,7 +1784,7 @@ Resources:
         EntryPoints:
           - send-email-v2.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: send-email-v2.handler
       Timeout: 900
@@ -1805,7 +1845,7 @@ Resources:
         EntryPoints:
           - migrate-contacts-to-dynamodb.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: migrate-contacts-to-dynamodb.handler
       Timeout: 900
@@ -1847,7 +1887,7 @@ Resources:
         EntryPoints:
           - parse-md-to-json.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: parse-md-to-json.handler
       Policies:
@@ -1870,7 +1910,7 @@ Resources:
         EntryPoints:
           - transform-and-callback.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: transform-and-callback.handler
       Policies:
@@ -1896,7 +1936,7 @@ Resources:
         EntryPoints:
           - sync-repo-data.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: sync-repo-data.handler
       Policies:
@@ -1944,7 +1984,7 @@ Resources:
         EntryPoints:
           - import-issue-from-github.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: import-issue-from-github.handler
       Policies:
@@ -2379,7 +2419,7 @@ Resources:
         EntryPoints:
           - update-link-tracking.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: update-link-tracking.handler
       Policies:
@@ -2406,7 +2446,7 @@ Resources:
         EntryPoints:
           - process-link-click.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: process-link-click.handler
       Layers:
@@ -2448,7 +2488,7 @@ Resources:
         EntryPoints:
           - get-top-link.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: get-top-link.handler
       Policies:
@@ -2609,7 +2649,7 @@ Resources:
         EntryPoints:
           - billing/create-checkout-session.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: billing/create-checkout-session.handler
       Policies:
@@ -2646,7 +2686,7 @@ Resources:
         EntryPoints:
           - billing/create-customer-portal-session.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: billing/create-customer-portal-session.handler
       Policies:
@@ -2683,7 +2723,7 @@ Resources:
         EntryPoints:
           - billing/get-subscription-status.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: billing/get-subscription-status.handler
       Policies:
@@ -2715,7 +2755,7 @@ Resources:
         EntryPoints:
           - billing/process-dlq-messages.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: billing/process-dlq-messages.handler
       Description: "Simplified DLQ processor for logging failed events and sending alerts"
@@ -2950,7 +2990,7 @@ Resources:
         EntryPoints:
           - billing/stripe-event-handler.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: billing/stripe-event-handler.handler
       DeadLetterQueue:
@@ -3015,7 +3055,7 @@ Resources:
         EntryPoints:
           - billing/stripe-subscription-events.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: billing/stripe-subscription-events.handler
       Policies:
@@ -3055,7 +3095,7 @@ Resources:
         EntryPoints:
           - billing/stripe-payment-events.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: billing/stripe-payment-events.handler
       Policies:
@@ -3094,7 +3134,7 @@ Resources:
         EntryPoints:
           - billing/dlq-processor.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: billing/dlq-processor.handler
       Policies:
@@ -3234,7 +3274,7 @@ Resources:
         EntryPoints:
           - issue-processing/create-hero-image.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: issue-processing/create-hero-image.handler
       Layers:
@@ -3304,7 +3344,7 @@ Resources:
         EntryPoints:
           - subscribers/auto-unsubscribe-complaint.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: subscribers/auto-unsubscribe-complaint.handler
       Policies:
@@ -3346,7 +3386,7 @@ Resources:
         EntryPoints:
           - backfill-stats-gsi.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: backfill-stats-gsi.handler
       Timeout: 300
@@ -3375,7 +3415,7 @@ Resources:
         EntryPoints:
           - aggregate-issue-analytics.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: aggregate-issue-analytics.handler
       Timeout: 120
@@ -3402,7 +3442,7 @@ Resources:
         EntryPoints:
           - schedule-aggregation.mjs
     Properties:
-      Runtime: nodejs22.x
+      Runtime: nodejs24.x
       CodeUri: functions
       Handler: schedule-aggregation.handler
       Policies:
@@ -3430,6 +3470,100 @@ Resources:
                 - newsletter-service
               detail-type:
                 - ISSUE_PUBLISHED
+
+  CalculatePricingFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - calculate-pricing.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: calculate-pricing.handler
+      Timeout: 60
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/*"
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource: !GetAtt SubscribersTable.Arn
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource:
+                - !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/*
+                - !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
+          BEDROCK_MODEL_ID: us.amazon.nova-pro-v1:0
+      Events:
+        PricingRecalculationEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - newsletter-service
+              detail-type:
+                - PRICING_RECALCULATION_REQUESTED
+
+  WeeklyPricingJobFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - weekly-pricing-job.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: weekly-pricing-job.handler
+      Timeout: 900
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Query
+                - dynamodb:Scan
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/*"
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource: !GetAtt SubscribersTable.Arn
+            - Effect: Allow
+              Action:
+                - events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
+      Events:
+        WeeklySchedule:
+          Type: Schedule
+          Properties:
+            Schedule: "cron(0 15 ? * WED *)"
 
   AggregationSchedulerRole:
     Type: AWS::IAM::Role

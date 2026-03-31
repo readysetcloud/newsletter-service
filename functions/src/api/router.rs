@@ -1,7 +1,7 @@
 use lambda_http::{http::Method, Body, Error, Request, Response};
 use serde_json::json;
 
-use crate::controllers::{api_keys, brand, domain, issues, profile, senders};
+use crate::controllers::{api_keys, brand, domain, issues, pricing, profile, senders};
 
 pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
     let method = event.method();
@@ -103,6 +103,17 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
             issues::delete_issue(event, issue_id).await
         }
 
+        // Pricing endpoints
+        (&Method::GET, "/pricing") => pricing::get_pricing(event).await,
+        (&Method::GET, "/pricing/history") => pricing::get_pricing_history(event).await,
+        (&Method::GET, "/pricing/questionnaire") => pricing::get_questionnaire(event).await,
+        (&Method::POST, "/pricing/questionnaire") => pricing::submit_questionnaire(event).await,
+        (&Method::POST, "/pricing/recalculate") => pricing::recalculate(event).await,
+        (&Method::GET, path) if path.starts_with("/pricing/recalculate/") => {
+            let job_id = extract_path_param(path, "/pricing/recalculate/");
+            pricing::get_job_status(event, job_id).await
+        }
+
         // Method not allowed for valid paths
         (_, path) if is_valid_api_path(path) => Ok(format_method_not_allowed()),
 
@@ -137,6 +148,12 @@ fn is_valid_api_path(path: &str) -> bool {
         || path == "/issues"
         || path == "/issues/trends"
         || path.starts_with("/issues/")
+        // Pricing paths
+        || path == "/pricing"
+        || path == "/pricing/history"
+        || path == "/pricing/questionnaire"
+        || path == "/pricing/recalculate"
+        || path.starts_with("/pricing/recalculate/")
 }
 
 fn extract_path_param(path: &str, prefix: &str) -> Option<String> {
@@ -448,11 +465,30 @@ mod tests {
         let api_keys_path = "/api-keys";
         let senders_path = "/senders";
         let domain_path = "/senders/domain";
+        let pricing_path = "/pricing";
 
         assert!(is_valid_api_path(profile_path));
         assert!(is_valid_api_path(brand_path));
         assert!(is_valid_api_path(api_keys_path));
         assert!(is_valid_api_path(senders_path));
         assert!(is_valid_api_path(domain_path));
+        assert!(is_valid_api_path(pricing_path));
+    }
+
+    #[test]
+    fn test_is_valid_api_path_pricing() {
+        assert!(is_valid_api_path("/pricing"));
+        assert!(is_valid_api_path("/pricing/questionnaire"));
+        assert!(is_valid_api_path("/pricing/recalculate"));
+        assert!(is_valid_api_path("/pricing/recalculate/job-abc-123"));
+    }
+
+    #[test]
+    fn test_pricing_recalculate_job_id_extraction() {
+        let result = extract_path_param("/pricing/recalculate/job-abc-123", "/pricing/recalculate/");
+        assert_eq!(result, Some("job-abc-123".to_string()));
+
+        let result = extract_path_param("/pricing/recalculate/", "/pricing/recalculate/");
+        assert_eq!(result, None);
     }
 }

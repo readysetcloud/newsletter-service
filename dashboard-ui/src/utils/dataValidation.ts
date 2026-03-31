@@ -25,13 +25,17 @@ function isValidRate(value: unknown): value is number {
   return typeof value === 'number' && !isNaN(value) && value >= 0 && value <= 100;
 }
 
+function isValidRatio(value: unknown): value is number {
+  return typeof value === 'number' && !isNaN(value) && value >= 0;
+}
+
 export function validateIssueMetrics(data: unknown): data is IssueMetrics {
   if (!data || typeof data !== 'object') return false;
   const metrics = data as Record<string, unknown>;
   return (
     isValidRate(metrics.openRate) &&
     isValidRate(metrics.clickRate) &&
-    (metrics.clickToOpenRate === undefined || isValidRate(metrics.clickToOpenRate)) &&
+    (metrics.clickToOpenRate === undefined || isValidRatio(metrics.clickToOpenRate)) &&
     isValidRate(metrics.bounceRate) &&
     isNonNegativeNumber(metrics.delivered) &&
     isNonNegativeNumber(metrics.opens) &&
@@ -48,7 +52,7 @@ export function validateTrendAggregates(data: unknown): data is TrendAggregates 
   return (
     isValidRate(aggregates.avgOpenRate) &&
     isValidRate(aggregates.avgClickRate) &&
-    (aggregates.avgClickToOpenRate === undefined || isValidRate(aggregates.avgClickToOpenRate)) &&
+    (aggregates.avgClickToOpenRate === undefined || isValidRatio(aggregates.avgClickToOpenRate)) &&
     isValidRate(aggregates.avgBounceRate) &&
     isNonNegativeNumber(aggregates.totalDelivered) &&
     isNonNegativeNumber(aggregates.issueCount)

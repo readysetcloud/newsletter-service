@@ -2,6 +2,7 @@
 export * from './api';
 export * from './app';
 export * from './billing';
+export * from './pricing';
 
 // Export issues types with explicit names to avoid conflicts
 export type {

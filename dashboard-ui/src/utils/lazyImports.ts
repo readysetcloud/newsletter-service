@@ -89,6 +89,14 @@ export const LazyIssueFormPage = lazy(() =>
     })
 );
 
+export const LazySponsorshipPricingPage = lazy(() =>
+  import('@/pages/pricing/SponsorshipPricingPage').then(module => ({ default: module.SponsorshipPricingPage }))
+    .catch(error => {
+      console.error('Failed to load SponsorshipPricingPage:', error);
+      throw error;
+    })
+);
+
 // Preload critical routes
 export const preloadCriticalRoutes = () => {
   // Preload dashboard since it's the default route
@@ -128,6 +136,9 @@ export const preloadRoute = (routeName: string) => {
       break;
     case 'issues':
       import('@/pages/issues');
+      break;
+    case 'pricing':
+      import('@/pages/pricing/SponsorshipPricingPage');
       break;
     case 'login':
       import('@/pages/auth/LoginPage');

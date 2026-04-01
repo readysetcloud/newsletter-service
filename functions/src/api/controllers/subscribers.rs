@@ -73,7 +73,9 @@ pub async fn list_subscribers(event: Request) -> Result<Response<Body>, Error> {
             Ok(response::format_error_response(&err))
         }
         None => {
-            let err = AppError::BadRequest("type query parameter is required (e.g. ?type=sunset)".to_string());
+            let err = AppError::BadRequest(
+                "type query parameter is required (e.g. ?type=sunset)".to_string(),
+            );
             Ok(response::format_error_response(&err))
         }
     }
@@ -111,8 +113,13 @@ async fn handle_get_audience_health(event: Request) -> Result<Response<Body>, Ap
     let subscribers_table = get_subscribers_table_name()?;
     let ddb_client = aws_clients::get_dynamodb_client().await;
 
-    let health = query_audience_health(ddb_client, &subscribers_table, &tenant_id, latest_issue_number)
-        .await?;
+    let health = query_audience_health(
+        ddb_client,
+        &subscribers_table,
+        &tenant_id,
+        latest_issue_number,
+    )
+    .await?;
 
     response::format_response(200, health)
 }
@@ -144,9 +151,14 @@ async fn handle_get_sunset_candidates(event: Request) -> Result<Response<Body>, 
     let subscribers_table = get_subscribers_table_name()?;
     let ddb_client = aws_clients::get_dynamodb_client().await;
 
-    let dormant_subscribers =
-        query_sunset_candidates(ddb_client, &subscribers_table, &tenant_id, threshold, latest_issue_number)
-            .await?;
+    let dormant_subscribers = query_sunset_candidates(
+        ddb_client,
+        &subscribers_table,
+        &tenant_id,
+        threshold,
+        latest_issue_number,
+    )
+    .await?;
 
     response::format_response(
         200,
@@ -155,7 +167,6 @@ async fn handle_get_sunset_candidates(event: Request) -> Result<Response<Body>, 
         },
     )
 }
-
 
 // ── Helper functions ───────────────────────────────────────────────────
 
@@ -200,7 +211,9 @@ async fn query_sunset_candidates(
         let result = query.send().await?;
 
         for item in result.items() {
-            if let Some(subscriber) = evaluate_subscriber(item, cutoff_issue, threshold, latest_issue_number) {
+            if let Some(subscriber) =
+                evaluate_subscriber(item, cutoff_issue, threshold, latest_issue_number)
+            {
                 dormant.push(subscriber);
             }
         }
@@ -238,7 +251,12 @@ fn evaluate_subscriber(
         .map(|s| s.to_string());
 
     // Exclude subscribers whose subscription is too recent
-    if is_subscription_too_recent(last_engaged_issue, &created_at, threshold, latest_issue_number) {
+    if is_subscription_too_recent(
+        last_engaged_issue,
+        &created_at,
+        threshold,
+        latest_issue_number,
+    ) {
         return None;
     }
 
@@ -298,8 +316,7 @@ fn is_subscription_too_recent(
     if let Some(created_at_str) = created_at {
         if let Ok(created_date) = chrono::DateTime::parse_from_rfc3339(created_at_str) {
             let now = chrono::Utc::now();
-            let weeks_since_creation = (now - created_date.with_timezone(&chrono::Utc))
-                .num_weeks();
+            let weeks_since_creation = (now - created_date.with_timezone(&chrono::Utc)).num_weeks();
 
             if weeks_since_creation <= threshold {
                 return true;
@@ -447,11 +464,7 @@ mod tests {
         // lastEngagedIssue = 5, latestIssueNumber = 20, threshold = 10
         // cutoff = 20 - 10 = 10, 5 < 10 → dormant
         // createdAt is old enough (2020) so not too recent
-        let item = make_subscriber_item(
-            "test@example.com",
-            Some(5),
-            Some("2020-01-01T00:00:00Z"),
-        );
+        let item = make_subscriber_item("test@example.com", Some(5), Some("2020-01-01T00:00:00Z"));
         let result = evaluate_subscriber(&item, 10, 10, 20);
         assert!(result.is_some());
         let dormant = result.unwrap();
@@ -463,11 +476,8 @@ mod tests {
     fn test_subscriber_with_recent_engagement_not_flagged() {
         // lastEngagedIssue = 15, latestIssueNumber = 20, threshold = 10
         // cutoff = 10, 15 >= 10 → not dormant
-        let item = make_subscriber_item(
-            "active@example.com",
-            Some(15),
-            Some("2020-01-01T00:00:00Z"),
-        );
+        let item =
+            make_subscriber_item("active@example.com", Some(15), Some("2020-01-01T00:00:00Z"));
         let result = evaluate_subscriber(&item, 10, 10, 20);
         assert!(result.is_none());
     }
@@ -475,11 +485,7 @@ mod tests {
     #[test]
     fn test_subscriber_no_engagement_old_created_at_is_flagged() {
         // No lastEngagedIssue, createdAt is old → dormant
-        let item = make_subscriber_item(
-            "never@example.com",
-            None,
-            Some("2020-01-01T00:00:00Z"),
-        );
+        let item = make_subscriber_item("never@example.com", None, Some("2020-01-01T00:00:00Z"));
         let result = evaluate_subscriber(&item, 10, 10, 20);
         assert!(result.is_some());
         let dormant = result.unwrap();
@@ -499,21 +505,14 @@ mod tests {
     #[test]
     fn test_default_threshold_of_10() {
         // Verify the default threshold logic: cutoff = 20 - 10 = 10
-        let item = make_subscriber_item(
-            "edge@example.com",
-            Some(10),
-            Some("2020-01-01T00:00:00Z"),
-        );
+        let item = make_subscriber_item("edge@example.com", Some(10), Some("2020-01-01T00:00:00Z"));
         // lastEngagedIssue = 10, cutoff = 10 → 10 < 10 is false → not dormant
         let result = evaluate_subscriber(&item, 10, 10, 20);
         assert!(result.is_none());
 
         // lastEngagedIssue = 9, cutoff = 10 → 9 < 10 → dormant
-        let item2 = make_subscriber_item(
-            "edge2@example.com",
-            Some(9),
-            Some("2020-01-01T00:00:00Z"),
-        );
+        let item2 =
+            make_subscriber_item("edge2@example.com", Some(9), Some("2020-01-01T00:00:00Z"));
         let result2 = evaluate_subscriber(&item2, 10, 10, 20);
         assert!(result2.is_some());
     }
@@ -521,11 +520,8 @@ mod tests {
     #[test]
     fn test_empty_result_when_no_match() {
         // All subscribers are active
-        let item = make_subscriber_item(
-            "active@example.com",
-            Some(19),
-            Some("2020-01-01T00:00:00Z"),
-        );
+        let item =
+            make_subscriber_item("active@example.com", Some(19), Some("2020-01-01T00:00:00Z"));
         let result = evaluate_subscriber(&item, 10, 10, 20);
         assert!(result.is_none());
     }
@@ -583,46 +579,31 @@ mod tests {
     #[test]
     fn test_classify_cohort_occasional_two_behind() {
         // lastEngagedIssue == latestIssueNumber - 2 → occasional (3–10 issues behind)
-        assert_eq!(
-            classify_cohort(Some(18), 20),
-            EngagementCohort::Occasional
-        );
+        assert_eq!(classify_cohort(Some(18), 20), EngagementCohort::Occasional);
     }
 
     #[test]
     fn test_classify_cohort_occasional_nine_behind() {
         // lastEngagedIssue == latestIssueNumber - 9 → occasional (boundary)
-        assert_eq!(
-            classify_cohort(Some(11), 20),
-            EngagementCohort::Occasional
-        );
+        assert_eq!(classify_cohort(Some(11), 20), EngagementCohort::Occasional);
     }
 
     #[test]
     fn test_classify_cohort_dormant_ten_behind() {
         // lastEngagedIssue == latestIssueNumber - 10 → dormant
-        assert_eq!(
-            classify_cohort(Some(10), 20),
-            EngagementCohort::Dormant
-        );
+        assert_eq!(classify_cohort(Some(10), 20), EngagementCohort::Dormant);
     }
 
     #[test]
     fn test_classify_cohort_dormant_very_old() {
         // lastEngagedIssue far behind → dormant
-        assert_eq!(
-            classify_cohort(Some(1), 20),
-            EngagementCohort::Dormant
-        );
+        assert_eq!(classify_cohort(Some(1), 20), EngagementCohort::Dormant);
     }
 
     #[test]
     fn test_classify_cohort_dormant_no_engagement() {
         // No lastEngagedIssue → dormant
-        assert_eq!(
-            classify_cohort(None, 20),
-            EngagementCohort::Dormant
-        );
+        assert_eq!(classify_cohort(None, 20), EngagementCohort::Dormant);
     }
 
     #[test]
@@ -649,9 +630,18 @@ mod tests {
         let resp = AudienceHealthResponse {
             bootstrap: None,
             cohorts: Some(CohortCounts {
-                highly_engaged: CohortDetail { count: 5, percentage: 50.0 },
-                occasional: CohortDetail { count: 3, percentage: 30.0 },
-                dormant: CohortDetail { count: 2, percentage: 20.0 },
+                highly_engaged: CohortDetail {
+                    count: 5,
+                    percentage: 50.0,
+                },
+                occasional: CohortDetail {
+                    count: 3,
+                    percentage: 30.0,
+                },
+                dormant: CohortDetail {
+                    count: 2,
+                    percentage: 20.0,
+                },
                 total: 10,
             }),
         };
@@ -674,12 +664,24 @@ mod tests {
         let latest = 20;
 
         // Highly engaged boundary
-        assert_eq!(classify_cohort(Some(19), latest), EngagementCohort::HighlyEngaged);
-        assert_eq!(classify_cohort(Some(20), latest), EngagementCohort::HighlyEngaged);
+        assert_eq!(
+            classify_cohort(Some(19), latest),
+            EngagementCohort::HighlyEngaged
+        );
+        assert_eq!(
+            classify_cohort(Some(20), latest),
+            EngagementCohort::HighlyEngaged
+        );
 
         // Occasional boundaries
-        assert_eq!(classify_cohort(Some(18), latest), EngagementCohort::Occasional);
-        assert_eq!(classify_cohort(Some(11), latest), EngagementCohort::Occasional);
+        assert_eq!(
+            classify_cohort(Some(18), latest),
+            EngagementCohort::Occasional
+        );
+        assert_eq!(
+            classify_cohort(Some(11), latest),
+            EngagementCohort::Occasional
+        );
 
         // Dormant boundaries
         assert_eq!(classify_cohort(Some(10), latest), EngagementCohort::Dormant);
@@ -692,7 +694,11 @@ mod tests {
         // Simulate what query_audience_health does for percentage calculation
         let total = 10i64;
         let percentage = |count: i64| -> f64 {
-            if total == 0 { 0.0 } else { ((count as f64 / total as f64) * 1000.0).round() / 10.0 }
+            if total == 0 {
+                0.0
+            } else {
+                ((count as f64 / total as f64) * 1000.0).round() / 10.0
+            }
         };
 
         assert_eq!(percentage(5), 50.0);
@@ -712,9 +718,8 @@ mod tests {
     fn test_cohort_percentage_rounding() {
         // 1/3 should round to 33.3
         let total = 3i64;
-        let percentage = |count: i64| -> f64 {
-            ((count as f64 / total as f64) * 1000.0).round() / 10.0
-        };
+        let percentage =
+            |count: i64| -> f64 { ((count as f64 / total as f64) * 1000.0).round() / 10.0 };
         assert_eq!(percentage(1), 33.3);
     }
 }

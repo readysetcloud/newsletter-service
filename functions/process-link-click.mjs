@@ -1,6 +1,6 @@
 import { DynamoDBClient, UpdateItemCommand, PutItemCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
-import { hash } from "./utils/helpers.mjs";
+import { hash, decrypt } from "./utils/helpers.mjs";
 import { detectDevice } from "./utils/detect-device.mjs";
 import { lookupCountry } from "./utils/geolocation.mjs";
 import { updateSubscriberEngagement } from "./utils/subscriber-engagement.mjs";
@@ -107,7 +107,8 @@ export const handler = async (event) => {
       if (engTenantId && engIssueNumber) {
         ops.push(async () => {
           try {
-            await updateSubscriberEngagement(engTenantId, msg.s, parseInt(engIssueNumber, 10));
+            const subscriberEmail = decrypt(msg.s);
+            await updateSubscriberEngagement(engTenantId, subscriberEmail, parseInt(engIssueNumber, 10));
           } catch (err) {
             console.error('Subscriber engagement update failed', {
               cid,

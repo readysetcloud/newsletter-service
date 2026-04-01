@@ -10,7 +10,8 @@ import {
   computeMetricAverages,
   computeSubscriberGrowthRate,
   computeWeeklyWindow,
-  computeRecommendedPrice
+  computeRecommendedPrice,
+  computePricingChecksum
 } from './utils/pricing.mjs';
 
 const ddb = new DynamoDBClient();
@@ -425,6 +426,55 @@ async function loadQuestionnaireResponses(tenantId) {
 }
 
 // ---------------------------------------------------------------------------
+// Sponsor-facing narrative generation
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate a concise, sponsor-facing value narrative using Bedrock.
+ * This is a best-effort call — failures are non-fatal.
+ */
+async function generateSponsorNarrative(metrics, recommendedPrice, confidence) {
+  const prompt = [
+    'Write a short, professional paragraph (2-4 sentences) for potential sponsors describing the value of advertising in this newsletter.',
+    'Use the following data points to support the pitch. Do NOT include raw numbers or percentages — summarize them qualitatively.',
+    '',
+    `Subscriber count: ${metrics.subscriberCount}`,
+    `Average open rate: ${(metrics.avgOpenRate * 100).toFixed(1)}%`,
+    `Average click-through rate: ${(metrics.avgClickRate * 100).toFixed(1)}%`,
+    `Subscriber growth rate: ${(metrics.subscriberGrowthRate * 100).toFixed(1)}%`,
+    `Published issues analyzed: ${metrics.publishedIssueCount}`,
+    `Recommended sponsorship price: $${recommendedPrice.toFixed(2)}`,
+    `Pricing confidence: ${confidence}`,
+    '',
+    'The tone should be confident but not hyperbolic. Focus on audience engagement and reach.',
+    'Return ONLY the paragraph text, no JSON, no markdown, no preamble.'
+  ].join('\n');
+
+  const response = await bedrock.send(new InvokeModelCommand({
+    modelId: BEDROCK_MODEL_ID,
+    contentType: 'application/json',
+    accept: 'application/json',
+    body: JSON.stringify({
+      anthropic_version: 'bedrock-2023-05-31',
+      max_tokens: 512,
+      messages: [
+        { role: 'user', content: prompt }
+      ]
+    })
+  }));
+
+  const body = JSON.parse(new TextDecoder().decode(response.body));
+  const text = body.content?.[0]?.text?.trim() ?? '';
+
+  if (!text || text.length < 20) {
+    console.warn('[NARRATIVE] Response too short or empty');
+    return null;
+  }
+
+  return text;
+}
+
+// ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
 
@@ -557,6 +607,14 @@ export const handler = async (event) => {
 
     // Step 4: Store the record
     const calculatedAt = now.toISOString();
+    const pricingChecksum = computePricingChecksum({
+      recommendedPrice,
+      subscriberCount: metrics.subscriberCount,
+      avgOpenRate: metrics.avgOpenRate,
+      avgClickRate: metrics.avgClickRate,
+      confidence: finalConfidence,
+      weekWindow: weekWindowStr
+    });
     const pricingRecord = {
       recommendedPrice,
       baselinePrice,
@@ -565,6 +623,7 @@ export const handler = async (event) => {
       multiplierSmoothed,
       confidence: finalConfidence,
       justification,
+      pricingChecksum,
       metrics: {
         subscriberCount: metrics.subscriberCount,
         avgOpenRate: metrics.avgOpenRate,
@@ -584,6 +643,18 @@ export const handler = async (event) => {
     };
 
     const existingSk = existingWindowRecord?.sk ?? null;
+
+    // Generate sponsor-facing narrative via Bedrock
+    try {
+      const narrative = await generateSponsorNarrative(metrics, recommendedPrice, finalConfidence);
+      if (narrative) {
+        pricingRecord.narrative = narrative;
+        pricingRecord.narrativeChecksum = pricingChecksum;
+      }
+    } catch (err) {
+      console.warn('[NARRATIVE] Failed to generate narrative, skipping:', err.message);
+    }
+
     await storePricingRecord(tenantId, pricingRecord, existingSk);
 
     // Update job status

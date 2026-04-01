@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback } from 'react';
+import React, { useRef, useCallback } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { cn } from '../../utils/cn';
 
@@ -16,17 +16,16 @@ export interface CollapsibleSectionProps {
   emptyMessage?: string;
 }
 
-const SESSION_STORAGE_KEY = 'issue-detail-expanded-sections';
-
 /**
- * CollapsibleSection component with expand/collapse functionality and session state persistence
+ * CollapsibleSection component with expand/collapse functionality
+ *
+ * This is a controlled component — the parent manages expanded state.
  *
  * Features:
  * - Smooth expand/collapse animation with max-height transition
  * - Rotating chevron icon to indicate state
  * - Badge display when collapsed
  * - Empty state handling with placeholder message
- * - Session storage persistence for expanded/collapsed state
  * - Accessible with ARIA attributes
  */
 export const CollapsibleSection: React.FC<CollapsibleSectionProps> = React.memo(({
@@ -34,7 +33,6 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = React.memo(
   title,
   description,
   icon,
-  defaultExpanded = false,
   isExpanded,
   onToggle,
   children,
@@ -43,54 +41,6 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = React.memo(
   emptyMessage = 'No data available for this section',
 }) => {
   const contentRef = useRef<HTMLDivElement>(null);
-
-  // Load expanded state from sessionStorage on mount
-  useEffect(() => {
-    try {
-      const stored = sessionStorage.getItem(SESSION_STORAGE_KEY);
-      if (stored) {
-        const expandedSections = JSON.parse(stored) as string[];
-        const shouldBeExpanded = expandedSections.includes(id);
-
-        // Only trigger toggle if the stored state differs from current state
-        if (shouldBeExpanded !== isExpanded) {
-          onToggle(id);
-        }
-      } else if (defaultExpanded && !isExpanded) {
-        // If no stored state and defaultExpanded is true, expand the section
-        onToggle(id);
-      }
-    } catch (error) {
-      console.warn('Failed to load section state from sessionStorage:', error);
-      // If there's an error, use defaultExpanded
-      if (defaultExpanded && !isExpanded) {
-        onToggle(id);
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]); // Only run on mount
-
-  // Save expanded state to sessionStorage when it changes
-  useEffect(() => {
-    try {
-      const stored = sessionStorage.getItem(SESSION_STORAGE_KEY);
-      let expandedSections: string[] = stored ? JSON.parse(stored) : [];
-
-      if (isExpanded) {
-        // Add to expanded sections if not already there
-        if (!expandedSections.includes(id)) {
-          expandedSections.push(id);
-        }
-      } else {
-        // Remove from expanded sections
-        expandedSections = expandedSections.filter(sectionId => sectionId !== id);
-      }
-
-      sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(expandedSections));
-    } catch (error) {
-      console.warn('Failed to save section state to sessionStorage:', error);
-    }
-  }, [id, isExpanded]);
 
   const handleToggle = useCallback(() => {
     onToggle(id);

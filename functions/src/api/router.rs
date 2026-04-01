@@ -109,6 +109,7 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
         (&Method::GET, "/pricing/questionnaire") => pricing::get_questionnaire(event).await,
         (&Method::POST, "/pricing/questionnaire") => pricing::submit_questionnaire(event).await,
         (&Method::POST, "/pricing/recalculate") => pricing::recalculate(event).await,
+        (&Method::GET, "/pricing/narrative") => pricing::generate_narrative(event).await,
         (&Method::GET, path) if path.starts_with("/pricing/recalculate/") => {
             let job_id = extract_path_param(path, "/pricing/recalculate/");
             pricing::get_job_status(event, job_id).await
@@ -152,6 +153,7 @@ fn is_valid_api_path(path: &str) -> bool {
         || path == "/pricing"
         || path == "/pricing/history"
         || path == "/pricing/questionnaire"
+        || path == "/pricing/narrative"
         || path == "/pricing/recalculate"
         || path.starts_with("/pricing/recalculate/")
 }

@@ -7,7 +7,8 @@ import {
   Tooltip as RechartsTooltip,
   ResponsiveContainer,
 } from 'recharts';
-import { RefreshCw, DollarSign, ChevronDown, AlertCircle, Info } from 'lucide-react';
+import { RefreshCw, DollarSign, ChevronDown, AlertCircle, Info, FileDown } from 'lucide-react';
+import { reportService } from '../../services/reportService';
 import { AppHeader } from '../../components/layout/AppHeader';
 import { Card, CardContent } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -271,6 +272,10 @@ export const SponsorshipPricingPage: React.FC = () => {
   const [recalculating, setRecalculating] = useState(false);
   const [submittingQuestionnaire, setSubmittingQuestionnaire] = useState(false);
 
+  // Export state
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
   // Track whether we already auto-triggered the first calculation
   const [autoTriggered, setAutoTriggered] = useState(false);
 
@@ -404,6 +409,21 @@ export const SponsorshipPricingPage: React.FC = () => {
   );
 
   // ------------------------------------------------------------------
+  // Export sponsor report
+  // ------------------------------------------------------------------
+  const handleExportReport = useCallback(async () => {
+    setExporting(true);
+    setExportError(null);
+    try {
+      await reportService.generateReport();
+    } catch {
+      setExportError('Report could not be generated. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  }, []);
+
+  // ------------------------------------------------------------------
   // Initial load
   // ------------------------------------------------------------------
   useEffect(() => {
@@ -475,6 +495,14 @@ export const SponsorshipPricingPage: React.FC = () => {
           </div>
         )}
 
+        {/* Export error banner */}
+        {exportError && (
+          <div role="alert" className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-900/20 p-4 text-sm text-red-800 dark:text-red-300">
+            <AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5" aria-hidden="true" />
+            <p>{exportError}</p>
+          </div>
+        )}
+
         {loading ? (
           <PricingSkeleton />
         ) : !pricingData?.hasPricing ? (
@@ -484,6 +512,21 @@ export const SponsorshipPricingPage: React.FC = () => {
           <>
             {/* ---- Price card (Req 7.3) ---- */}
             <PriceCard record={current} recalculating={recalculating} onRecalculate={handleRecalculate} />
+
+            {/* ---- Export Sponsor Report button ---- */}
+            <div className="flex items-center gap-3">
+              <Button
+                onClick={handleExportReport}
+                variant="outline"
+                size="sm"
+                disabled={exporting}
+                isLoading={exporting}
+                aria-label={exporting ? 'Generating sponsor report' : 'Export sponsor report'}
+              >
+                <FileDown className="h-4 w-4 mr-2" aria-hidden="true" />
+                {exporting ? 'Generating…' : 'Export Sponsor Report'}
+              </Button>
+            </div>
 
             {/* ---- Trend chart (Req 3.1–3.5) ---- */}
             {showChart ? (

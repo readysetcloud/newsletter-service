@@ -252,3 +252,34 @@ export function computeWeeklyWindow(timestamp) {
 export function computeRecommendedPrice(baseline, multiplier) {
   return baseline * multiplier;
 }
+
+/**
+ * Compute a checksum of the key pricing fields used to generate the narrative.
+ * Used to detect when the narrative is stale relative to the pricing data.
+ *
+ * @param {Object} params
+ * @param {number} params.recommendedPrice
+ * @param {number} params.subscriberCount
+ * @param {number} params.avgOpenRate
+ * @param {number} params.avgClickRate
+ * @param {string} params.confidence
+ * @param {string} params.weekWindow
+ * @returns {string} Hex-encoded checksum
+ */
+export function computePricingChecksum({ recommendedPrice, subscriberCount, avgOpenRate, avgClickRate, confidence, weekWindow }) {
+  const input = [
+    recommendedPrice?.toFixed(2),
+    subscriberCount,
+    avgOpenRate?.toFixed(6),
+    avgClickRate?.toFixed(6),
+    confidence,
+    weekWindow
+  ].join('|');
+
+  // Simple DJB2 hash — fast, deterministic, no crypto dependency needed
+  let hash = 5381;
+  for (let i = 0; i < input.length; i++) {
+    hash = ((hash << 5) + hash + input.charCodeAt(i)) >>> 0;
+  }
+  return hash.toString(16).padStart(8, '0');
+}

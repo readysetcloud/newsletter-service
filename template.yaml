@@ -3505,8 +3505,8 @@ Resources:
               Action:
                 - bedrock:InvokeModel
               Resource:
-                - !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/*
-                - !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*
+                - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/*
+                - !Sub arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1

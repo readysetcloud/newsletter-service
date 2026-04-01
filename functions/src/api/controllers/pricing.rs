@@ -154,6 +154,13 @@ struct QuestionnaireAnswerItem {
     answer: Value,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NarrativeResponse {
+    narrative: String,
+    pricing_checksum: String,
+}
+
 // ── Public endpoint handlers ───────────────────────────────────────────
 
 /// GET /pricing
@@ -175,6 +182,14 @@ pub async fn get_pricing_history(event: Request) -> Result<Response<Body>, Error
 /// POST /pricing/recalculate
 pub async fn recalculate(event: Request) -> Result<Response<Body>, Error> {
     match handle_recalculate(event).await {
+        Ok(resp) => Ok(resp),
+        Err(e) => Ok(response::format_error_response(&e)),
+    }
+}
+
+/// GET /pricing/narrative
+pub async fn generate_narrative(event: Request) -> Result<Response<Body>, Error> {
+    match handle_generate_narrative(event).await {
         Ok(resp) => Ok(resp),
         Err(e) => Ok(response::format_error_response(&e)),
     }
@@ -487,6 +502,75 @@ async fn handle_submit_questionnaire(event: Request) -> Result<Response<Body>, A
         RecalculateResponse {
             job_id,
             status: "processing".to_string(),
+        },
+    )
+}
+
+/// GET /pricing/narrative — return the stored sponsor-facing narrative
+async fn handle_generate_narrative(event: Request) -> Result<Response<Body>, AppError> {
+    let user_context = auth::get_user_context(&event)?;
+    let tenant_id = user_context
+        .tenant_id
+        .ok_or_else(|| AppError::Forbidden("Tenant access required".to_string()))?;
+
+    let table_name = get_table_name()?;
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+
+    let result = ddb_client
+        .query()
+        .table_name(&table_name)
+        .key_condition_expression("pk = :pk AND begins_with(sk, :sk_prefix)")
+        .expression_attribute_values(":pk", AttributeValue::S(tenant_id.clone()))
+        .expression_attribute_values(
+            ":sk_prefix",
+            AttributeValue::S(PRICING_SK_PREFIX.to_string()),
+        )
+        .scan_index_forward(false)
+        .limit(1)
+        .send()
+        .await?;
+
+    let items = result.items();
+
+    if items.is_empty() {
+        return response::format_response(
+            409,
+            json!({
+                "error": "NoPricingData",
+                "message": "No pricing data available. Please calculate pricing first via POST /pricing/recalculate."
+            }),
+        );
+    }
+
+    let pricing = dynamodb_item_to_json(items.first().unwrap());
+
+    let narrative = pricing
+        .get("narrative")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let pricing_checksum = pricing
+        .get("pricingChecksum")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if narrative.is_empty() {
+        return response::format_response(
+            409,
+            json!({
+                "error": "NarrativeNotGenerated",
+                "message": "Pricing exists but no narrative has been generated yet. Please recalculate pricing via POST /pricing/recalculate."
+            }),
+        );
+    }
+
+    response::format_response(
+        200,
+        NarrativeResponse {
+            narrative,
+            pricing_checksum,
         },
     )
 }

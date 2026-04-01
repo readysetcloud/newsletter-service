@@ -59,6 +59,14 @@ export class PricingService {
       responses,
     });
   }
+
+  /**
+   * Get the stored value narrative from the latest pricing calculation.
+   * Returns 409 if no pricing data or narrative exists yet.
+   */
+  async generateNarrative(): Promise<ApiResponse<{ narrative: string }>> {
+    return apiClient.get<{ narrative: string }>('/pricing/narrative');
+  }
 }
 
 // Export singleton instance

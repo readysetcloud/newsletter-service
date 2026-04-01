@@ -276,7 +276,6 @@ async function callBedrockWithRetry(prompt, maxRetries) {
         accept: 'application/json',
         body: JSON.stringify({
           anthropic_version: 'bedrock-2023-05-31',
-          max_tokens: 1024,
           messages: [
             { role: 'user', content: prompt }
           ]

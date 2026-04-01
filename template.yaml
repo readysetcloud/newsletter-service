@@ -1175,6 +1175,10 @@ Resources:
               Action:
                 - events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource: !GetAtt SubscribersTable.Arn
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
@@ -1391,6 +1395,12 @@ Resources:
                 - dynamodb:UpdateItem
                 - dynamodb:PutItem
               Resource: !GetAtt NewsletterTable.Arn
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !GetAtt SubscribersTable.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
@@ -2461,6 +2471,12 @@ Resources:
                 - dynamodb:PutItem
                 - dynamodb:GetItem
               Resource: !GetAtt NewsletterTable.Arn
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !GetAtt SubscribersTable.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
@@ -3429,6 +3445,12 @@ Resources:
                 - dynamodb:Query
                 - dynamodb:UpdateItem
               Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:BatchGetItem
+                - dynamodb:GetItem
+                - dynamodb:Query
+              Resource: !GetAtt SubscribersTable.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1

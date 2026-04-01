@@ -5,3 +5,4 @@ pub mod issues;
 pub mod pricing;
 pub mod profile;
 pub mod senders;
+pub mod subscribers;

@@ -3,6 +3,7 @@ import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { hash } from "./utils/helpers.mjs";
 import { detectDevice } from "./utils/detect-device.mjs";
 import { lookupCountry } from "./utils/geolocation.mjs";
+import { updateSubscriberEngagement } from "./utils/subscriber-engagement.mjs";
 import { ulid } from "ulid";
 import crypto from "crypto";
 import zlib from "zlib";
@@ -99,6 +100,23 @@ export const handler = async (event) => {
         });
       }
     });
+
+    // Update subscriber engagement fields (cross-issue tracking)
+    if (msg.s) {
+      const [engTenantId, engIssueNumber] = cid.split('#');
+      if (engTenantId && engIssueNumber) {
+        ops.push(async () => {
+          try {
+            await updateSubscriberEngagement(engTenantId, msg.s, parseInt(engIssueNumber, 10));
+          } catch (err) {
+            console.error('Subscriber engagement update failed', {
+              cid,
+              error: err.message
+            });
+          }
+        });
+      }
+    }
   }
 
   const results = await runInBatches(ops, CONCURRENCY);

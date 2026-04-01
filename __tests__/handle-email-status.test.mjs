@@ -77,11 +77,10 @@ describe('handle-email-status', () => {
 
   describe('Open event tracking', () => {
     it('should track first open with userAgent and ipAddress', async () => {
-      // GetItem (publishedAt lookup), PutItem (capture open), PutItem (track unique), UpdateItem (engagement), UpdateItem (stats)
+      // GetItem (publishedAt lookup), PutItem (capture open), PutItem (track unique), UpdateItem (stats)
       ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem - no publishedAt
       ddbSend.mockResolvedValueOnce({});
       ddbSend.mockResolvedValueOnce({});
-      ddbSend.mockResolvedValueOnce({}); // engagement update
       ddbSend.mockResolvedValueOnce({});
 
       const event = {
@@ -105,7 +104,7 @@ describe('handle-email-status', () => {
       const result = await handler(event);
 
       expect(result).toBe(true);
-      expect(ddbSend).toHaveBeenCalledTimes(5);
+      expect(ddbSend).toHaveBeenCalledTimes(4);
 
       const trackCall = ddbSend.mock.calls[2][0];
       expect(trackCall.__type).toBe('PutItem');
@@ -117,7 +116,7 @@ describe('handle-email-status', () => {
       expect(trackCall.Item.createdAt.S).toBeDefined();
       expect(trackCall.Item.ttl.N).toBeDefined();
 
-      const updateCall = ddbSend.mock.calls[4][0];
+      const updateCall = ddbSend.mock.calls[3][0];
       expect(updateCall.__type).toBe('UpdateItem');
     });
 
@@ -162,7 +161,6 @@ describe('handle-email-status', () => {
       conditionalError.name = 'ConditionalCheckFailedException';
 
       ddbSend.mockRejectedValueOnce(conditionalError);
-      ddbSend.mockResolvedValueOnce({}); // engagement update
       ddbSend.mockResolvedValueOnce({});
 
       const event = {
@@ -186,9 +184,9 @@ describe('handle-email-status', () => {
       const result = await handler(event);
 
       expect(result).toBe(true);
-      expect(ddbSend).toHaveBeenCalledTimes(5);
+      expect(ddbSend).toHaveBeenCalledTimes(4);
 
-      const updateCall = ddbSend.mock.calls[4][0];
+      const updateCall = ddbSend.mock.calls[3][0];
       expect(updateCall.__type).toBe('UpdateItem');
       expect(updateCall.ExpressionAttributeNames['#stat']).toBe('reopens');
     });
@@ -202,7 +200,6 @@ describe('handle-email-status', () => {
       });
       ddbSend.mockResolvedValueOnce({}); // PutItem (capture open)
       ddbSend.mockResolvedValueOnce({}); // PutItem (track unique)
-      ddbSend.mockResolvedValueOnce({}); // UpdateItem (engagement)
       ddbSend.mockResolvedValueOnce({}); // UpdateItem (stats)
 
       const event = {
@@ -228,7 +225,7 @@ describe('handle-email-status', () => {
       const result = await handler(event);
 
       expect(result).toBe(true);
-      expect(ddbSend).toHaveBeenCalledTimes(5);
+      expect(ddbSend).toHaveBeenCalledTimes(4);
 
       // First call is GetItemCommand for publishedAt
       const getCall = ddbSend.mock.calls[0][0];
@@ -1147,7 +1144,6 @@ describe('handle-email-status', () => {
       ddbSend.mockResolvedValueOnce({}); // trackLinkClick UpdateItem
       ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem (publishedAt lookup)
       ddbSend.mockResolvedValueOnce({}); // captureClickEvent PutItem
-      ddbSend.mockResolvedValueOnce({}); // engagement update
       ddbSend.mockResolvedValueOnce({}); // stats UpdateItem
 
       const event = {
@@ -1169,7 +1165,7 @@ describe('handle-email-status', () => {
       const result = await handler(event);
 
       expect(result).toBe(true);
-      expect(ddbSend).toHaveBeenCalledTimes(5);
+      expect(ddbSend).toHaveBeenCalledTimes(4);
     });
   });
 
@@ -1383,7 +1379,6 @@ describe('handle-email-status', () => {
       ddbSend.mockResolvedValueOnce({}); // trackLinkClick UpdateItem
       ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem (publishedAt)
       ddbSend.mockResolvedValueOnce({}); // captureClickEvent PutItem
-      ddbSend.mockResolvedValueOnce({}); // engagement update
       ddbSend.mockResolvedValueOnce({}); // stats UpdateItem
 
       const event = {
@@ -1405,7 +1400,7 @@ describe('handle-email-status', () => {
       await handler(event);
 
       expect(mockLookupCountry).toHaveBeenCalledWith('8.8.8.8');
-      expect(ddbSend).toHaveBeenCalledTimes(5);
+      expect(ddbSend).toHaveBeenCalledTimes(4);
 
       const linkUpdateCall = ddbSend.mock.calls[0][0];
       expect(linkUpdateCall.__type).toBe('UpdateItem');
@@ -1416,7 +1411,6 @@ describe('handle-email-status', () => {
       ddbSend.mockResolvedValueOnce({}); // trackLinkClick
       ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem
       ddbSend.mockResolvedValueOnce({}); // captureClickEvent
-      ddbSend.mockResolvedValueOnce({}); // engagement update
       ddbSend.mockResolvedValueOnce({}); // stats
 
       const event = {
@@ -1437,7 +1431,7 @@ describe('handle-email-status', () => {
       await handler(event);
 
       expect(mockLookupCountry).not.toHaveBeenCalled();
-      expect(ddbSend).toHaveBeenCalledTimes(5);
+      expect(ddbSend).toHaveBeenCalledTimes(4);
 
       const linkUpdateCall = ddbSend.mock.calls[0][0];
       expect(linkUpdateCall.ExpressionAttributeValues[':country'].S).toBe('unknown');
@@ -1449,7 +1443,6 @@ describe('handle-email-status', () => {
       ddbSend.mockResolvedValueOnce({}); // trackLinkClick
       ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem
       ddbSend.mockResolvedValueOnce({}); // captureClickEvent
-      ddbSend.mockResolvedValueOnce({}); // engagement update
       ddbSend.mockResolvedValueOnce({}); // stats
 
       const event = {
@@ -1471,7 +1464,7 @@ describe('handle-email-status', () => {
       await handler(event);
 
       expect(mockLookupCountry).toHaveBeenCalledWith('10.0.0.1');
-      expect(ddbSend).toHaveBeenCalledTimes(5);
+      expect(ddbSend).toHaveBeenCalledTimes(4);
 
       const linkUpdateCall = ddbSend.mock.calls[0][0];
       expect(linkUpdateCall.ExpressionAttributeValues[':country'].S).toBe('unknown');
@@ -1486,7 +1479,6 @@ describe('handle-email-status', () => {
       ddbSend.mockResolvedValueOnce({}); // trackLinkClick
       ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem
       ddbSend.mockResolvedValueOnce({}); // captureClickEvent
-      ddbSend.mockResolvedValueOnce({}); // engagement update
       ddbSend.mockResolvedValueOnce({}); // stats
 
       const event = {

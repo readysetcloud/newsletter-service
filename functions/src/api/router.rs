@@ -1,7 +1,7 @@
 use lambda_http::{http::Method, Body, Error, Request, Response};
 use serde_json::json;
 
-use crate::controllers::{api_keys, brand, domain, issues, pricing, profile, senders};
+use crate::controllers::{api_keys, brand, domain, issues, pricing, profile, senders, subscribers};
 
 pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
     let method = event.method();
@@ -115,6 +115,10 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
             pricing::get_job_status(event, job_id).await
         }
 
+        // Subscribers endpoints
+        (&Method::GET, "/subscribers") => subscribers::list_subscribers(event).await,
+        (&Method::GET, "/subscribers/health") => subscribers::get_audience_health(event).await,
+
         // Method not allowed for valid paths
         (_, path) if is_valid_api_path(path) => Ok(format_method_not_allowed()),
 
@@ -156,6 +160,9 @@ fn is_valid_api_path(path: &str) -> bool {
         || path == "/pricing/narrative"
         || path == "/pricing/recalculate"
         || path.starts_with("/pricing/recalculate/")
+        // Subscribers paths
+        || path == "/subscribers"
+        || path == "/subscribers/health"
 }
 
 fn extract_path_param(path: &str, prefix: &str) -> Option<String> {

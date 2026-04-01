@@ -1,5 +1,6 @@
-import { DynamoDBClient, QueryCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, QueryCommand, UpdateItemCommand, GetItemCommand } from '@aws-sdk/client-dynamodb';
 import { unmarshall, marshall } from '@aws-sdk/util-dynamodb';
+import { decrypt } from './utils/helpers.mjs';
 
 const ddb = new DynamoDBClient();
 
@@ -52,7 +53,7 @@ export const handler = async (event) => {
       geoDistribution: calculateGeoDistribution(events.clicks, events.opens),
       deviceBreakdown: calculateDeviceBreakdown(events.opens),
       timingMetrics: calculateTimingMetrics(events.opens, events.clicks),
-      engagementType: calculateEngagementType(events.clicks),
+      engagementType: await calculateEngagementType(events.clicks, ddb, tenantId),
       trafficSource: calculateTrafficSource(events.clicks),
       bounceReasons: calculateBounceReasons(events.bounces),
       complaintDetails: formatComplaintDetails(events.complaints)
@@ -342,31 +343,87 @@ function calculatePercentile(sortedArray, percentile) {
   return sortedArray[Math.max(0, index)];
 }
 
-export function calculateEngagementType(clicks) {
-  const clickerMap = new Map();
-
+/**
+ * Classifies unique clickers as "new" (engagementCount === 1) or
+ * "returning" (engagementCount > 1) by decrypting the subscriber tokens
+ * stored in click events back to emails, then looking up engagement
+ * directly in the SubscribersTable.
+ *
+ * Click events store an encrypted token (from send-email-v2 link tracking),
+ * not a SHA-256 hash, so we decrypt to recover the original email for lookup.
+ *
+ * @param {Array} clicks - Click events for the issue
+ * @param {DynamoDBClient} ddb - DynamoDB client
+ * @param {string} tenantId - Tenant ID for subscriber lookups
+ * @returns {Promise<{ newClickers: number, returningClickers: number }>}
+ */
+export async function calculateEngagementType(clicks, ddb, tenantId) {
+  // Decrypt unique subscriber tokens to emails
+  const uniqueEmails = new Set();
   for (const click of clicks) {
-    const subscriberHash = click.subscriberEmailHash;
-    if (subscriberHash && subscriberHash !== 'unknown') {
-      clickerMap.set(subscriberHash, (clickerMap.get(subscriberHash) || 0) + 1);
+    const token = click.subscriberEmailHash;
+    if (token && token !== 'unknown') {
+      try {
+        const email = decrypt(token);
+        uniqueEmails.add(email);
+      } catch {
+        // Malformed token — skip
+      }
     }
   }
+
+  if (uniqueEmails.size === 0) {
+    return { newClickers: 0, returningClickers: 0 };
+  }
+
+  const emailToEngagement = await lookupSubscriberEngagements(ddb, tenantId, uniqueEmails);
 
   let newClickers = 0;
   let returningClickers = 0;
 
-  for (const clickCount of clickerMap.values()) {
-    if (clickCount === 1) {
-      newClickers++;
-    } else {
+  for (const email of uniqueEmails) {
+    const engagementCount = emailToEngagement.get(email);
+    if (engagementCount != null && engagementCount > 1) {
       returningClickers++;
+    } else {
+      newClickers++;
     }
   }
 
-  return {
-    newClickers,
-    returningClickers
-  };
+  return { newClickers, returningClickers };
+}
+
+/**
+ * Looks up engagementCount for a set of subscriber emails by direct
+ * GetItem calls against the SubscribersTable (keyed by tenantId + email).
+ *
+ * @param {DynamoDBClient} ddb - DynamoDB client
+ * @param {string} tenantId - Tenant partition key
+ * @param {Set<string>} emails - Subscriber emails to look up
+ * @returns {Promise<Map<string, number>>} Map of email → engagementCount
+ */
+async function lookupSubscriberEngagements(ddb, tenantId, emails) {
+  const emailToEngagement = new Map();
+
+  const lookups = Array.from(emails).map(async (email) => {
+    try {
+      const result = await ddb.send(new GetItemCommand({
+        TableName: process.env.SUBSCRIBERS_TABLE_NAME,
+        Key: marshall({ tenantId, email }),
+        ProjectionExpression: 'engagementCount'
+      }));
+
+      if (result.Item) {
+        const subscriber = unmarshall(result.Item);
+        emailToEngagement.set(email, subscriber.engagementCount ?? null);
+      }
+    } catch (err) {
+      console.error('Failed to look up subscriber engagement', { tenantId, email, error: err.message });
+    }
+  });
+
+  await Promise.all(lookups);
+  return emailToEngagement;
 }
 
 export function calculateTrafficSource(clicks) {

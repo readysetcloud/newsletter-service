@@ -4,6 +4,7 @@ import { hash } from './utils/helpers.mjs';
 import { hashEmail } from './utils/hash-email.mjs';
 import { detectDevice } from './utils/detect-device.mjs';
 import { lookupCountry } from './utils/geolocation.mjs';
+import { updateSubscriberEngagement } from './utils/subscriber-engagement.mjs';
 import { ulid } from 'ulid';
 import crypto from 'crypto';
 
@@ -50,11 +51,21 @@ export const handler = async (event) => {
         await captureOpenEvent(issueId, detail.mail.destination[0], detail.open, detail.mail.commonHeaders);
         const isReopen = await trackUniqueOpen(issueId, detail.mail.destination[0], detail.open);
         stat = isReopen ? 'reopens' : 'opens';
+        try {
+          await updateSubscriberEngagement(tenantId, detail.mail.destination[0], parseInt(issueNumber, 10));
+        } catch (err) {
+          console.error('Subscriber engagement update failed on open', { issueId, error: err.message });
+        }
         break;
       case 'click':
         stat = 'clicks';
         await trackLinkClick(issueId, detail.click.link, detail.click.ipAddress);
         await captureClickEvent(issueId, detail.mail.destination[0], detail.click);
+        try {
+          await updateSubscriberEngagement(tenantId, detail.mail.destination[0], parseInt(issueNumber, 10));
+        } catch (err) {
+          console.error('Subscriber engagement update failed on click', { issueId, error: err.message });
+        }
         break;
       default:
         console.warn(`Unsupported stat ${detail.eventType} was provided`);

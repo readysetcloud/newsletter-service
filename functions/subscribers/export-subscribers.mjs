@@ -15,6 +15,7 @@ export const handler = async (event) => {
     }
 
     const emailAddresses = [];
+    const subscribers = [];
     let exclusiveStartKey;
 
     do {
@@ -33,7 +34,15 @@ export const handler = async (event) => {
       const response = await sendWithRetry(() => ddb.send(new QueryCommand(queryParams)));
 
       if (response.Items?.length) {
-        emailAddresses.push(...response.Items.map(item => unmarshall(item).email));
+        for (const item of response.Items) {
+          const record = unmarshall(item);
+          emailAddresses.push(record.email);
+          subscribers.push({
+            email: record.email,
+            lastEngagedIssue: record.lastEngagedIssue ?? null,
+            engagementCount: record.engagementCount ?? null
+          });
+        }
       }
 
       exclusiveStartKey = response.LastEvaluatedKey;
@@ -41,7 +50,8 @@ export const handler = async (event) => {
 
     const report = {
       total: emailAddresses.length,
-      addresses: emailAddresses
+      addresses: emailAddresses,
+      subscribers
     };
 
     const key = `reports/${tenantId}-${new Date().toISOString()}.json`;

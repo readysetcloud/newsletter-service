@@ -59,6 +59,10 @@ const loadIsolated = async () => {
       ulid: jest.fn(() => '01HQZX3Y4K5M6N7P8Q9R0S1T2U'),
     }));
 
+    jest.unstable_mockModule('../functions/utils/subscriber-engagement.mjs', () => ({
+      updateSubscriberEngagement: jest.fn().mockResolvedValue(undefined),
+    }));
+
     ({ handler } = await import('../functions/handle-email-status.mjs'));
     ({ PutItemCommand, UpdateItemCommand, GetItemCommand } = await import('@aws-sdk/client-dynamodb'));
   });
@@ -1357,6 +1361,10 @@ describe('handle-email-status', () => {
 
       jest.unstable_mockModule('ulid', () => ({
         ulid: jest.fn(() => '01HQZX3Y4K5M6N7P8Q9R0S1T2U'),
+      }));
+
+      jest.unstable_mockModule('../functions/utils/subscriber-engagement.mjs', () => ({
+        updateSubscriberEngagement: jest.fn().mockResolvedValue(undefined),
       }));
 
       ({ handler } = await import('../functions/handle-email-status.mjs'));

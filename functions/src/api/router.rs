@@ -118,6 +118,8 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
         }
 
         // Subscribers endpoints
+        (&Method::GET, "/subscribers/count") => subscribers::get_subscriber_count(event).await,
+        (&Method::GET, "/subscribers/trends") => subscribers::get_subscriber_trends(event).await,
         (&Method::GET, "/subscribers") => subscribers::list_subscribers(event).await,
         (&Method::GET, "/subscribers/health") => subscribers::get_audience_health(event).await,
 
@@ -216,6 +218,8 @@ fn is_valid_api_path(path: &str) -> bool {
         || path.starts_with("/pricing/recalculate/")
         // Subscribers paths
         || path == "/subscribers"
+        || path == "/subscribers/count"
+        || path == "/subscribers/trends"
         || path == "/subscribers/health"
         // Segments paths
         || path == "/segments"
@@ -420,6 +424,14 @@ mod tests {
     }
 
     #[test]
+    fn test_is_valid_api_path_subscribers() {
+        assert!(is_valid_api_path("/subscribers"));
+        assert!(is_valid_api_path("/subscribers/count"));
+        assert!(is_valid_api_path("/subscribers/trends"));
+        assert!(is_valid_api_path("/subscribers/health"));
+    }
+
+    #[test]
     fn test_extract_issue_id_from_path() {
         // Test issue ID extraction using existing extract_path_param
         let result = extract_path_param("/issues/issue-123", "/issues/");
@@ -514,6 +526,14 @@ mod tests {
         assert!(is_valid_api_path("/issues"));
         assert!(is_valid_api_path("/issues/trends"));
         assert!(is_valid_api_path("/issues/issue-123"));
+    }
+
+    #[test]
+    fn test_method_validation_subscriber_endpoints() {
+        assert!(is_valid_api_path("/subscribers"));
+        assert!(is_valid_api_path("/subscribers/count"));
+        assert!(is_valid_api_path("/subscribers/trends"));
+        assert!(is_valid_api_path("/subscribers/health"));
     }
 
     // CORS handling tests

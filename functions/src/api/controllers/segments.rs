@@ -785,7 +785,6 @@ async fn handle_list_segments(event: Request) -> Result<lambda_http::Response<Bo
         .query()
         .table_name(&table_name)
         .key_condition_expression("tenantId = :pk AND begins_with(email, :sk_prefix)")
-        .filter_expression("NOT contains(email, :member_marker)")
         .expression_attribute_values(":pk", AttributeValue::S(tenant_id.clone()))
         .expression_attribute_values(":sk_prefix", AttributeValue::S("SEGMENT#".to_string()))
         .send()

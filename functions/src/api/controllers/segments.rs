@@ -788,7 +788,6 @@ async fn handle_list_segments(event: Request) -> Result<lambda_http::Response<Bo
         .filter_expression("NOT contains(email, :member_marker)")
         .expression_attribute_values(":pk", AttributeValue::S(tenant_id.clone()))
         .expression_attribute_values(":sk_prefix", AttributeValue::S("SEGMENT#".to_string()))
-        .expression_attribute_values(":member_marker", AttributeValue::S("#MEMBER#".to_string()))
         .send()
         .await
         .map_err(|e| {
@@ -804,6 +803,7 @@ async fn handle_list_segments(event: Request) -> Result<lambda_http::Response<Bo
     let mut segments: Vec<SegmentResponse> = result
         .items()
         .iter()
+        .filter(|item| is_segment_record(item))
         .filter_map(|item| parse_segment_item(item).ok())
         .collect();
 
@@ -1715,6 +1715,13 @@ fn parse_segment_item(
     })
 }
 
+fn is_segment_record(item: &std::collections::HashMap<String, AttributeValue>) -> bool {
+    item.get("email")
+        .and_then(|v| v.as_s().ok())
+        .map(|email| email.starts_with("SEGMENT#") && !email.contains("#MEMBER#"))
+        .unwrap_or(false)
+}
+
 fn get_subscribers_table_name() -> Result<String, AppError> {
     env::var("SUBSCRIBERS_TABLE_NAME")
         .map_err(|_| AppError::InternalError("SUBSCRIBERS_TABLE_NAME not set".to_string()))
@@ -2011,6 +2018,28 @@ mod tests {
     }
 
     // ── get_segment unit tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_is_segment_record_accepts_segment_item() {
+        let mut item = std::collections::HashMap::new();
+        item.insert(
+            "email".to_string(),
+            AttributeValue::S("SEGMENT#01JTEST".to_string()),
+        );
+
+        assert!(is_segment_record(&item));
+    }
+
+    #[test]
+    fn test_is_segment_record_rejects_member_item() {
+        let mut item = std::collections::HashMap::new();
+        item.insert(
+            "email".to_string(),
+            AttributeValue::S("SEGMENT#01JTEST#MEMBER#user@example.com".to_string()),
+        );
+
+        assert!(!is_segment_record(&item));
+    }
 
     #[test]
     fn test_get_segment_sk_format() {

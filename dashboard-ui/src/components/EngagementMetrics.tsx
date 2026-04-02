@@ -1,18 +1,14 @@
 
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
+import type { TooltipProps } from 'recharts';
 import type { TrendAggregates } from '@/types';
 
 interface EngagementMetricsProps {
   aggregates: TrendAggregates;
 }
 
-type TooltipPayloadItem = {
-  name?: string;
-  value?: number;
-};
-
-function CustomTooltip({ active, payload }: { active?: boolean; payload?: TooltipPayloadItem[] }) {
-  if (active && Array.isArray(payload) && payload.length > 0) {
+function CustomTooltip({ active, payload }: TooltipProps<number, string>) {
+  if (active && payload && payload.length > 0) {
     const item = payload[0];
     const label = item?.name ?? 'Value';
     const value = typeof item?.value === 'number' ? item.value : 0;

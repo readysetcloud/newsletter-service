@@ -1,12 +1,14 @@
 use aws_sdk_cognitoidentityprovider::Client as CognitoClient;
 use aws_sdk_dynamodb::Client as DynamoDbClient;
 use aws_sdk_eventbridge::Client as EventBridgeClient;
+use aws_sdk_lambda::Client as LambdaClient;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sfn::Client as SfnClient;
 use tokio::sync::OnceCell;
 
 static DYNAMODB_CLIENT: OnceCell<DynamoDbClient> = OnceCell::const_new();
 static COGNITO_CLIENT: OnceCell<CognitoClient> = OnceCell::const_new();
+static LAMBDA_CLIENT: OnceCell<LambdaClient> = OnceCell::const_new();
 static S3_CLIENT: OnceCell<S3Client> = OnceCell::const_new();
 static EVENTBRIDGE_CLIENT: OnceCell<EventBridgeClient> = OnceCell::const_new();
 static SFN_CLIENT: OnceCell<SfnClient> = OnceCell::const_new();
@@ -52,6 +54,15 @@ pub async fn get_sfn_client() -> &'static SfnClient {
         .get_or_init(|| async {
             let config = aws_config::load_from_env().await;
             SfnClient::new(&config)
+        })
+        .await
+}
+
+pub async fn get_lambda_client() -> &'static LambdaClient {
+    LAMBDA_CLIENT
+        .get_or_init(|| async {
+            let config = aws_config::load_from_env().await;
+            LambdaClient::new(&config)
         })
         .await
 }

@@ -6,6 +6,10 @@ interface EngagementTypeTrendChartProps {
   trendsData: TrendsData;
 }
 
+function formatTooltipNumber(value: unknown): string {
+  return typeof value === 'number' ? value.toLocaleString() : String(value ?? '');
+}
+
 const EngagementTypeTrendChart: React.FC<EngagementTypeTrendChartProps> = ({ trendsData }) => {
   const data = [...trendsData.issues]
     .reverse()
@@ -30,7 +34,7 @@ const EngagementTypeTrendChart: React.FC<EngagementTypeTrendChartProps> = ({ tre
         <LineChart data={data} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
           <XAxis dataKey="issue" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
           <YAxis tick={{ fontSize: 11 }} axisLine={false} tickLine={false} width={36} />
-          <Tooltip formatter={(value: number) => value.toLocaleString()} />
+          <Tooltip formatter={formatTooltipNumber} />
           <Legend />
           <Line
             type="monotone"

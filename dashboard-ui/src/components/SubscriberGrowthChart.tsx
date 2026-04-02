@@ -6,6 +6,10 @@ interface SubscriberGrowthChartProps {
   trendsData: TrendsData;
 }
 
+function formatTooltipNumber(value: unknown): string {
+  return typeof value === 'number' ? value.toLocaleString() : String(value ?? '');
+}
+
 export const SubscriberGrowthChart: React.FC<SubscriberGrowthChartProps> = ({ trendsData }) => {
   const data = [...trendsData.issues]
     .reverse()
@@ -54,7 +58,7 @@ export const SubscriberGrowthChart: React.FC<SubscriberGrowthChartProps> = ({ tr
               borderColor: 'hsl(var(--border))',
               borderRadius: 8
             }}
-            formatter={(value: number) => value.toLocaleString()}
+            formatter={formatTooltipNumber}
           />
           <Line
             type="monotone"

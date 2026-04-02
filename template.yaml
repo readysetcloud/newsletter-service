@@ -3698,6 +3698,7 @@ Resources:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
           BEDROCK_MODEL_ID: us.amazon.nova-pro-v1:0
+          LOG_MODEL_INPUTS: "true"
       Events:
         PricingRecalculationEvent:
           Type: EventBridgeRule
@@ -3707,6 +3708,37 @@ Resources:
                 - newsletter-service
               detail-type:
                 - PRICING_RECALCULATION_REQUESTED
+
+  SeedPricingConfigFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - seed-pricing-config.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: seed-pricing-config.handler
+      Timeout: 30
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+
+  SeedPricingConfig:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt SeedPricingConfigFunction.Arn
 
   WeeklyPricingJobFunction:
     Type: AWS::Serverless::Function

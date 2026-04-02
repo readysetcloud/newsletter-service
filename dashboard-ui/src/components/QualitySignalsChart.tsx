@@ -6,7 +6,9 @@ interface QualitySignalsChartProps {
   trendsData: TrendsData;
 }
 
-const formatNumber = (value: number) => value.toLocaleString();
+const formatNumber = (value: unknown) => (
+  typeof value === 'number' ? value.toLocaleString() : String(value ?? '')
+);
 
 const QualitySignalsChart: React.FC<QualitySignalsChartProps> = ({ trendsData }) => {
   const data = [...trendsData.issues]
@@ -41,7 +43,7 @@ const QualitySignalsChart: React.FC<QualitySignalsChartProps> = ({ trendsData })
             tickLine={false}
             width={36}
           />
-          <Tooltip formatter={(value: number) => formatNumber(value)} />
+          <Tooltip formatter={formatNumber} />
           <Legend />
           <Line
             type="monotone"

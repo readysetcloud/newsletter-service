@@ -8,6 +8,12 @@ import {
   computeWeeklyWindow,
   determineConfidence
 } from '../utils/pricing.mjs';
+import {
+  buildPrompt,
+  selectSmoothingBaseRecord,
+  evaluatePricingConfidence,
+  computeConfidenceOverride
+} from '../calculate-pricing.mjs';
 
 // Feature: sponsorship-pricing-calculator, Property 6: Four-step pipeline produces correct result
 describe('Property 6: Four-step pipeline produces correct result', () => {
@@ -141,7 +147,7 @@ describe('Property 15: Pricing record output completeness', () => {
         fc.double({ min: 0, max: 0.1, noNaN: true }),
         (subscriberCount, avgOpenRate, cpmRate, rawMultiplier, confidence, justification, avgClickRate, avgBounceRate, avgComplaintRate) => {
           // Simulate the pipeline to build a pricing record
-          const baseline = computeBaseline(subscriberCount, avgOpenRate, cpmRate);
+          const baseline = computeBaseline(subscriberCount, avgOpenRate, avgClickRate, cpmRate, 2.0);
           const multiplierMin = 0.5;
           const multiplierMax = 3.0;
 
@@ -237,13 +243,19 @@ describe('Property 17: Calculator produces valid result without questionnaire', 
           // No questionnaire responses
           const questionnaireResponses = null;
 
-          const baseline = computeBaseline(subscriberCount, avgOpenRate, cpmRate);
+          const baseline = computeBaseline(subscriberCount, avgOpenRate, avgClickRate, cpmRate, 2.0);
           const multiplierClamped = clampMultiplier(multiplierRaw, 0.5, 3.0);
           const recommendedPrice = computeRecommendedPrice(baseline, multiplierClamped);
 
           const metricsComplete = avgOpenRate != null && avgBounceRate != null;
           const hasQuestionnaire = false;
-          const confidence = determineConfidence(publishedIssueCount, metricsComplete, hasQuestionnaire, 0.15, false);
+          const confidence = determineConfidence({
+            publishedIssueCount,
+            metricsComplete,
+            hasQuestionnaire,
+            stabilityCoV: 0.15,
+            isFallback: false
+          });
 
           const now = new Date();
           const weekWindow = computeWeeklyWindow(now);
@@ -299,6 +311,107 @@ describe('Property 17: Calculator produces valid result without questionnaire', 
       ),
       { numRuns: 100 }
     );
+  });
+});
+
+describe('Lambda pricing flow helpers', () => {
+  it('stores llmConfidence separately from deterministic confidence', () => {
+    const record = {
+      llmConfidence: 'high',
+      confidenceOverride: true,
+      confidence: 'low'
+    };
+
+    expect(record.llmConfidence).toBe('high');
+    expect(record.confidenceOverride).toBe(true);
+    expect(record.confidence).toBe('low');
+  });
+
+  it('tracks when deterministic confidence overrides the LLM confidence', () => {
+    expect(computeConfidenceOverride('high', 'low')).toBe(true);
+    expect(computeConfidenceOverride('medium', 'medium')).toBe(false);
+    expect(computeConfidenceOverride(null, 'low')).toBe(false);
+  });
+
+  it('smoothing anchors to the previous completed week only', () => {
+    const currentWeekWindow = '2026-04-01T15:00:00.000Z/2026-04-08T15:00:00.000Z';
+    const previousWeekRecord = {
+      weekWindow: '2026-03-25T15:00:00.000Z/2026-04-01T15:00:00.000Z',
+      recommendedPrice: 100
+    };
+    const currentWeekRecord = {
+      weekWindow: currentWeekWindow,
+      recommendedPrice: 130
+    };
+
+    expect(selectSmoothingBaseRecord(previousWeekRecord, currentWeekWindow)).toBe(previousWeekRecord);
+    expect(selectSmoothingBaseRecord(currentWeekRecord, currentWeekWindow)).toBeNull();
+  });
+
+  it('stale data lowers deterministic confidence in the Lambda flow', () => {
+    const metrics = {
+      avgOpenRate: 0.35,
+      avgClickRate: 0.05,
+      avgBounceRate: 0.001,
+      avgComplaintRate: 0.0001,
+      publishedIssueCount: 12,
+      volatility: { openRateCoV: 0.05, clickRateCoV: 0.10 },
+      cadenceStdDevDays: 1,
+      latestPublishedAt: '2026-01-01T00:00:00.000Z'
+    };
+    const config = {
+      cadenceRegularityThreshold: 3,
+      dataRecencyThresholdDays: 30
+    };
+
+    const result = evaluatePricingConfidence(
+      metrics,
+      { q1: 'Technology' },
+      false,
+      config,
+      new Date('2026-04-02T00:00:00.000Z')
+    );
+
+    expect(result.isDataStale).toBe(true);
+    expect(result.confidence).toBe('low');
+  });
+
+  it('serializes questionnaire arrays and objects cleanly into the prompt', () => {
+    const metrics = {
+      subscriberCount: 10000,
+      subscriberGrowthRate: 0.05,
+      avgOpenRate: 0.32,
+      avgClickRate: 0.04,
+      avgBounceRate: 0.002,
+      avgComplaintRate: 0.0001,
+      publishedIssueCount: 10,
+      latestPublishedAt: '2026-04-01T00:00:00.000Z',
+      averageDaysBetweenIssues: 7,
+      medianDaysBetweenIssues: 7,
+      cadenceStdDevDays: 1,
+      recentTrend: {
+        openRate: { first: 0.28, last: 0.34, slopePerIssue: 0.01 },
+        clickRate: { first: 0.03, last: 0.05, slopePerIssue: 0.004 }
+      },
+      volatility: {
+        openRateCoV: 0.12,
+        clickRateCoV: 0.18
+      }
+    };
+    const questionnaireResponses = {
+      q3: ['Dedicated email', 'Banner ad'],
+      q6: { niche: 'Cloud', audience: 'Engineers' }
+    };
+    const config = {
+      clickWeight: 2.0,
+      industryAvgOpenRate: 0.21,
+      industryAvgClickRate: 0.025
+    };
+
+    const prompt = buildPrompt(metrics, 250, questionnaireResponses, null, config);
+
+    expect(prompt).toContain('Dedicated email, Banner ad');
+    expect(prompt).toContain('{"niche":"Cloud","audience":"Engineers"}');
   });
 });
 

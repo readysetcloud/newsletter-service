@@ -38,12 +38,7 @@ function App() {
 
   return (
     <ErrorBoundary>
-      <Router
-        future={{
-          v7_startTransition: true,
-          v7_relativeSplatPath: true
-        }}
-      >
+      <Router>
         <AuthProvider>
           <ToastProvider>
             <div className="min-h-screen bg-background overflow-x-hidden flex flex-col">

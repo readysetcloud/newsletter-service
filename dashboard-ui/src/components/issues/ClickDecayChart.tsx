@@ -1,4 +1,5 @@
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea } from 'recharts';
+import type { TooltipProps } from 'recharts';
 import { InfoTooltip } from '../ui/InfoTooltip';
 import type { ClickDecayPoint } from '@/types';
 
@@ -6,22 +7,12 @@ interface ClickDecayChartProps {
   clickDecay: ClickDecayPoint[];
 }
 
-type TooltipPayloadItem = {
-  name?: string;
-  value?: number;
-  color?: string;
-};
-
 function CustomTooltip({
   active,
   payload,
   label
-}: {
-  active?: boolean;
-  payload?: TooltipPayloadItem[];
-  label?: string;
-}) {
-  if (active && Array.isArray(payload) && payload.length > 0) {
+}: TooltipProps<number, string>) {
+  if (active && payload && payload.length > 0) {
     return (
       <div className="bg-surface p-4 border border-border rounded-lg shadow-lg">
         <p className="font-medium text-foreground mb-2">Hour {label}</p>

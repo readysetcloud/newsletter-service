@@ -2,13 +2,32 @@ name: Pre-deployment validations
 
 on:
   workflow_call:
+    inputs:
+      run_js:
+        required: false
+        type: boolean
+        default: true
+      run_rust:
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   eslint:
     name: Lint JS
+    if: inputs.run_js
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            dashboard-ui/package-lock.json
       - name: Configure NPM
         run: |
           npm ci
@@ -16,9 +35,19 @@ jobs:
 
   unit-tests:
     name: Run Unit Tests
+    if: inputs.run_js
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            dashboard-ui/package-lock.json
       - name: Unit Tests
         run: |
           npm ci
@@ -26,24 +55,32 @@ jobs:
 
   rust-tests:
     name: Run Rust Tests
+    if: inputs.run_rust
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
       - name: Rust Tests
         run: |
           cargo test --workspace
 
   rust-lint:
     name: Rust Lint
+    if: inputs.run_rust
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
       - name: Rust Format
         run: |
           cargo fmt --all -- --check

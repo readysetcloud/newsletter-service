@@ -6,6 +6,10 @@ export interface TrafficSourceChartProps {
   trafficSource: TrafficSource;
 }
 
+function formatTooltipNumber(value: unknown): string {
+  return typeof value === 'number' ? value.toLocaleString() : String(value ?? '');
+}
+
 export const TrafficSourceChart: React.FC<TrafficSourceChartProps> = ({ trafficSource }) => {
   const data = [
     { name: 'Email', value: trafficSource.clicks.email },
@@ -38,7 +42,7 @@ export const TrafficSourceChart: React.FC<TrafficSourceChartProps> = ({ trafficS
               <Cell key={`cell-${index}`} fill={colors[index % colors.length]} />
             ))}
           </Pie>
-          <Tooltip formatter={(value: number) => value.toLocaleString()} />
+          <Tooltip formatter={formatTooltipNumber} />
           <Legend />
         </PieChart>
       </ResponsiveContainer>

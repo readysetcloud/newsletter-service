@@ -1479,13 +1479,9 @@ async fn handle_get_job_status(
         .ok_or_else(|| AppError::InternalError("Missing status on job record".to_string()))?
         .clone();
 
-    let s3_key = item
-        .get("s3Key")
-        .and_then(|v| v.as_s().ok()).cloned();
+    let s3_key = item.get("s3Key").and_then(|v| v.as_s().ok()).cloned();
 
-    let error = item
-        .get("error")
-        .and_then(|v| v.as_s().ok()).cloned();
+    let error = item.get("error").and_then(|v| v.as_s().ok()).cloned();
 
     response::format_response(
         200,
@@ -1627,9 +1623,7 @@ fn parse_segment_item(
         .ok_or_else(|| AppError::InternalError("Missing name".to_string()))?
         .clone();
 
-    let description = item
-        .get("description")
-        .and_then(|v| v.as_s().ok()).cloned();
+    let description = item.get("description").and_then(|v| v.as_s().ok()).cloned();
 
     let member_count = item
         .get("memberCount")
@@ -1643,9 +1637,7 @@ fn parse_segment_item(
         .ok_or_else(|| AppError::InternalError("Missing createdAt".to_string()))?
         .clone();
 
-    let updated_at = item
-        .get("updatedAt")
-        .and_then(|v| v.as_s().ok()).cloned();
+    let updated_at = item.get("updatedAt").and_then(|v| v.as_s().ok()).cloned();
 
     Ok(SegmentResponse {
         segment_id,
@@ -2000,7 +1992,8 @@ mod tests {
 
     #[test]
     fn test_segments_sort_by_created_at_descending() {
-        let mut segments = [SegmentResponse {
+        let mut segments = [
+            SegmentResponse {
                 segment_id: "01JAAA".to_string(),
                 name: "Oldest".to_string(),
                 description: None,
@@ -2023,7 +2016,8 @@ mod tests {
                 member_count: 0,
                 created_at: "2025-01-15T10:00:00Z".to_string(),
                 updated_at: None,
-            }];
+            },
+        ];
 
         segments.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
@@ -2439,9 +2433,11 @@ mod tests {
     #[test]
     fn test_remove_members_filter_confirmed_members() {
         // Simulate: requested 3 emails, only 2 are actual members
-        let requested = ["member1@test.com".to_string(),
+        let requested = [
+            "member1@test.com".to_string(),
             "nonmember@test.com".to_string(),
-            "member2@test.com".to_string()];
+            "member2@test.com".to_string(),
+        ];
         let segment_id = "01JSEG";
 
         // BatchGetItem would return only existing member SKs

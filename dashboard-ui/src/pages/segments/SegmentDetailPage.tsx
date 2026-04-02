@@ -37,7 +37,6 @@ export const SegmentDetailPage: React.FC = () => {
 
   // Export state
   const [exporting, setExporting] = useState(false);
-  const [exportJobId, setExportJobId] = useState<string | null>(null);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [exportS3Key, setExportS3Key] = useState<string | null>(null);
 
@@ -140,7 +139,6 @@ export const SegmentDetailPage: React.FC = () => {
     setExporting(true);
     setExportStatus(null);
     setExportS3Key(null);
-    setExportJobId(null);
 
     const response = await segmentService.exportSegment(segmentId);
     if (response.success && response.data) {
@@ -148,7 +146,6 @@ export const SegmentDetailPage: React.FC = () => {
         setExportS3Key(response.data.s3Key);
         setExportStatus('completed');
       } else if (response.data.jobId) {
-        setExportJobId(response.data.jobId);
         setExportStatus('pending');
         pollExportJob(response.data.jobId);
       }
@@ -455,7 +452,7 @@ export const SegmentDetailPage: React.FC = () => {
       {/* Edit Segment Modal */}
       {showEditModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="fixed inset-0 bg-black/50" onClick={() => setShowEditModal(false)} />
+          <div className="fixed inset-0 bg-black/50" role="presentation" onClick={() => setShowEditModal(false)} onKeyDown={e => { if (e.key === 'Escape') setShowEditModal(false); }} />
           <div className="relative bg-surface rounded-lg shadow-xl w-full max-w-md mx-4 p-6 z-10">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-foreground">Edit Segment</h2>

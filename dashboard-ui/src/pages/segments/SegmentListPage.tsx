@@ -234,7 +234,7 @@ export const SegmentListPage: React.FC = () => {
       {/* Create Segment Modal */}
       {showCreateModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="fixed inset-0 bg-black/50" onClick={() => setShowCreateModal(false)} />
+          <div className="fixed inset-0 bg-black/50" role="presentation" onClick={() => setShowCreateModal(false)} onKeyDown={e => { if (e.key === 'Escape') setShowCreateModal(false); }} />
           <div className="relative bg-surface rounded-lg shadow-xl w-full max-w-md mx-4 p-6 z-10">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-foreground">Create Segment</h2>
@@ -292,11 +292,11 @@ export const SegmentListPage: React.FC = () => {
       {/* Delete Confirmation Dialog */}
       {segmentToDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="fixed inset-0 bg-black/50" onClick={() => setSegmentToDelete(null)} />
+          <div className="fixed inset-0 bg-black/50" role="presentation" onClick={() => setSegmentToDelete(null)} onKeyDown={e => { if (e.key === 'Escape') setSegmentToDelete(null); }} />
           <div className="relative bg-surface rounded-lg shadow-xl w-full max-w-sm mx-4 p-6 z-10">
             <h2 className="text-lg font-semibold text-foreground mb-2">Delete Segment</h2>
             <p className="text-sm text-muted-foreground mb-6">
-              Are you sure you want to delete <span className="font-medium text-foreground">"{segmentToDelete.name}"</span>? This will remove all member associations. This action cannot be undone.
+              Are you sure you want to delete <span className="font-medium text-foreground">&quot;{segmentToDelete.name}&quot;</span>? This will remove all member associations. This action cannot be undone.
             </p>
             <div className="flex justify-end gap-3">
               <Button variant="outline" onClick={() => setSegmentToDelete(null)}>Cancel</Button>

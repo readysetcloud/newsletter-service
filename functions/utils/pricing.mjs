@@ -13,8 +13,9 @@
  * @param {number} cpmRate - Cost per thousand impressions
  * @returns {number} Baseline price in USD
  */
-export function computeBaseline(subscriberCount, avgOpenRate, cpmRate) {
-  return (subscriberCount * avgOpenRate / 1000) * cpmRate;
+export function computeBaseline(subscriberCount, avgOpenRate, avgClickRate, cpmRate, clickWeight = 0) {
+  const engagementMultiplier = 1 + ((avgClickRate || 0) * clickWeight);
+  return (subscriberCount * avgOpenRate / 1000) * cpmRate * engagementMultiplier;
 }
 
 /**
@@ -94,7 +95,15 @@ export function applySmoothing(previousPrice, newPrice, capPct, metricChanges, s
  * @param {boolean} isFallback - True if LLM was unavailable
  * @returns {'low' | 'medium' | 'high'}
  */
-export function determineConfidence(publishedIssueCount, metricsComplete, hasQuestionnaire, stabilityCoV, isFallback) {
+export function determineConfidence({
+  publishedIssueCount,
+  metricsComplete,
+  hasQuestionnaire,
+  stabilityCoV,
+  isFallback,
+  isCadenceIrregular = false,
+  isDataStale = false
+}) {
   if (isFallback) return 'low';
 
   const levels = ['low', 'medium', 'high'];
@@ -119,7 +128,10 @@ export function determineConfidence(publishedIssueCount, metricsComplete, hasQue
   else if (stabilityCoV >= 0.15) stabilityFactor = 'medium';
   else stabilityFactor = 'high';
 
-  return minLevel(issueFactor, metricsFactor, stabilityFactor);
+  const cadenceFactor = isCadenceIrregular ? 'low' : 'high';
+  const recencyFactor = isDataStale ? 'low' : 'high';
+
+  return minLevel(issueFactor, metricsFactor, stabilityFactor, cadenceFactor, recencyFactor);
 }
 
 /**
@@ -186,6 +198,129 @@ export function computeMetricAverages(issues) {
     avgClickRate: sum.clickRate / count,
     avgBounceRate: sum.bounceRate / count,
     avgComplaintRate: sum.complaintRate / count
+  };
+}
+
+function round(value, digits = 6) {
+  return Number(value.toFixed(digits));
+}
+
+export function computeMean(values) {
+  if (!values.length) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+export function computeStdDev(values) {
+  if (values.length < 2) return 0;
+  const mean = computeMean(values);
+  const variance = values.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / values.length;
+  return Math.sqrt(variance);
+}
+
+export function computeCoefficientOfVariation(values) {
+  if (!values.length) return 0;
+  const mean = computeMean(values);
+  if (mean === 0) return 0;
+  return computeStdDev(values) / mean;
+}
+
+export function computeLinearTrend(values) {
+  if (!values.length) {
+    return { first: 0, last: 0, slopePerIssue: 0 };
+  }
+
+  if (values.length === 1) {
+    return { first: values[0], last: values[0], slopePerIssue: 0 };
+  }
+
+  const n = values.length;
+  const xMean = (n - 1) / 2;
+  const yMean = computeMean(values);
+  let numerator = 0;
+  let denominator = 0;
+
+  for (let i = 0; i < n; i++) {
+    const dx = i - xMean;
+    numerator += dx * (values[i] - yMean);
+    denominator += dx * dx;
+  }
+
+  return {
+    first: values[0],
+    last: values[n - 1],
+    slopePerIssue: denominator === 0 ? 0 : numerator / denominator
+  };
+}
+
+export function computeMedian(values) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 0) {
+    return (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+  return sorted[mid];
+}
+
+export function computeCadenceStats(publishedAtValues) {
+  if (!publishedAtValues || publishedAtValues.length < 2) {
+    return {
+      averageDaysBetweenIssues: null,
+      medianDaysBetweenIssues: null,
+      cadenceStdDevDays: null
+    };
+  }
+
+  const sorted = [...publishedAtValues]
+    .map((value) => new Date(value).getTime())
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => a - b);
+
+  if (sorted.length < 2) {
+    return {
+      averageDaysBetweenIssues: null,
+      medianDaysBetweenIssues: null,
+      cadenceStdDevDays: null
+    };
+  }
+
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const gapsInDays = [];
+  for (let i = 1; i < sorted.length; i++) {
+    gapsInDays.push((sorted[i] - sorted[i - 1]) / msPerDay);
+  }
+
+  return {
+    averageDaysBetweenIssues: round(computeMean(gapsInDays), 2),
+    medianDaysBetweenIssues: round(computeMedian(gapsInDays), 2),
+    cadenceStdDevDays: round(computeStdDev(gapsInDays), 2)
+  };
+}
+
+export function buildTrendSummary(issueMetrics) {
+  const openRates = issueMetrics.map((issue) => issue.openRate || 0);
+  const clickRates = issueMetrics.map((issue) => issue.clickRate || 0);
+
+  const openTrend = computeLinearTrend(openRates);
+  const clickTrend = computeLinearTrend(clickRates);
+
+  return {
+    recentTrend: {
+      openRate: {
+        first: round(openTrend.first),
+        last: round(openTrend.last),
+        slopePerIssue: round(openTrend.slopePerIssue)
+      },
+      clickRate: {
+        first: round(clickTrend.first),
+        last: round(clickTrend.last),
+        slopePerIssue: round(clickTrend.slopePerIssue)
+      }
+    },
+    volatility: {
+      openRateCoV: round(computeCoefficientOfVariation(openRates)),
+      clickRateCoV: round(computeCoefficientOfVariation(clickRates))
+    }
   };
 }
 

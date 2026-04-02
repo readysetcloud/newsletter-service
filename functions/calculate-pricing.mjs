@@ -9,6 +9,8 @@ import {
   determineConfidence,
   validateLlmResponse,
   computeMetricAverages,
+  computeCadenceStats,
+  buildTrendSummary,
   computeSubscriberGrowthRate,
   computeWeeklyWindow,
   computeRecommendedPrice,
@@ -20,6 +22,23 @@ const ddb = new DynamoDBClient();
 const TABLE_NAME = process.env.TABLE_NAME;
 const SUBSCRIBERS_TABLE_NAME = process.env.SUBSCRIBERS_TABLE_NAME;
 const BEDROCK_MODEL_ID = process.env.BEDROCK_MODEL_ID;
+const LOG_MODEL_INPUTS = process.env.LOG_MODEL_INPUTS === 'true';
+
+const DEFAULT_PRICING_CONFIG = {
+  cpmRate: 5,
+  multiplierMin: 0.5,
+  multiplierMax: 3.0,
+  clickWeight: 2.0,
+  smoothingCapPct: 0.20,
+  significantSubscriberChangePct: 0.25,
+  significantOpenRateChangePts: 10,
+  minPublishedIssues: 3,
+  cadenceRegularityThreshold: 3,
+  dataRecencyThresholdDays: 30,
+  industryAvgOpenRate: 0.21,
+  industryAvgClickRate: 0.025,
+  pricingModelVersion: 'v2'
+};
 
 /**
  * Load system pricing configuration from DynamoDB.
@@ -33,18 +52,13 @@ async function loadPricingConfig() {
 
   if (!result.Items || result.Items.length === 0) {
     console.warn('[CONFIG] No pricing-config found, using defaults');
-    return {
-      cpmRate: 5,
-      multiplierMin: 0.5,
-      multiplierMax: 3.0,
-      smoothingCapPct: 0.20,
-      significantSubscriberChangePct: 0.25,
-      significantOpenRateChangePts: 10,
-      minPublishedIssues: 3
-    };
+    return { ...DEFAULT_PRICING_CONFIG };
   }
 
-  return unmarshall(result.Items[0]);
+  return {
+    ...DEFAULT_PRICING_CONFIG,
+    ...unmarshall(result.Items[0])
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -144,6 +158,64 @@ function extractIssueMetrics(statsRecord) {
   };
 }
 
+function getIssuePublishedAt(statsRecord) {
+  return statsRecord.publishedAt || statsRecord.createdAt || null;
+}
+
+function formatPercentage(value, digits = 1) {
+  return `${((value || 0) * 100).toFixed(digits)}%`;
+}
+
+function formatSlope(value) {
+  const sign = value > 0 ? '+' : '';
+  return `${sign}${(value * 100).toFixed(2)} pts/issue`;
+}
+
+function stringifyAnswer(answer) {
+  if (Array.isArray(answer)) {
+    return answer.join(', ');
+  }
+  if (answer && typeof answer === 'object') {
+    return JSON.stringify(answer);
+  }
+  return String(answer);
+}
+
+function sanitizeQuestionnaireResponses(questionnaireResponses) {
+  if (!questionnaireResponses) return questionnaireResponses;
+
+  const sanitized = {};
+  for (const [questionId, answer] of Object.entries(questionnaireResponses)) {
+    sanitized[questionId] = '[REDACTED]';
+    if (Array.isArray(answer)) {
+      sanitized[questionId] = `[REDACTED_ARRAY_${answer.length}]`;
+    } else if (answer && typeof answer === 'object') {
+      sanitized[questionId] = '[REDACTED_OBJECT]';
+    }
+  }
+  return sanitized;
+}
+
+function maybeRedactPrompt(prompt) {
+  const marker = '## Creator Questionnaire Responses';
+  const start = prompt.indexOf(marker);
+  if (start === -1) return prompt;
+
+  const instructionsIndex = prompt.indexOf('## Instructions', start);
+  const before = prompt.slice(0, start);
+  const after = instructionsIndex >= 0 ? prompt.slice(instructionsIndex) : '';
+  return `${before}${marker}\n- [REDACTED FOR LOGGING]\n\n${after}`.trim();
+}
+
+function logModelRequest(label, modelId, systemPrompt, userPrompt) {
+  if (!LOG_MODEL_INPUTS) return;
+  console.log(`[LLM] ${label} request`, JSON.stringify({
+    modelId,
+    systemPrompt,
+    userPrompt: maybeRedactPrompt(userPrompt)
+  }));
+}
+
 /**
  * Fetch the most recent Pricing_Record for a tenant.
  */
@@ -182,6 +254,14 @@ async function collectMetrics(tenantId, previousRecord) {
 
   const issueMetrics = recentIssues.map(extractIssueMetrics);
   const averages = computeMetricAverages(issueMetrics);
+  const trendSummary = buildTrendSummary(issueMetrics);
+  const publishedAtValues = recentIssues
+    .map(getIssuePublishedAt)
+    .filter(Boolean);
+  const cadenceStats = computeCadenceStats(publishedAtValues);
+  const latestPublishedAt = publishedAtValues.length > 0
+    ? publishedAtValues.reduce((latest, value) => (new Date(value) > new Date(latest) ? value : latest))
+    : null;
 
   const previousSubscriberCount = previousRecord?.metrics?.subscriberCount ?? null;
   const subscriberGrowthRate = computeSubscriberGrowthRate(subscriberCount, previousSubscriberCount);
@@ -189,8 +269,11 @@ async function collectMetrics(tenantId, previousRecord) {
   return {
     subscriberCount,
     ...averages,
+    ...trendSummary,
+    ...cadenceStats,
     subscriberGrowthRate,
-    publishedIssueCount: recentIssues.length
+    publishedIssueCount: recentIssues.length,
+    latestPublishedAt
   };
 }
 
@@ -201,22 +284,42 @@ async function collectMetrics(tenantId, previousRecord) {
 /**
  * Build the LLM prompt for pricing multiplier generation.
  */
-function buildPrompt(metrics, baselinePrice, questionnaireResponses, previousRecord) {
+export function buildPrompt(metrics, baselinePrice, questionnaireResponses, previousRecord, config) {
   const lines = [
     '## Deterministic Baseline',
-    `We calculated a baseline sponsorship price of $${baselinePrice.toFixed(2)} using a CPM formula based on subscriber count and open rate.`,
-    'Your job is to evaluate the additional metrics and context below, then provide a multiplier to adjust this baseline price up or down.',
+    `We calculated a baseline sponsorship price of $${baselinePrice.toFixed(2)} using subscriber count, open rate, CPM, and click rate.`,
+    `The baseline already includes an engagement multiplier driven by click rate with clickWeight=${config.clickWeight}.`,
+    'Your job is to evaluate the residual pricing context below, then provide a multiplier to adjust this baseline price up or down.',
     '',
     '## Newsletter Metrics',
     `- Subscriber count: ${metrics.subscriberCount}`,
-    `- Subscriber growth rate: ${(metrics.subscriberGrowthRate * 100).toFixed(1)}%`,
-    `- Average open rate: ${(metrics.avgOpenRate * 100).toFixed(1)}%`,
-    `- Average bounce rate: ${(metrics.avgBounceRate * 100).toFixed(1)}%`,
-    `- Average complaint rate: ${(metrics.avgComplaintRate * 100).toFixed(4)}%`,
+    `- Subscriber growth rate: ${formatPercentage(metrics.subscriberGrowthRate)}`,
+    `- Average open rate: ${formatPercentage(metrics.avgOpenRate)}`,
+    `- Average click-through rate: ${formatPercentage(metrics.avgClickRate)}`,
+    `- Average bounce rate: ${formatPercentage(metrics.avgBounceRate)}`,
+    `- Average complaint rate: ${formatPercentage(metrics.avgComplaintRate, 4)}`,
     `- Published issues with analytics: ${metrics.publishedIssueCount}`,
+    `- Most recent published issue: ${metrics.latestPublishedAt ?? 'unknown'}`,
     '',
-    '## Qualitative Inputs',
-    `- Average click-through rate: ${(metrics.avgClickRate * 100).toFixed(1)}% (not included in the baseline formula, use as a qualitative signal)`
+    '## Trend And Stability',
+    `- Open rate trend: ${formatPercentage(metrics.recentTrend.openRate.first)} -> ${formatPercentage(metrics.recentTrend.openRate.last)} (${formatSlope(metrics.recentTrend.openRate.slopePerIssue)})`,
+    `- Click rate trend: ${formatPercentage(metrics.recentTrend.clickRate.first)} -> ${formatPercentage(metrics.recentTrend.clickRate.last)} (${formatSlope(metrics.recentTrend.clickRate.slopePerIssue)})`,
+    `- Open rate CoV: ${formatPercentage(metrics.volatility.openRateCoV, 2)}`,
+    `- Click rate CoV: ${formatPercentage(metrics.volatility.clickRateCoV, 2)}`,
+    '',
+    '## Cadence',
+    `- Average days between issues: ${metrics.averageDaysBetweenIssues ?? 'unknown'}`,
+    `- Median days between issues: ${metrics.medianDaysBetweenIssues ?? 'unknown'}`,
+    `- Cadence standard deviation in days: ${metrics.cadenceStdDevDays ?? 'unknown'}`,
+    '',
+    '## Market Benchmarks',
+    `- Industry average open rate: ${formatPercentage(config.industryAvgOpenRate)}`,
+    `- Industry average click rate: ${formatPercentage(config.industryAvgClickRate)}`,
+    '',
+    '## Modeling Guidance',
+    '- Click rate is a conversion signal and the strongest sponsor ROI indicator available in these metrics.',
+    '- Click rate is already part of the baseline, so use click trajectory, stability, and questionnaire context for any additional adjustment rather than re-pricing the same average blindly.',
+    '- Reward upward trends, consistent cadence, and recent data. Penalize stale, volatile, or irregular performance.'
   ];
 
   if (previousRecord) {
@@ -232,7 +335,7 @@ function buildPrompt(metrics, baselinePrice, questionnaireResponses, previousRec
   if (questionnaireResponses && Object.keys(questionnaireResponses).length > 0) {
     lines.push('', '## Creator Questionnaire Responses');
     for (const [questionId, answer] of Object.entries(questionnaireResponses)) {
-      lines.push(`- ${questionId}: ${answer}`);
+      lines.push(`- ${questionId}: ${stringifyAnswer(answer)}`);
     }
   }
 
@@ -241,10 +344,54 @@ function buildPrompt(metrics, baselinePrice, questionnaireResponses, previousRec
     '## Instructions',
     'Given the baseline price above and the metrics provided, determine how the price should be adjusted.',
     'A multiplier of 1.0 means no change. Above 1.0 increases the price, below 1.0 decreases it.',
+    'Use questionnaire responses as qualitative context when they exist, especially for audience quality, niche specificity, sponsorship format, and monetization goals.',
     'Use the submit_pricing_adjustment tool to provide your multiplier, confidence level, and justification.'
   );
 
   return lines.join('\n');
+}
+
+export function selectSmoothingBaseRecord(previousRecord, currentWeekWindow) {
+  return previousRecord && previousRecord.weekWindow !== currentWeekWindow
+    ? previousRecord
+    : null;
+}
+
+export function evaluatePricingConfidence(metrics, questionnaireResponses, usedFallback, config, now = new Date()) {
+  const hasQuestionnaire = questionnaireResponses != null && Object.keys(questionnaireResponses).length > 0;
+  const metricsComplete = (
+    metrics.avgOpenRate != null &&
+    metrics.avgClickRate != null &&
+    metrics.avgBounceRate != null &&
+    metrics.avgComplaintRate != null
+  );
+  const openRateCoV = metrics.volatility.openRateCoV;
+  const dataAgeDays = metrics.latestPublishedAt
+    ? (now.getTime() - new Date(metrics.latestPublishedAt).getTime()) / (24 * 60 * 60 * 1000)
+    : Number.POSITIVE_INFINITY;
+  const isCadenceIrregular = (metrics.cadenceStdDevDays ?? Number.POSITIVE_INFINITY) > config.cadenceRegularityThreshold;
+  const isDataStale = dataAgeDays > config.dataRecencyThresholdDays;
+
+  return {
+    hasQuestionnaire,
+    metricsComplete,
+    isCadenceIrregular,
+    isDataStale,
+    confidence: determineConfidence({
+      publishedIssueCount: metrics.publishedIssueCount,
+      metricsComplete,
+      hasQuestionnaire,
+      stabilityCoV: openRateCoV,
+      isFallback: usedFallback,
+      isCadenceIrregular,
+      isDataStale
+    })
+  };
+}
+
+export function computeConfidenceOverride(llmConfidence, finalConfidence) {
+  if (!llmConfidence) return false;
+  return llmConfidence !== finalConfidence;
 }
 
 // ---------------------------------------------------------------------------
@@ -284,10 +431,11 @@ async function callBedrock(prompt) {
     const systemPrompt = [
       'Role: You are a newsletter sponsorship pricing expert with deep knowledge of digital advertising CPM models and audience valuation.',
       'Instructions: Analyze the provided newsletter metrics, historical pricing data, and any creator questionnaire responses to determine a fair sponsorship pricing adjustment.',
-      'Steps: 1) Evaluate subscriber count, growth trajectory, and engagement rates against industry benchmarks. 2) Weigh qualitative signals like click-through rate and creator-provided context. 3) Compare against the deterministic baseline price and any previous pricing records. 4) Use the submit_pricing_adjustment tool to return your recommendation.',
+      'Steps: 1) Evaluate subscriber count, growth trajectory, cadence, recency, and engagement rates against the supplied benchmarks. 2) Treat click-through rate as a conversion signal and the strongest sponsor ROI indicator in the data. 3) Remember the baseline already incorporates average click rate, so adjust primarily on trajectory, stability, and questionnaire-specific context. 4) Compare against the deterministic baseline price and any previous pricing records. 5) Use the submit_pricing_adjustment tool to return your recommendation.',
       'End goal: Produce a well-calibrated pricing multiplier that reflects the newsletter\'s true sponsorship value, along with a confidence level and a justification grounded in the specific metrics provided.',
       'Narrowing: Only use the submit_pricing_adjustment tool to respond. Do not produce free-text output. The multiplier should be a positive number. Confidence must be exactly one of "low", "medium", or "high". The justification must reference specific metrics from the input.'
     ].join('\n');
+    logModelRequest('pricing-adjustment', BEDROCK_MODEL_ID, systemPrompt, prompt);
     await converse(BEDROCK_MODEL_ID, systemPrompt, prompt, toolDefs);
 
     if (!captured) {
@@ -459,6 +607,7 @@ async function generateSponsorNarrative(metrics) {
     'The tone should be confident but not hyperbolic. Focus on audience engagement and reach.'
   ].join('\n');
 
+  logModelRequest('sponsor-narrative', BEDROCK_MODEL_ID, systemPrompt, userPrompt);
   await converse(BEDROCK_MODEL_ID, systemPrompt, userPrompt, toolDefs);
 
   if (!captured || !captured.narrative || captured.narrative.length < 20) {
@@ -498,11 +647,18 @@ export const handler = async (event) => {
     console.log('[PRICING] Metrics collected', {
       subscriberCount: metrics.subscriberCount,
       avgOpenRate: metrics.avgOpenRate,
+      avgClickRate: metrics.avgClickRate,
       publishedIssueCount: metrics.publishedIssueCount
     });
 
     // Compute baseline
-    const baselinePrice = computeBaseline(metrics.subscriberCount, metrics.avgOpenRate, config.cpmRate);
+    const baselinePrice = computeBaseline(
+      metrics.subscriberCount,
+      metrics.avgOpenRate,
+      metrics.avgClickRate,
+      config.cpmRate,
+      config.clickWeight
+    );
 
     // Load questionnaire responses
     let questionnaireResponses = eventResponses || null;
@@ -515,8 +671,14 @@ export const handler = async (event) => {
       }
     }
 
+    console.log('[PRICING] Questionnaire context', {
+      hasQuestionnaire: questionnaireResponses != null && Object.keys(questionnaireResponses).length > 0,
+      questionnaireVersion,
+      questionnaireResponses: sanitizeQuestionnaireResponses(questionnaireResponses)
+    });
+
     // Build prompt and call LLM
-    const prompt = buildPrompt(metrics, baselinePrice, questionnaireResponses, previousRecord);
+    const prompt = buildPrompt(metrics, baselinePrice, questionnaireResponses, previousRecord, config);
     const { llmResponse, isFallback } = await callBedrock(prompt);
 
     // --- 4-Step Pipeline ---
@@ -545,14 +707,13 @@ export const handler = async (event) => {
     const weekWindow = computeWeeklyWindow(now);
     const weekWindowStr = `${weekWindow.start}/${weekWindow.end}`;
 
-    // Get the most recent record for the current window for smoothing comparison
     const existingWindowRecord = await getExistingRecordForWindow(tenantId, weekWindowStr);
-    const smoothingBaseRecord = existingWindowRecord || previousRecord;
+    const smoothingBaseRecord = selectSmoothingBaseRecord(previousRecord, weekWindowStr);
     const previousPrice = smoothingBaseRecord?.recommendedPrice ?? null;
 
     const newComputedPrice = computeRecommendedPrice(baselinePrice, multiplierClamped);
 
-    const previousAvgOpenRate = smoothingBaseRecord?.metrics?.avgOpenRate ?? null;
+    const previousAvgOpenRate = previousRecord?.metrics?.avgOpenRate ?? null;
     const metricChanges = {
       subscriberChangePct: previousRecord?.metrics?.subscriberCount
         ? computeSubscriberGrowthRate(metrics.subscriberCount, previousRecord.metrics.subscriberCount)
@@ -578,21 +739,24 @@ export const handler = async (event) => {
     const recommendedPrice = smoothedPrice;
 
     // Determine confidence deterministically
-    const hasQuestionnaire = questionnaireResponses != null && Object.keys(questionnaireResponses).length > 0;
-    const metricsComplete = metrics.avgOpenRate != null && metrics.avgBounceRate != null;
-    // Approximate stability CoV - use 0.15 (medium) as default when we don't have 4 weeks of data
-    const stabilityCoV = 0.15;
-    const finalConfidence = determineConfidence(
-      metrics.publishedIssueCount,
-      metricsComplete,
-      hasQuestionnaire,
-      stabilityCoV,
-      usedFallback
-    );
+    const {
+      isCadenceIrregular,
+      isDataStale,
+      confidence: finalConfidence
+    } = evaluatePricingConfidence(metrics, questionnaireResponses, usedFallback, config, now);
+    const confidenceOverride = computeConfidenceOverride(llmResponse?.confidence, finalConfidence);
 
     // Add reduced accuracy notice if fewer than minimum published issues
     if (metrics.publishedIssueCount < (config.minPublishedIssues || 3)) {
       justification = `[Reduced accuracy: only ${metrics.publishedIssueCount} published issue(s) with analytics available, minimum recommended is ${config.minPublishedIssues || 3}] ${justification}`;
+    }
+
+    if (isCadenceIrregular) {
+      justification = `${justification} Confidence was reduced because publishing cadence is irregular.`;
+    }
+
+    if (isDataStale) {
+      justification = `${justification} Confidence was reduced because the most recent published issue is older than ${config.dataRecencyThresholdDays} days.`;
     }
 
     // Add smoothing notice if applied
@@ -616,9 +780,12 @@ export const handler = async (event) => {
       multiplierRaw,
       multiplierClamped,
       multiplierSmoothed,
+      llmConfidence: llmResponse?.confidence ?? null,
+      confidenceOverride,
       confidence: finalConfidence,
       justification,
       pricingChecksum,
+      pricingModelVersion: config.pricingModelVersion,
       metrics: {
         subscriberCount: metrics.subscriberCount,
         avgOpenRate: metrics.avgOpenRate,
@@ -626,7 +793,13 @@ export const handler = async (event) => {
         avgBounceRate: metrics.avgBounceRate,
         avgComplaintRate: metrics.avgComplaintRate,
         subscriberGrowthRate: metrics.subscriberGrowthRate,
-        publishedIssueCount: metrics.publishedIssueCount
+        publishedIssueCount: metrics.publishedIssueCount,
+        recentTrend: metrics.recentTrend,
+        volatility: metrics.volatility,
+        averageDaysBetweenIssues: metrics.averageDaysBetweenIssues,
+        medianDaysBetweenIssues: metrics.medianDaysBetweenIssues,
+        cadenceStdDevDays: metrics.cadenceStdDevDays,
+        latestPublishedAt: metrics.latestPublishedAt
       },
       weekWindow: weekWindowStr,
       calculatedAt,
@@ -662,6 +835,8 @@ export const handler = async (event) => {
       recommendedPrice,
       baselinePrice,
       multiplierSmoothed,
+      llmConfidence: llmResponse?.confidence ?? null,
+      confidenceOverride,
       confidence: finalConfidence,
       isFallback: usedFallback
     });

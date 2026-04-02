@@ -6,6 +6,8 @@ import {
   applySmoothing,
   determineConfidence,
   computeMetricAverages,
+  computeCadenceStats,
+  buildTrendSummary,
   computeSubscriberGrowthRate,
   computeWeeklyWindow,
   validateLlmResponse
@@ -15,15 +17,17 @@ import {
 describe('Property 1: Deterministic baseline computation', () => {
   // **Validates: Requirements 1.2**
 
-  it('baseline = (subscriberCount × avgOpenRate / 1000) × cpmRate for any valid inputs', () => {
+  it('baseline includes click-rate engagement weighting for any valid inputs', () => {
     fc.assert(
       fc.property(
         fc.integer({ min: 1, max: 1_000_000 }),
         fc.double({ min: 0, max: 1, noNaN: true }),
+        fc.double({ min: 0, max: 1, noNaN: true }),
         fc.double({ min: 0.01, max: 100, noNaN: true }),
-        (subscriberCount, avgOpenRate, cpmRate) => {
-          const result = computeBaseline(subscriberCount, avgOpenRate, cpmRate);
-          const expected = (subscriberCount * avgOpenRate / 1000) * cpmRate;
+        fc.double({ min: 0, max: 5, noNaN: true }),
+        (subscriberCount, avgOpenRate, avgClickRate, cpmRate, clickWeight) => {
+          const result = computeBaseline(subscriberCount, avgOpenRate, avgClickRate, cpmRate, clickWeight);
+          const expected = (subscriberCount * avgOpenRate / 1000) * cpmRate * (1 + (avgClickRate * clickWeight));
           expect(result).toBeCloseTo(expected, 10);
         }
       ),
@@ -31,7 +35,7 @@ describe('Property 1: Deterministic baseline computation', () => {
     );
   });
 
-  it('changing CTR does not affect baseline', () => {
+  it('higher CTR increases baseline when clickWeight is positive', () => {
     fc.assert(
       fc.property(
         fc.integer({ min: 1, max: 1_000_000 }),
@@ -39,20 +43,19 @@ describe('Property 1: Deterministic baseline computation', () => {
         fc.double({ min: 0.01, max: 100, noNaN: true }),
         fc.double({ min: 0, max: 1, noNaN: true }),
         fc.double({ min: 0, max: 1, noNaN: true }),
-        (subscriberCount, avgOpenRate, cpmRate, _ctr1, _ctr2) => {
-          // computeBaseline does not accept CTR — calling it with the same
-          // subscriber/open/cpm inputs always yields the same result regardless
-          // of what CTR values exist elsewhere.
-          const baseline1 = computeBaseline(subscriberCount, avgOpenRate, cpmRate);
-          const baseline2 = computeBaseline(subscriberCount, avgOpenRate, cpmRate);
-          expect(baseline1).toBe(baseline2);
+        fc.double({ min: 0.01, max: 5, noNaN: true }),
+        (subscriberCount, avgOpenRate, cpmRate, ctr1, ctr2, clickWeight) => {
+          const lowCtr = Math.min(ctr1, ctr2);
+          const highCtr = Math.max(ctr1, ctr2);
+          const baseline1 = computeBaseline(subscriberCount, avgOpenRate, lowCtr, cpmRate, clickWeight);
+          const baseline2 = computeBaseline(subscriberCount, avgOpenRate, highCtr, cpmRate, clickWeight);
+          expect(baseline2).toBeGreaterThanOrEqual(baseline1);
         }
       ),
       { numRuns: 100 }
     );
   });
 });
-
 
 // Feature: sponsorship-pricing-calculator, Property 2: Recommended price equals baseline times multiplier
 describe('Property 2: Recommended price equals baseline times multiplier', () => {
@@ -99,12 +102,11 @@ describe('Property 4: Multiplier clamping', () => {
   });
 });
 
-
 // Feature: sponsorship-pricing-calculator, Property 5: Price smoothing with significance bypass
 describe('Property 5: Price smoothing with significance bypass', () => {
   // **Validates: Requirements 11.1, 11.2, 11.3**
 
-  it('if no metric exceeds significance threshold, week-over-week change ≤ cap%', () => {
+  it('if no metric exceeds significance threshold, week-over-week change <= cap%', () => {
     fc.assert(
       fc.property(
         fc.double({ min: 1, max: 10_000, noNaN: true }),
@@ -135,12 +137,10 @@ describe('Property 5: Price smoothing with significance bypass', () => {
         fc.double({ min: 1, max: 10_000, noNaN: true }),
         fc.double({ min: 0.01, max: 0.99, noNaN: true }),
         fc.oneof(
-          // subscriber change exceeds threshold
           fc.record({
             subscriberChangePct: fc.double({ min: 0.26, max: 1, noNaN: true }),
             openRateChangePts: fc.double({ min: 0, max: 20, noNaN: true })
           }),
-          // open rate change exceeds threshold
           fc.record({
             subscriberChangePct: fc.double({ min: 0, max: 1, noNaN: true }),
             openRateChangePts: fc.double({ min: 10.01, max: 50, noNaN: true })
@@ -193,7 +193,6 @@ describe('Property 5: Price smoothing with significance bypass', () => {
   });
 });
 
-
 // Feature: sponsorship-pricing-calculator, Property 7: Confidence level determination
 describe('Property 7: Confidence level determination', () => {
   // **Validates: Requirements 1.7**
@@ -206,9 +205,14 @@ describe('Property 7: Confidence level determination', () => {
         fc.boolean(),
         fc.double({ min: 0, max: 0.6, noNaN: true }),
         (publishedIssueCount, metricsComplete, hasQuestionnaire, stabilityCoV) => {
-          const result = determineConfidence(publishedIssueCount, metricsComplete, hasQuestionnaire, stabilityCoV, false);
+          const result = determineConfidence({
+            publishedIssueCount,
+            metricsComplete,
+            hasQuestionnaire,
+            stabilityCoV,
+            isFallback: false
+          });
 
-          // Compute expected factor levels
           let issueFactor;
           if (publishedIssueCount < 3) issueFactor = 'low';
           else if (publishedIssueCount < 10) issueFactor = 'medium';
@@ -226,7 +230,7 @@ describe('Property 7: Confidence level determination', () => {
 
           const levels = ['low', 'medium', 'high'];
           const rank = (l) => levels.indexOf(l);
-          const expected = levels[Math.min(rank(issueFactor), rank(metricsFactor), rank(stabilityFactor))];
+          const expected = levels[Math.min(rank(issueFactor), rank(metricsFactor), rank(stabilityFactor), rank('high'), rank('high'))];
 
           expect(result).toBe(expected);
         }
@@ -243,15 +247,42 @@ describe('Property 7: Confidence level determination', () => {
         fc.boolean(),
         fc.double({ min: 0, max: 0.6, noNaN: true }),
         (publishedIssueCount, metricsComplete, hasQuestionnaire, stabilityCoV) => {
-          const result = determineConfidence(publishedIssueCount, metricsComplete, hasQuestionnaire, stabilityCoV, true);
+          const result = determineConfidence({
+            publishedIssueCount,
+            metricsComplete,
+            hasQuestionnaire,
+            stabilityCoV,
+            isFallback: true
+          });
           expect(result).toBe('low');
         }
       ),
       { numRuns: 100 }
     );
   });
-});
 
+  it('cadence irregularity or stale data lowers confidence to low', () => {
+    expect(determineConfidence({
+      publishedIssueCount: 12,
+      metricsComplete: true,
+      hasQuestionnaire: true,
+      stabilityCoV: 0.05,
+      isFallback: false,
+      isCadenceIrregular: true,
+      isDataStale: false
+    })).toBe('low');
+
+    expect(determineConfidence({
+      publishedIssueCount: 12,
+      metricsComplete: true,
+      hasQuestionnaire: true,
+      stabilityCoV: 0.05,
+      isFallback: false,
+      isCadenceIrregular: false,
+      isDataStale: true
+    })).toBe('low');
+  });
+});
 
 // Feature: sponsorship-pricing-calculator, Property 8: Metric averaging from recent published issues
 describe('Property 8: Metric averaging from recent published issues', () => {
@@ -301,7 +332,6 @@ describe('Property 8: Metric averaging from recent published issues', () => {
         fc.array(issueArb, { minLength: 11, maxLength: 20 }),
         (issues) => {
           const result = computeMetricAverages(issues);
-          // Only first 10 issues should be used
           const first10 = issues.slice(0, 10);
           const expectedOpen = first10.reduce((s, i) => s + i.openRate, 0) / 10;
           expect(result.avgOpenRate).toBeCloseTo(expectedOpen, 10);
@@ -309,6 +339,33 @@ describe('Property 8: Metric averaging from recent published issues', () => {
       ),
       { numRuns: 100 }
     );
+  });
+});
+
+describe('Trend and cadence helpers', () => {
+  it('builds trend summaries from ordered issue metrics', () => {
+    const summary = buildTrendSummary([
+      { openRate: 0.20, clickRate: 0.02 },
+      { openRate: 0.25, clickRate: 0.03 },
+      { openRate: 0.30, clickRate: 0.05 }
+    ]);
+
+    expect(summary.recentTrend.openRate.first).toBeCloseTo(0.2, 6);
+    expect(summary.recentTrend.openRate.last).toBeCloseTo(0.3, 6);
+    expect(summary.recentTrend.openRate.slopePerIssue).toBeGreaterThan(0);
+    expect(summary.volatility.openRateCoV).toBeGreaterThan(0);
+  });
+
+  it('computes cadence stats from publish timestamps', () => {
+    const cadence = computeCadenceStats([
+      '2025-01-01T00:00:00Z',
+      '2025-01-08T00:00:00Z',
+      '2025-01-15T00:00:00Z'
+    ]);
+
+    expect(cadence.averageDaysBetweenIssues).toBe(7);
+    expect(cadence.medianDaysBetweenIssues).toBe(7);
+    expect(cadence.cadenceStdDevDays).toBe(0);
   });
 });
 
@@ -346,7 +403,6 @@ describe('Property 9: Subscriber growth rate computation', () => {
   });
 });
 
-
 // Feature: sponsorship-pricing-calculator, Property 11: Weekly calculation window idempotency
 describe('Property 11: Weekly calculation window idempotency', () => {
   // **Validates: Requirements 2.5, 6.3, 6.4**
@@ -360,22 +416,18 @@ describe('Property 11: Weekly calculation window idempotency', () => {
           const start = new Date(result.start);
           const end = new Date(result.end);
 
-          // Window is exactly 7 days
           const diffMs = end.getTime() - start.getTime();
           expect(diffMs).toBe(7 * 24 * 60 * 60 * 1000);
 
-          // Start is a Wednesday at 3 PM UTC
-          expect(start.getUTCDay()).toBe(3); // Wednesday
+          expect(start.getUTCDay()).toBe(3);
           expect(start.getUTCHours()).toBe(15);
           expect(start.getUTCMinutes()).toBe(0);
           expect(start.getUTCSeconds()).toBe(0);
           expect(start.getUTCMilliseconds()).toBe(0);
 
-          // End is also a Wednesday at 3 PM UTC
           expect(end.getUTCDay()).toBe(3);
           expect(end.getUTCHours()).toBe(15);
 
-          // The input timestamp falls within the window
           expect(date.getTime()).toBeGreaterThanOrEqual(start.getTime());
           expect(date.getTime()).toBeLessThan(end.getTime());
         }
@@ -401,7 +453,6 @@ describe('Property 11: Weekly calculation window idempotency', () => {
   });
 });
 
-
 // Feature: sponsorship-pricing-calculator, Property 3: LLM response JSON schema validation
 describe('Property 3: LLM response JSON schema validation', () => {
   // **Validates: Requirements 1.4**
@@ -424,32 +475,25 @@ describe('Property 3: LLM response JSON schema validation', () => {
 
   it('rejects responses missing required fields, with wrong types, or non-object values', () => {
     const invalidResponseArb = fc.oneof(
-      // null / undefined / primitives / arrays
       fc.constantFrom(null, undefined, 42, 'string', true, []),
-      // empty object
       fc.constant({}),
-      // missing multiplier
       fc.record({
         confidence: fc.constantFrom('low', 'medium', 'high'),
         justification: fc.string()
       }),
-      // missing confidence
       fc.record({
         multiplier: fc.double({ min: -10, max: 10, noNaN: true }),
         justification: fc.string()
       }),
-      // missing justification
       fc.record({
         multiplier: fc.double({ min: -10, max: 10, noNaN: true }),
         confidence: fc.constantFrom('low', 'medium', 'high')
       }),
-      // multiplier is not a number
       fc.record({
         multiplier: fc.oneof(fc.string(), fc.boolean(), fc.constant(null)),
         confidence: fc.constantFrom('low', 'medium', 'high'),
         justification: fc.string()
       }),
-      // confidence is not a valid enum value
       fc.record({
         multiplier: fc.double({ min: -10, max: 10, noNaN: true }),
         confidence: fc.oneof(
@@ -459,13 +503,11 @@ describe('Property 3: LLM response JSON schema validation', () => {
         ),
         justification: fc.string()
       }),
-      // justification is not a string
       fc.record({
         multiplier: fc.double({ min: -10, max: 10, noNaN: true }),
         confidence: fc.constantFrom('low', 'medium', 'high'),
         justification: fc.oneof(fc.integer(), fc.boolean(), fc.constant(null))
       }),
-      // multiplier is NaN
       fc.constant({ multiplier: NaN, confidence: 'low', justification: 'test' })
     );
 

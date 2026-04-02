@@ -396,7 +396,11 @@ describe('Lambda pricing flow helpers', () => {
       volatility: {
         openRateCoV: 0.12,
         clickRateCoV: 0.18
-      }
+      },
+      issueDataPoints: [
+        { subscribers: 9500, openRate: 0.28, clickRate: 0.03, bounceRate: 0.002, complaintRate: 0.0001, publishedAt: '2026-03-25T00:00:00.000Z' },
+        { subscribers: 10000, openRate: 0.34, clickRate: 0.05, bounceRate: 0.002, complaintRate: 0.0001, publishedAt: '2026-04-01T00:00:00.000Z' }
+      ]
     };
     const questionnaireResponses = {
       q3: ['Dedicated email', 'Banner ad'],

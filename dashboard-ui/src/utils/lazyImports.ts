@@ -113,6 +113,14 @@ export const LazySegmentDetailPage = lazy(() =>
     })
 );
 
+export const LazySubscribersPage = lazy(() =>
+  import('@/pages/subscribers/SubscribersPage').then(module => ({ default: module.SubscribersPage }))
+    .catch(error => {
+      console.error('Failed to load SubscribersPage:', error);
+      throw error;
+    })
+);
+
 // Preload critical routes
 export const preloadCriticalRoutes = () => {
   // Preload dashboard since it's the default route
@@ -158,6 +166,9 @@ export const preloadRoute = (routeName: string) => {
       break;
     case 'segments':
       import('@/pages/segments');
+      break;
+    case 'subscribers':
+      import('@/pages/subscribers/SubscribersPage');
       break;
     case 'login':
       import('@/pages/auth/LoginPage');

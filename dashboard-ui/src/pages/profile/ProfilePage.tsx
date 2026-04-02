@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-import { AppHeader } from '@/components/layout/AppHeader';
 import { Loading } from '@/components/ui/Loading';
 import { useToast } from '@/components/ui/Toast';
 import { PersonalInfoForm } from '@/components/forms/PersonalInfoForm';
@@ -169,7 +168,6 @@ export function ProfilePage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <AppHeader />
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">

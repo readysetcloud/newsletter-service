@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Plus, Trash2, Download, Pencil, X, RefreshCw, AlertCircle, Users } from 'lucide-react';
-import { AppHeader } from '@/components/layout/AppHeader';
 import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/Toast';
 import { Card, CardContent } from '@/components/ui/Card';
@@ -243,7 +242,6 @@ export const SegmentDetailPage: React.FC = () => {
   if (loading) {
     return (
       <div className="min-h-screen bg-background">
-        <AppHeader />
         <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div role="status" aria-live="polite"><span className="sr-only">Loading segment...</span>
             <div className="mb-6"><div className="h-9 w-32 bg-muted rounded animate-pulse" /></div>
@@ -258,7 +256,6 @@ export const SegmentDetailPage: React.FC = () => {
   if (notFound) {
     return (
       <div className="min-h-screen bg-background">
-        <AppHeader />
         <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <Card><CardContent className="py-12">
             <div className="text-center" role="alert">
@@ -277,7 +274,6 @@ export const SegmentDetailPage: React.FC = () => {
   if (error || !segment) {
     return (
       <div className="min-h-screen bg-background">
-        <AppHeader />
         <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <Card><CardContent className="py-12">
             <div className="text-center" role="alert">
@@ -295,7 +291,6 @@ export const SegmentDetailPage: React.FC = () => {
   // --- Render: Main ---
   return (
     <div className="min-h-screen bg-background">
-      <AppHeader />
       <main id="main-content" className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Back */}
         <div className="mb-4">

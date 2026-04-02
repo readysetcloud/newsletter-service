@@ -31,10 +31,6 @@ vi.mock('@/components/ui/Toast', () => ({
   useToast: () => ({ addToast: mockAddToast }),
 }));
 
-vi.mock('@/components/layout/AppHeader', () => ({
-  AppHeader: () => <div data-testid="app-header">AppHeader</div>,
-}));
-
 const mockSegment: Segment = {
   segmentId: 'seg-1',
   name: 'VIP Subscribers',

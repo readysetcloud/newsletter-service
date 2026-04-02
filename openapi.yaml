@@ -23,6 +23,8 @@ tags:
   - name: Profile
   - name: Senders
   - name: Issues
+  - name: Pricing
+  - name: Subscribers
 
 paths:
   /dashboard:
@@ -224,7 +226,7 @@ paths:
           $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/UnknownError"
-          
+
   /profiles/{userId}:
     parameters:
       - name: userId
@@ -1327,6 +1329,358 @@ paths:
         "500":
           $ref: "#/components/responses/UnknownError"
 
+  /pricing:
+    get:
+      summary: Get current pricing
+      description: Returns the latest sponsorship pricing calculation for the authenticated tenant
+      tags:
+        - Pricing
+      responses:
+        "200":
+          description: Current pricing data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  current:
+                    type: object
+                    nullable: true
+                    description: The latest pricing record (null if no pricing exists)
+                  hasPricing:
+                    type: boolean
+                    description: Whether any pricing data exists
+                  firstCalculationPending:
+                    type: boolean
+                    description: True if no pricing has ever been calculated
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /pricing/history:
+    get:
+      summary: Get pricing history
+      description: Returns up to 52 weekly pricing records for trend analysis
+      tags:
+        - Pricing
+      responses:
+        "200":
+          description: Pricing history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  history:
+                    type: array
+                    items:
+                      type: object
+                    description: List of historical pricing records (most recent first)
+                  count:
+                    type: integer
+                    description: Number of records returned
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /pricing/questionnaire:
+    get:
+      summary: Get pricing questionnaire
+      description: Returns the questionnaire questions and any existing responses for the tenant
+      tags:
+        - Pricing
+      responses:
+        "200":
+          description: Questionnaire with questions and existing responses
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version:
+                    type: string
+                    description: Questionnaire version identifier
+                  questions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/QuestionnaireQuestion"
+                  existingResponses:
+                    type: object
+                    nullable: true
+                    description: Previously submitted responses keyed by question ID
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+    post:
+      summary: Submit questionnaire responses
+      description: Saves questionnaire responses and triggers an async pricing recalculation
+      tags:
+        - Pricing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - version
+                - responses
+              properties:
+                version:
+                  type: string
+                  description: Questionnaire version being answered
+                responses:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - questionId
+                      - answer
+                    properties:
+                      questionId:
+                        type: string
+                      answer: {}
+                  minItems: 1
+      responses:
+        "200":
+          description: Questionnaire saved and recalculation triggered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecalculateResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /pricing/recalculate:
+    post:
+      summary: Trigger pricing recalculation
+      description: Starts an on-demand pricing recalculation. Returns 409 if a recalculation is already in progress.
+      tags:
+        - Pricing
+      responses:
+        "200":
+          description: Recalculation started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecalculateResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Recalculation already in progress
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  jobId:
+                    type: string
+                    description: ID of the existing in-progress job
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /pricing/recalculate/{jobId}:
+    parameters:
+      - name: jobId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The recalculation job ID
+    get:
+      summary: Get recalculation job status
+      description: Poll the status of an in-progress pricing recalculation
+      tags:
+        - Pricing
+      responses:
+        "200":
+          description: Job status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobId:
+                    type: string
+                  status:
+                    type: string
+                    enum: [processing, completed, failed]
+                  result:
+                    type: object
+                    nullable: true
+                    description: The pricing record (present when status is completed)
+                  error:
+                    type: string
+                    nullable: true
+                    description: Error message (present when status is failed)
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /pricing/narrative:
+    get:
+      summary: Get sponsor-facing narrative
+      description: |
+        Returns the stored sponsor-facing value narrative generated during the last pricing calculation.
+        The narrative is versioned with a pricingChecksum derived from the pricing data it was based on.
+        Returns 409 if no pricing data exists or if the narrative has not been generated yet.
+      tags:
+        - Pricing
+      responses:
+        "200":
+          description: Narrative with pricing version checksum
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  narrative:
+                    type: string
+                    description: Sponsor-facing value narrative paragraph
+                  pricingChecksum:
+                    type: string
+                    description: Checksum of the pricing data the narrative was generated from
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: No pricing data or narrative not yet generated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    enum: [NoPricingData, NarrativeNotGenerated]
+                  message:
+                    type: string
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /subscribers:
+    get:
+      summary: List subscribers by type
+      description: Returns subscriber data filtered by the `type` query parameter. Currently supports `type=sunset` to identify dormant subscribers for sunset policy evaluation.
+      tags:
+        - Subscribers
+      parameters:
+        - name: type
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [sunset]
+          description: The type of subscriber query to perform
+        - name: latestIssueNumber
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: The most recently published issue number
+        - name: threshold
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 10
+          description: Number of issues without engagement before a subscriber is considered dormant
+      responses:
+        "200":
+          description: List of dormant subscribers matching sunset criteria
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  dormantSubscribers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        emailHash:
+                          type: string
+                          description: SHA-256 hash of the subscriber email
+                        lastEngagedIssue:
+                          type: integer
+                          nullable: true
+                          description: Issue number of the subscriber's most recent engagement, or null if never engaged
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /subscribers/health:
+    get:
+      summary: Get audience health cohort distribution
+      description: Classifies all subscribers into engagement cohorts (highly engaged, occasional, dormant) based on recency of engagement relative to the latest issue. Returns a bootstrap indicator when no engagement data has been collected yet.
+      tags:
+        - Subscribers
+      parameters:
+        - name: latestIssueNumber
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: The most recently published issue number
+      responses:
+        "200":
+          description: Audience health cohort distribution or bootstrap indicator
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    description: Bootstrap state — no engagement data collected yet
+                    properties:
+                      bootstrap:
+                        type: boolean
+                        enum: [true]
+                    required:
+                      - bootstrap
+                  - type: object
+                    description: Cohort distribution with counts and percentages
+                    properties:
+                      cohorts:
+                        type: object
+                        properties:
+                          highlyEngaged:
+                            $ref: "#/components/schemas/CohortDetail"
+                          occasional:
+                            $ref: "#/components/schemas/CohortDetail"
+                          dormant:
+                            $ref: "#/components/schemas/CohortDetail"
+                          total:
+                            type: integer
+                            description: Total number of subscribers
+                        required:
+                          - highlyEngaged
+                          - occasional
+                          - dormant
+                          - total
+                    required:
+                      - cohorts
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
 components:
   parameters:
     Tenant:
@@ -2190,3 +2544,59 @@ components:
           format: date-time
         complaintType:
           type: string
+
+    QuestionnaireQuestion:
+      type: object
+      required:
+        - id
+        - category
+        - text
+        - type
+      properties:
+        id:
+          type: string
+          description: Question identifier (e.g. q1, q2)
+        category:
+          type: string
+          description: Question category (e.g. audience_demographics, newsletter_niche)
+        text:
+          type: string
+          description: The question text
+        type:
+          type: string
+          enum: [single-select, multi-select, text]
+          description: Input type for the question
+        options:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: Available options (for single-select and multi-select types)
+
+    RecalculateResponse:
+      type: object
+      required:
+        - jobId
+        - status
+      properties:
+        jobId:
+          type: string
+          description: Unique identifier for the recalculation job
+        status:
+          type: string
+          enum: [processing]
+          description: Initial job status
+
+    CohortDetail:
+      type: object
+      required:
+        - count
+        - percentage
+      properties:
+        count:
+          type: integer
+          description: Number of subscribers in this cohort
+        percentage:
+          type: number
+          format: float
+          description: Percentage of total subscribers in this cohort

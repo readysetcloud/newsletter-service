@@ -1,8 +1,9 @@
 import { DynamoDBClient, UpdateItemCommand, PutItemCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
-import { hash } from "./utils/helpers.mjs";
+import { hash, decrypt } from "./utils/helpers.mjs";
 import { detectDevice } from "./utils/detect-device.mjs";
 import { lookupCountry } from "./utils/geolocation.mjs";
+import { updateSubscriberEngagement } from "./utils/subscriber-engagement.mjs";
 import { ulid } from "ulid";
 import crypto from "crypto";
 import zlib from "zlib";
@@ -99,6 +100,24 @@ export const handler = async (event) => {
         });
       }
     });
+
+    // Update subscriber engagement fields (cross-issue tracking)
+    if (msg.s) {
+      const [engTenantId, engIssueNumber] = cid.split('#');
+      if (engTenantId && engIssueNumber) {
+        ops.push(async () => {
+          try {
+            const subscriberEmail = decrypt(msg.s);
+            await updateSubscriberEngagement(engTenantId, subscriberEmail, parseInt(engIssueNumber, 10));
+          } catch (err) {
+            console.error('Subscriber engagement update failed', {
+              cid,
+              error: err.message
+            });
+          }
+        });
+      }
+    }
   }
 
   const results = await runInBatches(ops, CONCURRENCY);

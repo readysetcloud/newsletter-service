@@ -1,6 +1,7 @@
 import { DynamoDBClient, QueryCommand, UpdateItemCommand, PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
-import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
+import { z } from 'zod';
+import { converse } from './utils/agents.mjs';
 import {
   computeBaseline,
   clampMultiplier,
@@ -15,17 +16,10 @@ import {
 } from './utils/pricing.mjs';
 
 const ddb = new DynamoDBClient();
-const bedrock = new BedrockRuntimeClient();
 
 const TABLE_NAME = process.env.TABLE_NAME;
 const SUBSCRIBERS_TABLE_NAME = process.env.SUBSCRIBERS_TABLE_NAME;
 const BEDROCK_MODEL_ID = process.env.BEDROCK_MODEL_ID;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Load system pricing configuration from DynamoDB.
@@ -46,8 +40,7 @@ async function loadPricingConfig() {
       smoothingCapPct: 0.20,
       significantSubscriberChangePct: 0.25,
       significantOpenRateChangePts: 10,
-      minPublishedIssues: 3,
-      llmMaxRetries: 3
+      minPublishedIssues: 3
     };
   }
 
@@ -55,7 +48,7 @@ async function loadPricingConfig() {
 }
 
 // ---------------------------------------------------------------------------
-// Task 2.1 — Metrics Collection
+// Task 2.1 - Metrics Collection
 // ---------------------------------------------------------------------------
 
 /**
@@ -202,7 +195,7 @@ async function collectMetrics(tenantId, previousRecord) {
 }
 
 // ---------------------------------------------------------------------------
-// Task 2.2 — LLM Prompt Construction & Bedrock Call
+// Task 2.2 - LLM Prompt Construction & Bedrock Call
 // ---------------------------------------------------------------------------
 
 /**
@@ -210,8 +203,9 @@ async function collectMetrics(tenantId, previousRecord) {
  */
 function buildPrompt(metrics, baselinePrice, questionnaireResponses, previousRecord) {
   const lines = [
-    'You are a newsletter sponsorship pricing expert.',
-    'Given the following newsletter metrics and context, return a JSON object with a pricing multiplier, confidence level, and justification.',
+    '## Deterministic Baseline',
+    `We calculated a baseline sponsorship price of $${baselinePrice.toFixed(2)} using a CPM formula based on subscriber count and open rate.`,
+    'Your job is to evaluate the additional metrics and context below, then provide a multiplier to adjust this baseline price up or down.',
     '',
     '## Newsletter Metrics',
     `- Subscriber count: ${metrics.subscriberCount}`,
@@ -222,9 +216,7 @@ function buildPrompt(metrics, baselinePrice, questionnaireResponses, previousRec
     `- Published issues with analytics: ${metrics.publishedIssueCount}`,
     '',
     '## Qualitative Inputs',
-    `- Average click-through rate: ${(metrics.avgClickRate * 100).toFixed(1)}% (provided as qualitative signal, not included in baseline)`,
-    '',
-    `## Deterministic Baseline Price: $${baselinePrice.toFixed(2)}`
+    `- Average click-through rate: ${(metrics.avgClickRate * 100).toFixed(1)}% (not included in the baseline formula, use as a qualitative signal)`
   ];
 
   if (previousRecord) {
@@ -247,77 +239,77 @@ function buildPrompt(metrics, baselinePrice, questionnaireResponses, previousRec
   lines.push(
     '',
     '## Instructions',
-    'Return a JSON object with exactly these fields:',
-    '- "multiplier": a number representing the adjustment factor to apply to the baseline price',
-    '- "confidence": one of "low", "medium", or "high"',
-    '- "justification": a plain-language explanation referencing specific metrics',
-    '',
-    'Return ONLY the JSON object, no other text.'
+    'Given the baseline price above and the metrics provided, determine how the price should be adjusted.',
+    'A multiplier of 1.0 means no change. Above 1.0 increases the price, below 1.0 decreases it.',
+    'Use the submit_pricing_adjustment tool to provide your multiplier, confidence level, and justification.'
   );
 
   return lines.join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// Tool definitions for structured LLM output
+// ---------------------------------------------------------------------------
+
+const pricingAdjustmentSchema = z.object({
+  multiplier: z.number().describe('Adjustment factor to apply to the baseline price'),
+  confidence: z.enum(['low', 'medium', 'high']).describe('Confidence level of the pricing recommendation'),
+  justification: z.string().describe('Plain-language explanation referencing specific metrics')
+});
+
+const sponsorNarrativeSchema = z.object({
+  narrative: z.string().describe('A short, professional paragraph (2-4 sentences) for potential sponsors describing the value of advertising in this newsletter')
+});
+
 /**
- * Call Amazon Bedrock with exponential backoff retry.
+ * Call Amazon Bedrock via the converse utility with a tool definition
+ * so the LLM returns structured, schema-validated output.
  *
- * Retries up to `maxRetries` times with delays of 1s, 2s, 4s.
- * On all retries exhausted, returns a deterministic fallback.
+ * Falls back to a deterministic default if the call fails.
  */
-async function callBedrockWithRetry(prompt, maxRetries) {
-  const delays = [1000, 2000, 4000];
-  let lastError;
+async function callBedrock(prompt) {
+  let captured = null;
 
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const response = await bedrock.send(new InvokeModelCommand({
-        modelId: BEDROCK_MODEL_ID,
-        contentType: 'application/json',
-        accept: 'application/json',
-        body: JSON.stringify({
-          anthropic_version: 'bedrock-2023-05-31',
-          max_tokens: 1024,
-          messages: [
-            { role: 'user', content: prompt }
-          ]
-        })
-      }));
-
-      const body = JSON.parse(new TextDecoder().decode(response.body));
-      const text = body.content?.[0]?.text ?? '';
-
-      // Extract JSON from the response text
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        throw new Error('No JSON object found in LLM response');
-      }
-
-      return { llmResponse: JSON.parse(jsonMatch[0]), isFallback: false };
-    } catch (error) {
-      lastError = error;
-      console.error(`[LLM] Attempt ${attempt + 1}/${maxRetries + 1} failed:`, error.message);
-
-      if (attempt < maxRetries) {
-        const delay = delays[attempt] || delays[delays.length - 1];
-        console.log(`[LLM] Retrying in ${delay}ms...`);
-        await sleep(delay);
-      }
+  const toolDefs = [{
+    name: 'submit_pricing_adjustment',
+    description: 'Submit the pricing multiplier, confidence level, and justification for the newsletter sponsorship pricing calculation.',
+    schema: pricingAdjustmentSchema,
+    handler: (input) => {
+      captured = input;
+      return { success: true };
     }
-  }
+  }];
 
-  console.warn('[LLM] All retries exhausted, using deterministic fallback');
-  return {
-    llmResponse: {
-      multiplier: 1.0,
-      confidence: 'low',
-      justification: 'This price is based on the deterministic baseline calculation. The AI-powered adjustment was unavailable during this calculation cycle.'
-    },
-    isFallback: true
-  };
+  try {
+    const systemPrompt = [
+      'Role: You are a newsletter sponsorship pricing expert with deep knowledge of digital advertising CPM models and audience valuation.',
+      'Instructions: Analyze the provided newsletter metrics, historical pricing data, and any creator questionnaire responses to determine a fair sponsorship pricing adjustment.',
+      'Steps: 1) Evaluate subscriber count, growth trajectory, and engagement rates against industry benchmarks. 2) Weigh qualitative signals like click-through rate and creator-provided context. 3) Compare against the deterministic baseline price and any previous pricing records. 4) Use the submit_pricing_adjustment tool to return your recommendation.',
+      'End goal: Produce a well-calibrated pricing multiplier that reflects the newsletter\'s true sponsorship value, along with a confidence level and a justification grounded in the specific metrics provided.',
+      'Narrowing: Only use the submit_pricing_adjustment tool to respond. Do not produce free-text output. The multiplier should be a positive number. Confidence must be exactly one of "low", "medium", or "high". The justification must reference specific metrics from the input.'
+    ].join('\n');
+    await converse(BEDROCK_MODEL_ID, systemPrompt, prompt, toolDefs);
+
+    if (!captured) {
+      throw new Error('LLM did not call the submit_pricing_adjustment tool');
+    }
+
+    return { llmResponse: captured, isFallback: false };
+  } catch (error) {
+    console.warn('[LLM] Bedrock call failed, using deterministic fallback:', error.message);
+    return {
+      llmResponse: {
+        multiplier: 1.0,
+        confidence: 'low',
+        justification: 'This price is based on the deterministic baseline calculation. The AI-powered adjustment was unavailable during this calculation cycle.'
+      },
+      isFallback: true
+    };
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Task 2.3 — 4-Step Pipeline (validate → clamp → smooth → store)
+// Task 2.3 - 4-Step Pipeline (validate > clamp > smooth > store)
 // ---------------------------------------------------------------------------
 
 /**
@@ -430,48 +422,51 @@ async function loadQuestionnaireResponses(tenantId) {
 // ---------------------------------------------------------------------------
 
 /**
- * Generate a concise, sponsor-facing value narrative using Bedrock.
- * This is a best-effort call — failures are non-fatal.
+ * Generate a concise, sponsor-facing value narrative using the converse utility
+ * with a tool definition for structured output.
+ * This is a best-effort call - failures are non-fatal.
  */
-async function generateSponsorNarrative(metrics, recommendedPrice, confidence) {
-  const prompt = [
+async function generateSponsorNarrative(metrics) {
+  let captured = null;
+
+  const toolDefs = [{
+    name: 'submit_sponsor_narrative',
+    description: 'Submit the sponsor-facing value narrative paragraph.',
+    schema: sponsorNarrativeSchema,
+    handler: (input) => {
+      captured = input;
+      return { success: true };
+    }
+  }];
+
+  const systemPrompt = [
+    'Role: You are a professional copywriter specializing in newsletter sponsorship pitches for B2B and B2C audiences.',
+    'Instructions: Craft a concise, sponsor-facing value narrative based on the provided newsletter performance data. Summarize metrics qualitatively rather than citing raw numbers.',
+    'Steps: 1) Assess the audience size and engagement signals. 2) Frame the newsletter\'s reach and reader loyalty as a compelling advertising opportunity. 3) Use the submit_sponsor_narrative tool to return the narrative.',
+    'End goal: A polished 2-4 sentence paragraph that a sales team could use directly in sponsor outreach, conveying confidence in the newsletter\'s advertising value.',
+    'Narrowing: Only use the submit_sponsor_narrative tool to respond. Do not produce free-text output. Do not include raw numbers, percentages, or pricing figures. Keep the tone confident but not hyperbolic.'
+  ].join('\n');
+  const userPrompt = [
     'Write a short, professional paragraph (2-4 sentences) for potential sponsors describing the value of advertising in this newsletter.',
-    'Use the following data points to support the pitch. Do NOT include raw numbers or percentages — summarize them qualitatively.',
+    'Use the following data points to support the pitch. Do NOT include raw numbers or percentages - summarize them qualitatively.',
     '',
     `Subscriber count: ${metrics.subscriberCount}`,
     `Average open rate: ${(metrics.avgOpenRate * 100).toFixed(1)}%`,
     `Average click-through rate: ${(metrics.avgClickRate * 100).toFixed(1)}%`,
     `Subscriber growth rate: ${(metrics.subscriberGrowthRate * 100).toFixed(1)}%`,
     `Published issues analyzed: ${metrics.publishedIssueCount}`,
-    `Recommended sponsorship price: $${recommendedPrice.toFixed(2)}`,
-    `Pricing confidence: ${confidence}`,
     '',
-    'The tone should be confident but not hyperbolic. Focus on audience engagement and reach.',
-    'Return ONLY the paragraph text, no JSON, no markdown, no preamble.'
+    'The tone should be confident but not hyperbolic. Focus on audience engagement and reach.'
   ].join('\n');
 
-  const response = await bedrock.send(new InvokeModelCommand({
-    modelId: BEDROCK_MODEL_ID,
-    contentType: 'application/json',
-    accept: 'application/json',
-    body: JSON.stringify({
-      anthropic_version: 'bedrock-2023-05-31',
-      max_tokens: 512,
-      messages: [
-        { role: 'user', content: prompt }
-      ]
-    })
-  }));
+  await converse(BEDROCK_MODEL_ID, systemPrompt, userPrompt, toolDefs);
 
-  const body = JSON.parse(new TextDecoder().decode(response.body));
-  const text = body.content?.[0]?.text?.trim() ?? '';
-
-  if (!text || text.length < 20) {
+  if (!captured || !captured.narrative || captured.narrative.length < 20) {
     console.warn('[NARRATIVE] Response too short or empty');
     return null;
   }
 
-  return text;
+  return captured.narrative;
 }
 
 // ---------------------------------------------------------------------------
@@ -486,6 +481,10 @@ export const handler = async (event) => {
   const { tenantId, questionnaireResponses: eventResponses, jobId, isWeeklyJob } = detail;
 
   console.log('[PRICING] Starting calculation', { tenantId, jobId, isWeeklyJob });
+
+  if (!tenantId) {
+    throw new Error('tenantId is required');
+  }
 
   try {
     // Load configuration
@@ -518,26 +517,22 @@ export const handler = async (event) => {
 
     // Build prompt and call LLM
     const prompt = buildPrompt(metrics, baselinePrice, questionnaireResponses, previousRecord);
-    const { llmResponse, isFallback } = await callBedrockWithRetry(prompt, config.llmMaxRetries || 3);
+    const { llmResponse, isFallback } = await callBedrock(prompt);
 
     // --- 4-Step Pipeline ---
 
     // Step 1: Validate LLM response
     const validation = validateLlmResponse(llmResponse);
     let multiplierRaw;
-    let confidence;
     let justification;
     let usedFallback = isFallback;
 
     if (validation.valid) {
       multiplierRaw = llmResponse.multiplier;
-      confidence = llmResponse.confidence;
       justification = llmResponse.justification;
     } else {
       console.warn('[PIPELINE] LLM response validation failed:', validation.errors);
-      // Fallback on invalid response
       multiplierRaw = 1.0;
-      confidence = 'low';
       justification = 'This price is based on the deterministic baseline calculation. The AI response did not pass validation.';
       usedFallback = true;
     }
@@ -585,7 +580,7 @@ export const handler = async (event) => {
     // Determine confidence deterministically
     const hasQuestionnaire = questionnaireResponses != null && Object.keys(questionnaireResponses).length > 0;
     const metricsComplete = metrics.avgOpenRate != null && metrics.avgBounceRate != null;
-    // Approximate stability CoV — use 0.15 (medium) as default when we don't have 4 weeks of data
+    // Approximate stability CoV - use 0.15 (medium) as default when we don't have 4 weeks of data
     const stabilityCoV = 0.15;
     const finalConfidence = determineConfidence(
       metrics.publishedIssueCount,
@@ -646,10 +641,9 @@ export const handler = async (event) => {
 
     // Generate sponsor-facing narrative via Bedrock
     try {
-      const narrative = await generateSponsorNarrative(metrics, recommendedPrice, finalConfidence);
+      const narrative = await generateSponsorNarrative(metrics);
       if (narrative) {
         pricingRecord.narrative = narrative;
-        pricingRecord.narrativeChecksum = pricingChecksum;
       }
     } catch (err) {
       console.warn('[NARRATIVE] Failed to generate narrative, skipping:', err.message);

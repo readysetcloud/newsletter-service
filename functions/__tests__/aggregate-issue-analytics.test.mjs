@@ -1,7 +1,8 @@
 import { jest } from '@jest/globals';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 
-const { DynamoDBClient, QueryCommand, UpdateItemCommand } = await import('@aws-sdk/client-dynamodb');
+const { DynamoDBClient, QueryCommand, UpdateItemCommand, GetItemCommand } = await import('@aws-sdk/client-dynamodb');
+const { encrypt } = await import('../utils/helpers.mjs');
 const {
   handler,
   queryEventsByType,
@@ -823,71 +824,148 @@ describe('aggregate-issue-analytics', () => {
     });
   });
 
-  describe('calculateEngagementType', () => {
-    test('should count new vs returning clickers', () => {
+  describe('calculateEngagementType (cross-issue)', () => {
+    let subscribersTableEnv;
+    let encryptionKeyEnv;
+
+    // Encrypted tokens (generated fresh in beforeEach after env is set)
+    let ALICE_TOKEN, BOB_TOKEN, CHARLIE_TOKEN, DAVE_TOKEN;
+
+    beforeEach(() => {
+      subscribersTableEnv = process.env.SUBSCRIBERS_TABLE_NAME;
+      encryptionKeyEnv = process.env.EMAIL_ENCRYPTION_KEY;
+      process.env.SUBSCRIBERS_TABLE_NAME = 'test-subscribers-table';
+      process.env.EMAIL_ENCRYPTION_KEY = 'test-encryption-key-for-unit-tests';
+      ALICE_TOKEN = encrypt('alice@example.com');
+      BOB_TOKEN = encrypt('bob@example.com');
+      CHARLIE_TOKEN = encrypt('charlie@example.com');
+      DAVE_TOKEN = encrypt('dave@example.com');
+    });
+
+    afterEach(() => {
+      process.env.SUBSCRIBERS_TABLE_NAME = subscribersTableEnv;
+      process.env.EMAIL_ENCRYPTION_KEY = encryptionKeyEnv;
+    });
+
+    function mockSubscriberGetItem(emailToRecord) {
+      mockSend.mockImplementation((command) => {
+        if (command instanceof GetItemCommand) {
+          const key = unmarshall(command.input.Key);
+          const record = emailToRecord[key.email];
+          if (record) {
+            return Promise.resolve({ Item: marshall(record) });
+          }
+          return Promise.resolve({});
+        }
+        return Promise.resolve({});
+      });
+    }
+
+    test('should classify clicker with engagementCount = 1 as new', async () => {
+      const clicks = [{ subscriberEmailHash: ALICE_TOKEN }];
+
+      mockSubscriberGetItem({
+        'alice@example.com': { tenantId: 'tenant1', email: 'alice@example.com', engagementCount: 1 }
+      });
+
+      const ddb = new DynamoDBClient();
+      const result = await calculateEngagementType(clicks, ddb, 'tenant1');
+
+      expect(result.newClickers).toBe(1);
+      expect(result.returningClickers).toBe(0);
+    });
+
+    test('should classify clicker with engagementCount > 1 as returning', async () => {
+      const clicks = [{ subscriberEmailHash: BOB_TOKEN }];
+
+      mockSubscriberGetItem({
+        'bob@example.com': { tenantId: 'tenant1', email: 'bob@example.com', engagementCount: 5 }
+      });
+
+      const ddb = new DynamoDBClient();
+      const result = await calculateEngagementType(clicks, ddb, 'tenant1');
+
+      expect(result.newClickers).toBe(0);
+      expect(result.returningClickers).toBe(1);
+    });
+
+    test('should classify clicker with no engagement fields as new (fallback)', async () => {
+      const clicks = [{ subscriberEmailHash: CHARLIE_TOKEN }];
+
+      mockSubscriberGetItem({
+        'charlie@example.com': { tenantId: 'tenant1', email: 'charlie@example.com' }
+      });
+
+      const ddb = new DynamoDBClient();
+      const result = await calculateEngagementType(clicks, ddb, 'tenant1');
+
+      expect(result.newClickers).toBe(1);
+      expect(result.returningClickers).toBe(0);
+    });
+
+    test('should classify clicker not found in subscribers as new (fallback)', async () => {
+      const clicks = [{ subscriberEmailHash: DAVE_TOKEN }];
+
+      mockSubscriberGetItem({});
+
+      const ddb = new DynamoDBClient();
+      const result = await calculateEngagementType(clicks, ddb, 'tenant1');
+
+      expect(result.newClickers).toBe(1);
+      expect(result.returningClickers).toBe(0);
+    });
+
+    test('should produce correct counts for mixed clickers', async () => {
       const clicks = [
-        { subscriberEmailHash: 'hash1' },
-        { subscriberEmailHash: 'hash2' },
-        { subscriberEmailHash: 'hash2' },
-        { subscriberEmailHash: 'hash3' },
-        { subscriberEmailHash: 'hash3' },
-        { subscriberEmailHash: 'hash3' },
-        { subscriberEmailHash: 'hash4' }
+        { subscriberEmailHash: ALICE_TOKEN },
+        { subscriberEmailHash: ALICE_TOKEN }, // duplicate click, same user
+        { subscriberEmailHash: BOB_TOKEN },
+        { subscriberEmailHash: CHARLIE_TOKEN },
+        { subscriberEmailHash: DAVE_TOKEN }
       ];
 
-      const result = calculateEngagementType(clicks);
+      mockSubscriberGetItem({
+        'alice@example.com': { tenantId: 'tenant1', email: 'alice@example.com', engagementCount: 1 },
+        'bob@example.com': { tenantId: 'tenant1', email: 'bob@example.com', engagementCount: 3 },
+        'charlie@example.com': { tenantId: 'tenant1', email: 'charlie@example.com', engagementCount: 7 },
+        'dave@example.com': { tenantId: 'tenant1', email: 'dave@example.com' }
+      });
 
+      const ddb = new DynamoDBClient();
+      const result = await calculateEngagementType(clicks, ddb, 'tenant1');
+
+      // alice (engagementCount=1) → new, dave (missing) → new = 2 new
+      // bob (engagementCount=3) → returning, charlie (engagementCount=7) → returning = 2 returning
       expect(result.newClickers).toBe(2);
       expect(result.returningClickers).toBe(2);
     });
 
-    test('should handle all new clickers', () => {
-      const clicks = [
-        { subscriberEmailHash: 'hash1' },
-        { subscriberEmailHash: 'hash2' },
-        { subscriberEmailHash: 'hash3' }
-      ];
+    test('should handle empty clicks array', async () => {
+      const ddb = new DynamoDBClient();
+      const result = await calculateEngagementType([], ddb, 'tenant1');
 
-      const result = calculateEngagementType(clicks);
-
-      expect(result.newClickers).toBe(3);
+      expect(result.newClickers).toBe(0);
       expect(result.returningClickers).toBe(0);
+      // Should not query subscribers table when there are no clicks
+      expect(mockSend).not.toHaveBeenCalled();
     });
 
-    test('should exclude unknown subscriber hashes', () => {
+    test('should exclude unknown subscriber hashes', async () => {
       const clicks = [
-        { subscriberEmailHash: 'hash1' },
+        { subscriberEmailHash: ALICE_TOKEN },
         { subscriberEmailHash: 'unknown' },
-        { subscriberEmailHash: 'unknown' },
-        { subscriberEmailHash: 'hash2' },
-        { subscriberEmailHash: 'hash2' },
         { subscriberEmailHash: 'unknown' }
       ];
 
-      const result = calculateEngagementType(clicks);
+      mockSubscriberGetItem({
+        'alice@example.com': { tenantId: 'tenant1', email: 'alice@example.com', engagementCount: 2 }
+      });
 
-      expect(result.newClickers).toBe(1);
+      const ddb = new DynamoDBClient();
+      const result = await calculateEngagementType(clicks, ddb, 'tenant1');
+
+      expect(result.newClickers).toBe(0);
       expect(result.returningClickers).toBe(1);
-    });
-
-    test('should handle all unknown clicks', () => {
-      const clicks = [
-        { subscriberEmailHash: 'unknown' },
-        { subscriberEmailHash: 'unknown' },
-        { subscriberEmailHash: 'unknown' }
-      ];
-
-      const result = calculateEngagementType(clicks);
-
-      expect(result.newClickers).toBe(0);
-      expect(result.returningClickers).toBe(0);
-    });
-
-    test('should handle empty clicks array', () => {
-      const result = calculateEngagementType([]);
-
-      expect(result.newClickers).toBe(0);
-      expect(result.returningClickers).toBe(0);
     });
   });
 

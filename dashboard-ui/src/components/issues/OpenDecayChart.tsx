@@ -7,6 +7,14 @@ interface OpenDecayChartProps {
   openDecay: OpenDecayPoint[];
 }
 
+function formatTooltipNumber(value: unknown): string {
+  return typeof value === 'number' ? value.toLocaleString() : String(value ?? '');
+}
+
+function formatTooltipLabel(label: unknown): string {
+  return `Hour ${String(label ?? '')}`;
+}
+
 // Helper to format time labels
 function formatTimeLabel(hour: number): string {
   if (hour === 0) return '0h';
@@ -117,8 +125,8 @@ const OpenDecayChart: React.FC<OpenDecayChartProps> = ({ openDecay }) => {
               label={{ value: 'Opens', angle: -90, position: 'insideLeft', style: { fontSize: 12, fill: '#6b7280' } }}
             />
             <Tooltip
-              formatter={(value: number) => value.toLocaleString()}
-              labelFormatter={(label: number) => `Hour ${label}`}
+              formatter={formatTooltipNumber}
+              labelFormatter={formatTooltipLabel}
             />
             <Legend wrapperStyle={{ fontSize: 12 }} />
             <Line

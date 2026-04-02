@@ -1,5 +1,6 @@
 import React from 'react';
 import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import type { TooltipProps } from 'recharts';
 import { Globe, Smartphone, Clock } from 'lucide-react';
 import type { GeoData, DeviceBreakdown, TimingMetrics } from '@/types';
 
@@ -9,22 +10,12 @@ export interface AudienceInsightsPanelProps {
   timingMetrics: TimingMetrics;
 }
 
-type TooltipPayloadItem = {
-  name?: string;
-  value?: number;
-  color?: string;
-};
-
 function CustomTooltip({
   active,
   payload,
   label
-}: {
-  active?: boolean;
-  payload?: TooltipPayloadItem[];
-  label?: string;
-}) {
-  if (active && Array.isArray(payload) && payload.length > 0) {
+}: TooltipProps<number, string>) {
+  if (active && payload && payload.length > 0) {
     return (
       <div className="bg-surface p-4 border border-border rounded-lg shadow-lg">
         <p className="font-medium text-foreground mb-2">{label}</p>

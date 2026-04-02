@@ -13,7 +13,8 @@ import {
   CreditCardIcon,
   CurrencyDollarIcon,
   MoonIcon,
-  SunIcon
+  SunIcon,
+  UserGroupIcon
 } from '@heroicons/react/24/outline';
 import { FileText } from 'lucide-react';
 import { useTheme } from '@/hooks/useTheme';
@@ -25,6 +26,7 @@ export const AppHeader: React.FC = () => {
 
   const baseNavigation = [
     { name: 'Issues', href: '/issues', icon: FileText, preloadKey: 'issues' },
+    { name: 'Segments', href: '/segments', icon: UserGroupIcon, preloadKey: 'segments' },
     { name: 'Brand', href: '/brand', icon: BuildingOfficeIcon, preloadKey: 'brand' },
     { name: 'Profile', href: '/profile', icon: UserIcon, preloadKey: 'profile' },
     { name: 'Sender Emails', href: '/senders', icon: EnvelopeIcon, preloadKey: 'senders' },
@@ -87,6 +89,8 @@ export const AppHeader: React.FC = () => {
               {navigation.map((item) => {
                 const isActive = item.href === '/issues'
                   ? location.pathname.startsWith('/issues')
+                  : item.href === '/segments'
+                  ? location.pathname.startsWith('/segments')
                   : location.pathname === item.href;
                 const Icon = item.icon;
 

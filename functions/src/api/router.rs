@@ -1,7 +1,9 @@
 use lambda_http::{http::Method, Body, Error, Request, Response};
 use serde_json::json;
 
-use crate::controllers::{api_keys, brand, domain, issues, pricing, profile, senders, subscribers};
+use crate::controllers::{
+    api_keys, brand, domain, issues, pricing, profile, segments, senders, subscribers,
+};
 
 pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
     let method = event.method();
@@ -119,6 +121,58 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
         (&Method::GET, "/subscribers") => subscribers::list_subscribers(event).await,
         (&Method::GET, "/subscribers/health") => subscribers::get_audience_health(event).await,
 
+        // Segments endpoints
+        (&Method::POST, "/segments") => segments::create_segment(event).await,
+        (&Method::GET, "/segments") => segments::list_segments(event).await,
+        (&Method::GET, path) if path.starts_with("/segments/jobs/") => {
+            match extract_path_param(path, "/segments/jobs/") {
+                Some(job_id) => segments::get_job_status(event, &job_id).await,
+                None => Ok(format_not_found()),
+            }
+        }
+        (&Method::GET, path) if path.starts_with("/segments/") && path.ends_with("/members") => {
+            match extract_segment_id(path) {
+                Some(segment_id) => segments::list_members(event, &segment_id).await,
+                None => Ok(format_not_found()),
+            }
+        }
+        (&Method::POST, path) if path.starts_with("/segments/") && path.ends_with("/members") => {
+            match extract_segment_id(path) {
+                Some(segment_id) => segments::add_members(event, &segment_id).await,
+                None => Ok(format_not_found()),
+            }
+        }
+        (&Method::DELETE, path) if path.starts_with("/segments/") && path.ends_with("/members") => {
+            match extract_segment_id(path) {
+                Some(segment_id) => segments::remove_members(event, &segment_id).await,
+                None => Ok(format_not_found()),
+            }
+        }
+        (&Method::POST, path) if path.starts_with("/segments/") && path.ends_with("/export") => {
+            match extract_segment_id_before(path, "/export") {
+                Some(segment_id) => segments::export_segment(event, &segment_id).await,
+                None => Ok(format_not_found()),
+            }
+        }
+        (&Method::GET, path) if path.starts_with("/segments/") => {
+            match extract_path_param(path, "/segments/") {
+                Some(segment_id) => segments::get_segment(event, &segment_id).await,
+                None => Ok(format_not_found()),
+            }
+        }
+        (&Method::PUT, path) if path.starts_with("/segments/") => {
+            match extract_path_param(path, "/segments/") {
+                Some(segment_id) => segments::update_segment(event, &segment_id).await,
+                None => Ok(format_not_found()),
+            }
+        }
+        (&Method::DELETE, path) if path.starts_with("/segments/") => {
+            match extract_path_param(path, "/segments/") {
+                Some(segment_id) => segments::delete_segment(event, &segment_id).await,
+                None => Ok(format_not_found()),
+            }
+        }
+
         // Method not allowed for valid paths
         (_, path) if is_valid_api_path(path) => Ok(format_method_not_allowed()),
 
@@ -163,6 +217,9 @@ fn is_valid_api_path(path: &str) -> bool {
         // Subscribers paths
         || path == "/subscribers"
         || path == "/subscribers/health"
+        // Segments paths
+        || path == "/segments"
+        || path.starts_with("/segments/")
 }
 
 fn extract_path_param(path: &str, prefix: &str) -> Option<String> {
@@ -180,6 +237,20 @@ fn extract_sender_id(path: &str) -> Option<String> {
 
 fn extract_domain(path: &str) -> Option<String> {
     path.strip_prefix("/senders/domain/")
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
+fn extract_segment_id(path: &str) -> Option<String> {
+    path.strip_prefix("/segments/")
+        .and_then(|s| s.split('/').next())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
+fn extract_segment_id_before(path: &str, suffix: &str) -> Option<String> {
+    path.strip_prefix("/segments/")
+        .and_then(|s| s.strip_suffix(suffix))
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
 }
@@ -500,5 +571,51 @@ mod tests {
 
         let result = extract_path_param("/pricing/recalculate/", "/pricing/recalculate/");
         assert_eq!(result, None);
+    }
+
+    // Segment helper tests
+    #[test]
+    fn test_extract_segment_id_from_members_path() {
+        let result = extract_segment_id("/segments/seg-123/members");
+        assert_eq!(result, Some("seg-123".to_string()));
+    }
+
+    #[test]
+    fn test_extract_segment_id_from_simple_path() {
+        let result = extract_segment_id("/segments/seg-abc");
+        assert_eq!(result, Some("seg-abc".to_string()));
+    }
+
+    #[test]
+    fn test_extract_segment_id_empty() {
+        let result = extract_segment_id("/segments/");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_segment_id_before_export() {
+        let result = extract_segment_id_before("/segments/seg-123/export", "/export");
+        assert_eq!(result, Some("seg-123".to_string()));
+    }
+
+    #[test]
+    fn test_extract_segment_id_before_no_suffix() {
+        let result = extract_segment_id_before("/segments/seg-123", "/export");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_segment_id_before_empty() {
+        let result = extract_segment_id_before("/segments//export", "/export");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_is_valid_api_path_segments() {
+        assert!(is_valid_api_path("/segments"));
+        assert!(is_valid_api_path("/segments/seg-123"));
+        assert!(is_valid_api_path("/segments/seg-123/members"));
+        assert!(is_valid_api_path("/segments/seg-123/export"));
+        assert!(is_valid_api_path("/segments/jobs/job-456"));
     }
 }

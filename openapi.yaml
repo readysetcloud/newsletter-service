@@ -25,6 +25,7 @@ tags:
   - name: Issues
   - name: Pricing
   - name: Subscribers
+  - name: Segments
 
 paths:
   /dashboard:
@@ -1681,6 +1682,295 @@ paths:
         "500":
           $ref: "#/components/responses/UnknownError"
 
+  /segments:
+    get:
+      summary: List all segments
+      description: Returns all segments for the authenticated tenant, sorted by creation date descending
+      tags:
+        - Segments
+      responses:
+        "200":
+          description: List of segments
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListSegmentsResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+    post:
+      summary: Create a new segment
+      description: Creates a new named segment for the authenticated tenant. Segment names must be unique per tenant (case-insensitive).
+      tags:
+        - Segments
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSegmentRequest"
+      responses:
+        "201":
+          description: Segment created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SegmentResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /segments/{segmentId}:
+    parameters:
+      - name: segmentId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The segment identifier
+    get:
+      summary: Get segment details
+      description: Retrieves details of a specific segment
+      tags:
+        - Segments
+      responses:
+        "200":
+          description: Segment details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SegmentResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+    put:
+      summary: Update a segment
+      description: Updates the name and/or description of an existing segment
+      tags:
+        - Segments
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSegmentRequest"
+      responses:
+        "200":
+          description: Segment updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SegmentResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+    delete:
+      summary: Delete a segment
+      description: Deletes a segment and all its member records. Returns 200 for synchronous deletion (≤25 members) or 202 for asynchronous deletion (>25 members).
+      tags:
+        - Segments
+      responses:
+        "200":
+          description: Segment deleted synchronously
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        "202":
+          description: Segment deletion accepted (async cleanup in progress)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /segments/{segmentId}/members:
+    parameters:
+      - name: segmentId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The segment identifier
+    get:
+      summary: List segment members
+      description: Returns a paginated list of members in a segment with their engagement data
+      tags:
+        - Segments
+      parameters:
+        - name: pageSize
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+          description: Number of members per page (default 50, max 200)
+        - name: nextToken
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Pagination token from previous response
+      responses:
+        "200":
+          description: Paginated list of segment members
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListSegmentMembersResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+    post:
+      summary: Add members to a segment
+      description: Adds one or more subscribers to a segment. Non-existent subscribers are skipped.
+      tags:
+        - Segments
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddSegmentMembersRequest"
+      responses:
+        "200":
+          description: Members added (with counts of added and skipped)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AddSegmentMembersResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+    delete:
+      summary: Remove members from a segment
+      description: Removes one or more subscribers from a segment. Non-members are silently skipped.
+      tags:
+        - Segments
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RemoveSegmentMembersRequest"
+      responses:
+        "200":
+          description: Members removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemoveSegmentMembersResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /segments/{segmentId}/export:
+    parameters:
+      - name: segmentId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The segment identifier
+    post:
+      summary: Export segment members
+      description: Exports all members of a segment to a JSON file in S3. Returns the S3 key directly for segments with ≤1000 members, or a job ID for async export of larger segments.
+      tags:
+        - Segments
+      responses:
+        "200":
+          description: Synchronous export completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SegmentExportSyncResponse"
+        "202":
+          description: Async export started (poll job for status)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SegmentExportAsyncResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /segments/jobs/{jobId}:
+    parameters:
+      - name: jobId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The async job identifier
+    get:
+      summary: Get segment job status
+      description: Polls the status of an async segment operation (e.g., export). Returns the job status and result when completed.
+      tags:
+        - Segments
+      responses:
+        "200":
+          description: Job status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SegmentJobStatusResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
 components:
   parameters:
     Tenant:
@@ -2033,7 +2323,7 @@ components:
       properties:
         id:
           type: string
-          description: Issue identifier (format: tenantId#issueNumber)
+          description: Issue identifier
         issueNumber:
           type: integer
           description: Sequential issue number
@@ -2600,3 +2890,214 @@ components:
           type: number
           format: float
           description: Percentage of total subscribers in this cohort
+
+    CreateSegmentRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Segment name (1-100 characters, unique per tenant case-insensitively)
+        description:
+          type: string
+          maxLength: 500
+          description: Optional segment description
+      additionalProperties: false
+
+    UpdateSegmentRequest:
+      type: object
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: New segment name
+        description:
+          type: string
+          maxLength: 500
+          description: New segment description
+      additionalProperties: false
+
+    SegmentResponse:
+      type: object
+      required:
+        - segmentId
+        - name
+        - memberCount
+        - createdAt
+      properties:
+        segmentId:
+          type: string
+          description: Unique segment identifier (ULID)
+        name:
+          type: string
+          description: Segment name (original casing)
+        description:
+          type: string
+          nullable: true
+          description: Optional segment description
+        memberCount:
+          type: integer
+          description: Denormalized count of members (eventually consistent)
+        createdAt:
+          type: string
+          format: date-time
+          description: When the segment was created
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the segment was last updated
+
+    ListSegmentsResponse:
+      type: object
+      required:
+        - segments
+      properties:
+        segments:
+          type: array
+          items:
+            $ref: "#/components/schemas/SegmentResponse"
+          description: List of segments sorted by creation date descending
+
+    SegmentMember:
+      type: object
+      required:
+        - email
+        - addedAt
+      properties:
+        email:
+          type: string
+          format: email
+          description: Subscriber email address
+        lastEngagedIssue:
+          type: integer
+          nullable: true
+          description: Issue number of the subscriber's most recent engagement
+        engagementCount:
+          type: integer
+          nullable: true
+          description: Total engagement count for the subscriber
+        addedAt:
+          type: string
+          format: date-time
+          description: When the subscriber was added to the segment
+
+    ListSegmentMembersResponse:
+      type: object
+      required:
+        - members
+        - totalCount
+      properties:
+        members:
+          type: array
+          items:
+            $ref: "#/components/schemas/SegmentMember"
+          description: List of segment members with engagement data
+        totalCount:
+          type: integer
+          description: Total member count from segment record (eventually consistent)
+        nextToken:
+          type: string
+          description: Pagination token for next page (only present if more results available)
+
+    AddSegmentMembersRequest:
+      type: object
+      required:
+        - emails
+      properties:
+        emails:
+          type: array
+          items:
+            type: string
+            format: email
+          minItems: 1
+          maxItems: 100
+          description: List of subscriber emails to add (max 100)
+      additionalProperties: false
+
+    AddSegmentMembersResponse:
+      type: object
+      required:
+        - added
+        - skipped
+      properties:
+        added:
+          type: integer
+          description: Number of subscribers newly added to the segment
+        skipped:
+          type: integer
+          description: Number of emails skipped (non-existent subscribers)
+        skippedEmails:
+          type: array
+          items:
+            type: string
+          description: List of email addresses that were skipped
+
+    RemoveSegmentMembersRequest:
+      type: object
+      required:
+        - emails
+      properties:
+        emails:
+          type: array
+          items:
+            type: string
+            format: email
+          minItems: 1
+          maxItems: 100
+          description: List of subscriber emails to remove (max 100)
+      additionalProperties: false
+
+    RemoveSegmentMembersResponse:
+      type: object
+      required:
+        - removed
+      properties:
+        removed:
+          type: integer
+          description: Number of members actually removed
+
+    SegmentExportSyncResponse:
+      type: object
+      required:
+        - s3Key
+      properties:
+        s3Key:
+          type: string
+          description: S3 key where the export file is stored
+
+    SegmentExportAsyncResponse:
+      type: object
+      required:
+        - jobId
+      properties:
+        jobId:
+          type: string
+          description: Job identifier to poll for export completion
+
+    SegmentJobStatusResponse:
+      type: object
+      required:
+        - jobId
+        - status
+      properties:
+        jobId:
+          type: string
+          description: Job identifier
+        status:
+          type: string
+          enum: [pending, completed, failed]
+          description: Current job status
+        s3Key:
+          type: string
+          nullable: true
+          description: S3 key for the export file (present when status is completed)
+        error:
+          type: string
+          nullable: true
+          description: Error message (present when status is failed)

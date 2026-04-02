@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AppHeader } from '@/components/layout/AppHeader';
 import { ErrorDisplay, NetworkError } from '@/components/ui/ErrorDisplay';
 import { LoadingOverlay, ProgressIndicator, EmptyState, LoadingSpinner } from '@/components/ui/LoadingStates';
 
@@ -213,7 +212,6 @@ export function SenderEmailSetupPage() {
   if (state.isLoading && state.senders.length === 0) {
     return (
       <div className="min-h-screen bg-background">
-        <AppHeader />
         <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
           <div className="px-4 py-6 sm:px-0">
             <LoadingOverlay
@@ -234,7 +232,6 @@ export function SenderEmailSetupPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <AppHeader />
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">

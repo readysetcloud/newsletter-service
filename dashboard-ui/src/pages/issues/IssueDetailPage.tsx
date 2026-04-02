@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Pencil, Trash, RefreshCw, AlertCircle, TrendingUp, Users, Shield, FileText } from 'lucide-react';
-import { AppHeader } from '../../components/layout/AppHeader';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { useToast } from '../../components/ui/Toast';
@@ -584,7 +583,6 @@ export const IssueDetailPage: React.FC = () => {
   if (loading) {
     return (
       <div className="min-h-screen bg-background">
-        <AppHeader />
         <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div role="status" aria-live="polite" aria-label="Loading issue details">
             <span className="sr-only">Loading issue details...</span>
@@ -604,7 +602,6 @@ export const IssueDetailPage: React.FC = () => {
 
     return (
       <div className="min-h-screen bg-background">
-        <AppHeader />
         <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <Card>
             <CardContent className="py-12">
@@ -663,8 +660,6 @@ export const IssueDetailPage: React.FC = () => {
         {isAnalyticsRebuilding && 'Refreshing analytics insights...'}
         {loading && 'Loading issue details...'}
       </div>
-
-      <AppHeader />
 
       <main
         id="main-content"

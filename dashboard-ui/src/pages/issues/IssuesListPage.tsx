@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Trash2, Eye, RefreshCw, ArrowUpDown, ArrowUp, ArrowDown, Filter } from 'lucide-react';
-import { AppHeader } from '@/components/layout/AppHeader';
 import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/Toast';
 import { Card, CardContent } from '@/components/ui/Card';
@@ -248,7 +247,6 @@ export const IssuesListPage: React.FC = () => {
   if (loading) {
     return (
       <div className="min-h-screen bg-background">
-        <AppHeader />
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div role="status" aria-live="polite" aria-label="Loading issues">
             <span className="sr-only">Loading issues...</span>
@@ -359,7 +357,6 @@ export const IssuesListPage: React.FC = () => {
   if (error && issues.length === 0) {
     return (
       <div className="min-h-screen bg-background">
-        <AppHeader />
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div role="alert" aria-live="assertive" className="text-center py-12">
             <h3 className="text-lg font-medium text-foreground mb-2">Failed to load issues</h3>
@@ -376,7 +373,6 @@ export const IssuesListPage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      <AppHeader />
 
       <main id="main-content" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-6">

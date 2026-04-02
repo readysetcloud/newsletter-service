@@ -19,6 +19,8 @@ import {
   LazyIssueDetailPage,
   LazyIssueFormPage,
   LazySponsorshipPricingPage,
+  LazySegmentListPage,
+  LazySegmentDetailPage,
   preloadCriticalRoutes
 } from '@/utils/lazyImports';
 import { BrandOnboardingPage, ProfileOnboardingPage, SenderOnboardingPage } from '@/pages/onboarding';
@@ -203,6 +205,34 @@ function App() {
                           <OnboardingGuard>
                             <PageLoader>
                               <LazySponsorshipPricingPage />
+                            </PageLoader>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/segments"
+                    element={
+                      <RouteErrorBoundary routeName="Segments">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <PageLoader>
+                              <LazySegmentListPage />
+                            </PageLoader>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/segments/:segmentId"
+                    element={
+                      <RouteErrorBoundary routeName="Segment Details">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <PageLoader>
+                              <LazySegmentDetailPage />
                             </PageLoader>
                           </OnboardingGuard>
                         </ProtectedRoute>

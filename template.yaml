@@ -357,6 +357,19 @@ Resources:
           AttributeType: S
         - AttributeName: email
           AttributeType: S
+        - AttributeName: memberEmail
+          AttributeType: S
+      GlobalSecondaryIndexes:
+        - IndexName: SegmentMemberIndex
+          KeySchema:
+            - AttributeName: memberEmail
+              KeyType: HASH
+            - AttributeName: tenantId
+              KeyType: RANGE
+          Projection:
+            ProjectionType: KEYS_ONLY
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
 
   NewsletterBucket:
     Type: AWS::S3::Bucket
@@ -1177,14 +1190,37 @@ Resources:
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
             - Effect: Allow
               Action:
-                - dynamodb:Query
+                - dynamodb:PutItem
+                - dynamodb:DeleteItem
+                - dynamodb:UpdateItem
+                - dynamodb:BatchGetItem
+                - dynamodb:BatchWriteItem
               Resource: !GetAtt SubscribersTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource:
+                - !GetAtt SubscribersTable.Arn
+                - !Sub "${SubscribersTable.Arn}/index/SegmentMemberIndex"
+            - Effect: Allow
+              Action:
+                - lambda:InvokeFunction
+              Resource:
+                - !GetAtt SegmentDeleteFunction.Arn
+                - !GetAtt SegmentExportFunction.Arn
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource: !Sub "${NewsletterBucket.Arn}/*"
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
           USER_POOL_ID: !Ref NewsletterUserPool
           HOSTING_BUCKET_NAME: !Ref HostingBucket
           STATE_MACHINE_ARN: !Ref StageIssueStateMachine
+          SEGMENT_DELETE_FUNCTION_NAME: !Ref SegmentDeleteFunction
+          SEGMENT_EXPORT_FUNCTION_NAME: !Ref SegmentExportFunction
+          BUCKET: !Ref NewsletterBucket
           ORIGIN: !If
             - DeployFrontendCustomDomain
             - !Sub "https://${FrontendCustomDomain}"
@@ -1243,6 +1279,24 @@ Resources:
             RestApiId: !Ref DashboardApi
             Path: /pricing/questionnaire
             Method: POST
+        GetSegments:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /segments
+            Method: GET
+        PostSegments:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /segments
+            Method: POST
+        SegmentsProxy:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DashboardApi
+            Path: /segments/{proxy+}
+            Method: ANY
 
   S3AssetCleanupFunction:
     Type: AWS::Serverless::Function
@@ -1371,6 +1425,109 @@ Resources:
           BUCKET: !Ref NewsletterBucket
           TABLE_NAME: !Ref NewsletterTable
           SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
+
+  SegmentDeleteFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - subscribers/segment-delete.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: subscribers/segment-delete.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:BatchWriteItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt SubscribersTable.Arn
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
+
+  SegmentExportFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - subscribers/segment-export.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: subscribers/segment-export.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:BatchGetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt SubscribersTable.Arn
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource: !Sub "${NewsletterBucket.Arn}/*"
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
+          BUCKET: !Ref NewsletterBucket
+
+  SegmentMembershipCleanupFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - subscribers/segment-membership-cleanup.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: subscribers/segment-membership-cleanup.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource: !Sub "${SubscribersTable.Arn}/index/SegmentMemberIndex"
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:DeleteItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt SubscribersTable.Arn
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
+      Events:
+        DynamoDBStream:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt SubscribersTable.StreamArn
+            StartingPosition: TRIM_HORIZON
+            BatchSize: 10
+            FilterCriteria:
+              Filters:
+                - Pattern: '{"eventName":["REMOVE"]}'
 
   HandleEmailStatusFunction:
     Type: AWS::Serverless::Function

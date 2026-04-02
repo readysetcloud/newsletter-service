@@ -13,6 +13,7 @@ aws-sdk-cloudwatchlogs = { workspace = true }
 aws-sdk-cognitoidentityprovider = { workspace = true }
 aws-sdk-dynamodb = { workspace = true }
 aws-sdk-eventbridge = { workspace = true }
+aws-sdk-lambda = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 aws-sdk-scheduler = { workspace = true }
 aws-sdk-sesv2 = { workspace = true }
@@ -36,6 +37,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+ulid = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
@@ -106,6 +108,7 @@ aws-sdk-sesv2 = "1"
 aws-sdk-sfn = "1"
 aws-sdk-eventbridge = "1"
 aws-sdk-bedrockruntime = "1"
+aws-sdk-lambda = "1"
 aws-sdk-scheduler = "1"
 aws-smithy-types = "1"
 tracing = "0.1"
@@ -118,6 +121,7 @@ base64 = "0.22"
 hex = "0.4"
 proptest = "1"
 regex = "1"
+ulid = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 serde_dynamo = "4"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

@@ -97,6 +97,22 @@ export const LazySponsorshipPricingPage = lazy(() =>
     })
 );
 
+export const LazySegmentListPage = lazy(() =>
+  import('@/pages/segments').then(module => ({ default: module.SegmentListPage }))
+    .catch(error => {
+      console.error('Failed to load SegmentListPage:', error);
+      throw error;
+    })
+);
+
+export const LazySegmentDetailPage = lazy(() =>
+  import('@/pages/segments').then(module => ({ default: module.SegmentDetailPage }))
+    .catch(error => {
+      console.error('Failed to load SegmentDetailPage:', error);
+      throw error;
+    })
+);
+
 // Preload critical routes
 export const preloadCriticalRoutes = () => {
   // Preload dashboard since it's the default route
@@ -139,6 +155,9 @@ export const preloadRoute = (routeName: string) => {
       break;
     case 'pricing':
       import('@/pages/pricing/SponsorshipPricingPage');
+      break;
+    case 'segments':
+      import('@/pages/segments');
       break;
     case 'login':
       import('@/pages/auth/LoginPage');

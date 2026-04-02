@@ -6,23 +6,112 @@ on:
       - main
 
 concurrency:
-  group: ${{ github.ref_name }}
+  group: newsletter-service-prod
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 env:
-  BRANCH_NAME: ${{ github.event_name == 'workflow_dispatch' && github.ref_name || github.event_name == 'pull_request' && github.head_ref }}
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  changes:
+    name: Detect deploy changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      backend_changed: ${{ steps.detect.outputs.backend_changed }}
+      frontend_changed: ${{ steps.detect.outputs.frontend_changed }}
+      js_changed: ${{ steps.detect.outputs.js_changed }}
+      rust_changed: ${{ steps.detect.outputs.rust_changed }}
+      deploy_needed: ${{ steps.detect.outputs.deploy_needed }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Detect backend and frontend changes
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE_SHA="${{ github.event.before }}"
+          HEAD_SHA="${{ github.sha }}"
+
+          if [[ -z "${BASE_SHA}" || "${BASE_SHA}" == "0000000000000000000000000000000000000000" ]]; then
+            BASE_SHA="$(git rev-parse "${HEAD_SHA}^" 2>/dev/null || true)"
+          fi
+
+          if [[ -z "${BASE_SHA}" ]]; then
+            echo "backend_changed=true" >> "$GITHUB_OUTPUT"
+            echo "frontend_changed=true" >> "$GITHUB_OUTPUT"
+            echo "deploy_needed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          backend_changed=false
+          frontend_changed=false
+          js_changed=false
+          rust_changed=false
+
+          while IFS= read -r file; do
+            [[ -z "${file}" ]] && continue
+
+            case "${file}" in
+              dashboard-ui/*|scripts/deploy-ui.mjs)
+                frontend_changed=true
+                js_changed=true
+                ;;
+            esac
+
+            case "${file}" in
+              crates/*|functions/*|state-machines/*|templates/*|Cargo.toml|template.yaml|openapi.yaml|publicapi.yaml|package.json|package-lock.json|samconfig.toml)
+                backend_changed=true
+                ;;
+            esac
+
+            case "${file}" in
+              functions/*|scripts/*|__tests__/*|__mocks__/*|package.json|package-lock.json|eslint.config.js|jest.config.mjs|babel.config.json|dashboard-ui/*)
+                js_changed=true
+                ;;
+            esac
+
+            case "${file}" in
+              crates/*|Cargo.toml)
+                rust_changed=true
+                ;;
+            esac
+          done < <(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")
+
+          if [[ "${backend_changed}" == "true" || "${frontend_changed}" == "true" ]]; then
+            deploy_needed=true
+          else
+            deploy_needed=false
+          fi
+
+          echo "backend_changed=${backend_changed}" >> "$GITHUB_OUTPUT"
+          echo "frontend_changed=${frontend_changed}" >> "$GITHUB_OUTPUT"
+          echo "js_changed=${js_changed}" >> "$GITHUB_OUTPUT"
+          echo "rust_changed=${rust_changed}" >> "$GITHUB_OUTPUT"
+          echo "deploy_needed=${deploy_needed}" >> "$GITHUB_OUTPUT"
+
   predeploy-validations:
     name: Pre-deploy validations
+    needs: changes
+    if: needs.changes.outputs.deploy_needed == 'true'
     uses: ./.github/workflows/pre-deploy-validation.yaml
+    with:
+      run_js: ${{ needs.changes.outputs.js_changed == 'true' }}
+      run_rust: ${{ needs.changes.outputs.rust_changed == 'true' }}
 
-  deploy:
-    name: Deploy
+  deploy-backend:
+    name: Deploy Backend
+    needs: [changes, predeploy-validations]
+    if: needs.changes.outputs.backend_changed == 'true'
     environment: prod
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
       - name: Install Rust toolchain with Cargo Lambda
@@ -40,7 +129,6 @@ jobs:
           aws-region: us-east-1
           aws-access-key-id: ${{ secrets.PROD_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.PROD_SECRET_KEY }}
-
       - name: SAM Build and Deploy
         run: |
           npm install -g esbuild
@@ -56,13 +144,31 @@ jobs:
           --capabilities CAPABILITY_IAM \
           --parameter-overrides Environment=production EncryptionKey=${{secrets.ENCRYPTION_KEY}} RedirectCustomDomain=rdyset.click VerifiedFromEmail=${{vars.VERIFIED_FROM_EMAIL}} FrontendCustomDomain=${{vars.FRONTEND_CUSTOM_DOMAIN}} FrontendHostedZoneId=${{vars.FRONTEND_HOSTED_ZONE_ID}}
 
+  deploy-frontend:
+    name: Deploy Frontend
+    needs: [changes, predeploy-validations, deploy-backend]
+    if: |
+      always() &&
+      needs.predeploy-validations.result == 'success' &&
+      (needs.deploy-backend.result == 'success' || needs.deploy-backend.result == 'skipped') &&
+      (needs.changes.outputs.frontend_changed == 'true' || needs.changes.outputs.backend_changed == 'true')
+    environment: prod
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-region: us-east-1
+          aws-access-key-id: ${{ secrets.PROD_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.PROD_SECRET_KEY }}
       - name: Setup Node.js for Frontend
         uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: 'npm'
           cache-dependency-path: dashboard-ui/package-lock.json
-
       - name: Deploy Frontend
         run: |
           node scripts/deploy-ui.mjs --ci --stack-name newsletter-service --region us-east-1

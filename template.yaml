@@ -3729,6 +3729,7 @@ Resources:
             - Effect: Allow
               Action:
                 - dynamodb:PutItem
+                - dynamodb:GetItem
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:

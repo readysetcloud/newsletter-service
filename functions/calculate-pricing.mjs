@@ -254,8 +254,13 @@ async function collectMetrics(tenantId, previousRecord) {
 
   const issueMetrics = recentIssues.map(extractIssueMetrics);
   const averages = computeMetricAverages(issueMetrics);
-  const trendSummary = buildTrendSummary(issueMetrics);
-  const publishedAtValues = recentIssues
+
+  // Trend analysis expects oldest -> newest ordering, while the query returns
+  // newest first for recency and averaging purposes.
+  const chronologicalIssues = [...recentIssues].reverse();
+  const chronologicalIssueMetrics = chronologicalIssues.map(extractIssueMetrics);
+  const trendSummary = buildTrendSummary(chronologicalIssueMetrics);
+  const publishedAtValues = chronologicalIssues
     .map(getIssuePublishedAt)
     .filter(Boolean);
   const cadenceStats = computeCadenceStats(publishedAtValues);

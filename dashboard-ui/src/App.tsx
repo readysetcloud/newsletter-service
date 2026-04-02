@@ -208,7 +208,7 @@ function App() {
                   <Route
                     path="/pricing"
                     element={
-                      <RouteErrorBoundary routeName="Sponsorship Pricing">
+                      <RouteErrorBoundary routeName="Sponsors">
                         <ProtectedRoute>
                           <OnboardingGuard>
                             <AppShell>

@@ -37,7 +37,7 @@ describe('usePageMeta', () => {
       { path: '/issues', title: 'Issues' },
       { path: '/subscribers', title: 'Subscribers' },
       { path: '/brand', title: 'Brand' },
-      { path: '/pricing', title: 'Sponsorship Pricing' },
+      { path: '/pricing', title: 'Sponsors' },
       { path: '/profile', title: 'Profile' },
       { path: '/senders', title: 'Sender Emails' },
       { path: '/api-keys', title: 'API Keys' },

@@ -44,7 +44,7 @@ describe('AppSidebar', () => {
       expect(screen.getByText('Issues')).toBeInTheDocument();
       expect(screen.getByText('Subscribers')).toBeInTheDocument();
       expect(screen.getByText('Brand')).toBeInTheDocument();
-      expect(screen.getByText('Sponsorship Pricing')).toBeInTheDocument();
+      expect(screen.getByText('Sponsors')).toBeInTheDocument();
     });
 
     it('renders an icon for each nav item', () => {
@@ -119,9 +119,9 @@ describe('AppSidebar', () => {
       expect(link).toHaveAttribute('aria-current', 'page');
     });
 
-    it('marks Sponsorship Pricing as active on /pricing', () => {
+    it('marks Sponsors as active on /pricing', () => {
       renderSidebar(['/pricing']);
-      const link = screen.getByText('Sponsorship Pricing').closest('a');
+      const link = screen.getByText('Sponsors').closest('a');
       expect(link).toHaveAttribute('aria-current', 'page');
     });
 

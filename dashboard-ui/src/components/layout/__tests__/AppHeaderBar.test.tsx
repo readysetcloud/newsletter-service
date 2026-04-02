@@ -161,9 +161,9 @@ describe('AppHeaderBar', () => {
       expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Brand');
     });
 
-    it('renders "Sponsorship Pricing" title on /pricing', () => {
+    it('renders "Sponsors" title on /pricing', () => {
       renderAtRoute('/pricing');
-      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Sponsorship Pricing');
+      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Sponsors');
     });
   });
 

@@ -134,7 +134,7 @@ describe('MobileDrawer', () => {
       expect(screen.getByText('Issues')).toBeInTheDocument();
       expect(screen.getByText('Subscribers')).toBeInTheDocument();
       expect(screen.getByText('Brand')).toBeInTheDocument();
-      expect(screen.getByText('Sponsorship Pricing')).toBeInTheDocument();
+      expect(screen.getByText('Sponsors')).toBeInTheDocument();
     });
 
     it('renders account items (Profile, Sender Emails, API Keys)', () => {

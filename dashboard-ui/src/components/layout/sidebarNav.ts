@@ -19,7 +19,7 @@ export const NAV_ITEMS: SidebarNavItem[] = [
   { name: 'Issues', href: '/issues', icon: FileText, preloadKey: 'issues', matchPaths: ['/issues'] },
   { name: 'Subscribers', href: '/subscribers', icon: UserGroupIcon, preloadKey: 'subscribers', matchPaths: ['/subscribers', '/segments'] },
   { name: 'Brand', href: '/brand', icon: BuildingOfficeIcon, preloadKey: 'brand', matchPaths: ['/brand'] },
-  { name: 'Sponsorship Pricing', href: '/pricing', icon: CurrencyDollarIcon, preloadKey: 'pricing', matchPaths: ['/pricing'] },
+  { name: 'Sponsors', href: '/pricing', icon: CurrencyDollarIcon, preloadKey: 'pricing', matchPaths: ['/pricing'] },
 ];
 
 /**

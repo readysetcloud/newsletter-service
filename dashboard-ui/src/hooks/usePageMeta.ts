@@ -15,7 +15,7 @@ export const ROUTE_META: Record<string, { title: string; parent?: { label: strin
   '/issues': { title: 'Issues' },
   '/subscribers': { title: 'Subscribers' },
   '/brand': { title: 'Brand' },
-  '/pricing': { title: 'Sponsorship Pricing' },
+  '/pricing': { title: 'Sponsors' },
   '/profile': { title: 'Profile' },
   '/senders': { title: 'Sender Emails' },
   '/api-keys': { title: 'API Keys' },

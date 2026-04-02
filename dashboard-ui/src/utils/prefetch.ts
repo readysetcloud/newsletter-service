@@ -5,6 +5,10 @@
  * that are likely to be needed based on user behavior.
  */
 
+interface PrefetchRequestInit extends RequestInit {
+  priority?: 'high' | 'low' | 'auto';
+}
+
 /**
  * Prefetch a lazy-loaded component by triggering its import
  * This loads the component in the background without rendering it
@@ -38,11 +42,13 @@ export function prefetchData(url: string): void {
     ((cb: IdleRequestCallback) => setTimeout(cb, 1))) as typeof requestIdleCallback;
 
   scheduleTask(() => {
-    fetch(url, {
+    const requestInit: PrefetchRequestInit = {
       method: 'GET',
       credentials: 'include',
       priority: 'low',
-    }).catch((error) => {
+    };
+
+    fetch(url, requestInit).catch((error) => {
       console.warn('Failed to prefetch data:', error);
     });
   });

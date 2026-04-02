@@ -115,7 +115,7 @@ async function decrementMemberCount(tenantId, segmentId, count) {
       TableName: TABLE_NAME,
       Key: marshall({ tenantId, email: `SEGMENT#${segmentId}` }),
       UpdateExpression: "SET memberCount = if_not_exists(memberCount, :zero) - :count",
-      ConditionExpression: "if_not_exists(memberCount, :zero) >= :count",
+      ConditionExpression: "attribute_exists(memberCount) AND memberCount >= :count",
       ExpressionAttributeValues: marshall({
         ":count": count,
         ":zero": 0

@@ -7,7 +7,9 @@ const TABLE_NAME = process.env.SUBSCRIBERS_TABLE_NAME;
 const BATCH_SIZE = 25;
 
 export const handler = async (event) => {
-  const { tenantId, segmentId } = event;
+  // Support both direct invocation and EventBridge event shapes
+  const detail = event.detail || event;
+  const { tenantId, segmentId } = detail;
   console.log(`Deleting segment members for segment ${segmentId} in tenant ${tenantId}`);
 
   try {

@@ -699,8 +699,49 @@ async fn handle_delete_segment(
 
         response::format_response(200, serde_json::json!({ "deleted": true }))
     } else {
-        // 3b. Async deletion: delete segment + uniqueness immediately, invoke Lambda async
-        // TransactWriteItems to delete segment record + uniqueness record
+        // 3b. Async deletion: publish EventBridge event for cleanup first,
+        //     then delete metadata. If the publish fails, the segment still
+        //     exists so the delete can be retried from the API.
+
+        // Publish segment cleanup event to EventBridge
+        let eventbridge_client = aws_clients::get_eventbridge_client().await;
+        let detail = serde_json::json!({
+            "tenantId": tenant_id,
+            "segmentId": segment_id
+        });
+        let detail_str = serde_json::to_string(&detail).map_err(|e| {
+            AppError::InternalError(format!("Failed to serialize event detail: {}", e))
+        })?;
+
+        let put_result = eventbridge_client
+            .put_events()
+            .entries(
+                aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
+                    .source("newsletter-service")
+                    .detail_type("SEGMENT_DELETE_REQUESTED")
+                    .detail(detail_str)
+                    .build(),
+            )
+            .send()
+            .await
+            .map_err(|e| AppError::AwsError(format!("EventBridge publish failed: {}", e)))?;
+
+        // Check for partial failures
+        for entry in put_result.entries() {
+            if let Some(error_code) = entry.error_code() {
+                tracing::error!(
+                    segment_id = %segment_id,
+                    error_code = %error_code,
+                    error_message = ?entry.error_message(),
+                    "Failed to publish segment delete event to EventBridge"
+                );
+                return Err(AppError::InternalError(
+                    "Failed to publish segment delete event".to_string(),
+                ));
+            }
+        }
+
+        // Event accepted — now safe to delete segment + uniqueness records
         let delete_segment = Delete::builder()
             .table_name(&table_name)
             .key("tenantId", AttributeValue::S(tenant_id.clone()))
@@ -726,30 +767,6 @@ async fn handle_delete_segment(
             .send()
             .await
             .map_err(|e| AppError::AwsError(format!("DynamoDB TransactWriteItems error: {}", e)))?;
-
-        // Invoke SegmentDeleteFunction asynchronously
-        let function_name = env::var("SEGMENT_DELETE_FUNCTION_NAME").map_err(|_| {
-            AppError::InternalError("SEGMENT_DELETE_FUNCTION_NAME not set".to_string())
-        })?;
-
-        let lambda_client = aws_clients::get_lambda_client().await;
-        let payload = serde_json::json!({
-            "tenantId": tenant_id,
-            "segmentId": segment_id
-        });
-
-        lambda_client
-            .invoke()
-            .function_name(&function_name)
-            .invocation_type(aws_sdk_lambda::types::InvocationType::Event)
-            .payload(aws_smithy_types::Blob::new(
-                serde_json::to_vec(&payload).map_err(|e| {
-                    AppError::InternalError(format!("Failed to serialize payload: {}", e))
-                })?,
-            ))
-            .send()
-            .await
-            .map_err(|e| AppError::AwsError(format!("Lambda invoke error: {}", e)))?;
 
         response::format_response(202, serde_json::json!({ "deleted": true, "async": true }))
     }
@@ -1051,8 +1068,11 @@ async fn handle_remove_members(
     }
 
     // 3. BatchWriteItem to delete confirmed member records (in batches of 25)
+    //    Retry any unprocessed items with exponential backoff to ensure all
+    //    deletes complete before we decrement memberCount.
+    let mut actually_deleted: i64 = 0;
     for chunk in confirmed_member_sks.chunks(25) {
-        let delete_requests: Vec<WriteRequest> = chunk
+        let mut pending_requests: Vec<WriteRequest> = chunk
             .iter()
             .map(|sk| {
                 let mut key = HashMap::new();
@@ -1069,15 +1089,53 @@ async fn handle_remove_members(
             })
             .collect();
 
-        ddb_client
-            .batch_write_item()
-            .request_items(&table_name, delete_requests)
-            .send()
-            .await
-            .map_err(|e| AppError::AwsError(format!("DynamoDB BatchWriteItem error: {}", e)))?;
+        let mut retries = 0u32;
+        const MAX_RETRIES: u32 = 5;
+
+        loop {
+            let batch_size = pending_requests.len() as i64;
+            let result = ddb_client
+                .batch_write_item()
+                .request_items(&table_name, pending_requests.clone())
+                .send()
+                .await
+                .map_err(|e| AppError::AwsError(format!("DynamoDB BatchWriteItem error: {}", e)))?;
+
+            let unprocessed = result
+                .unprocessed_items()
+                .and_then(|items| items.get(&table_name))
+                .cloned()
+                .unwrap_or_default();
+
+            actually_deleted += batch_size - unprocessed.len() as i64;
+
+            if unprocessed.is_empty() {
+                break;
+            }
+
+            retries += 1;
+            if retries > MAX_RETRIES {
+                tracing::warn!(
+                    "BatchWriteItem still has {} unprocessed items after {} retries for segment {}",
+                    unprocessed.len(),
+                    MAX_RETRIES,
+                    segment_id
+                );
+                break;
+            }
+
+            // Exponential backoff: 50ms, 100ms, 200ms, 400ms, 800ms
+            let delay_ms = 50 * (1u64 << (retries - 1));
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            pending_requests = unprocessed;
+        }
     }
 
-    // 4. Decrement memberCount with floor-at-zero protection
+    if actually_deleted == 0 {
+        return response::format_response(200, RemoveMembersResponse { removed: 0 });
+    }
+
+    // 4. Decrement memberCount by the number actually deleted, with floor-at-zero protection
     let decrement_result = ddb_client
         .update_item()
         .table_name(&table_name)
@@ -1085,7 +1143,7 @@ async fn handle_remove_members(
         .key("email", AttributeValue::S(segment_sk.clone()))
         .update_expression("SET memberCount = if_not_exists(memberCount, :zero) - :count")
         .condition_expression("memberCount >= :count")
-        .expression_attribute_values(":count", AttributeValue::N(removed_count.to_string()))
+        .expression_attribute_values(":count", AttributeValue::N(actually_deleted.to_string()))
         .expression_attribute_values(":zero", AttributeValue::N("0".to_string()))
         .send()
         .await;
@@ -1118,7 +1176,7 @@ async fn handle_remove_members(
     response::format_response(
         200,
         RemoveMembersResponse {
-            removed: removed_count,
+            removed: actually_deleted,
         },
     )
 }

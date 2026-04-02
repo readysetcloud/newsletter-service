@@ -1206,7 +1206,6 @@ Resources:
               Action:
                 - lambda:InvokeFunction
               Resource:
-                - !GetAtt SegmentDeleteFunction.Arn
                 - !GetAtt SegmentExportFunction.Arn
             - Effect: Allow
               Action:
@@ -1218,7 +1217,6 @@ Resources:
           USER_POOL_ID: !Ref NewsletterUserPool
           HOSTING_BUCKET_NAME: !Ref HostingBucket
           STATE_MACHINE_ARN: !Ref StageIssueStateMachine
-          SEGMENT_DELETE_FUNCTION_NAME: !Ref SegmentDeleteFunction
           SEGMENT_EXPORT_FUNCTION_NAME: !Ref SegmentExportFunction
           BUCKET: !Ref NewsletterBucket
           ORIGIN: !If
@@ -1452,6 +1450,15 @@ Resources:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
+      Events:
+        SegmentDeleteEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - newsletter-service
+              detail-type:
+                - SEGMENT_DELETE_REQUESTED
 
   SegmentExportFunction:
     Type: AWS::Serverless::Function

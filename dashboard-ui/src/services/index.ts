@@ -7,3 +7,4 @@ export * from './billingService';
 export * from './issuesService';
 export * from './pricingService';
 export * from './reportService';
+export * from './subscriberService';

@@ -10,10 +10,10 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import type { DataListColumn } from '@/components/ui/DataList';
 import { SubscriberGrowthChart } from '@/components/SubscriberGrowthChart';
 import { AudienceHealthWidget } from '@/components/AudienceHealthWidget';
-import { dashboardService } from '@/services/dashboardService';
+import { subscriberService } from '@/services/subscriberService';
 import { segmentService } from '@/services/segmentService';
 import type { Segment } from '@/services/segmentService';
-import type { TrendsData } from '@/types';
+import type { SubscriberTrendsResponse } from '@/types';
 
 const formatDate = (dateString: string) =>
   new Date(dateString).toLocaleDateString('en-US', {
@@ -86,7 +86,8 @@ export const SubscribersPage: React.FC = () => {
   const navigate = useNavigate();
   const { addToast } = useToast();
 
-  const [trendsData, setTrendsData] = useState<TrendsData | null>(null);
+  const [trendsData, setTrendsData] = useState<SubscriberTrendsResponse | null>(null);
+  const [subscriberCount, setSubscriberCount] = useState(0);
   const [segments, setSegments] = useState<Segment[]>([]);
   const [trendsLoading, setTrendsLoading] = useState(true);
   const [segmentsLoading, setSegmentsLoading] = useState(true);
@@ -104,11 +105,19 @@ export const SubscribersPage: React.FC = () => {
     try {
       setTrendsLoading(true);
       setTrendsError(null);
-      const response = await dashboardService.getTrends();
-      if (response.success && response.data) {
-        setTrendsData(response.data);
+      const [countResponse, trendsResponse] = await Promise.all([
+        subscriberService.getCount(),
+        subscriberService.getTrends(),
+      ]);
+      if (countResponse.success && countResponse.data && trendsResponse.success && trendsResponse.data) {
+        setSubscriberCount(countResponse.data.totalSubscribers);
+        setTrendsData(trendsResponse.data);
       } else {
-        setTrendsError(response.error || 'Failed to load subscriber data');
+        setTrendsError(
+          countResponse.error ||
+          trendsResponse.error ||
+          'Failed to load subscriber data'
+        );
       }
     } catch {
       setTrendsError('Failed to load subscriber data');
@@ -139,9 +148,8 @@ export const SubscribersPage: React.FC = () => {
     loadSegments();
   }, [loadTrends, loadSegments]);
 
-  const subscriberCount = trendsData?.issues?.[0]?.metrics?.subscribers ?? 0;
-  const latestIssueNumber = trendsData?.issues?.[0]?.id
-    ? Number(trendsData.issues[0].id)
+  const latestIssueNumber = trendsData?.points?.[0]?.issueNumber
+    ? Number(trendsData.points[0].issueNumber)
     : 0;
 
   const segmentColumns: DataListColumn<Segment>[] = useMemo(

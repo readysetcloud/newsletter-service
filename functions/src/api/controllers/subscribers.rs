@@ -45,12 +45,52 @@ struct CohortDetail {
     percentage: f64,
 }
 
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct SubscriberCountResponse {
+    total_subscribers: i64,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct SubscriberTrendsResponse {
+    points: Vec<SubscriberTrendPoint>,
+    summary: SubscriberTrendSummary,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct SubscriberTrendPoint {
+    issue_number: i64,
+    subscribers: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    published_at: Option<String>,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct SubscriberTrendSummary {
+    latest_subscribers: i64,
+    oldest_subscribers: i64,
+    net_change: i64,
+    percentage_change: f64,
+    points_returned: i64,
+}
+
 /// Engagement cohort classification for a single subscriber.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EngagementCohort {
     HighlyEngaged,
     Occasional,
     Dormant,
+}
+
+struct SubscriberTrendsQuery {
+    issue_count: i32,
+}
+
+fn default_issue_count() -> i32 {
+    10
 }
 
 // ── Public endpoint handlers ───────────────────────────────────────────
@@ -89,6 +129,22 @@ pub async fn get_audience_health(event: Request) -> Result<Response<Body>, Error
     }
 }
 
+/// GET /subscribers/count
+pub async fn get_subscriber_count(event: Request) -> Result<Response<Body>, Error> {
+    match handle_get_subscriber_count(event).await {
+        Ok(resp) => Ok(resp),
+        Err(e) => Ok(response::format_error_response(&e)),
+    }
+}
+
+/// GET /subscribers/trends
+pub async fn get_subscriber_trends(event: Request) -> Result<Response<Body>, Error> {
+    match handle_get_subscriber_trends(event).await {
+        Ok(resp) => Ok(resp),
+        Err(e) => Ok(response::format_error_response(&e)),
+    }
+}
+
 // ── Internal handlers ──────────────────────────────────────────────────
 
 async fn handle_get_audience_health(event: Request) -> Result<Response<Body>, AppError> {
@@ -122,6 +178,37 @@ async fn handle_get_audience_health(event: Request) -> Result<Response<Body>, Ap
     .await?;
 
     response::format_response(200, health)
+}
+
+async fn handle_get_subscriber_count(event: Request) -> Result<Response<Body>, AppError> {
+    let user_context = auth::get_user_context(&event)?;
+    let tenant_id = user_context
+        .tenant_id
+        .ok_or_else(|| AppError::Forbidden("Tenant access required".to_string()))?;
+
+    let table_name = get_newsletter_table_name()?;
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+    let total_subscribers =
+        query_current_subscriber_count(ddb_client, &table_name, &tenant_id).await?;
+
+    response::format_response(200, SubscriberCountResponse { total_subscribers })
+}
+
+async fn handle_get_subscriber_trends(event: Request) -> Result<Response<Body>, AppError> {
+    let user_context = auth::get_user_context(&event)?;
+    let tenant_id = user_context
+        .tenant_id
+        .ok_or_else(|| AppError::Forbidden("Tenant access required".to_string()))?;
+
+    let query = parse_subscriber_trends_query_params(&event)?;
+    let table_name = get_newsletter_table_name()?;
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+    let points =
+        query_subscriber_trend_points(ddb_client, &table_name, &tenant_id, query.issue_count)
+            .await?;
+    let summary = calculate_trend_summary(&points);
+
+    response::format_response(200, SubscriberTrendsResponse { points, summary })
 }
 
 async fn handle_get_sunset_candidates(event: Request) -> Result<Response<Body>, AppError> {
@@ -175,10 +262,131 @@ fn get_subscribers_table_name() -> Result<String, AppError> {
         .map_err(|_| AppError::InternalError("SUBSCRIBERS_TABLE_NAME not set".to_string()))
 }
 
+fn get_newsletter_table_name() -> Result<String, AppError> {
+    env::var("TABLE_NAME").map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))
+}
+
+fn parse_subscriber_trends_query_params(
+    event: &Request,
+) -> Result<SubscriberTrendsQuery, AppError> {
+    let query_params = event.query_string_parameters();
+    let issue_count = query_params
+        .first("issueCount")
+        .map(|s| {
+            s.parse::<i32>()
+                .map_err(|_| AppError::BadRequest("issueCount must be a valid integer".to_string()))
+        })
+        .transpose()?
+        .unwrap_or_else(default_issue_count);
+
+    if !(1..=50).contains(&issue_count) {
+        return Err(AppError::BadRequest(
+            "issueCount must be between 1 and 50".to_string(),
+        ));
+    }
+
+    Ok(SubscriberTrendsQuery { issue_count })
+}
+
 fn hash_email(email: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(email.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+async fn query_current_subscriber_count(
+    ddb_client: &aws_sdk_dynamodb::Client,
+    table_name: &str,
+    tenant_id: &str,
+) -> Result<i64, AppError> {
+    let result = ddb_client
+        .get_item()
+        .table_name(table_name)
+        .key("pk", AttributeValue::S(tenant_id.to_string()))
+        .key("sk", AttributeValue::S("tenant".to_string()))
+        .send()
+        .await?;
+
+    let item = result
+        .item()
+        .ok_or_else(|| AppError::NotFound("Tenant not found".to_string()))?;
+
+    Ok(item
+        .get("subscribers")
+        .and_then(|v| v.as_n().ok())
+        .and_then(|n| n.parse::<i64>().ok())
+        .unwrap_or(0))
+}
+
+async fn query_subscriber_trend_points(
+    ddb_client: &aws_sdk_dynamodb::Client,
+    table_name: &str,
+    tenant_id: &str,
+    issue_count: i32,
+) -> Result<Vec<SubscriberTrendPoint>, AppError> {
+    let gsi1pk = format!("{}#issue", tenant_id);
+
+    let result = ddb_client
+        .query()
+        .table_name(table_name)
+        .index_name("GSI1")
+        .key_condition_expression("GSI1PK = :gsi1pk")
+        .expression_attribute_values(":gsi1pk", AttributeValue::S(gsi1pk))
+        .scan_index_forward(false)
+        .limit(issue_count)
+        .send()
+        .await?;
+
+    Ok(result
+        .items()
+        .iter()
+        .filter_map(parse_subscriber_trend_point)
+        .collect())
+}
+
+fn parse_subscriber_trend_point(
+    item: &std::collections::HashMap<String, AttributeValue>,
+) -> Option<SubscriberTrendPoint> {
+    let issue_number = item
+        .get("GSI1SK")
+        .and_then(|v| v.as_s().ok())
+        .and_then(|s| s.parse::<i64>().ok())?;
+
+    let stats = item.get("stats")?.as_m().ok()?;
+    let subscribers = stats
+        .get("subscribers")
+        .and_then(|v| v.as_n().ok())
+        .and_then(|n| n.parse::<i64>().ok())?;
+
+    let published_at = item
+        .get("publishedAt")
+        .and_then(|v| v.as_s().ok())
+        .map(|s| s.to_string());
+
+    Some(SubscriberTrendPoint {
+        issue_number,
+        subscribers,
+        published_at,
+    })
+}
+
+fn calculate_trend_summary(points: &[SubscriberTrendPoint]) -> SubscriberTrendSummary {
+    let latest_subscribers = points.first().map(|point| point.subscribers).unwrap_or(0);
+    let oldest_subscribers = points.last().map(|point| point.subscribers).unwrap_or(0);
+    let net_change = latest_subscribers - oldest_subscribers;
+    let percentage_change = if oldest_subscribers > 0 {
+        ((net_change as f64 / oldest_subscribers as f64) * 1000.0).round() / 10.0
+    } else {
+        0.0
+    };
+
+    SubscriberTrendSummary {
+        latest_subscribers,
+        oldest_subscribers,
+        net_change,
+        percentage_change,
+        points_returned: points.len() as i64,
+    }
 }
 
 /// Query all subscribers for a tenant and filter for sunset candidates.
@@ -459,6 +667,22 @@ mod tests {
         item
     }
 
+    fn make_trend_item(issue_number: i64, subscribers: i64) -> HashMap<String, AttributeValue> {
+        let mut item = HashMap::new();
+        item.insert(
+            "GSI1SK".to_string(),
+            AttributeValue::S(issue_number.to_string()),
+        );
+        item.insert(
+            "stats".to_string(),
+            AttributeValue::M(HashMap::from([(
+                "subscribers".to_string(),
+                AttributeValue::N(subscribers.to_string()),
+            )])),
+        );
+        item
+    }
+
     #[test]
     fn test_subscriber_with_old_engagement_is_flagged() {
         // lastEngagedIssue = 5, latestIssueNumber = 20, threshold = 10
@@ -721,5 +945,53 @@ mod tests {
         let percentage =
             |count: i64| -> f64 { ((count as f64 / total as f64) * 1000.0).round() / 10.0 };
         assert_eq!(percentage(1), 33.3);
+    }
+
+    #[test]
+    fn test_parse_subscriber_trend_point() {
+        let item = make_trend_item(12, 1450);
+        let point = parse_subscriber_trend_point(&item).unwrap();
+
+        assert_eq!(point.issue_number, 12);
+        assert_eq!(point.subscribers, 1450);
+        assert_eq!(point.published_at, None);
+    }
+
+    #[test]
+    fn test_calculate_trend_summary_multiple_points() {
+        let points = vec![
+            SubscriberTrendPoint {
+                issue_number: 12,
+                subscribers: 1450,
+                published_at: None,
+            },
+            SubscriberTrendPoint {
+                issue_number: 11,
+                subscribers: 1300,
+                published_at: None,
+            },
+            SubscriberTrendPoint {
+                issue_number: 10,
+                subscribers: 1200,
+                published_at: None,
+            },
+        ];
+
+        let summary = calculate_trend_summary(&points);
+        assert_eq!(summary.latest_subscribers, 1450);
+        assert_eq!(summary.oldest_subscribers, 1200);
+        assert_eq!(summary.net_change, 250);
+        assert_eq!(summary.percentage_change, 20.8);
+        assert_eq!(summary.points_returned, 3);
+    }
+
+    #[test]
+    fn test_calculate_trend_summary_empty_points() {
+        let summary = calculate_trend_summary(&[]);
+        assert_eq!(summary.latest_subscribers, 0);
+        assert_eq!(summary.oldest_subscribers, 0);
+        assert_eq!(summary.net_change, 0);
+        assert_eq!(summary.percentage_change, 0.0);
+        assert_eq!(summary.points_returned, 0);
     }
 }

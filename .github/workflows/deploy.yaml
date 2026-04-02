@@ -6,8 +6,8 @@ on:
       - main
 
 concurrency:
-  group: ${{ github.ref_name }}
-  cancel-in-progress: true
+  group: newsletter-service-prod
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -119,8 +119,6 @@ jobs:
         with:
           bins: cargo-lambda
           targets: aarch64-unknown-linux-gnu
-      - name: Restore Rust cache
-        uses: Swatinem/rust-cache@v2
       - name: Install Zig toolchain
         uses: mlugg/setup-zig@v2
         with:

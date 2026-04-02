@@ -1,7 +1,6 @@
 
 import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { AppHeader } from '@/components/layout/AppHeader';
 import { dashboardService } from '@/services/dashboardService';
 import { profileService } from '@/services/profileService';
 import { DashboardSkeleton } from '@/components/ui/SkeletonLoader';
@@ -224,7 +223,6 @@ export function DashboardPage() {
   if (loading) {
     return (
       <div className="min-h-screen bg-background">
-        <AppHeader />
         <main className="max-w-7xl mx-auto py-2 sm:px-6 lg:px-8">
           <div className="px-4 py-4 sm:px-0">
             <div className="mb-4 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
@@ -246,7 +244,6 @@ export function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <AppHeader />
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto py-2 sm:px-6 lg:px-8">

@@ -6,9 +6,6 @@ import type { SenderEmail, TierLimits } from '@/types';
 
 // Mock dependencies
 vi.mock('@/services/senderService');
-vi.mock('@/components/layout/AppHeader', () => ({
-  AppHeader: () => <div data-testid="app-header">App Header</div>
-}));
 vi.mock('@/components/ui/Toast', () => ({
   useToast: () => ({
     addToast: vi.fn()
@@ -83,7 +80,6 @@ describe('SenderEmailSetupPage', () => {
     render(<SenderEmailSetupPage />);
 
     await waitFor(() => {
-      expect(screen.getByTestId('app-header')).toBeInTheDocument();
       expect(screen.getByText('Sender Email Setup')).toBeInTheDocument();
       expect(screen.getByText(/configure verified email addresses/i)).toBeInTheDocument();
     });

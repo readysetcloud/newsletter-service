@@ -9,7 +9,6 @@ import {
 } from 'recharts';
 import { RefreshCw, DollarSign, ChevronDown, AlertCircle, Info, FileDown } from 'lucide-react';
 import { reportService } from '../../services/reportService';
-import { AppHeader } from '../../components/layout/AppHeader';
 import { Card, CardContent } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { pricingService } from '../../services/pricingService';
@@ -483,7 +482,6 @@ export const SponsorshipPricingPage: React.FC = () => {
   // ------------------------------------------------------------------
   return (
     <div className="min-h-screen bg-background">
-      <AppHeader />
       <main id="main-content" className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
         <h1 className="text-2xl sm:text-3xl font-bold text-foreground">Sponsorship Pricing</h1>
 

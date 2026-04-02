@@ -786,12 +786,20 @@ async fn handle_list_segments(event: Request) -> Result<lambda_http::Response<Bo
         .table_name(&table_name)
         .key_condition_expression("tenantId = :pk AND begins_with(email, :sk_prefix)")
         .filter_expression("NOT contains(email, :member_marker)")
-        .expression_attribute_values(":pk", AttributeValue::S(tenant_id))
+        .expression_attribute_values(":pk", AttributeValue::S(tenant_id.clone()))
         .expression_attribute_values(":sk_prefix", AttributeValue::S("SEGMENT#".to_string()))
         .expression_attribute_values(":member_marker", AttributeValue::S("#MEMBER#".to_string()))
         .send()
         .await
-        .map_err(|e| AppError::AwsError(format!("DynamoDB query error: {}", e)))?;
+        .map_err(|e| {
+            tracing::error!(
+                error = ?e,
+                tenant_id = %tenant_id,
+                table_name = %table_name,
+                "Failed to query segments from DynamoDB"
+            );
+            AppError::AwsError(format!("DynamoDB query error: {}", e))
+        })?;
 
     let mut segments: Vec<SegmentResponse> = result
         .items()

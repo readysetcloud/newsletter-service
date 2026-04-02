@@ -2,14 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { SubscribersPage } from '../SubscribersPage';
-import { dashboardService } from '@/services/dashboardService';
+import { subscriberService } from '@/services/subscriberService';
 import { segmentService } from '@/services/segmentService';
 import type { Segment } from '@/services/segmentService';
-import type { TrendsData } from '@/types';
+import type { SubscriberTrendsResponse } from '@/types';
 
-// Mock dashboardService
-vi.mock('@/services/dashboardService', () => ({
-  dashboardService: {
+// Mock subscriberService
+vi.mock('@/services/subscriberService', () => ({
+  subscriberService: {
+    getCount: vi.fn(),
     getTrends: vi.fn(),
   },
 }));
@@ -40,7 +41,7 @@ vi.mock('@/components/ui/Toast', () => ({
 
 // Mock SubscriberGrowthChart as a simple stub
 vi.mock('@/components/SubscriberGrowthChart', () => ({
-  SubscriberGrowthChart: (_props: { trendsData: TrendsData }) => (
+  SubscriberGrowthChart: (_props: { trendsData: SubscriberTrendsResponse }) => (
     <div data-testid="subscriber-growth-chart">SubscriberGrowthChart</div>
   ),
 }));
@@ -54,31 +55,20 @@ vi.mock('@/components/AudienceHealthWidget', () => ({
 
 // --- Test data ---
 
-const mockTrendsData: TrendsData = {
-  issues: [
+const mockTrendsData: SubscriberTrendsResponse = {
+  points: [
     {
-      id: '5',
-      metrics: {
-        subscribers: 1234,
-        opens: 800,
-        clicks: 200,
-        bounces: 10,
-        delivered: 1200,
-        complaints: 1,
-        openRate: 0.65,
-        clickRate: 0.16,
-        clickToOpenRate: 0.25,
-        bounceRate: 0.008,
-      },
+      issueNumber: 5,
+      subscribers: 1234,
+      publishedAt: '2025-01-20T10:00:00Z',
     },
   ],
-  aggregates: {
-    avgOpenRate: 0.6,
-    avgClickRate: 0.15,
-    avgClickToOpenRate: 0.25,
-    avgBounceRate: 0.01,
-    totalDelivered: 5000,
-    issueCount: 5,
+  summary: {
+    latestSubscribers: 1234,
+    oldestSubscribers: 1234,
+    netChange: 0,
+    percentageChange: 0,
+    pointsReturned: 1,
   },
 };
 
@@ -112,7 +102,8 @@ describe('SubscribersPage', () => {
 
   // --- Loading state ---
   it('displays skeleton placeholders while data is loading', () => {
-    vi.mocked(dashboardService.getTrends).mockReturnValue(new Promise(() => {}));
+    vi.mocked(subscriberService.getCount).mockReturnValue(new Promise(() => {}));
+    vi.mocked(subscriberService.getTrends).mockReturnValue(new Promise(() => {}));
     vi.mocked(segmentService.listSegments).mockReturnValue(new Promise(() => {}));
 
     const { container } = renderPage();
@@ -124,7 +115,11 @@ describe('SubscribersPage', () => {
 
   // --- 3-row layout order ---
   it('renders 3-row layout: metrics, trends/health, segments', async () => {
-    vi.mocked(dashboardService.getTrends).mockResolvedValue({
+    vi.mocked(subscriberService.getCount).mockResolvedValue({
+      success: true,
+      data: { totalSubscribers: 1234 },
+    });
+    vi.mocked(subscriberService.getTrends).mockResolvedValue({
       success: true,
       data: mockTrendsData,
     });
@@ -159,7 +154,11 @@ describe('SubscribersPage', () => {
 
   // --- Success state details ---
   it('renders subscriber count, chart, health widget, and segment list on success', async () => {
-    vi.mocked(dashboardService.getTrends).mockResolvedValue({
+    vi.mocked(subscriberService.getCount).mockResolvedValue({
+      success: true,
+      data: { totalSubscribers: 1234 },
+    });
+    vi.mocked(subscriberService.getTrends).mockResolvedValue({
       success: true,
       data: mockTrendsData,
     });
@@ -191,7 +190,11 @@ describe('SubscribersPage', () => {
 
   // --- Empty segments state ---
   it('displays EmptyState when segment list is empty', async () => {
-    vi.mocked(dashboardService.getTrends).mockResolvedValue({
+    vi.mocked(subscriberService.getCount).mockResolvedValue({
+      success: true,
+      data: { totalSubscribers: 1234 },
+    });
+    vi.mocked(subscriberService.getTrends).mockResolvedValue({
       success: true,
       data: mockTrendsData,
     });
@@ -214,7 +217,11 @@ describe('SubscribersPage', () => {
 
   // --- Error states ---
   it('displays error with Retry button when trends data fails', async () => {
-    vi.mocked(dashboardService.getTrends).mockResolvedValue({
+    vi.mocked(subscriberService.getCount).mockResolvedValue({
+      success: true,
+      data: { totalSubscribers: 1234 },
+    });
+    vi.mocked(subscriberService.getTrends).mockResolvedValue({
       success: false,
       error: 'Failed to load subscriber data',
     });
@@ -237,7 +244,11 @@ describe('SubscribersPage', () => {
   });
 
   it('displays error with Retry button when segments fail', async () => {
-    vi.mocked(dashboardService.getTrends).mockResolvedValue({
+    vi.mocked(subscriberService.getCount).mockResolvedValue({
+      success: true,
+      data: { totalSubscribers: 1234 },
+    });
+    vi.mocked(subscriberService.getTrends).mockResolvedValue({
       success: true,
       data: mockTrendsData,
     });
@@ -256,7 +267,11 @@ describe('SubscribersPage', () => {
   });
 
   it('retries trends data fetch when Retry is clicked', async () => {
-    vi.mocked(dashboardService.getTrends)
+    vi.mocked(subscriberService.getCount).mockResolvedValue({
+      success: true,
+      data: { totalSubscribers: 1234 },
+    });
+    vi.mocked(subscriberService.getTrends)
       .mockResolvedValueOnce({ success: false, error: 'Failed to load subscriber data' })
       .mockResolvedValueOnce({ success: true, data: mockTrendsData });
     vi.mocked(segmentService.listSegments).mockResolvedValue({
@@ -279,11 +294,15 @@ describe('SubscribersPage', () => {
       expect(screen.getByText('1,234')).toBeInTheDocument();
     });
 
-    expect(dashboardService.getTrends).toHaveBeenCalledTimes(2);
+    expect(subscriberService.getTrends).toHaveBeenCalledTimes(2);
   });
 
   it('retries segment list fetch when Retry is clicked', async () => {
-    vi.mocked(dashboardService.getTrends).mockResolvedValue({
+    vi.mocked(subscriberService.getCount).mockResolvedValue({
+      success: true,
+      data: { totalSubscribers: 1234 },
+    });
+    vi.mocked(subscriberService.getTrends).mockResolvedValue({
       success: true,
       data: mockTrendsData,
     });
@@ -308,7 +327,11 @@ describe('SubscribersPage', () => {
 
   // --- Segment row click navigation ---
   it('navigates to segment detail when a segment row is clicked', async () => {
-    vi.mocked(dashboardService.getTrends).mockResolvedValue({
+    vi.mocked(subscriberService.getCount).mockResolvedValue({
+      success: true,
+      data: { totalSubscribers: 1234 },
+    });
+    vi.mocked(subscriberService.getTrends).mockResolvedValue({
       success: true,
       data: mockTrendsData,
     });

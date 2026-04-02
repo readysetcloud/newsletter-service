@@ -4,6 +4,7 @@ export * from './app';
 export * from './billing';
 export * from './pricing';
 export * from './report';
+export * from './subscribers';
 
 // Export issues types with explicit names to avoid conflicts
 export type {

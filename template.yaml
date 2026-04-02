@@ -1053,40 +1053,6 @@ Resources:
               detail-type:
                 - Subscriber Added
 
-  GetSubscriberStatsFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - subscribers/get-subscriber-stats.mjs
-    Properties:
-      Runtime: nodejs24.x
-      CodeUri: functions
-      Handler: subscribers/get-subscriber-stats.handler
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - dynamodb:GetItem
-                - dynamodb:Query
-              Resource:
-                - !GetAtt NewsletterTable.Arn
-                - !Sub "${NewsletterTable.Arn}/index/GSI1"
-      Environment:
-        Variables:
-          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
-      Events:
-        FromApi:
-          Type: Api
-          Properties:
-            RestApiId: !Ref NewsletterApi
-            Path: /{tenant}/stats/subscribers
-            Method: GET
-
   LambdaAuthorizerFunction:
     Type: AWS::Serverless::Function
     Metadata:

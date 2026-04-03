@@ -30,7 +30,7 @@ jobs:
             dashboard-ui/package-lock.json
       - name: Configure NPM
         run: |
-          npm ci
+          npm install --no-fund --no-audit
           npm --prefix dashboard-ui ci
           npm run lint:all
 
@@ -51,7 +51,7 @@ jobs:
             dashboard-ui/package-lock.json
       - name: Unit Tests
         run: |
-          npm ci
+          npm install --no-fund --no-audit
           npm --prefix dashboard-ui ci
           npm run coverage
 

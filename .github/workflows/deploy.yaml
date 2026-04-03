@@ -132,7 +132,7 @@ jobs:
       - name: SAM Build and Deploy
         run: |
           npm install -g esbuild
-          npm ci
+          npm install --no-fund --no-audit
 
           sam --info
           sam build --beta-features

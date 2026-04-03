@@ -31,6 +31,22 @@ const formatSecondsDetailed = (value: number) => {
   return minutes > 0 ? `${hours} hours ${minutes} minutes` : `${hours} hours`;
 };
 
+type TooltipValue = number | string | Array<number | string> | undefined;
+type TooltipName = number | string;
+
+const getNumericTooltipValue = (value: TooltipValue): number => {
+  if (typeof value === 'number') return value;
+  if (Array.isArray(value)) {
+    const firstNumericValue = value.find((item): item is number => typeof item === 'number');
+    return firstNumericValue ?? 0;
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+};
+
 // Determine engagement speed category
 const getEngagementSpeed = (medianTime: number): { color: string; label: string } => {
   if (medianTime < 300) return { color: '#10b981', label: 'Fast' }; // < 5 minutes
@@ -103,8 +119,8 @@ export const TimingMetricsChart: React.FC<TimingMetricsChartProps> = ({ timingMe
               width={75}
             />
             <Tooltip
-              formatter={(value: number, name: string) => [
-                formatSecondsDetailed(value),
+              formatter={(value: TooltipValue, name: TooltipName) => [
+                formatSecondsDetailed(getNumericTooltipValue(value)),
                 name === 'median' ? 'Median (50%)' : 'P95 (95%)'
               ]}
             />

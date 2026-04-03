@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
-import type { TooltipProps } from 'recharts';
 import { apiClient } from '@/services/api';
 import { Loading } from '@/components/ui/Loading';
 import { Users } from 'lucide-react';
@@ -24,6 +23,19 @@ interface AudienceHealthWidgetProps {
   latestIssueNumber: number;
 }
 
+interface ChartTooltipEntry {
+  name?: string | number;
+  value?: number | string;
+  payload?: {
+    percentage?: number;
+  };
+}
+
+interface ChartTooltipProps {
+  active?: boolean;
+  payload?: ChartTooltipEntry[];
+}
+
 const COHORT_COLORS = {
   highlyEngaged: '#10b981',
   occasional: '#f59e0b',
@@ -36,7 +48,7 @@ const COHORT_LABELS: Record<string, string> = {
   dormant: 'Dormant',
 };
 
-function CustomTooltip({ active, payload }: TooltipProps<number, string>) {
+function CustomTooltip({ active, payload }: ChartTooltipProps) {
   if (active && payload && payload.length > 0) {
     const item = payload[0];
     const label = item?.name ?? 'Value';

@@ -1,6 +1,5 @@
 import React from 'react';
 import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import type { TooltipProps } from 'recharts';
 import { Globe, Smartphone, Clock } from 'lucide-react';
 import type { GeoData, DeviceBreakdown, TimingMetrics } from '@/types';
 
@@ -10,11 +9,23 @@ export interface AudienceInsightsPanelProps {
   timingMetrics: TimingMetrics;
 }
 
+interface ChartTooltipEntry {
+  color?: string;
+  name?: string | number;
+  value?: number | string;
+}
+
+interface ChartTooltipProps {
+  active?: boolean;
+  label?: string | number;
+  payload?: ChartTooltipEntry[];
+}
+
 function CustomTooltip({
   active,
   payload,
   label
-}: TooltipProps<number, string>) {
+}: ChartTooltipProps) {
   if (active && payload && payload.length > 0) {
     return (
       <div className="bg-surface p-4 border border-border rounded-lg shadow-lg">
@@ -141,7 +152,7 @@ export const AudienceInsightsPanel: React.FC<AudienceInsightsPanelProps> = ({
                     cx="50%"
                     cy="50%"
                     labelLine={false}
-                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                    label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}
                     outerRadius={60}
                     fill="#8884d8"
                     dataKey="value"

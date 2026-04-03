@@ -18,10 +18,13 @@ export interface RealTimeValidationOptions {
 /**
  * Hook for real-time field validation with debouncing
  */
-export function useRealTimeValidation<T extends FieldValues>(
-  form: UseFormReturn<T>,
-  fieldName: FieldPath<T>,
-  schema: z.ZodSchema<T>,
+export function useRealTimeValidation<
+  TFieldValues extends FieldValues,
+  TTransformedValues extends FieldValues | undefined = undefined
+>(
+  form: UseFormReturn<TFieldValues, unknown, TTransformedValues>,
+  fieldName: FieldPath<TFieldValues>,
+  schema: z.ZodSchema<TFieldValues>,
   options: RealTimeValidationOptions = {}
 ) {
   const {
@@ -103,7 +106,7 @@ export function useRealTimeValidation<T extends FieldValues>(
  * Hook for managing form-wide validation state
  */
 export function useFormValidationState<T extends FieldValues>(
-  form: UseFormReturn<T>
+  form: UseFormReturn<T, unknown, FieldValues | undefined>
 ) {
   const [validationWarnings, setValidationWarnings] = useState<Record<string, string>>({});
 
@@ -154,8 +157,11 @@ export function useFormValidationState<T extends FieldValues>(
 /**
  * Hook for progressive validation (validates fields as user progresses through form)
  */
-export function useProgressiveValidation<T extends FieldValues>(
-  form: UseFormReturn<T>,
+export function useProgressiveValidation<
+  T extends FieldValues,
+  TTransformedValues extends FieldValues | undefined = undefined
+>(
+  form: UseFormReturn<T, unknown, TTransformedValues>,
   fieldOrder: Array<FieldPath<T>>
 ) {
   const [currentFieldIndex, setCurrentFieldIndex] = useState(0);
@@ -200,8 +206,11 @@ export function useProgressiveValidation<T extends FieldValues>(
 /**
  * Hook for field-level optimistic updates
  */
-export function useOptimisticFieldUpdate<T extends FieldValues>(
-  form: UseFormReturn<T>,
+export function useOptimisticFieldUpdate<
+  T extends FieldValues,
+  TTransformedValues extends FieldValues | undefined = undefined
+>(
+  form: UseFormReturn<T, unknown, TTransformedValues>,
   fieldName: FieldPath<T>,
   onUpdate: (value: T[FieldPath<T>]) => Promise<void>
 ) {
@@ -264,8 +273,11 @@ export function useOptimisticFieldUpdate<T extends FieldValues>(
 /**
  * Hook for cross-field validation
  */
-export function useCrossFieldValidation<T extends FieldValues>(
-  form: UseFormReturn<T>,
+export function useCrossFieldValidation<
+  T extends FieldValues,
+  TTransformedValues extends FieldValues | undefined = undefined
+>(
+  form: UseFormReturn<T, unknown, TTransformedValues>,
   validationRules: Array<{
     fields: Array<FieldPath<T>>;
     validator: (values: Partial<T>) => string | null;

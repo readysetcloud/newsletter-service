@@ -33,7 +33,7 @@ interface ChartTooltipEntry {
 
 interface ChartTooltipProps {
   active?: boolean;
-  payload?: ChartTooltipEntry[];
+  payload?: readonly ChartTooltipEntry[];
 }
 
 const COHORT_COLORS = {

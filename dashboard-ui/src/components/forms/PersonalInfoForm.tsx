@@ -1,5 +1,6 @@
 import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import { EnhancedInput } from '@/components/ui/EnhancedInput';
 import { EnhancedForm } from '@/components/ui/EnhancedForm';
 import { Card } from '@/components/ui/Card';
@@ -8,6 +9,8 @@ import { personalInfoSchema, type PersonalInfoFormData } from '@/schemas/profile
 import type { PersonalInfo } from '@/types/api';
 import { useFormValidationState } from '@/hooks/useRealTimeValidation';
 import { getUserFriendlyErrorMessage } from '@/utils/errorHandling';
+
+type PersonalInfoFormInput = z.input<typeof personalInfoSchema>;
 
 interface PersonalInfoFormProps {
   initialData?: PersonalInfo;
@@ -18,7 +21,7 @@ interface PersonalInfoFormProps {
 export function PersonalInfoForm({ initialData, onSubmit, isLoading = false }: PersonalInfoFormProps) {
   const { addToast } = useToast();
 
-  const form = useForm<PersonalInfoFormData>({
+  const form = useForm<PersonalInfoFormInput>({
     resolver: zodResolver(personalInfoSchema),
     mode: 'onChange',
     defaultValues: {
@@ -39,9 +42,13 @@ export function PersonalInfoForm({ initialData, onSubmit, isLoading = false }: P
 
   const { isFormValid } = useFormValidationState(form);
 
-  const handleFormSubmit = async (data: PersonalInfoFormData) => {
+  const handleFormSubmit = async (data: PersonalInfoFormInput) => {
     try {
-      await onSubmit(data);
+      const normalizedData: PersonalInfoFormData = {
+        ...data,
+        links: data.links ?? []
+      };
+      await onSubmit(normalizedData);
 
       addToast({
         type: 'success',

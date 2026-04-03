@@ -18,7 +18,7 @@ interface ChartTooltipEntry {
 interface ChartTooltipProps {
   active?: boolean;
   label?: string | number;
-  payload?: ChartTooltipEntry[];
+  payload?: readonly ChartTooltipEntry[];
 }
 
 function CustomTooltip({

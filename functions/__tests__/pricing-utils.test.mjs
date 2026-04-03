@@ -27,7 +27,9 @@ describe('Property 1: Deterministic baseline computation', () => {
         fc.double({ min: 0, max: 5, noNaN: true }),
         (subscriberCount, avgOpenRate, avgClickRate, cpmRate, clickWeight) => {
           const result = computeBaseline(subscriberCount, avgOpenRate, avgClickRate, cpmRate, clickWeight);
-          const expected = (subscriberCount * avgOpenRate / 1000) * cpmRate * (1 + (avgClickRate * clickWeight));
+          const cpmPrice = (subscriberCount * avgOpenRate / 1000) * cpmRate * (1 + (avgClickRate * clickWeight));
+          const floor = subscriberCount * 0.05;
+          const expected = Math.max(cpmPrice, floor);
           expect(result).toBeCloseTo(expected, 10);
         }
       ),
@@ -460,11 +462,14 @@ describe('Property 3: LLM response JSON schema validation', () => {
   it('accepts valid LLM responses with multiplier (number), confidence (low|medium|high), justification (string)', () => {
     fc.assert(
       fc.property(
-        fc.double({ min: -100, max: 100, noNaN: true }),
         fc.constantFrom('low', 'medium', 'high'),
+        fc.constantFrom('low', 'medium', 'high'),
+        fc.constantFrom('low', 'medium', 'high'),
+        fc.constantFrom('low', 'medium', 'high'),
+        fc.constantFrom('broad_consumer', 'prosumer', 'b2b_general', 'b2b_technical', 'exec_operator', 'premium_niche'),
         fc.string({ minLength: 0, maxLength: 200 }),
-        (multiplier, confidence, justification) => {
-          const response = { multiplier, confidence, justification };
+        (audienceQuality, nicheSpecificity, cadenceHealth, sponsorFit, suggestedBand, justification) => {
+          const response = { audienceQuality, nicheSpecificity, cadenceHealth, sponsorFit, suggestedBand, justification };
           const result = validateLlmResponse(response);
           expect(result).toEqual({ valid: true });
         }
@@ -477,38 +482,28 @@ describe('Property 3: LLM response JSON schema validation', () => {
     const invalidResponseArb = fc.oneof(
       fc.constantFrom(null, undefined, 42, 'string', true, []),
       fc.constant({}),
-      fc.record({
-        confidence: fc.constantFrom('low', 'medium', 'high'),
-        justification: fc.string()
+      // Missing fields
+      fc.constant({ audienceQuality: 'high', nicheSpecificity: 'medium' }),
+      // Invalid factor rating
+      fc.constant({
+        audienceQuality: 'very_high', nicheSpecificity: 'medium',
+        cadenceHealth: 'high', sponsorFit: 'high',
+        suggestedBand: 'b2b_technical', justification: 'test'
       }),
-      fc.record({
-        multiplier: fc.double({ min: -10, max: 10, noNaN: true }),
-        justification: fc.string()
+      // Invalid band
+      fc.constant({
+        audienceQuality: 'high', nicheSpecificity: 'medium',
+        cadenceHealth: 'high', sponsorFit: 'high',
+        suggestedBand: 'ultra_premium', justification: 'test'
       }),
-      fc.record({
-        multiplier: fc.double({ min: -10, max: 10, noNaN: true }),
-        confidence: fc.constantFrom('low', 'medium', 'high')
+      // Missing justification
+      fc.constant({
+        audienceQuality: 'high', nicheSpecificity: 'medium',
+        cadenceHealth: 'high', sponsorFit: 'high',
+        suggestedBand: 'b2b_technical'
       }),
-      fc.record({
-        multiplier: fc.oneof(fc.string(), fc.boolean(), fc.constant(null)),
-        confidence: fc.constantFrom('low', 'medium', 'high'),
-        justification: fc.string()
-      }),
-      fc.record({
-        multiplier: fc.double({ min: -10, max: 10, noNaN: true }),
-        confidence: fc.oneof(
-          fc.string().filter(s => !['low', 'medium', 'high'].includes(s)),
-          fc.integer(),
-          fc.constant(null)
-        ),
-        justification: fc.string()
-      }),
-      fc.record({
-        multiplier: fc.double({ min: -10, max: 10, noNaN: true }),
-        confidence: fc.constantFrom('low', 'medium', 'high'),
-        justification: fc.oneof(fc.integer(), fc.boolean(), fc.constant(null))
-      }),
-      fc.constant({ multiplier: NaN, confidence: 'low', justification: 'test' })
+      // Old schema shape (should be rejected)
+      fc.constant({ multiplier: 1.5, confidence: 'high', justification: 'test' })
     );
 
     fc.assert(

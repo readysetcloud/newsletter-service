@@ -14,7 +14,12 @@ import {
   computeSubscriberGrowthRate,
   computeWeeklyWindow,
   computeRecommendedPrice,
-  computePricingChecksum
+  computePricingChecksum,
+  cpmForBand,
+  getValidBands,
+  factorsToMultiplier,
+  reconcileBandWithFactors,
+  buildDeterministicClassification
 } from './utils/pricing.mjs';
 
 const ddb = new DynamoDBClient();
@@ -24,9 +29,6 @@ const BEDROCK_MODEL_ID = process.env.BEDROCK_MODEL_ID;
 const LOG_MODEL_INPUTS = process.env.LOG_MODEL_INPUTS === 'true';
 
 const DEFAULT_PRICING_CONFIG = {
-  cpmRate: 5,
-  multiplierMin: 0.5,
-  multiplierMax: 3.0,
   clickWeight: 2.0,
   smoothingCapPct: 0.20,
   significantSubscriberChangePct: 0.25,
@@ -35,12 +37,14 @@ const DEFAULT_PRICING_CONFIG = {
   cadenceRegularityThreshold: 3,
   dataRecencyThresholdDays: 30,
   // Cross-industry medians from MailerLite 2025 Email Marketing Benchmarks
-  // (3.6M campaigns, 181K accounts, Dec 2024 – Nov 2025)
+  // (3.6M campaigns, 181K accounts, Dec 2024 - Nov 2025)
   // Source: https://www.mailerlite.com/blog/compare-your-email-performance-metrics-industry-benchmarks
   industryAvgOpenRate: 0.4346,
   industryAvgClickRate: 0.0209,
   industryAvgUnsubscribeRate: 0.0022,
-  pricingModelVersion: 'v2'
+  multiplierMin: 0.5,
+  multiplierMax: 2.0,
+  pricingModelVersion: 'v3'
 };
 
 async function loadPricingConfig() {
@@ -87,10 +91,6 @@ async function getRecentPublishedIssues(tenantId, limit = 10) {
   return issues.slice(0, limit);
 }
 
-/**
- * Extract per-issue metrics from a consolidated stats record.
- * analytics.currentMetrics stores rates as percentages (0-100); we normalize to ratios (0-1).
- */
 function extractIssueMetrics(statsRecord) {
   const cm = statsRecord.analytics?.currentMetrics;
   const publishedAt = statsRecord.publishedAt || statsRecord.createdAt || null;
@@ -117,9 +117,6 @@ function extractIssueMetrics(statsRecord) {
   };
 }
 
-/**
- * Load issue records, extract per-issue data, compute trends and averages.
- */
 async function collectMetrics(tenantId) {
   const recentIssues = await getRecentPublishedIssues(tenantId, 10);
   if (recentIssues.length === 0) {
@@ -132,35 +129,28 @@ async function collectMetrics(tenantId) {
     throw new Error('Subscribers are required before pricing can be calculated');
   }
 
-  // Chronological (oldest -> newest) for trend analysis.
   const chronological = [...issueMetrics].reverse();
   const averages = computeMetricAverages(chronological);
   const trendSummary = buildTrendSummary(chronological);
   const publishedAtValues = chronological.map(m => m.publishedAt).filter(Boolean);
   const cadenceStats = computeCadenceStats(publishedAtValues);
   const latestPublishedAt = publishedAtValues.length > 0
-    ? publishedAtValues[publishedAtValues.length - 1]
-    : null;
+    ? publishedAtValues[publishedAtValues.length - 1] : null;
 
   const subCounts = chronological.map(m => m.subscribers).filter(s => s > 0);
   const subscriberGrowthRate = subCounts.length >= 2
-    ? computeSubscriberGrowthRate(subCounts[subCounts.length - 1], subCounts[0])
-    : 0;
+    ? computeSubscriberGrowthRate(subCounts[subCounts.length - 1], subCounts[0]) : 0;
 
   return {
-    subscriberCount,
-    subscriberGrowthRate,
-    publishedIssueCount: issueMetrics.length,
-    latestPublishedAt,
+    subscriberCount, subscriberGrowthRate,
+    publishedIssueCount: issueMetrics.length, latestPublishedAt,
     issueDataPoints: chronological,
-    ...averages,
-    ...trendSummary,
-    ...cadenceStats
+    ...averages, ...trendSummary, ...cadenceStats
   };
 }
 
 // ---------------------------------------------------------------------------
-// LLM Prompt Construction
+// LLM Prompt — asks for structured classification, not a raw multiplier
 // ---------------------------------------------------------------------------
 
 function fmtPct(value, digits = 1) {
@@ -193,9 +183,9 @@ function maybeRedactPrompt(prompt) {
   const marker = '## Creator Questionnaire Responses';
   const start = prompt.indexOf(marker);
   if (start === -1) return prompt;
-  const instructionsIndex = prompt.indexOf('## Instructions', start);
+  const idx = prompt.indexOf('## Instructions', start);
   const before = prompt.slice(0, start);
-  const after = instructionsIndex >= 0 ? prompt.slice(instructionsIndex) : '';
+  const after = idx >= 0 ? prompt.slice(idx) : '';
   return `${before}${marker}\n- [REDACTED FOR LOGGING]\n\n${after}`.trim();
 }
 
@@ -206,18 +196,11 @@ function logModelRequest(label, modelId, systemPrompt, userPrompt) {
   }));
 }
 
-/**
- * Build the LLM prompt with per-issue data points plus computed trends.
- */
-export function buildPrompt(metrics, baselinePrice, questionnaireResponses, previousRecord, config) {
+export function buildPrompt(metrics, questionnaireResponses, config) {
   const lines = [
-    '## Deterministic Baseline',
-    `We calculated a baseline sponsorship price of $${baselinePrice.toFixed(2)} using subscriber count, open rate, CPM, and click rate.`,
-    `The baseline already includes an engagement multiplier driven by click rate with clickWeight=${config.clickWeight}.`,
-    'Your job is to evaluate the context below, then provide a multiplier to adjust this baseline price up or down.',
+    '## Newsletter Performance Data',
     '',
-    '## Per-Issue Data (oldest to newest)',
-    'Each row is one published issue: subscribers, open rate, click rate, bounce rate, complaint rate, published date.',
+    '### Per-Issue Data (oldest to newest)',
     ''
   ];
 
@@ -232,7 +215,7 @@ export function buildPrompt(metrics, baselinePrice, questionnaireResponses, prev
 
   lines.push(
     '',
-    '## Summary',
+    '### Summary',
     `- Data period: ${oldestDate} to ${newestDate}`,
     `- Current subscriber count: ${metrics.subscriberCount}`,
     `- Subscriber growth rate: ${fmtPct(metrics.subscriberGrowthRate)}`,
@@ -242,52 +225,52 @@ export function buildPrompt(metrics, baselinePrice, questionnaireResponses, prev
     `- Average complaint rate: ${fmtPct(metrics.avgComplaintRate, 4)}`,
     `- Published issues with analytics: ${metrics.publishedIssueCount}`,
     '',
-    '## Trends',
+    '### Trends',
     `- Open rate trend: ${fmtPct(metrics.recentTrend.openRate.first)} -> ${fmtPct(metrics.recentTrend.openRate.last)} (${fmtSlope(metrics.recentTrend.openRate.slopePerIssue)})`,
     `- Click rate trend: ${fmtPct(metrics.recentTrend.clickRate.first)} -> ${fmtPct(metrics.recentTrend.clickRate.last)} (${fmtSlope(metrics.recentTrend.clickRate.slopePerIssue)})`,
     `- Open rate CoV: ${fmtPct(metrics.volatility.openRateCoV, 2)}`,
     `- Click rate CoV: ${fmtPct(metrics.volatility.clickRateCoV, 2)}`,
     '',
-    '## Cadence',
+    '### Cadence',
     `- Average days between issues: ${metrics.averageDaysBetweenIssues ?? 'unknown'}`,
     `- Median days between issues: ${metrics.medianDaysBetweenIssues ?? 'unknown'}`,
     `- Cadence standard deviation: ${metrics.cadenceStdDevDays ?? 'unknown'} days`,
     '',
-    '## Market Benchmarks',
+    '### Market Benchmarks',
     `- Industry average open rate: ${fmtPct(config.industryAvgOpenRate)}`,
     `- Industry average click rate: ${fmtPct(config.industryAvgClickRate)}`,
-    `- Industry average unsubscribe rate: ${fmtPct(config.industryAvgUnsubscribeRate)}`,
-    '',
-    '## Modeling Guidance',
-    '- Click rate is a conversion signal and the strongest sponsor ROI indicator.',
-    '- Click rate is already part of the baseline, so adjust primarily on trajectory, stability, and questionnaire context.',
-    '- Reward upward trends, consistent cadence, and recent data. Penalize stale, volatile, or irregular performance.'
+    `- Industry average unsubscribe rate: ${fmtPct(config.industryAvgUnsubscribeRate)}`
   );
-
-  if (previousRecord) {
-    lines.push(
-      '',
-      '## Previous Pricing',
-      `- Previous recommended price: $${previousRecord.recommendedPrice?.toFixed(2) ?? 'N/A'}`,
-      `- Previous multiplier: ${previousRecord.multiplierSmoothed ?? previousRecord.multiplierClamped ?? 'N/A'}`,
-      `- Previous confidence: ${previousRecord.confidence ?? 'N/A'}`
-    );
-  }
 
   if (questionnaireResponses && Object.keys(questionnaireResponses).length > 0) {
     lines.push('', '## Creator Questionnaire Responses');
-    for (const [questionId, answer] of Object.entries(questionnaireResponses)) {
-      lines.push(`- ${questionId}: ${stringifyAnswer(answer)}`);
+    for (const [qid, answer] of Object.entries(questionnaireResponses)) {
+      lines.push(`- ${qid}: ${stringifyAnswer(answer)}`);
     }
   }
 
   lines.push(
     '',
     '## Instructions',
-    'Given the baseline price above and the metrics provided, determine how the price should be adjusted.',
-    'A multiplier of 1.0 means no change. Above 1.0 increases the price, below 1.0 decreases it.',
-    'Use questionnaire responses as qualitative context when they exist, especially for audience quality, niche specificity, sponsorship format, and monetization goals.',
-    'Use the submit_pricing_adjustment tool to provide your multiplier, confidence level, and justification.'
+    'Based on the metrics and questionnaire responses above, classify this newsletter by providing structured ratings.',
+    'Do NOT compute a price or multiplier. Just classify the following factors:',
+    '',
+    '- audienceQuality: How valuable is this audience to sponsors? (low / medium / high)',
+    '- nicheSpecificity: How focused and specialized is the content niche? (low / medium / high)',
+    '- cadenceHealth: How consistent and reliable is the publishing schedule? (low / medium / high)',
+    '- sponsorFit: How well-suited is this newsletter for sponsorship placements? (low / medium / high)',
+    `- suggestedBand: Which audience pricing band best fits? One of: ${getValidBands().join(', ')}`,
+    '- justification: A brief explanation referencing specific metrics and questionnaire responses.',
+    '',
+    'Band selection rubric (band should be consistent with factor ratings):',
+    '- broad_consumer: General interest, no specific niche. nicheSpecificity is typically low.',
+    '- prosumer: Enthusiast or semi-professional audience. At least medium nicheSpecificity.',
+    '- b2b_general: Business audience. audienceQuality should be at least medium.',
+    '- b2b_technical: Technical professionals. nicheSpecificity should be at least medium, audienceQuality at least medium.',
+    '- exec_operator: Decision-makers, founders, C-suite. audienceQuality must be high.',
+    '- premium_niche: Highly specialized, high-value audience. nicheSpecificity must be high.',
+    '',
+    'Use the submit_pricing_classification tool to provide your assessment.'
   );
 
   return lines.join('\n');
@@ -299,17 +282,14 @@ export function buildPrompt(metrics, baselinePrice, questionnaireResponses, prev
 
 export function selectSmoothingBaseRecord(previousRecord, currentWeekWindow) {
   return previousRecord && previousRecord.weekWindow !== currentWeekWindow
-    ? previousRecord
-    : null;
+    ? previousRecord : null;
 }
 
 export function evaluatePricingConfidence(metrics, questionnaireResponses, usedFallback, config, now = new Date()) {
   const hasQuestionnaire = questionnaireResponses != null && Object.keys(questionnaireResponses).length > 0;
   const metricsComplete = (
-    metrics.avgOpenRate != null &&
-    metrics.avgClickRate != null &&
-    metrics.avgBounceRate != null &&
-    metrics.avgComplaintRate != null
+    metrics.avgOpenRate != null && metrics.avgClickRate != null &&
+    metrics.avgBounceRate != null && metrics.avgComplaintRate != null
   );
   const openRateCoV = metrics.volatility.openRateCoV;
   const dataAgeDays = metrics.latestPublishedAt
@@ -319,76 +299,66 @@ export function evaluatePricingConfidence(metrics, questionnaireResponses, usedF
   const isDataStale = dataAgeDays > config.dataRecencyThresholdDays;
 
   return {
-    hasQuestionnaire,
-    metricsComplete,
-    isCadenceIrregular,
-    isDataStale,
+    hasQuestionnaire, metricsComplete, isCadenceIrregular, isDataStale,
     confidence: determineConfidence({
       publishedIssueCount: metrics.publishedIssueCount,
-      metricsComplete,
-      hasQuestionnaire,
+      metricsComplete, hasQuestionnaire,
       stabilityCoV: openRateCoV,
       isFallback: usedFallback,
-      isCadenceIrregular,
-      isDataStale
+      isCadenceIrregular, isDataStale
     })
   };
-}
-
-export function computeConfidenceOverride(llmConfidence, finalConfidence) {
-  if (!llmConfidence) return false;
-  return llmConfidence !== finalConfidence;
 }
 
 // ---------------------------------------------------------------------------
 // Bedrock LLM calls
 // ---------------------------------------------------------------------------
 
-const pricingAdjustmentSchema = z.object({
-  multiplier: z.number().describe('Adjustment factor to apply to the baseline price'),
-  confidence: z.enum(['low', 'medium', 'high']).describe('Confidence level of the pricing recommendation'),
-  justification: z.string().describe('Plain-language explanation referencing specific metrics')
+const classificationSchema = z.object({
+  audienceQuality: z.enum(['low', 'medium', 'high']).describe('How valuable is this audience to sponsors?'),
+  nicheSpecificity: z.enum(['low', 'medium', 'high']).describe('How focused is the content niche?'),
+  cadenceHealth: z.enum(['low', 'medium', 'high']).describe('How consistent is the publishing schedule?'),
+  sponsorFit: z.enum(['low', 'medium', 'high']).describe('How well-suited for sponsorship placements?'),
+  suggestedBand: z.enum(getValidBands()).describe('Audience pricing band classification'),
+  justification: z.string().describe('Brief explanation referencing specific metrics')
 });
 
 const sponsorNarrativeSchema = z.object({
-  narrative: z.string().describe('A short, professional paragraph (2-4 sentences) for potential sponsors describing the value of advertising in this newsletter')
+  narrative: z.string().describe('A short, professional paragraph (2-4 sentences) for potential sponsors')
 });
 
 async function callBedrock(prompt) {
   let captured = null;
   const toolDefs = [{
-    name: 'submit_pricing_adjustment',
-    description: 'Submit the pricing multiplier, confidence level, and justification for the newsletter sponsorship pricing calculation.',
-    schema: pricingAdjustmentSchema,
+    name: 'submit_pricing_classification',
+    description: 'Submit structured pricing factor classifications for the newsletter.',
+    schema: classificationSchema,
     handler: (input) => { captured = input; return { success: true }; }
   }];
 
   try {
     const systemPrompt = [
-      'Role: You are a newsletter sponsorship pricing expert with deep knowledge of digital advertising CPM models and audience valuation.',
-      'Instructions: Analyze the provided newsletter metrics, historical pricing data, and any creator questionnaire responses to determine a fair sponsorship pricing adjustment.',
-      'Steps: 1) Evaluate subscriber count, growth trajectory, cadence, recency, and engagement rates against the supplied benchmarks. 2) Treat click-through rate as a conversion signal and the strongest sponsor ROI indicator in the data. 3) Remember the baseline already incorporates average click rate, so adjust primarily on trajectory, stability, and questionnaire-specific context. 4) Compare against the deterministic baseline price and any previous pricing records. 5) Use the submit_pricing_adjustment tool to return your recommendation.',
-      'End goal: Produce a well-calibrated pricing multiplier that reflects the newsletter\'s true sponsorship value, along with a confidence level and a justification grounded in the specific metrics provided.',
-      'Narrowing: Only use the submit_pricing_adjustment tool to respond. Do not produce free-text output. The multiplier should be a positive number. Confidence must be exactly one of "low", "medium", or "high". The justification must reference specific metrics from the input.'
+      'Role: You are a newsletter audience analyst who classifies newsletters for sponsorship pricing.',
+      'Instructions: Analyze the provided metrics and questionnaire responses to classify this newsletter across several quality dimensions.',
+      'You do NOT set prices or multipliers. You classify factors that code will use to compute a price.',
+      'Steps: 1) Assess audience quality from engagement rates and questionnaire context. 2) Evaluate niche specificity from content signals and questionnaire responses. 3) Judge cadence health from publishing regularity. 4) Assess sponsor fit from format, audience, and monetization signals. 5) Suggest the best audience pricing band.',
+      `Valid bands: ${getValidBands().join(', ')}. broad_consumer = general interest, prosumer = enthusiast/semi-pro, b2b_general = business audience, b2b_technical = technical professionals, exec_operator = decision-makers/founders, premium_niche = highly specialized high-value audience.`,
+      'Narrowing: Only use the submit_pricing_classification tool. Do not produce free-text output.'
     ].join('\n');
-    logModelRequest('pricing-adjustment', BEDROCK_MODEL_ID, systemPrompt, prompt);
+    logModelRequest('pricing-classification', BEDROCK_MODEL_ID, systemPrompt, prompt);
     await converse(BEDROCK_MODEL_ID, systemPrompt, prompt, toolDefs);
-    if (!captured) throw new Error('LLM did not call the submit_pricing_adjustment tool');
+    if (!captured) throw new Error('LLM did not call the submit_pricing_classification tool');
     return { llmResponse: captured, isFallback: false };
   } catch (error) {
     console.warn('[LLM] Bedrock call failed, using deterministic fallback:', error.message);
     return {
-      llmResponse: {
-        multiplier: 1.0,
-        confidence: 'low',
-        justification: 'This price is based on the deterministic baseline calculation. The AI-powered adjustment was unavailable during this calculation cycle.'
-      },
+      llmResponse: null,
       isFallback: true
     };
   }
 }
 
-async function generateSponsorNarrative(metrics) {
+async function generateSponsorNarrative(metrics, classification) {
   let captured = null;
   const toolDefs = [{
     name: 'submit_sponsor_narrative',
@@ -398,23 +368,22 @@ async function generateSponsorNarrative(metrics) {
   }];
 
   const systemPrompt = [
-    'Role: You are a professional copywriter specializing in newsletter sponsorship pitches for B2B and B2C audiences.',
-    'Instructions: Craft a concise, sponsor-facing value narrative based on the provided newsletter performance data. Summarize metrics qualitatively rather than citing raw numbers.',
-    'Steps: 1) Assess the audience size and engagement signals. 2) Frame the newsletter\'s reach and reader loyalty as a compelling advertising opportunity. 3) Use the submit_sponsor_narrative tool to return the narrative.',
-    'End goal: A polished 2-4 sentence paragraph that a sales team could use directly in sponsor outreach, conveying confidence in the newsletter\'s advertising value.',
-    'Narrowing: Only use the submit_sponsor_narrative tool to respond. Do not produce free-text output. Do not include raw numbers, percentages, or pricing figures. Keep the tone confident but not hyperbolic.'
+    'Role: You are a professional copywriter specializing in newsletter sponsorship pitches.',
+    'Instructions: Craft a concise, sponsor-facing value narrative. Summarize metrics qualitatively.',
+    'Narrowing: Only use the submit_sponsor_narrative tool. No free-text. No raw numbers or pricing figures.'
   ].join('\n');
   const userPrompt = [
-    'Write a short, professional paragraph (2-4 sentences) for potential sponsors describing the value of advertising in this newsletter.',
-    'Use the following data points to support the pitch. Do NOT include raw numbers or percentages - summarize them qualitatively.',
+    'Write a short, professional paragraph (2-4 sentences) for potential sponsors.',
     '',
     `Subscriber count: ${metrics.subscriberCount}`,
     `Average open rate: ${(metrics.avgOpenRate * 100).toFixed(1)}%`,
-    `Average click-through rate: ${(metrics.avgClickRate * 100).toFixed(1)}%`,
+    `Average click rate: ${(metrics.avgClickRate * 100).toFixed(1)}%`,
     `Subscriber growth rate: ${(metrics.subscriberGrowthRate * 100).toFixed(1)}%`,
     `Published issues analyzed: ${metrics.publishedIssueCount}`,
-    '',
-    'The tone should be confident but not hyperbolic. Focus on audience engagement and reach.'
+    `Audience band: ${classification.suggestedBand}`,
+    `Audience quality: ${classification.audienceQuality}`,
+    `Niche specificity: ${classification.nicheSpecificity}`,
+    `Sponsor fit: ${classification.sponsorFit}`
   ].join('\n');
 
   logModelRequest('sponsor-narrative', BEDROCK_MODEL_ID, systemPrompt, userPrompt);
@@ -426,6 +395,7 @@ async function generateSponsorNarrative(metrics) {
   return captured.narrative;
 }
 
+
 // ---------------------------------------------------------------------------
 // DynamoDB helpers
 // ---------------------------------------------------------------------------
@@ -435,8 +405,7 @@ async function getPreviousPricingRecord(tenantId) {
     TableName: TABLE_NAME,
     KeyConditionExpression: 'pk = :pk AND begins_with(sk, :skPrefix)',
     ExpressionAttributeValues: marshall({ ':pk': tenantId, ':skPrefix': 'pricing#' }),
-    ScanIndexForward: false,
-    Limit: 1
+    ScanIndexForward: false, Limit: 1
   }));
   if (!result.Items || result.Items.length === 0) return null;
   return unmarshall(result.Items[0]);
@@ -490,8 +459,7 @@ async function storePricingRecord(tenantId, record, existingRecordSk) {
     if (err.name === 'ConditionalCheckFailedException') {
       console.warn('[STORE] Record already exists for this timestamp, updating');
       await ddb.send(new PutItemCommand({
-        TableName: TABLE_NAME,
-        Item: marshall({ pk: tenantId, sk, ...record }, { removeUndefinedValues: true })
+        TableName: TABLE_NAME, Item: marshall({ pk: tenantId, sk, ...record }, { removeUndefinedValues: true })
       }));
       return sk;
     }
@@ -534,11 +502,7 @@ export const handler = async (event) => {
       publishedIssueCount: metrics.publishedIssueCount
     });
 
-    const baselinePrice = computeBaseline(
-      metrics.subscriberCount, metrics.avgOpenRate, metrics.avgClickRate,
-      config.cpmRate, config.clickWeight
-    );
-
+    // Load questionnaire responses.
     let questionnaireResponses = eventResponses || null;
     let questionnaireVersion = null;
     if (!questionnaireResponses) {
@@ -555,29 +519,52 @@ export const handler = async (event) => {
       questionnaireResponses: sanitizeQuestionnaireResponses(questionnaireResponses)
     });
 
-    const prompt = buildPrompt(metrics, baselinePrice, questionnaireResponses, previousRecord, config);
+    // --- Step 1: LLM classifies structured factors ---
+    const prompt = buildPrompt(metrics, questionnaireResponses, config);
     const { llmResponse, isFallback } = await callBedrock(prompt);
 
-    // Step 1: Validate
-    const validation = validateLlmResponse(llmResponse);
-    let multiplierRaw;
-    let justification;
+    let classification;
     let usedFallback = isFallback;
+    let justification;
 
-    if (validation.valid) {
-      multiplierRaw = llmResponse.multiplier;
-      justification = llmResponse.justification;
-    } else {
-      console.warn('[PIPELINE] LLM response validation failed:', validation.errors);
-      multiplierRaw = 1.0;
-      justification = 'This price is based on the deterministic baseline calculation. The AI response did not pass validation.';
-      usedFallback = true;
+    if (!isFallback) {
+      const validation = validateLlmResponse(llmResponse);
+      if (validation.valid) {
+        classification = llmResponse;
+        justification = llmResponse.justification;
+      } else {
+        console.warn('[PIPELINE] LLM classification validation failed:', validation.errors);
+        usedFallback = true;
+      }
     }
 
-    // Step 2: Clamp
+    // Fallback: deterministic classification when LLM is unavailable or invalid
+    if (usedFallback) {
+      classification = buildDeterministicClassification(questionnaireResponses, metrics, config);
+      justification = classification.justification;
+    }
+
+    // --- Step 2: Code determines CPM from band (with consistency check) ---
+    const reconciledBand = reconcileBandWithFactors(classification);
+    if (reconciledBand !== classification.suggestedBand) {
+      console.log(`[PRICING] Band downgraded: ${classification.suggestedBand} -> ${reconciledBand} (factor consistency)`);
+      classification.suggestedBand = reconciledBand;
+    }
+    const cpmRate = cpmForBand(classification.suggestedBand);
+
+    // --- Step 3: Compute deterministic baseline ---
+    const baselinePrice = computeBaseline(
+      metrics.subscriberCount, metrics.avgOpenRate, metrics.avgClickRate,
+      cpmRate, config.clickWeight
+    );
+
+    // --- Step 4: Code maps classification to bounded multiplier ---
+    const multiplierRaw = factorsToMultiplier(classification);
+
+    // --- Step 5: Clamp ---
     const multiplierClamped = clampMultiplier(multiplierRaw, config.multiplierMin, config.multiplierMax);
 
-    // Step 3: Smooth
+    // --- Step 6: Smooth ---
     const now = new Date();
     const weekWindow = computeWeeklyWindow(now);
     const weekWindowStr = `${weekWindow.start}/${weekWindow.end}`;
@@ -603,22 +590,30 @@ export const handler = async (event) => {
     const multiplierSmoothed = baselinePrice > 0 ? smoothedPrice / baselinePrice : multiplierClamped;
     const recommendedPrice = smoothedPrice;
 
+    // --- Confidence ---
     const { isCadenceIrregular, isDataStale, confidence: finalConfidence } =
       evaluatePricingConfidence(metrics, questionnaireResponses, usedFallback, config, now);
-    const confidenceOverride = computeConfidenceOverride(llmResponse?.confidence, finalConfidence);
 
     if (metrics.publishedIssueCount < (config.minPublishedIssues || 3)) {
-      justification = `[Reduced accuracy: only ${metrics.publishedIssueCount} published issue(s) with analytics available, minimum recommended is ${config.minPublishedIssues || 3}] ${justification}`;
+      justification = `[Reduced accuracy: only ${metrics.publishedIssueCount} published issue(s), minimum recommended is ${config.minPublishedIssues || 3}] ${justification}`;
     }
-    if (isCadenceIrregular) justification += ' Confidence was reduced because publishing cadence is irregular.';
-    if (isDataStale) justification += ` Confidence was reduced because the most recent published issue is older than ${config.dataRecencyThresholdDays} days.`;
-    if (smoothingApplied) justification += ` Note: The price adjustment was limited by the weekly smoothing cap of ${(config.smoothingCapPct * 100).toFixed(0)}%.`;
+    if (isCadenceIrregular) justification += ' Confidence reduced: irregular publishing cadence.';
+    if (isDataStale) justification += ` Confidence reduced: most recent issue is older than ${config.dataRecencyThresholdDays} days.`;
+    if (smoothingApplied) justification += ` Price change limited by ${(config.smoothingCapPct * 100).toFixed(0)}% weekly smoothing cap.`;
 
-    // Step 4: Store
+    // --- Step 7: Store ---
     const calculatedAt = now.toISOString();
     const pricingRecord = {
-      recommendedPrice, baselinePrice, multiplierRaw, multiplierClamped, multiplierSmoothed,
-      llmConfidence: llmResponse?.confidence ?? null, confidenceOverride,
+      recommendedPrice, baselinePrice,
+      audienceBand: classification.suggestedBand,
+      cpmRate,
+      classification: {
+        audienceQuality: classification.audienceQuality,
+        nicheSpecificity: classification.nicheSpecificity,
+        cadenceHealth: classification.cadenceHealth,
+        sponsorFit: classification.sponsorFit
+      },
+      multiplierRaw, multiplierClamped, multiplierSmoothed,
       confidence: finalConfidence, justification,
       pricingChecksum: computePricingChecksum({
         recommendedPrice, subscriberCount: metrics.subscriberCount,
@@ -646,7 +641,7 @@ export const handler = async (event) => {
 
     const existingSk = existingWindowRecord?.sk ?? null;
     try {
-      const narrative = await generateSponsorNarrative(metrics);
+      const narrative = await generateSponsorNarrative(metrics, classification);
       if (narrative) pricingRecord.narrative = narrative;
     } catch (err) {
       console.warn('[NARRATIVE] Failed to generate narrative, skipping:', err.message);
@@ -657,9 +652,8 @@ export const handler = async (event) => {
 
     const duration = Date.now() - executionStart;
     console.log(`[PRICING] Calculation complete in ${duration}ms`, {
-      tenantId, recommendedPrice, baselinePrice, multiplierSmoothed,
-      llmConfidence: llmResponse?.confidence ?? null, confidenceOverride,
-      confidence: finalConfidence, isFallback: usedFallback
+      tenantId, recommendedPrice, baselinePrice, audienceBand: classification.suggestedBand,
+      cpmRate, multiplierSmoothed, confidence: finalConfidence, isFallback: usedFallback
     });
 
     return { success: true, tenantId, pricingRecord };

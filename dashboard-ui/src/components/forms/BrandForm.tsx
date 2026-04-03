@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import { Input } from '../ui/Input';
 import { EnhancedInput } from '../ui/EnhancedInput';
 import { TextArea } from '../ui/TextArea';
@@ -15,7 +16,7 @@ import { BrandInfo } from '../../types';
 import { useFormValidationState } from '../../hooks/useRealTimeValidation';
 import { getUserFriendlyErrorMessage } from '../../utils/errorHandling';
 
-
+type BrandFormInput = z.input<typeof brandSchema>;
 
 interface BrandFormProps {
   initialData?: Partial<BrandInfo>;
@@ -61,7 +62,7 @@ const BrandFormInner: React.FC<BrandFormProps> = ({
   const [isLogoRemoved, setIsLogoRemoved] = useState(false);
   const { addToast } = useToast();
 
-  const form = useForm<BrandFormData>({
+  const form = useForm<BrandFormInput>({
     resolver: zodResolver(brandSchema),
     mode: 'onChange', // Enable real-time validation
     defaultValues: {
@@ -156,10 +157,14 @@ const BrandFormInner: React.FC<BrandFormProps> = ({
     }
   }, [logoPreview, onPreviewChange, getValues]);
 
-  const handleFormSubmit = async (data: BrandFormData) => {
+  const handleFormSubmit = async (data: BrandFormInput) => {
     try {
       setUploadError(null);
-      await onSubmit(data, logoFile || undefined, isLogoRemoved);
+      const normalizedData: BrandFormData = {
+        ...data,
+        tags: data.tags ?? []
+      };
+      await onSubmit(normalizedData, logoFile || undefined, isLogoRemoved);
 
       // Reset logo change state after successful submission
       setHasLogoChanged(false);

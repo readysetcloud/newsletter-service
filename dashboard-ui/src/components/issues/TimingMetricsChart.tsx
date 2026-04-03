@@ -31,7 +31,7 @@ const formatSecondsDetailed = (value: number) => {
   return minutes > 0 ? `${hours} hours ${minutes} minutes` : `${hours} hours`;
 };
 
-type TooltipValue = number | string | Array<number | string> | undefined;
+type TooltipValue = number | string | ReadonlyArray<number | string> | undefined;
 type TooltipName = number | string;
 
 const getNumericTooltipValue = (value: TooltipValue): number => {

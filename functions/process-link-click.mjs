@@ -386,6 +386,10 @@ async function updateInterestScore(tenantId, email, topic, increment) {
  */
 async function handleAutoSegmentation(tenantId, email, topic) {
   const segmentId = await findOrCreateInterestSegment(tenantId, topic);
+  if (!segmentId) {
+    // Colliding manual segment exists — skip auto-segmentation for this topic
+    return;
+  }
   const tableName = process.env.SUBSCRIBERS_TABLE_NAME;
 
   try {
@@ -443,7 +447,30 @@ export async function findOrCreateInterestSegment(tenantId, topic) {
 
   if (existingResult.Item) {
     const existing = unmarshall(existingResult.Item);
-    return existing.segmentId;
+    const existingSegmentId = existing.segmentId;
+
+    // Verify the target segment is actually auto-managed.
+    // A user-created segment can collide on the uniqueness key
+    // (e.g. manually naming a segment "Auto: AI"), so we must
+    // confirm autoManaged === true before reusing it.
+    const segmentResult = await ddb.send(new GetItemCommand({
+      TableName: tableName,
+      Key: marshall({ tenantId, email: `SEGMENT#${existingSegmentId}` }),
+      ProjectionExpression: 'autoManaged'
+    }));
+
+    if (segmentResult.Item) {
+      const segmentRecord = unmarshall(segmentResult.Item);
+      if (segmentRecord.autoManaged !== true) {
+        // Segment exists but is manually managed — do not hijack it
+        console.warn('Skipping auto-segmentation: colliding segment is not auto-managed', {
+          tenantId, topic, segmentId: existingSegmentId
+        });
+        return null;
+      }
+    }
+
+    return existingSegmentId;
   }
 
   // Step 2: Segment doesn't exist — create via TransactWriteItems
@@ -486,11 +513,14 @@ export async function findOrCreateInterestSegment(tenantId, topic) {
     return segmentId;
   } catch (error) {
     if (error.name === 'TransactionCanceledException') {
-      // Concurrent creation — retry with GetItem to find existing segment
+      // Concurrent creation — retry with strongly consistent read.
+      // Default GetItem is eventually consistent and can miss a segment
+      // created milliseconds earlier, so ConsistentRead is required here.
       const retryResult = await ddb.send(new GetItemCommand({
         TableName: tableName,
         Key: marshall({ tenantId, email: uniquenessKey }),
-        ProjectionExpression: 'segmentId'
+        ProjectionExpression: 'segmentId',
+        ConsistentRead: true
       }));
 
       if (retryResult.Item) {

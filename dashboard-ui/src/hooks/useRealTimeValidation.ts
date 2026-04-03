@@ -33,8 +33,8 @@ export function useRealTimeValidation<T extends FieldValues>(
     isValid: true
   });
 
-  const debounceTimer = useRef<ReturnType<typeof setTimeout>>();
-  const lastValue = useRef<unknown>();
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const lastValue = useRef<unknown>(undefined);
 
   const validateField = useCallback(async (value: unknown) => {
     // Skip validation if value hasn't changed

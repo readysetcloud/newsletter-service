@@ -1,5 +1,4 @@
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import type { TooltipProps } from 'recharts';
 import { useNavigate } from 'react-router-dom';
 
 import type { TrendsData } from '@/types';
@@ -9,11 +8,33 @@ interface IssuePerformanceChartProps {
   trendsData: TrendsData;
 }
 
+interface ChartTooltipEntry {
+  color?: string;
+  name?: string | number;
+  value?: number | string;
+}
+
+interface ChartTooltipProps {
+  active?: boolean;
+  label?: string | number;
+  payload?: ChartTooltipEntry[];
+}
+
+interface ActivePayloadPoint {
+  payload?: {
+    id?: string;
+  };
+}
+
+interface ChartClickState {
+  activePayload?: ActivePayloadPoint[];
+}
+
 function CustomTooltip({
   active,
   payload,
   label
-}: TooltipProps<number, string>) {
+}: ChartTooltipProps) {
   if (active && payload && payload.length > 0) {
     return (
       <div className="bg-surface p-4 border border-border rounded-lg shadow-lg">
@@ -41,7 +62,7 @@ export default function IssuePerformanceChart({ trendsData }: IssuePerformanceCh
     bounceRate: issue.metrics.bounceRate
   })).reverse();
 
-  const handleChartClick = (data: { activePayload?: Array<{ payload?: { id: string } }> }) => {
+  const handleChartClick = (data: ChartClickState) => {
     if (data?.activePayload?.[0]?.payload?.id) {
       navigate(`/issues/${data.activePayload[0].payload.id}`);
     }

@@ -15,7 +15,7 @@ import type {
  * Sender Service - Handles all sender email management operations
  */
 export class SenderService {
-  private pollingIntervals: Map<string, NodeJS.Timeout> = new Map();
+  private pollingIntervals: Map<string, ReturnType<typeof setInterval>> = new Map();
 
   /**
    * Get all sender emails for the authenticated tenant

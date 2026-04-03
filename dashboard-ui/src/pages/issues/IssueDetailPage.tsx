@@ -254,7 +254,7 @@ export const IssueDetailPage: React.FC = () => {
     };
 
     // Throttle scroll events to avoid excessive saves
-    let scrollTimeout: NodeJS.Timeout;
+    let scrollTimeout: ReturnType<typeof setTimeout> | undefined;
     const throttledHandleScroll = () => {
       if (scrollTimeout) {
         clearTimeout(scrollTimeout);

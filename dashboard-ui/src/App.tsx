@@ -19,10 +19,11 @@ import {
   LazyIssueDetailPage,
   LazyIssueFormPage,
   LazySponsorshipPricingPage,
-  LazySegmentListPage,
   LazySegmentDetailPage,
+  LazySubscribersPage,
   preloadCriticalRoutes
 } from '@/utils/lazyImports';
+import { AppShell } from '@/components/layout/AppShell';
 import { BrandOnboardingPage, ProfileOnboardingPage, SenderOnboardingPage } from '@/pages/onboarding';
 import { useEffect } from 'react';
 import { useTheme } from '@/hooks/useTheme';
@@ -37,12 +38,7 @@ function App() {
 
   return (
     <ErrorBoundary>
-      <Router
-        future={{
-          v7_startTransition: true,
-          v7_relativeSplatPath: true
-        }}
-      >
+      <Router>
         <AuthProvider>
           <ToastProvider>
             <div className="min-h-screen bg-background overflow-x-hidden flex flex-col">
@@ -112,16 +108,18 @@ function App() {
                     }
                   />
 
-                  {/* Protected Routes with Onboarding Guard */}
+                  {/* Protected Routes with Onboarding Guard — wrapped in AppShell */}
                   <Route
                     path="/"
                     element={
                       <RouteErrorBoundary routeName="Dashboard">
                         <ProtectedRoute>
                           <OnboardingGuard>
-                            <PageLoader>
-                              <LazyDashboardPage />
-                            </PageLoader>
+                            <AppShell>
+                              <PageLoader>
+                                <LazyDashboardPage />
+                              </PageLoader>
+                            </AppShell>
                           </OnboardingGuard>
                         </ProtectedRoute>
                       </RouteErrorBoundary>
@@ -133,9 +131,11 @@ function App() {
                       <RouteErrorBoundary routeName="Brand">
                         <ProtectedRoute>
                           <OnboardingGuard allowOnboarding>
-                            <PageLoader>
-                              <LazyBrandPage />
-                            </PageLoader>
+                            <AppShell>
+                              <PageLoader>
+                                <LazyBrandPage />
+                              </PageLoader>
+                            </AppShell>
                           </OnboardingGuard>
                         </ProtectedRoute>
                       </RouteErrorBoundary>
@@ -147,9 +147,11 @@ function App() {
                       <RouteErrorBoundary routeName="Profile">
                         <ProtectedRoute>
                           <OnboardingGuard allowOnboarding>
-                            <PageLoader>
-                              <LazyProfilePage />
-                            </PageLoader>
+                            <AppShell>
+                              <PageLoader>
+                                <LazyProfilePage />
+                              </PageLoader>
+                            </AppShell>
                           </OnboardingGuard>
                         </ProtectedRoute>
                       </RouteErrorBoundary>
@@ -161,9 +163,11 @@ function App() {
                       <RouteErrorBoundary routeName="API Keys">
                         <ProtectedRoute>
                           <OnboardingGuard>
-                            <PageLoader>
-                              <LazyApiKeysPage />
-                            </PageLoader>
+                            <AppShell>
+                              <PageLoader>
+                                <LazyApiKeysPage />
+                              </PageLoader>
+                            </AppShell>
                           </OnboardingGuard>
                         </ProtectedRoute>
                       </RouteErrorBoundary>
@@ -175,9 +179,11 @@ function App() {
                       <RouteErrorBoundary routeName="Sender Email Setup">
                         <ProtectedRoute>
                           <OnboardingGuard>
-                            <PageLoader>
-                              <LazySenderEmailSetupPage />
-                            </PageLoader>
+                            <AppShell>
+                              <PageLoader>
+                                <LazySenderEmailSetupPage />
+                              </PageLoader>
+                            </AppShell>
                           </OnboardingGuard>
                         </ProtectedRoute>
                       </RouteErrorBoundary>
@@ -189,9 +195,11 @@ function App() {
                       <RouteErrorBoundary routeName="Billing">
                         <ProtectedRoute>
                           <OnboardingGuard>
-                            <PageLoader>
-                              <LazyBillingPage />
-                            </PageLoader>
+                            <AppShell>
+                              <PageLoader>
+                                <LazyBillingPage />
+                              </PageLoader>
+                            </AppShell>
                           </OnboardingGuard>
                         </ProtectedRoute>
                       </RouteErrorBoundary>
@@ -200,12 +208,30 @@ function App() {
                   <Route
                     path="/pricing"
                     element={
-                      <RouteErrorBoundary routeName="Sponsorship Pricing">
+                      <RouteErrorBoundary routeName="Sponsors">
                         <ProtectedRoute>
                           <OnboardingGuard>
-                            <PageLoader>
-                              <LazySponsorshipPricingPage />
-                            </PageLoader>
+                            <AppShell>
+                              <PageLoader>
+                                <LazySponsorshipPricingPage />
+                              </PageLoader>
+                            </AppShell>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/subscribers"
+                    element={
+                      <RouteErrorBoundary routeName="Subscribers">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <AppShell>
+                              <PageLoader>
+                                <LazySubscribersPage />
+                              </PageLoader>
+                            </AppShell>
                           </OnboardingGuard>
                         </ProtectedRoute>
                       </RouteErrorBoundary>
@@ -213,17 +239,7 @@ function App() {
                   />
                   <Route
                     path="/segments"
-                    element={
-                      <RouteErrorBoundary routeName="Segments">
-                        <ProtectedRoute>
-                          <OnboardingGuard>
-                            <PageLoader>
-                              <LazySegmentListPage />
-                            </PageLoader>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
+                    element={<Navigate to="/subscribers" replace />}
                   />
                   <Route
                     path="/segments/:segmentId"
@@ -231,9 +247,11 @@ function App() {
                       <RouteErrorBoundary routeName="Segment Details">
                         <ProtectedRoute>
                           <OnboardingGuard>
-                            <PageLoader>
-                              <LazySegmentDetailPage />
-                            </PageLoader>
+                            <AppShell>
+                              <PageLoader>
+                                <LazySegmentDetailPage />
+                              </PageLoader>
+                            </AppShell>
                           </OnboardingGuard>
                         </ProtectedRoute>
                       </RouteErrorBoundary>
@@ -245,9 +263,11 @@ function App() {
                       <RouteErrorBoundary routeName="Issues">
                         <ProtectedRoute>
                           <OnboardingGuard>
-                            <PageLoader>
-                              <LazyIssuesListPage />
-                            </PageLoader>
+                            <AppShell>
+                              <PageLoader>
+                                <LazyIssuesListPage />
+                              </PageLoader>
+                            </AppShell>
                           </OnboardingGuard>
                         </ProtectedRoute>
                       </RouteErrorBoundary>
@@ -259,9 +279,11 @@ function App() {
                       <RouteErrorBoundary routeName="Create Issue">
                         <ProtectedRoute>
                           <OnboardingGuard>
-                            <PageLoader>
-                              <LazyIssueFormPage />
-                            </PageLoader>
+                            <AppShell>
+                              <PageLoader>
+                                <LazyIssueFormPage />
+                              </PageLoader>
+                            </AppShell>
                           </OnboardingGuard>
                         </ProtectedRoute>
                       </RouteErrorBoundary>
@@ -273,9 +295,11 @@ function App() {
                       <RouteErrorBoundary routeName="Issue Details">
                         <ProtectedRoute>
                           <OnboardingGuard>
-                            <PageLoader>
-                              <LazyIssueDetailPage />
-                            </PageLoader>
+                            <AppShell>
+                              <PageLoader>
+                                <LazyIssueDetailPage />
+                              </PageLoader>
+                            </AppShell>
                           </OnboardingGuard>
                         </ProtectedRoute>
                       </RouteErrorBoundary>
@@ -287,9 +311,11 @@ function App() {
                       <RouteErrorBoundary routeName="Edit Issue">
                         <ProtectedRoute>
                           <OnboardingGuard>
-                            <PageLoader>
-                              <LazyIssueFormPage />
-                            </PageLoader>
+                            <AppShell>
+                              <PageLoader>
+                                <LazyIssueFormPage />
+                              </PageLoader>
+                            </AppShell>
                           </OnboardingGuard>
                         </ProtectedRoute>
                       </RouteErrorBoundary>

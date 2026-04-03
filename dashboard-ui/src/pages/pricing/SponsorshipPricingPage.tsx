@@ -9,7 +9,6 @@ import {
 } from 'recharts';
 import { RefreshCw, DollarSign, ChevronDown, AlertCircle, Info, FileDown } from 'lucide-react';
 import { reportService } from '../../services/reportService';
-import { AppHeader } from '../../components/layout/AppHeader';
 import { Card, CardContent } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { pricingService } from '../../services/pricingService';
@@ -482,11 +481,7 @@ export const SponsorshipPricingPage: React.FC = () => {
   // Render
   // ------------------------------------------------------------------
   return (
-    <div className="min-h-screen bg-background">
-      <AppHeader />
-      <main id="main-content" className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-        <h1 className="text-2xl sm:text-3xl font-bold text-foreground">Sponsorship Pricing</h1>
-
+    <div className="space-y-6">
         {/* Error banner */}
         {error && (
           <div role="alert" className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-900/20 p-4 text-sm text-red-800 dark:text-red-300">
@@ -598,7 +593,6 @@ export const SponsorshipPricingPage: React.FC = () => {
             )}
           </>
         ) : null}
-      </main>
     </div>
   );
 };

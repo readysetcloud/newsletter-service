@@ -8,22 +8,34 @@ interface IssuePerformanceChartProps {
   trendsData: TrendsData;
 }
 
-type TooltipPayloadItem = {
-  name?: string;
-  value?: number;
+interface ChartTooltipEntry {
   color?: string;
-};
+  name?: string | number;
+  value?: number | string;
+}
+
+interface ChartTooltipProps {
+  active?: boolean;
+  label?: string | number;
+  payload?: ChartTooltipEntry[];
+}
+
+interface ActivePayloadPoint {
+  payload?: {
+    id?: string;
+  };
+}
+
+interface ChartClickState {
+  activePayload?: ActivePayloadPoint[];
+}
 
 function CustomTooltip({
   active,
   payload,
   label
-}: {
-  active?: boolean;
-  payload?: TooltipPayloadItem[];
-  label?: string;
-}) {
-  if (active && Array.isArray(payload) && payload.length > 0) {
+}: ChartTooltipProps) {
+  if (active && payload && payload.length > 0) {
     return (
       <div className="bg-surface p-4 border border-border rounded-lg shadow-lg">
         <p className="font-medium text-foreground">{label}</p>
@@ -50,7 +62,7 @@ export default function IssuePerformanceChart({ trendsData }: IssuePerformanceCh
     bounceRate: issue.metrics.bounceRate
   })).reverse();
 
-  const handleChartClick = (data: { activePayload?: Array<{ payload?: { id: string } }> }) => {
+  const handleChartClick = (data: ChartClickState) => {
     if (data?.activePayload?.[0]?.payload?.id) {
       navigate(`/issues/${data.activePayload[0].payload.id}`);
     }

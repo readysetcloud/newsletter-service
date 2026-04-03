@@ -9,22 +9,24 @@ export interface AudienceInsightsPanelProps {
   timingMetrics: TimingMetrics;
 }
 
-type TooltipPayloadItem = {
-  name?: string;
-  value?: number;
+interface ChartTooltipEntry {
   color?: string;
-};
+  name?: string | number;
+  value?: number | string;
+}
+
+interface ChartTooltipProps {
+  active?: boolean;
+  label?: string | number;
+  payload?: ChartTooltipEntry[];
+}
 
 function CustomTooltip({
   active,
   payload,
   label
-}: {
-  active?: boolean;
-  payload?: TooltipPayloadItem[];
-  label?: string;
-}) {
-  if (active && Array.isArray(payload) && payload.length > 0) {
+}: ChartTooltipProps) {
+  if (active && payload && payload.length > 0) {
     return (
       <div className="bg-surface p-4 border border-border rounded-lg shadow-lg">
         <p className="font-medium text-foreground mb-2">{label}</p>
@@ -150,7 +152,7 @@ export const AudienceInsightsPanel: React.FC<AudienceInsightsPanelProps> = ({
                     cx="50%"
                     cy="50%"
                     labelLine={false}
-                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                    label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}
                     outerRadius={60}
                     fill="#8884d8"
                     dataKey="value"

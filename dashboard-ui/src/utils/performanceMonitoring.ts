@@ -199,7 +199,7 @@ export function monitorLongTasks(): void {
  * Call this once when the app starts
  */
 export function initPerformanceMonitoring(): void {
-  if (process.env.NODE_ENV === 'development') {
+  if (import.meta.env.DEV) {
     // Only monitor in development to avoid overhead in production
     measureWebVitals();
     monitorLongTasks();
@@ -217,7 +217,7 @@ export function initPerformanceMonitoring(): void {
  */
 export function reportPerformanceMetrics(metrics: PerformanceMetrics): void {
   // In a real application, you would send these metrics to your analytics service
-  if (process.env.NODE_ENV === 'production') {
+  if (import.meta.env.PROD) {
     // Example: Send to analytics
     // analytics.track('performance_metrics', metrics);
     console.log('[Performance] Metrics:', metrics);

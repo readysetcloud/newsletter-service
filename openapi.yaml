@@ -1625,6 +1625,56 @@ paths:
         "500":
           $ref: "#/components/responses/UnknownError"
 
+  /subscribers/count:
+    get:
+      summary: Get current subscriber count
+      description: Returns the current total subscriber count for the authenticated tenant.
+      tags:
+        - Subscribers
+      responses:
+        "200":
+          description: Current subscriber count
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriberCountResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /subscribers/trends:
+    get:
+      summary: Get subscriber trends across recent issues
+      description: Returns subscriber counts captured at send time for the most recent published issues, plus a summary of growth or decline across the returned range.
+      tags:
+        - Subscribers
+      parameters:
+        - name: issueCount
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+          description: Number of recent published issues to include
+      responses:
+        "200":
+          description: Subscriber trend data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriberTrendsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
   /subscribers/health:
     get:
       summary: Get audience health cohort distribution
@@ -2890,6 +2940,72 @@ components:
           type: number
           format: float
           description: Percentage of total subscribers in this cohort
+
+    SubscriberCountResponse:
+      type: object
+      required:
+        - totalSubscribers
+      properties:
+        totalSubscribers:
+          type: integer
+          description: Current total number of subscribers for the tenant
+
+    SubscriberTrendPoint:
+      type: object
+      required:
+        - issueNumber
+        - subscribers
+      properties:
+        issueNumber:
+          type: integer
+          description: Published issue number
+        subscribers:
+          type: integer
+          description: Subscriber count recorded when the issue was sent
+        publishedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Publish timestamp for the issue when available
+
+    SubscriberTrendSummary:
+      type: object
+      required:
+        - latestSubscribers
+        - oldestSubscribers
+        - netChange
+        - percentageChange
+        - pointsReturned
+      properties:
+        latestSubscribers:
+          type: integer
+          description: Subscriber count for the most recent point returned
+        oldestSubscribers:
+          type: integer
+          description: Subscriber count for the oldest point returned
+        netChange:
+          type: integer
+          description: Difference between latest and oldest subscriber counts
+        percentageChange:
+          type: number
+          format: float
+          description: Percentage change from the oldest point to the latest point
+        pointsReturned:
+          type: integer
+          description: Number of trend points returned
+
+    SubscriberTrendsResponse:
+      type: object
+      required:
+        - points
+        - summary
+      properties:
+        points:
+          type: array
+          items:
+            $ref: "#/components/schemas/SubscriberTrendPoint"
+        summary:
+          $ref: "#/components/schemas/SubscriberTrendSummary"
 
     CreateSegmentRequest:
       type: object

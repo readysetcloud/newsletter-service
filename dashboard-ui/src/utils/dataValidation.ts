@@ -16,6 +16,12 @@ import type {
   ComplaintDetail,
   TrafficSource,
 } from '@/types/issues';
+import type {
+  SubscriberCountResponse,
+  SubscriberTrendPoint,
+  SubscriberTrendSummary,
+  SubscriberTrendsResponse,
+} from '@/types/subscribers';
 
 function isNonNegativeNumber(value: unknown): value is number {
   return typeof value === 'number' && !isNaN(value) && value >= 0;
@@ -96,6 +102,45 @@ export function validateTrendsData(data: unknown): data is TrendsData {
     return false;
   }
   return true;
+}
+
+export function validateSubscriberCountResponse(data: unknown): data is SubscriberCountResponse {
+  if (!data || typeof data !== 'object') return false;
+  const count = data as Record<string, unknown>;
+  return isNonNegativeNumber(count.totalSubscribers);
+}
+
+export function validateSubscriberTrendPoint(data: unknown): data is SubscriberTrendPoint {
+  if (!data || typeof data !== 'object') return false;
+  const point = data as Record<string, unknown>;
+  return (
+    typeof point.issueNumber === 'number' &&
+    point.issueNumber > 0 &&
+    isNonNegativeNumber(point.subscribers) &&
+    (point.publishedAt === undefined || typeof point.publishedAt === 'string')
+  );
+}
+
+export function validateSubscriberTrendSummary(data: unknown): data is SubscriberTrendSummary {
+  if (!data || typeof data !== 'object') return false;
+  const summary = data as Record<string, unknown>;
+  return (
+    isNonNegativeNumber(summary.latestSubscribers) &&
+    isNonNegativeNumber(summary.oldestSubscribers) &&
+    typeof summary.netChange === 'number' &&
+    typeof summary.percentageChange === 'number' &&
+    isNonNegativeNumber(summary.pointsReturned)
+  );
+}
+
+export function validateSubscriberTrendsResponse(data: unknown): data is SubscriberTrendsResponse {
+  if (!data || typeof data !== 'object') return false;
+  const trends = data as Record<string, unknown>;
+  return (
+    Array.isArray(trends.points) &&
+    trends.points.every(validateSubscriberTrendPoint) &&
+    validateSubscriberTrendSummary(trends.summary)
+  );
 }
 
 export function validateLinkPerformance(data: unknown): data is LinkPerformance {

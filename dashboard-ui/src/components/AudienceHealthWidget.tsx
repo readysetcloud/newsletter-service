@@ -23,6 +23,19 @@ interface AudienceHealthWidgetProps {
   latestIssueNumber: number;
 }
 
+interface ChartTooltipEntry {
+  name?: string | number;
+  value?: number | string;
+  payload?: {
+    percentage?: number;
+  };
+}
+
+interface ChartTooltipProps {
+  active?: boolean;
+  payload?: ChartTooltipEntry[];
+}
+
 const COHORT_COLORS = {
   highlyEngaged: '#10b981',
   occasional: '#f59e0b',
@@ -35,18 +48,15 @@ const COHORT_LABELS: Record<string, string> = {
   dormant: 'Dormant',
 };
 
-type TooltipPayloadItem = {
-  name?: string;
-  value?: number;
-  payload?: { percentage: number };
-};
-
-function CustomTooltip({ active, payload }: { active?: boolean; payload?: TooltipPayloadItem[] }) {
-  if (active && Array.isArray(payload) && payload.length > 0) {
+function CustomTooltip({ active, payload }: ChartTooltipProps) {
+  if (active && payload && payload.length > 0) {
     const item = payload[0];
     const label = item?.name ?? 'Value';
     const count = typeof item?.value === 'number' ? item.value : 0;
-    const percentage = item?.payload?.percentage ?? 0;
+    const percentage =
+      item?.payload && typeof item.payload === 'object' && 'percentage' in item.payload
+        ? Number(item.payload.percentage ?? 0)
+        : 0;
     return (
       <div className="bg-surface p-3 border border-border rounded-lg shadow-lg">
         <p className="font-medium text-foreground">{label}</p>

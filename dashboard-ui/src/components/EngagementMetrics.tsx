@@ -6,13 +6,18 @@ interface EngagementMetricsProps {
   aggregates: TrendAggregates;
 }
 
-type TooltipPayloadItem = {
-  name?: string;
-  value?: number;
-};
+interface ChartTooltipEntry {
+  name?: string | number;
+  value?: number | string;
+}
 
-function CustomTooltip({ active, payload }: { active?: boolean; payload?: TooltipPayloadItem[] }) {
-  if (active && Array.isArray(payload) && payload.length > 0) {
+interface ChartTooltipProps {
+  active?: boolean;
+  payload?: ChartTooltipEntry[];
+}
+
+function CustomTooltip({ active, payload }: ChartTooltipProps) {
+  if (active && payload && payload.length > 0) {
     const item = payload[0];
     const label = item?.name ?? 'Value';
     const value = typeof item?.value === 'number' ? item.value : 0;

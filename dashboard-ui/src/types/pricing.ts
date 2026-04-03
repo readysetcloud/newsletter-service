@@ -18,12 +18,15 @@ export interface PricingRecord {
   recommendedPrice: number;
   baselinePrice: number;
   multiplier: Multiplier;
+  llmConfidence?: 'low' | 'medium' | 'high' | null;
+  confidenceOverride?: boolean;
   confidence: 'low' | 'medium' | 'high';
   justification: string;
   metrics: PricingMetrics;
   calculatedAt: string;
   metricsAsOf: string;
   weekWindow: string;
+  pricingModelVersion?: string;
   isFallback: boolean;
   smoothingApplied: boolean;
   questionnaireVersion?: string;

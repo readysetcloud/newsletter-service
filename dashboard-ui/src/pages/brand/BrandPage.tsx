@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { BrandForm } from '../../components/forms/BrandForm';
 import { BrandPreview } from '../../components/brand/BrandPreview';
-import { AppHeader } from '../../components/layout/AppHeader';
 import { BrandFormData } from '../../schemas/brandSchema';
 import { BrandInfo, UserProfile } from '../../types';
 import { profileService } from '../../services/profileService';
@@ -150,7 +149,6 @@ export const BrandPage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      <AppHeader />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       {/* Header */}

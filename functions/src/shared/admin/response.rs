@@ -3,6 +3,7 @@ use lambda_http::{Body, Response};
 use serde::Serialize;
 use serde_json::json;
 use std::env;
+use tracing::error;
 
 fn get_cors_origin() -> String {
     env::var("ORIGIN").unwrap_or_else(|_| "*".to_string())
@@ -39,8 +40,15 @@ pub fn format_response<T: Serialize>(
 
 pub fn format_error_response(error: &AppError) -> Response<Body> {
     let status_code = error.status_code();
+    let message = match error {
+        AppError::AwsError(_) | AppError::InternalError(_) => {
+            error!(error = %error, status_code, "Request failed");
+            "Something went wrong".to_string()
+        }
+        _ => error.to_string(),
+    };
     let body = json!({
-        "message": error.to_string()
+        "message": message
     });
 
     add_cors_headers(Response::builder())

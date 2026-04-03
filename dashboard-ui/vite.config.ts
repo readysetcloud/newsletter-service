@@ -44,14 +44,36 @@ export default defineConfig(({ command: _command, mode }) => {
       target: 'es2020',
       rollupOptions: {
         output: {
-          manualChunks: {
-            // Vendor chunks for better caching
-            'react-vendor': ['react', 'react-dom'],
-            'router-vendor': ['react-router-dom'],
-            'ui-vendor': ['@headlessui/react', '@heroicons/react', 'lucide-react'],
-            'form-vendor': ['react-hook-form', '@hookform/resolvers', 'zod'],
-            'aws-vendor': ['aws-amplify'],
-            'chart-vendor': ['recharts'],
+          manualChunks: (id) => {
+            if (id.includes('node_modules')) {
+              if (id.includes('react-dom') || id.includes(`${path.sep}react${path.sep}`)) {
+                return 'react-vendor';
+              }
+              if (id.includes('react-router-dom')) {
+                return 'router-vendor';
+              }
+              if (
+                id.includes('@headlessui/react') ||
+                id.includes('@heroicons/react') ||
+                id.includes('lucide-react')
+              ) {
+                return 'ui-vendor';
+              }
+              if (
+                id.includes('react-hook-form') ||
+                id.includes('@hookform/resolvers') ||
+                id.includes(`${path.sep}zod${path.sep}`)
+              ) {
+                return 'form-vendor';
+              }
+              if (id.includes('aws-amplify')) {
+                return 'aws-vendor';
+              }
+              if (id.includes('recharts')) {
+                return 'chart-vendor';
+              }
+            }
+            return undefined;
           },
           chunkFileNames: (chunkInfo) => {
             const facadeModuleId = chunkInfo.facadeModuleId

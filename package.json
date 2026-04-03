@@ -17,9 +17,6 @@
     "fmt:rust": "cargo fmt --all -- --check",
     "fmt:rust:fix": "cargo fmt --all"
   },
-  "workspaces": [
-    "dashboard-ui"
-  ],
   "dependencies": {
     "@aws-lambda-powertools/logger": "^2.32.0",
     "@aws-lambda-powertools/parameters": "^2.32.0",

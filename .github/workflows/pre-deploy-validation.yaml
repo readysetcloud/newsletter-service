@@ -31,6 +31,7 @@ jobs:
       - name: Configure NPM
         run: |
           npm ci
+          npm --prefix dashboard-ui ci
           npm run lint:all
 
   unit-tests:
@@ -51,6 +52,7 @@ jobs:
       - name: Unit Tests
         run: |
           npm ci
+          npm --prefix dashboard-ui ci
           npm run coverage
 
   rust-tests:

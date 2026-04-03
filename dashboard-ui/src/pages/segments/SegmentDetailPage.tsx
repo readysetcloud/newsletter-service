@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Plus, Trash2, Download, Pencil, X, RefreshCw, AlertCircle, Users } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Download, Pencil, X, RefreshCw, AlertCircle, Users, Info, ChevronDown, ChevronUp } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/Toast';
 import { Card, CardContent } from '@/components/ui/Card';
@@ -46,6 +46,9 @@ export const SegmentDetailPage: React.FC = () => {
   const [editDescription, setEditDescription] = useState('');
   const [editError, setEditError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // Info panel state
+  const [showAutoInfo, setShowAutoInfo] = useState(false);
 
   // --- Load segment ---
   const loadSegment = useCallback(async () => {
@@ -345,6 +348,40 @@ export const SegmentDetailPage: React.FC = () => {
           </CardContent>
         </Card>
 
+        {/* Auto-managed info panel */}
+        {segment.autoManaged && (
+          <Card className="mb-6 border-primary-200 dark:border-primary-800">
+            <CardContent className="py-4">
+              <button
+                onClick={() => setShowAutoInfo(prev => !prev)}
+                className="flex items-center gap-2 w-full text-left focus:outline-none focus:ring-2 focus:ring-primary-500 rounded"
+                aria-expanded={showAutoInfo}
+                aria-controls="auto-segment-info"
+              >
+                <Info className="w-4 h-4 text-primary-500 flex-shrink-0" />
+                <span className="text-sm font-medium text-foreground">How this segment works</span>
+                {showAutoInfo
+                  ? <ChevronUp className="w-4 h-4 text-muted-foreground ml-auto" />
+                  : <ChevronDown className="w-4 h-4 text-muted-foreground ml-auto" />
+                }
+              </button>
+              {showAutoInfo && (
+                <div id="auto-segment-info" className="mt-3 space-y-2 text-sm text-muted-foreground">
+                  <p>
+                    This is an interest segment that is managed automatically. Subscribers are added based on the links they click in your newsletters.
+                  </p>
+                  <p>
+                    Each link in your newsletter is tagged with a topic. When a subscriber clicks a link, they earn interest points for that topic. Once a subscriber accumulates enough interest in a topic (3 or more points), they are automatically added to the matching segment.
+                  </p>
+                  <p>
+                    Primary topic links earn 1 point per click, and secondary topic links earn 0.5 points. Members cannot be manually added or removed from this segment.
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
         {/* Add members */}
         <Card className="mb-6">
           <CardContent className="py-4">
@@ -397,7 +434,11 @@ export const SegmentDetailPage: React.FC = () => {
             {members.length === 0 && !membersLoading ? (
               <div className="text-center py-8">
                 <Users className="mx-auto h-10 w-10 text-muted-foreground/50 mb-3" />
-                <p className="text-sm text-muted-foreground">No subscribers have been added to this segment yet.</p>
+                <p className="text-sm text-muted-foreground">
+                  {segment.autoManaged
+                    ? 'No subscribers have matched this interest yet. Members are added automatically as subscribers engage with related content.'
+                    : 'No subscribers have been added to this segment yet.'}
+                </p>
               </div>
             ) : (
               <>
@@ -491,8 +532,10 @@ export const SegmentDetailPage: React.FC = () => {
               <div>
                 <label htmlFor="edit-name" className="block text-sm font-medium text-foreground mb-1">Name</label>
                 <input id="edit-name" type="text" value={editName} onChange={e => setEditName(e.target.value)} maxLength={100}
-                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary-500" />
+                  disabled={segment.autoManaged}
+                  className={`w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary-500${segment.autoManaged ? ' opacity-50 cursor-not-allowed' : ''}`} />
                 <div className="flex justify-between mt-1">
+                  {segment.autoManaged && <p className="text-xs text-muted-foreground">Auto-managed segment names cannot be changed</p>}
                   {editNameError && <p className="text-xs text-error-600">{editNameError}</p>}
                   <p className="text-xs text-muted-foreground ml-auto">{editName.trim().length}/100</p>
                 </div>

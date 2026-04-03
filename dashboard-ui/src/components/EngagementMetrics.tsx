@@ -8,7 +8,7 @@ interface EngagementMetricsProps {
 
 interface ChartTooltipEntry {
   name?: string | number;
-  value?: number | string;
+  value?: number | string | readonly (string | number)[];
 }
 
 interface ChartTooltipProps {

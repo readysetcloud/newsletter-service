@@ -2567,11 +2567,14 @@ Resources:
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: dynamodb:PutItem
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:GetItem
               Resource: !GetAtt NewsletterTable.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          TABLE_NAME: !Ref NewsletterTable
           REDIRECT_URL: !If
             - HasRedirectCustomDomain
             - !Sub https://${RedirectCustomDomain}/r
@@ -2606,10 +2609,15 @@ Resources:
             - Effect: Allow
               Action:
                 - dynamodb:UpdateItem
+                - dynamodb:PutItem
+                - dynamodb:GetItem
+                - dynamodb:Query
+                - dynamodb:TransactWriteItems
               Resource: !GetAtt SubscribersTable.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
 
   RedirectLogsSubscription:
     Type: AWS::Logs::SubscriptionFilter

@@ -1,6 +1,6 @@
 import { jest } from '@jest/globals';
-import { handler } from '../process-link-click.mjs';
-import { DynamoDBClient, PutItemCommand, UpdateItemCommand, GetItemCommand } from '@aws-sdk/client-dynamodb';
+import { handler, findOrCreateInterestSegment } from '../process-link-click.mjs';
+import { DynamoDBClient, PutItemCommand, UpdateItemCommand, GetItemCommand, TransactWriteItemsCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import crypto from 'crypto';
 import zlib from 'zlib';
@@ -475,5 +475,151 @@ describe('process-link-click handler', () => {
       const item = unmarshall(putCalls[0][0].input.Item);
       expect(item.country).toBe('unknown');
     });
+  });
+});
+
+describe('findOrCreateInterestSegment', () => {
+  let mockSend;
+  let originalEnv;
+
+  beforeEach(() => {
+    originalEnv = process.env.SUBSCRIBERS_TABLE_NAME;
+    process.env.SUBSCRIBERS_TABLE_NAME = 'test-subscribers-table';
+    mockSend = jest.fn();
+    DynamoDBClient.prototype.send = mockSend;
+    jest.clearAllMocks();
+  });
+
+  afterEach(() => {
+    process.env.SUBSCRIBERS_TABLE_NAME = originalEnv;
+  });
+
+  test('should return null when existing segment is not auto-managed (manual collision)', async () => {
+    const existingSegmentId = 'SEG123';
+
+    mockSend.mockImplementation((command) => {
+      if (command instanceof GetItemCommand) {
+        const key = unmarshall(command.input.Key);
+        // First GetItem: uniqueness record lookup
+        if (key.email === 'SEGMENT_NAME#auto: ai') {
+          return Promise.resolve({
+            Item: marshall({ tenantId: 'tenant1', email: 'SEGMENT_NAME#auto: ai', segmentId: existingSegmentId })
+          });
+        }
+        // Second GetItem: segment record lookup — manually created, no autoManaged
+        if (key.email === `SEGMENT#${existingSegmentId}`) {
+          return Promise.resolve({
+            Item: marshall({ tenantId: 'tenant1', email: `SEGMENT#${existingSegmentId}`, name: 'Auto: AI', autoManaged: false })
+          });
+        }
+      }
+      return Promise.resolve({});
+    });
+
+    const result = await findOrCreateInterestSegment('tenant1', 'ai');
+    expect(result).toBeNull();
+  });
+
+  test('should return null when existing segment record has no autoManaged field', async () => {
+    const existingSegmentId = 'SEG456';
+
+    mockSend.mockImplementation((command) => {
+      if (command instanceof GetItemCommand) {
+        const key = unmarshall(command.input.Key);
+        if (key.email === 'SEGMENT_NAME#auto: ai') {
+          return Promise.resolve({
+            Item: marshall({ tenantId: 'tenant1', email: 'SEGMENT_NAME#auto: ai', segmentId: existingSegmentId })
+          });
+        }
+        if (key.email === `SEGMENT#${existingSegmentId}`) {
+          // Manually created segment — autoManaged field absent
+          return Promise.resolve({
+            Item: marshall({ tenantId: 'tenant1', email: `SEGMENT#${existingSegmentId}`, name: 'Auto: AI' })
+          });
+        }
+      }
+      return Promise.resolve({});
+    });
+
+    const result = await findOrCreateInterestSegment('tenant1', 'ai');
+    expect(result).toBeNull();
+  });
+
+  test('should return segmentId when existing segment is auto-managed', async () => {
+    const existingSegmentId = 'SEG789';
+
+    mockSend.mockImplementation((command) => {
+      if (command instanceof GetItemCommand) {
+        const key = unmarshall(command.input.Key);
+        if (key.email === 'SEGMENT_NAME#auto: ai') {
+          return Promise.resolve({
+            Item: marshall({ tenantId: 'tenant1', email: 'SEGMENT_NAME#auto: ai', segmentId: existingSegmentId })
+          });
+        }
+        if (key.email === `SEGMENT#${existingSegmentId}`) {
+          return Promise.resolve({
+            Item: marshall({ tenantId: 'tenant1', email: `SEGMENT#${existingSegmentId}`, autoManaged: true })
+          });
+        }
+      }
+      return Promise.resolve({});
+    });
+
+    const result = await findOrCreateInterestSegment('tenant1', 'ai');
+    expect(result).toBe(existingSegmentId);
+  });
+
+  test('should use ConsistentRead on TransactionCanceledException retry', async () => {
+    const concurrentSegmentId = 'SEG_CONCURRENT';
+    let callCount = 0;
+
+    mockSend.mockImplementation((command) => {
+      // First call: GetItem for uniqueness — not found
+      if (command instanceof GetItemCommand && callCount === 0) {
+        callCount++;
+        return Promise.resolve({});
+      }
+      // Second call: TransactWriteItems — fails with TransactionCanceledException
+      if (command instanceof TransactWriteItemsCommand) {
+        const err = new Error('Transaction canceled');
+        err.name = 'TransactionCanceledException';
+        return Promise.reject(err);
+      }
+      // Third call: GetItem retry — should have ConsistentRead
+      if (command instanceof GetItemCommand) {
+        expect(command.input.ConsistentRead).toBe(true);
+        return Promise.resolve({
+          Item: marshall({ tenantId: 'tenant1', email: 'SEGMENT_NAME#auto: ai', segmentId: concurrentSegmentId })
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    const result = await findOrCreateInterestSegment('tenant1', 'ai');
+    expect(result).toBe(concurrentSegmentId);
+  });
+
+  test('should throw when TransactionCanceledException retry finds nothing with ConsistentRead', async () => {
+    let callCount = 0;
+
+    mockSend.mockImplementation((command) => {
+      if (command instanceof GetItemCommand && callCount === 0) {
+        callCount++;
+        return Promise.resolve({});
+      }
+      if (command instanceof TransactWriteItemsCommand) {
+        const err = new Error('Transaction canceled');
+        err.name = 'TransactionCanceledException';
+        return Promise.reject(err);
+      }
+      if (command instanceof GetItemCommand) {
+        // Consistent read still finds nothing — unusual but possible
+        return Promise.resolve({});
+      }
+      return Promise.resolve({});
+    });
+
+    await expect(findOrCreateInterestSegment('tenant1', 'ai'))
+      .rejects.toThrow('Transaction canceled');
   });
 });

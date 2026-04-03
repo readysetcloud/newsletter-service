@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2, Eye, RefreshCw, Users, X } from 'lucide-react';
+import { Plus, Trash2, Eye, RefreshCw, Users, X, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/Toast';
 import { Card, CardContent } from '@/components/ui/Card';
@@ -111,6 +111,55 @@ export const SegmentListPage: React.FC = () => {
   const formatDate = (dateString: string) =>
     new Date(dateString).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 
+  const manualSegments = useMemo(() => segments.filter(s => !s.autoManaged), [segments]);
+  const autoSegments = useMemo(() => segments.filter(s => s.autoManaged), [segments]);
+
+  const renderSegmentTable = (items: Segment[], label: string) => (
+    <div className="overflow-x-auto">
+      <table className="min-w-full divide-y divide-border" role="table" aria-label={label}>
+        <thead className="bg-muted">
+          <tr>
+            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Name</th>
+            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider hidden sm:table-cell">Description</th>
+            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Members</th>
+            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider hidden md:table-cell">Created</th>
+            <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider">Actions</th>
+          </tr>
+        </thead>
+        <tbody className="bg-surface divide-y divide-border">
+          {items.map(segment => (
+            <tr key={segment.segmentId} className="hover:bg-muted/50 transition-colors group">
+              <td className="px-6 py-4">
+                <button
+                  onClick={() => navigate(`/segments/${segment.segmentId}`)}
+                  className="text-left text-sm font-medium text-foreground group-hover:text-primary-600 transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 rounded"
+                  aria-label={`View segment: ${segment.name}`}
+                >
+                  {segment.name}
+                </button>
+              </td>
+              <td className="px-6 py-4 text-sm text-muted-foreground max-w-xs truncate hidden sm:table-cell">
+                {segment.description || '—'}
+              </td>
+              <td className="px-6 py-4 text-sm text-muted-foreground">{segment.memberCount}</td>
+              <td className="px-6 py-4 text-sm text-muted-foreground hidden md:table-cell">{formatDate(segment.createdAt)}</td>
+              <td className="px-6 py-4 text-right">
+                <div className="flex items-center justify-end gap-2">
+                  <Button variant="ghost" size="sm" onClick={() => navigate(`/segments/${segment.segmentId}`)} aria-label={`View segment: ${segment.name}`}>
+                    <Eye className="w-4 h-4" />
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setSegmentToDelete(segment)} aria-label={`Delete segment: ${segment.name}`} className="hover:bg-error-50 dark:hover:bg-error-900/20">
+                    <Trash2 className="w-4 h-4 text-error-600 dark:text-error-400" />
+                  </Button>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
   // --- Render ---
   if (loading) {
     return (
@@ -179,51 +228,43 @@ export const SegmentListPage: React.FC = () => {
             </CardContent>
           </Card>
         ) : (
-          <Card>
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-border" role="table" aria-label="Segments list">
-                <thead className="bg-muted">
-                  <tr>
-                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Name</th>
-                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider hidden sm:table-cell">Description</th>
-                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Members</th>
-                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider hidden md:table-cell">Created</th>
-                    <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="bg-surface divide-y divide-border">
-                  {segments.map(segment => (
-                    <tr key={segment.segmentId} className="hover:bg-muted/50 transition-colors group">
-                      <td className="px-6 py-4">
-                        <button
-                          onClick={() => navigate(`/segments/${segment.segmentId}`)}
-                          className="text-left text-sm font-medium text-foreground group-hover:text-primary-600 transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 rounded"
-                          aria-label={`View segment: ${segment.name}`}
-                        >
-                          {segment.name}
-                        </button>
-                      </td>
-                      <td className="px-6 py-4 text-sm text-muted-foreground max-w-xs truncate hidden sm:table-cell">
-                        {segment.description || '—'}
-                      </td>
-                      <td className="px-6 py-4 text-sm text-muted-foreground">{segment.memberCount}</td>
-                      <td className="px-6 py-4 text-sm text-muted-foreground hidden md:table-cell">{formatDate(segment.createdAt)}</td>
-                      <td className="px-6 py-4 text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          <Button variant="ghost" size="sm" onClick={() => navigate(`/segments/${segment.segmentId}`)} aria-label={`View segment: ${segment.name}`}>
-                            <Eye className="w-4 h-4" />
-                          </Button>
-                          <Button variant="ghost" size="sm" onClick={() => setSegmentToDelete(segment)} aria-label={`Delete segment: ${segment.name}`} className="hover:bg-error-50 dark:hover:bg-error-900/20">
-                            <Trash2 className="w-4 h-4 text-error-600 dark:text-error-400" />
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
+          <div className="space-y-8">
+            {/* Your Segments */}
+            <section>
+              <div className="flex items-center gap-2 mb-3">
+                <h2 className="text-lg font-semibold text-foreground">Your Segments</h2>
+                <span className="text-xs text-muted-foreground">({manualSegments.length})</span>
+              </div>
+              {manualSegments.length === 0 ? (
+                <Card>
+                  <CardContent className="py-8">
+                    <div className="text-center">
+                      <Users className="mx-auto h-10 w-10 text-muted-foreground/50 mb-3" />
+                      <p className="text-sm text-muted-foreground mb-4">No manual segments yet. Create one to start organizing subscribers.</p>
+                      <Button size="sm" onClick={() => setShowCreateModal(true)}><Plus className="w-4 h-4 mr-2" />Create Segment</Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : (
+                <Card>{renderSegmentTable(manualSegments, 'Your segments')}</Card>
+              )}
+            </section>
+
+            {/* Interest Segments */}
+            {autoSegments.length > 0 && (
+              <section>
+                <div className="flex items-center gap-2 mb-1">
+                  <Sparkles className="w-4 h-4 text-primary-500" />
+                  <h2 className="text-lg font-semibold text-foreground">Interest Segments</h2>
+                  <span className="text-xs text-muted-foreground">({autoSegments.length})</span>
+                </div>
+                <p className="text-xs text-muted-foreground mb-3">
+                  These segments are built automatically from subscriber click behavior. When a subscriber clicks enough links about a topic in your newsletters, they are added to the matching interest segment. Open a segment to learn more.
+                </p>
+                <Card>{renderSegmentTable(autoSegments, 'Interest segments')}</Card>
+              </section>
+            )}
+          </div>
         )}
       </main>
 

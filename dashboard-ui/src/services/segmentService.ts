@@ -10,6 +10,12 @@ export interface Segment {
   memberCount: number;
   createdAt: string;
   updatedAt?: string;
+  autoManaged?: boolean;
+}
+
+export interface InterestScoreEntry {
+  score: number;
+  lastScoredAt: string;
 }
 
 export interface SegmentMember {
@@ -17,6 +23,7 @@ export interface SegmentMember {
   lastEngagedIssue: number | null;
   engagementCount: number | null;
   addedAt: string;
+  interestScores?: Record<string, InterestScoreEntry>;
 }
 
 export interface CreateSegmentRequest {

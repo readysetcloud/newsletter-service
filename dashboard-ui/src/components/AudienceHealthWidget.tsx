@@ -25,9 +25,10 @@ interface AudienceHealthWidgetProps {
 
 interface ChartTooltipEntry {
   name?: string | number;
-  value?: number | string;
+  value?: number | string | readonly (string | number)[];
   payload?: {
     percentage?: number;
+    [key: string]: unknown;
   };
 }
 

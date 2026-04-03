@@ -32,7 +32,7 @@ const formatSecondsDetailed = (value: number) => {
 };
 
 type TooltipValue = number | string | ReadonlyArray<number | string> | undefined;
-type TooltipName = number | string;
+type TooltipName = number | string | undefined;
 
 const getNumericTooltipValue = (value: TooltipValue): number => {
   if (typeof value === 'number') return value;

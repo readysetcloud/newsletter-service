@@ -17,7 +17,7 @@ interface ChartTooltipEntry {
 interface ChartTooltipProps {
   active?: boolean;
   label?: string | number;
-  payload?: ChartTooltipEntry[];
+  payload?: readonly ChartTooltipEntry[];
 }
 
 interface ActivePayloadPoint {
@@ -27,7 +27,7 @@ interface ActivePayloadPoint {
 }
 
 interface ChartClickState {
-  activePayload?: ActivePayloadPoint[];
+  activePayload?: readonly ActivePayloadPoint[];
 }
 
 function CustomTooltip({
@@ -62,9 +62,10 @@ export default function IssuePerformanceChart({ trendsData }: IssuePerformanceCh
     bounceRate: issue.metrics.bounceRate
   })).reverse();
 
-  const handleChartClick = (data: ChartClickState) => {
-    if (data?.activePayload?.[0]?.payload?.id) {
-      navigate(`/issues/${data.activePayload[0].payload.id}`);
+  const handleChartClick = (data: unknown) => {
+    const activePayload = (data as ChartClickState | undefined)?.activePayload;
+    if (activePayload?.[0]?.payload?.id) {
+      navigate(`/issues/${activePayload[0].payload.id}`);
     }
   };
 

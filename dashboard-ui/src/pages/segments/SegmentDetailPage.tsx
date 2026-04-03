@@ -6,6 +6,7 @@ import { useToast } from '@/components/ui/Toast';
 import { Card, CardContent } from '@/components/ui/Card';
 import { segmentService } from '@/services/segmentService';
 import type { Segment, SegmentMember } from '@/services/segmentService';
+import { getSortedInterestProfile, RECENCY_STYLES } from './interestProfileUtils';
 
 export const SegmentDetailPage: React.FC = () => {
   const { segmentId } = useParams<{ segmentId: string }>();
@@ -302,7 +303,14 @@ export const SegmentDetailPage: React.FC = () => {
           <CardContent className="py-6">
             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
               <div className="flex-1 min-w-0">
-                <h1 className="text-2xl font-bold text-foreground">{segment.name}</h1>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-2xl font-bold text-foreground">{segment.name}</h1>
+                  {segment.autoManaged && (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">
+                      Auto
+                    </span>
+                  )}
+                </div>
                 {segment.description && <p className="text-sm text-muted-foreground mt-1">{segment.description}</p>}
                 <div className="flex flex-wrap gap-4 text-xs text-muted-foreground mt-2">
                   <span>{segment.memberCount} member{segment.memberCount !== 1 ? 's' : ''}</span>
@@ -342,13 +350,16 @@ export const SegmentDetailPage: React.FC = () => {
           <CardContent className="py-4">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold text-foreground">Add Members</h2>
-              {!showAddForm && (
+              {!showAddForm && !segment.autoManaged && (
                 <Button variant="outline" size="sm" onClick={() => { setShowAddForm(true); setAddResult(null); }}>
                   <Plus className="h-4 w-4 mr-2" />Add
                 </Button>
               )}
+              {segment.autoManaged && (
+                <span className="text-xs text-muted-foreground">Auto-managed — members are added automatically</span>
+              )}
             </div>
-            {showAddForm && (
+            {showAddForm && !segment.autoManaged && (
               <div className="space-y-3">
                 <textarea
                   value={emailsInput}
@@ -376,7 +387,7 @@ export const SegmentDetailPage: React.FC = () => {
           <CardContent className="py-4">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold text-foreground">Members ({totalCount})</h2>
-              {selectedEmails.size > 0 && (
+              {selectedEmails.size > 0 && !segment.autoManaged && (
                 <Button variant="destructive" size="sm" onClick={handleRemoveSelected} isLoading={removing} disabled={removing}>
                   <Trash2 className="h-4 w-4 mr-2" />Remove Selected ({selectedEmails.size})
                 </Button>
@@ -401,16 +412,20 @@ export const SegmentDetailPage: React.FC = () => {
                             onChange={toggleSelectAll}
                             className="rounded border-border"
                             aria-label="Select all members"
+                            disabled={segment.autoManaged}
                           />
                         </th>
                         <th scope="col" className="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase">Email</th>
                         <th scope="col" className="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase hidden sm:table-cell">Last Engaged Issue</th>
                         <th scope="col" className="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase hidden sm:table-cell">Engagement Count</th>
                         <th scope="col" className="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase hidden md:table-cell">Added</th>
+                        <th scope="col" className="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase hidden lg:table-cell">Interest Profile</th>
                       </tr>
                     </thead>
                     <tbody className="bg-surface divide-y divide-border">
-                      {members.map(member => (
+                      {members.map(member => {
+                        const interestProfile = getSortedInterestProfile(member.interestScores);
+                        return (
                         <tr key={member.email} className="hover:bg-muted/50 transition-colors">
                           <td className="px-4 py-2">
                             <input
@@ -419,14 +434,33 @@ export const SegmentDetailPage: React.FC = () => {
                               onChange={() => toggleSelect(member.email)}
                               className="rounded border-border"
                               aria-label={`Select ${member.email}`}
+                              disabled={segment.autoManaged}
                             />
                           </td>
                           <td className="px-4 py-2 text-sm text-foreground">{member.email}</td>
                           <td className="px-4 py-2 text-sm text-muted-foreground hidden sm:table-cell">{member.lastEngagedIssue ?? '—'}</td>
                           <td className="px-4 py-2 text-sm text-muted-foreground hidden sm:table-cell">{member.engagementCount ?? '—'}</td>
                           <td className="px-4 py-2 text-sm text-muted-foreground hidden md:table-cell">{formatDate(member.addedAt)}</td>
+                          <td className="px-4 py-2 text-sm hidden lg:table-cell">
+                            {interestProfile.length === 0 ? (
+                              <span className="text-muted-foreground">—</span>
+                            ) : (
+                              <div className="flex flex-wrap gap-1">
+                                {interestProfile.map(entry => (
+                                  <span
+                                    key={entry.topic}
+                                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs ${RECENCY_STYLES[entry.recency]}`}
+                                    title={`${entry.displayName}: ${entry.score} (${entry.recency})`}
+                                  >
+                                    {entry.displayName} <span className="font-medium">{entry.score}</span>
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

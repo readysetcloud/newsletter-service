@@ -45,6 +45,8 @@ pub struct SegmentResponse {
     pub created_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_managed: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -81,6 +83,20 @@ struct RemoveMembersResponse {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct InterestScoreEntry {
+    score: f64,
+    last_scored_at: String,
+}
+
+/// Per-subscriber engagement + interest data fetched via BatchGetItem.
+type SubscriberData = (
+    Option<i64>,
+    Option<i64>,
+    Option<HashMap<String, InterestScoreEntry>>,
+);
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct MemberResponse {
     email: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -88,6 +104,8 @@ struct MemberResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     engagement_count: Option<i64>,
     added_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interest_scores: Option<HashMap<String, InterestScoreEntry>>,
 }
 
 #[derive(Serialize)]
@@ -336,6 +354,7 @@ async fn handle_create_segment(event: Request) -> Result<lambda_http::Response<B
                 member_count: 0,
                 created_at: now,
                 updated_at: None,
+                auto_managed: None,
             };
             response::format_response(201, resp)
         }
@@ -444,6 +463,23 @@ async fn handle_update_segment(
         .get("name")
         .and_then(|v| v.as_s().ok())
         .ok_or_else(|| AppError::InternalError("Missing name on existing segment".to_string()))?;
+
+    // Check if segment is auto-managed and name is being changed
+    let is_auto_managed = existing_item
+        .get("autoManaged")
+        .and_then(|v| v.as_bool().ok())
+        .copied()
+        .unwrap_or(false);
+
+    if is_auto_managed {
+        let new_lower_name = trimmed_name.to_lowercase();
+        let old_lower_name = old_name.trim().to_lowercase();
+        if new_lower_name != old_lower_name {
+            return Err(AppError::Forbidden(
+                "Cannot rename an auto-managed segment".to_string(),
+            ));
+        }
+    }
 
     let now = Utc::now().to_rfc3339();
     let new_lower_name = trimmed_name.to_lowercase();
@@ -849,6 +885,17 @@ async fn handle_add_members(
         return Err(AppError::NotFound("Segment not found".to_string()));
     }
 
+    // Check if segment is auto-managed
+    if let Some(item) = segment_result.item() {
+        if let Some(auto_managed) = item.get("autoManaged") {
+            if auto_managed.as_bool().unwrap_or(&false) == &true {
+                return Err(AppError::Forbidden(
+                    "Cannot manually add members to an auto-managed segment".to_string(),
+                ));
+            }
+        }
+    }
+
     if body.emails.is_empty() {
         return response::format_response(
             200,
@@ -1020,6 +1067,17 @@ async fn handle_remove_members(
 
     if segment_result.item().is_none() {
         return Err(AppError::NotFound("Segment not found".to_string()));
+    }
+
+    // Check if segment is auto-managed
+    if let Some(item) = segment_result.item() {
+        if let Some(auto_managed) = item.get("autoManaged") {
+            if auto_managed.as_bool().unwrap_or(&false) == &true {
+                return Err(AppError::Forbidden(
+                    "Cannot manually remove members from an auto-managed segment".to_string(),
+                ));
+            }
+        }
     }
 
     if body.emails.is_empty() {
@@ -1300,7 +1358,7 @@ async fn handle_list_members(
     }
 
     // 5. BatchGetItem subscriber records for engagement data (in batches of 100)
-    let mut subscriber_map: HashMap<String, (Option<i64>, Option<i64>)> = HashMap::new();
+    let mut subscriber_map: HashMap<String, SubscriberData> = HashMap::new();
 
     for chunk in member_data.chunks(100) {
         let keys: Vec<HashMap<String, AttributeValue>> = chunk
@@ -1315,7 +1373,7 @@ async fn handle_list_members(
 
         let keys_and_attrs = KeysAndAttributes::builder()
             .set_keys(Some(keys))
-            .projection_expression("email, lastEngagedIssue, engagementCount")
+            .projection_expression("email, lastEngagedIssue, engagementCount, interestScores")
             .build()
             .map_err(|e| {
                 AppError::InternalError(format!("Failed to build KeysAndAttributes: {}", e))
@@ -1341,7 +1399,11 @@ async fn handle_list_members(
                                 .get("engagementCount")
                                 .and_then(|v| v.as_n().ok())
                                 .and_then(|n| n.parse::<i64>().ok());
-                            subscriber_map.insert(email.clone(), (last_engaged, engagement_count));
+                            let interest_scores = parse_interest_scores(item);
+                            subscriber_map.insert(
+                                email.clone(),
+                                (last_engaged, engagement_count, interest_scores),
+                            );
                         }
                     }
                 }
@@ -1354,12 +1416,13 @@ async fn handle_list_members(
         .into_iter()
         .filter_map(|(email, added_at)| {
             subscriber_map
-                .get(&email)
-                .map(|(last_engaged, eng_count)| MemberResponse {
+                .remove(&email)
+                .map(|(last_engaged, eng_count, scores)| MemberResponse {
                     email,
-                    last_engaged_issue: *last_engaged,
-                    engagement_count: *eng_count,
+                    last_engaged_issue: last_engaged,
+                    engagement_count: eng_count,
                     added_at,
+                    interest_scores: Some(scores.unwrap_or_default()),
                 })
         })
         .collect();
@@ -1704,6 +1767,11 @@ fn parse_segment_item(
 
     let updated_at = item.get("updatedAt").and_then(|v| v.as_s().ok()).cloned();
 
+    let auto_managed = item
+        .get("autoManaged")
+        .and_then(|v| v.as_bool().ok())
+        .copied();
+
     Ok(SegmentResponse {
         segment_id,
         name,
@@ -1711,7 +1779,37 @@ fn parse_segment_item(
         member_count,
         created_at,
         updated_at,
+        auto_managed,
     })
+}
+
+fn parse_interest_scores(
+    item: &std::collections::HashMap<String, AttributeValue>,
+) -> Option<HashMap<String, InterestScoreEntry>> {
+    let scores_map = item.get("interestScores")?.as_m().ok()?;
+    let mut result = HashMap::new();
+    for (topic, entry_val) in scores_map {
+        if let Ok(entry_map) = entry_val.as_m() {
+            let score = entry_map
+                .get("score")
+                .and_then(|v| v.as_n().ok())
+                .and_then(|n| n.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            let last_scored_at = entry_map
+                .get("lastScoredAt")
+                .and_then(|v| v.as_s().ok())
+                .cloned()
+                .unwrap_or_default();
+            result.insert(
+                topic.clone(),
+                InterestScoreEntry {
+                    score,
+                    last_scored_at,
+                },
+            );
+        }
+    }
+    Some(result)
 }
 
 fn is_segment_record(item: &std::collections::HashMap<String, AttributeValue>) -> bool {
@@ -1827,6 +1925,7 @@ mod tests {
             member_count: 0,
             created_at: "2025-01-15T10:00:00Z".to_string(),
             updated_at: None,
+            auto_managed: None,
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["segmentId"], "01JTEST");
@@ -1846,6 +1945,7 @@ mod tests {
             member_count: 5,
             created_at: "2025-01-15T10:00:00Z".to_string(),
             updated_at: Some("2025-01-16T10:00:00Z".to_string()),
+            auto_managed: None,
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json.get("description").is_none());
@@ -1901,6 +2001,7 @@ mod tests {
                     member_count: 10,
                     created_at: "2025-01-15T10:00:00Z".to_string(),
                     updated_at: None,
+                    auto_managed: None,
                 },
                 SegmentResponse {
                     segment_id: "01JBBB".to_string(),
@@ -1909,6 +2010,7 @@ mod tests {
                     member_count: 0,
                     created_at: "2025-01-14T10:00:00Z".to_string(),
                     updated_at: None,
+                    auto_managed: None,
                 },
             ],
         };
@@ -2094,6 +2196,7 @@ mod tests {
                 member_count: 0,
                 created_at: "2025-01-10T10:00:00Z".to_string(),
                 updated_at: None,
+                auto_managed: None,
             },
             SegmentResponse {
                 segment_id: "01JCCC".to_string(),
@@ -2102,6 +2205,7 @@ mod tests {
                 member_count: 0,
                 created_at: "2025-01-20T10:00:00Z".to_string(),
                 updated_at: None,
+                auto_managed: None,
             },
             SegmentResponse {
                 segment_id: "01JBBB".to_string(),
@@ -2110,6 +2214,7 @@ mod tests {
                 member_count: 0,
                 created_at: "2025-01-15T10:00:00Z".to_string(),
                 updated_at: None,
+                auto_managed: None,
             },
         ];
 
@@ -2212,6 +2317,7 @@ mod tests {
             member_count: 42,
             created_at: "2025-01-15T10:00:00Z".to_string(),
             updated_at: Some("2025-01-16T10:00:00Z".to_string()),
+            auto_managed: None,
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["segmentId"], "01JTEST");
@@ -2555,6 +2661,7 @@ mod tests {
             last_engaged_issue: Some(25),
             engagement_count: Some(12),
             added_at: "2025-01-15T10:00:00Z".to_string(),
+            interest_scores: None,
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["email"], "user@example.com");
@@ -2570,6 +2677,7 @@ mod tests {
             last_engaged_issue: None,
             engagement_count: None,
             added_at: "2025-01-15T10:00:00Z".to_string(),
+            interest_scores: None,
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["email"], "user@example.com");
@@ -2586,6 +2694,7 @@ mod tests {
                 last_engaged_issue: Some(25),
                 engagement_count: Some(12),
                 added_at: "2025-01-15T10:00:00Z".to_string(),
+                interest_scores: None,
             }],
             next_token: Some("abc123".to_string()),
             total_count: 42,
@@ -2617,6 +2726,7 @@ mod tests {
                 last_engaged_issue: None,
                 engagement_count: None,
                 added_at: "2025-01-15T10:00:00Z".to_string(),
+                interest_scores: None,
             }],
             next_token: None,
             total_count: 1,
@@ -2748,6 +2858,7 @@ mod tests {
                         last_engaged_issue: *last_engaged,
                         engagement_count: *eng_count,
                         added_at,
+                        interest_scores: None,
                     })
             })
             .collect();
@@ -3035,6 +3146,7 @@ mod tests {
                     member_count: 0,
                     created_at: now.clone(),
                     updated_at: None,
+                    auto_managed: None,
                 };
 
                 // Assert: name stored in original casing (after trim)
@@ -3473,6 +3585,345 @@ mod tests {
                             "Member {} without engagement should have null engagementCount", entry.email);
                     }
                 }
+            }
+        }
+
+        // ── Property 10: Auto-managed segments reject manual membership changes ─
+        // **Validates: Requirements 7.1, 7.2**
+        //
+        // For any segment with autoManaged=true, attempting to manually add
+        // members or remove members must be rejected. The protection check
+        // reads the autoManaged attribute from the DynamoDB item HashMap and
+        // returns Forbidden when it is true.
+
+        /// Helper: check auto-managed protection for membership changes.
+        /// Mirrors the handler logic that reads autoManaged from a DynamoDB item.
+        fn check_auto_managed_membership_protection(
+            item: &HashMap<String, AttributeValue>,
+        ) -> Result<(), AppError> {
+            if let Some(auto_managed) = item.get("autoManaged") {
+                if auto_managed.as_bool().unwrap_or(&false) == &true {
+                    return Err(AppError::Forbidden(
+                        "Cannot manually modify members of an auto-managed segment".to_string(),
+                    ));
+                }
+            }
+            Ok(())
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(100))]
+
+            #[test]
+            fn prop_auto_managed_segments_reject_manual_membership_changes(
+                segment_id in "[A-Z0-9]{26}",
+                member_count in 0i64..1000,
+                emails in prop::collection::vec("[a-z]{3,8}@[a-z]{3,6}\\.com", 1..=20),
+            ) {
+                // Build a DynamoDB item with autoManaged=true
+                let mut item = HashMap::new();
+                item.insert("segmentId".to_string(), AttributeValue::S(segment_id.clone()));
+                item.insert("name".to_string(), AttributeValue::S("Auto: AI".to_string()));
+                item.insert("autoManaged".to_string(), AttributeValue::Bool(true));
+                item.insert("memberCount".to_string(), AttributeValue::N(member_count.to_string()));
+                item.insert("createdAt".to_string(), AttributeValue::S("2025-01-15T10:00:00Z".to_string()));
+
+                // Assert: protection check rejects the request
+                let result = check_auto_managed_membership_protection(&item);
+                prop_assert!(result.is_err(), "Auto-managed segment should reject membership changes");
+
+                // Assert: error is Forbidden
+                match result.unwrap_err() {
+                    AppError::Forbidden(msg) => {
+                        prop_assert!(msg.contains("auto-managed"),
+                            "Error message should mention auto-managed: {}", msg);
+                    }
+                    other => {
+                        prop_assert!(false, "Expected Forbidden error, got: {:?}", other);
+                    }
+                }
+
+                // Assert: memberCount is unchanged (we can verify the item is untouched)
+                let count = item.get("memberCount")
+                    .and_then(|v| v.as_n().ok())
+                    .and_then(|n| n.parse::<i64>().ok())
+                    .unwrap_or(0);
+                prop_assert_eq!(count, member_count,
+                    "memberCount should remain unchanged after rejected operation");
+
+                // Assert: no member records would be created (emails list untouched)
+                prop_assert!(!emails.is_empty(),
+                    "Test should have emails to verify they were not processed");
+            }
+        }
+
+        // Verify that non-auto-managed segments allow membership changes
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(100))]
+
+            #[test]
+            fn prop_non_auto_managed_segments_allow_membership_changes(
+                segment_id in "[A-Z0-9]{26}",
+                has_auto_managed_field in prop::bool::ANY,
+            ) {
+                let mut item = HashMap::new();
+                item.insert("segmentId".to_string(), AttributeValue::S(segment_id));
+                item.insert("name".to_string(), AttributeValue::S("Manual Segment".to_string()));
+                item.insert("memberCount".to_string(), AttributeValue::N("5".to_string()));
+                item.insert("createdAt".to_string(), AttributeValue::S("2025-01-15T10:00:00Z".to_string()));
+
+                if has_auto_managed_field {
+                    // autoManaged=false explicitly set
+                    item.insert("autoManaged".to_string(), AttributeValue::Bool(false));
+                }
+                // else: autoManaged field absent (legacy segments)
+
+                let result = check_auto_managed_membership_protection(&item);
+                prop_assert!(result.is_ok(),
+                    "Non-auto-managed segment should allow membership changes (field present: {})",
+                    has_auto_managed_field);
+            }
+        }
+
+        // ── Property 11: Auto-managed segments allow description updates but reject name changes ─
+        // **Validates: Requirements 7.3**
+        //
+        // For any segment with autoManaged=true, updating the description must
+        // succeed. Attempting to change the name (different after lowercase/trim)
+        // must be rejected with Forbidden. When the name stays the same (or only
+        // case/whitespace changes), the update is allowed.
+
+        /// Helper: check auto-managed protection for update requests.
+        /// Mirrors the handler logic for name change detection on auto-managed segments.
+        fn check_auto_managed_update_protection(
+            item: &HashMap<String, AttributeValue>,
+            new_name: &str,
+        ) -> Result<(), AppError> {
+            let is_auto_managed = item
+                .get("autoManaged")
+                .and_then(|v| v.as_bool().ok())
+                .copied()
+                .unwrap_or(false);
+
+            if is_auto_managed {
+                let old_name = item
+                    .get("name")
+                    .and_then(|v| v.as_s().ok())
+                    .unwrap_or(&String::new())
+                    .clone();
+                let new_lower = new_name.trim().to_lowercase();
+                let old_lower = old_name.trim().to_lowercase();
+                if new_lower != old_lower {
+                    return Err(AppError::Forbidden(
+                        "Cannot rename an auto-managed segment".to_string(),
+                    ));
+                }
+            }
+            Ok(())
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(100))]
+
+            #[test]
+            fn prop_auto_managed_segments_reject_name_changes(
+                original_name in "[a-zA-Z][a-zA-Z0-9 ]{0,49}",
+                different_name in "[a-zA-Z][a-zA-Z0-9 ]{0,49}",
+            ) {
+                let original_trimmed = original_name.trim().to_string();
+                let different_trimmed = different_name.trim().to_string();
+                prop_assume!(!original_trimmed.is_empty());
+                prop_assume!(!different_trimmed.is_empty());
+
+                // Only test when names are actually different after normalization
+                prop_assume!(original_trimmed.to_lowercase() != different_trimmed.to_lowercase());
+
+                let mut item = HashMap::new();
+                item.insert("segmentId".to_string(), AttributeValue::S("01JTEST".to_string()));
+                item.insert("name".to_string(), AttributeValue::S(original_trimmed.clone()));
+                item.insert("autoManaged".to_string(), AttributeValue::Bool(true));
+                item.insert("memberCount".to_string(), AttributeValue::N("10".to_string()));
+                item.insert("createdAt".to_string(), AttributeValue::S("2025-01-15T10:00:00Z".to_string()));
+
+                // Assert: name change is rejected
+                let result = check_auto_managed_update_protection(&item, &different_trimmed);
+                prop_assert!(result.is_err(),
+                    "Auto-managed segment should reject name change from '{}' to '{}'",
+                    original_trimmed, different_trimmed);
+
+                match result.unwrap_err() {
+                    AppError::Forbidden(msg) => {
+                        prop_assert!(msg.contains("rename") || msg.contains("auto-managed"),
+                            "Error message should mention rename or auto-managed: {}", msg);
+                    }
+                    other => {
+                        prop_assert!(false, "Expected Forbidden error, got: {:?}", other);
+                    }
+                }
+
+                // Assert: original name is unchanged in the item
+                let stored_name = item.get("name").and_then(|v| v.as_s().ok()).unwrap();
+                prop_assert_eq!(stored_name, &original_trimmed,
+                    "Segment name should remain unchanged after rejected rename");
+            }
+        }
+
+        // Verify that auto-managed segments allow same-name updates (case/whitespace changes)
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(100))]
+
+            #[test]
+            fn prop_auto_managed_segments_allow_same_name_updates(
+                base_name in "[a-zA-Z][a-zA-Z0-9 ]{0,49}",
+                add_leading_space in prop::bool::ANY,
+                add_trailing_space in prop::bool::ANY,
+                toggle_case in prop::bool::ANY,
+            ) {
+                let base_trimmed = base_name.trim().to_string();
+                prop_assume!(!base_trimmed.is_empty());
+
+                let mut item = HashMap::new();
+                item.insert("segmentId".to_string(), AttributeValue::S("01JTEST".to_string()));
+                item.insert("name".to_string(), AttributeValue::S(base_trimmed.clone()));
+                item.insert("autoManaged".to_string(), AttributeValue::Bool(true));
+                item.insert("memberCount".to_string(), AttributeValue::N("10".to_string()));
+                item.insert("createdAt".to_string(), AttributeValue::S("2025-01-15T10:00:00Z".to_string()));
+
+                // Build a variant that is the same name after lowercase/trim
+                let mut variant = if toggle_case {
+                    base_trimmed.to_uppercase()
+                } else {
+                    base_trimmed.clone()
+                };
+                if add_leading_space {
+                    variant = format!("  {}", variant);
+                }
+                if add_trailing_space {
+                    variant = format!("{}  ", variant);
+                }
+
+                // Assert: same-name update is allowed
+                let result = check_auto_managed_update_protection(&item, &variant);
+                prop_assert!(result.is_ok(),
+                    "Auto-managed segment should allow same-name update (variant: '{}')", variant);
+            }
+        }
+
+        // Verify that non-auto-managed segments allow name changes freely
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(100))]
+
+            #[test]
+            fn prop_non_auto_managed_segments_allow_name_changes(
+                original_name in "[a-zA-Z][a-zA-Z0-9 ]{0,49}",
+                new_name in "[a-zA-Z][a-zA-Z0-9 ]{0,49}",
+                has_auto_managed_field in prop::bool::ANY,
+            ) {
+                let original_trimmed = original_name.trim().to_string();
+                let new_trimmed = new_name.trim().to_string();
+                prop_assume!(!original_trimmed.is_empty());
+                prop_assume!(!new_trimmed.is_empty());
+
+                let mut item = HashMap::new();
+                item.insert("segmentId".to_string(), AttributeValue::S("01JTEST".to_string()));
+                item.insert("name".to_string(), AttributeValue::S(original_trimmed));
+                item.insert("memberCount".to_string(), AttributeValue::N("10".to_string()));
+                item.insert("createdAt".to_string(), AttributeValue::S("2025-01-15T10:00:00Z".to_string()));
+
+                if has_auto_managed_field {
+                    item.insert("autoManaged".to_string(), AttributeValue::Bool(false));
+                }
+                // else: autoManaged absent (legacy segment)
+
+                // Assert: name change is allowed for non-auto-managed segments
+                let result = check_auto_managed_update_protection(&item, &new_trimmed);
+                prop_assert!(result.is_ok(),
+                    "Non-auto-managed segment should allow name changes (field present: {})",
+                    has_auto_managed_field);
+            }
+        }
+
+        // ── Property 12: Interest profile returns empty map for subscribers without scores ─
+        // **Validates: Requirements 8.3**
+        //
+        // For any subscriber DynamoDB item that has no `interestScores` attribute,
+        // `parse_interest_scores()` must return `None`. When building a
+        // `MemberResponse`, that `None` is converted to `Some(HashMap::new())`
+        // (empty map), and the serialized JSON must contain `"interestScores":{}`
+        // (empty object), not null or missing.
+
+        /// Generate a random DynamoDB item without interestScores attribute.
+        /// Includes typical subscriber fields but never interestScores.
+        fn subscriber_item_without_interest_scores(
+        ) -> impl Strategy<Value = HashMap<String, AttributeValue>> {
+            (
+                "[a-z]{3,10}@[a-z]{3,6}\\.com",
+                prop::option::of(1i64..=500),
+                prop::option::of(1i64..=100),
+            )
+                .prop_map(|(email, last_engaged, eng_count)| {
+                    let mut item = HashMap::new();
+                    item.insert(
+                        "tenantId".to_string(),
+                        AttributeValue::S("tenant-1".to_string()),
+                    );
+                    item.insert("email".to_string(), AttributeValue::S(email));
+                    if let Some(le) = last_engaged {
+                        item.insert(
+                            "lastEngagedIssue".to_string(),
+                            AttributeValue::N(le.to_string()),
+                        );
+                    }
+                    if let Some(ec) = eng_count {
+                        item.insert(
+                            "engagementCount".to_string(),
+                            AttributeValue::N(ec.to_string()),
+                        );
+                    }
+                    // No interestScores attribute
+                    item
+                })
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(100))]
+
+            #[test]
+            fn prop_empty_interest_profile_for_subscribers_without_scores(
+                item in subscriber_item_without_interest_scores(),
+            ) {
+                // 1. parse_interest_scores returns None for items without interestScores
+                let parsed = parse_interest_scores(&item);
+                prop_assert!(parsed.is_none(),
+                    "parse_interest_scores should return None when interestScores attribute is absent");
+
+                // 2. MemberResponse converts None to Some(HashMap::new()) via unwrap_or_default
+                let email = item.get("email").and_then(|v| v.as_s().ok()).cloned().unwrap_or_default();
+                let last_engaged = item.get("lastEngagedIssue")
+                    .and_then(|v| v.as_n().ok())
+                    .and_then(|n| n.parse::<i64>().ok());
+                let eng_count = item.get("engagementCount")
+                    .and_then(|v| v.as_n().ok())
+                    .and_then(|n| n.parse::<i64>().ok());
+
+                let member = MemberResponse {
+                    email,
+                    last_engaged_issue: last_engaged,
+                    engagement_count: eng_count,
+                    added_at: "2025-01-15T10:00:00Z".to_string(),
+                    interest_scores: Some(parsed.unwrap_or_default()),
+                };
+
+                // 3. interest_scores is Some(empty map), not None
+                prop_assert!(member.interest_scores.is_some(),
+                    "interest_scores should be Some, not None");
+                prop_assert!(member.interest_scores.as_ref().unwrap().is_empty(),
+                    "interest_scores should be an empty map");
+
+                // 4. Serialized JSON contains "interestScores":{} (empty object)
+                let json = serde_json::to_string(&member).unwrap();
+                prop_assert!(json.contains("\"interestScores\":{}"),
+                    "Serialized JSON should contain interestScores as empty object, got: {}", json);
             }
         }
     }

@@ -4,9 +4,11 @@ import { Plus, RefreshCw, Search, Building2, X, Archive } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/Toast';
 import { Card, CardContent } from '@/components/ui/Card';
+import { SponsorPhotoUpload } from '../../components/forms/SponsorPhotoUpload';
 import {
   listSponsors,
   createSponsor,
+  uploadSponsorLogo,
   filterSponsors,
 } from '../../services/sponsorService';
 import type { SponsorRecord, CreateSponsorRequest } from '../../services/sponsorService';
@@ -34,6 +36,11 @@ export const SponsorDirectoryPage: React.FC = () => {
     contactEmail: '',
     notes: '',
   });
+
+  // Logo file state
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [logoUploading, setLogoUploading] = useState(false);
+  const [logoUploadError, setLogoUploadError] = useState<string | undefined>(undefined);
 
   // Duplicate name warning state
   const [showDuplicateWarning, setShowDuplicateWarning] = useState(false);
@@ -84,6 +91,8 @@ export const SponsorDirectoryPage: React.FC = () => {
     });
     setCreateError(null);
     setShowDuplicateWarning(false);
+    setLogoFile(null);
+    setLogoUploadError(undefined);
   };
 
   const handleOpenCreate = () => {
@@ -102,6 +111,24 @@ export const SponsorDirectoryPage: React.FC = () => {
           allowDuplicateName: allowDuplicate || undefined,
         };
         const created = await createSponsor(request);
+
+        // If a logo file was selected, upload it after sponsor creation
+        if (logoFile) {
+          try {
+            setLogoUploading(true);
+            await uploadSponsorLogo(created.sponsorId, logoFile);
+          } catch (uploadErr) {
+            // Sponsor was created but logo upload failed — notify but don't block
+            addToast({
+              title: 'Logo Upload Failed',
+              message: uploadErr instanceof Error ? uploadErr.message : 'Failed to upload logo',
+              type: 'warning',
+            });
+          } finally {
+            setLogoUploading(false);
+          }
+        }
+
         setSponsors((prev) => [created, ...prev]);
         setShowCreateModal(false);
         setShowDuplicateWarning(false);
@@ -122,7 +149,7 @@ export const SponsorDirectoryPage: React.FC = () => {
         setCreating(false);
       }
     },
-    [formData, addToast],
+    [formData, logoFile, addToast],
   );
 
   const updateField = (field: keyof CreateSponsorRequest, value: string) => {
@@ -459,20 +486,19 @@ export const SponsorDirectoryPage: React.FC = () => {
                 <p className="text-xs text-muted-foreground mt-1 text-right">{(formData.longDescription ?? '').length}/2000</p>
               </div>
 
-              {/* Logo URL */}
-              <div>
-                <label htmlFor="sponsor-logo" className="block text-sm font-medium text-foreground mb-1">
-                  Logo URL
-                </label>
-                <input
-                  id="sponsor-logo"
-                  type="url"
-                  value={formData.logoUrl ?? ''}
-                  onChange={(e) => updateField('logoUrl', e.target.value)}
-                  placeholder="https://example.com/logo.png"
-                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary-500"
-                />
-              </div>
+              {/* Logo Upload */}
+              <SponsorPhotoUpload
+                onPhotoChange={(file) => {
+                  setLogoFile(file);
+                  setLogoUploadError(undefined);
+                }}
+                onPhotoRemove={() => {
+                  setLogoFile(null);
+                  setLogoUploadError(undefined);
+                }}
+                isUploading={logoUploading}
+                error={logoUploadError}
+              />
 
               {/* Notes */}
               <div>

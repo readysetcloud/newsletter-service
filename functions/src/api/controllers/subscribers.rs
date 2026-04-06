@@ -352,8 +352,7 @@ fn parse_subscriber_trend_point(
         .and_then(|v| v.as_s().ok())
         .and_then(|s| s.parse::<i64>().ok())?;
 
-    let stats = item.get("stats")?.as_m().ok()?;
-    let subscribers = stats
+    let subscribers = item
         .get("subscribers")
         .and_then(|v| v.as_n().ok())
         .and_then(|n| n.parse::<i64>().ok())?;
@@ -674,11 +673,8 @@ mod tests {
             AttributeValue::S(issue_number.to_string()),
         );
         item.insert(
-            "stats".to_string(),
-            AttributeValue::M(HashMap::from([(
-                "subscribers".to_string(),
-                AttributeValue::N(subscribers.to_string()),
-            )])),
+            "subscribers".to_string(),
+            AttributeValue::N(subscribers.to_string()),
         );
         item
     }

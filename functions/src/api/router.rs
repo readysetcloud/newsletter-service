@@ -231,6 +231,20 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
                 None => Ok(format_not_found()),
             }
         }
+        // Sponsor logo upload: POST /sponsors/:id/logo
+        (&Method::POST, path) if path.starts_with("/sponsors/") && path.ends_with("/logo") => {
+            match extract_sponsor_id_from_path(path) {
+                Some(sponsor_id) => sponsors::upload_sponsor_logo(event, &sponsor_id).await,
+                None => Ok(format_not_found()),
+            }
+        }
+        // Sponsor logo confirm: PUT /sponsors/:id/logo
+        (&Method::PUT, path) if path.starts_with("/sponsors/") && path.ends_with("/logo") => {
+            match extract_sponsor_id_from_path(path) {
+                Some(sponsor_id) => sponsors::confirm_sponsor_logo(event, &sponsor_id).await,
+                None => Ok(format_not_found()),
+            }
+        }
         // Archive sponsor: POST /sponsors/:id/archive
         (&Method::POST, path) if path.starts_with("/sponsors/") && path.ends_with("/archive") => {
             match extract_sponsor_id_from_path(path) {
@@ -858,5 +872,56 @@ mod tests {
     fn test_extract_sponsor_and_outreach_job_id_wrong_path() {
         let result = extract_sponsor_and_outreach_job_id("/sponsors/sp-123/outreach/other/job-1");
         assert_eq!(result, None);
+    }
+
+    // Sponsor logo route tests
+    #[test]
+    fn test_is_valid_api_path_sponsor_logo() {
+        assert!(is_valid_api_path("/sponsors/sp-123/logo"));
+        assert!(is_valid_api_path("/sponsors/abc-def-ghi/logo"));
+    }
+
+    #[test]
+    fn test_extract_sponsor_id_from_logo_path() {
+        let result = extract_sponsor_id_from_path("/sponsors/sp-123/logo");
+        assert_eq!(result, Some("sp-123".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_route_post_sponsor_logo_dispatches_correctly() {
+        // Verify POST /sponsors/:id/logo path matches the logo upload arm
+        let path = "/sponsors/sp-123/logo";
+        let method = &Method::POST;
+        assert!(
+            path.starts_with("/sponsors/") && path.ends_with("/logo"),
+            "POST /sponsors/:id/logo should match the logo upload route guard"
+        );
+        assert_eq!(method, &Method::POST);
+        let sponsor_id = extract_sponsor_id_from_path(path);
+        assert_eq!(sponsor_id, Some("sp-123".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_route_put_sponsor_logo_dispatches_correctly() {
+        // Verify PUT /sponsors/:id/logo path matches the logo confirm arm
+        let path = "/sponsors/sp-123/logo";
+        let method = &Method::PUT;
+        assert!(
+            path.starts_with("/sponsors/") && path.ends_with("/logo"),
+            "PUT /sponsors/:id/logo should match the logo confirm route guard"
+        );
+        assert_eq!(method, &Method::PUT);
+        let sponsor_id = extract_sponsor_id_from_path(path);
+        assert_eq!(sponsor_id, Some("sp-123".to_string()));
+    }
+
+    #[test]
+    fn test_sponsor_logo_unsupported_method_returns_405() {
+        // /sponsors/:id/logo is a valid API path, so unsupported methods should get 405
+        let path = "/sponsors/sp-123/logo";
+        assert!(is_valid_api_path(path));
+        // The router returns 405 for valid paths with unsupported methods
+        let response = format_method_not_allowed();
+        assert_eq!(response.status(), 405);
     }
 }

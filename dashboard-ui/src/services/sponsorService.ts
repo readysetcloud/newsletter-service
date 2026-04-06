@@ -21,6 +21,7 @@ export interface SponsorRecord {
   shortDescription?: string;
   longDescription?: string;
   logoUrl?: string;
+  logoKey?: string;
   contactName?: string;
   contactEmail: string;
   notes?: string;
@@ -339,6 +340,93 @@ export async function pollOutreachJob(
   }
 
   return response.data;
+}
+
+// --- Sponsor Logo Upload ---
+
+/**
+ * Generate a presigned S3 upload URL for a sponsor logo.
+ */
+export async function generateSponsorLogoUploadUrl(
+  sponsorId: string,
+  fileName: string,
+  contentType: string
+): Promise<{ uploadUrl: string; key: string; publicUrl: string }> {
+  const response = await apiClient.post<{ uploadUrl: string; key: string; publicUrl: string }>(
+    `/sponsors/${sponsorId}/logo`,
+    { fileName, contentType }
+  );
+
+  if (!response.success) {
+    throw new Error(response.error || 'Failed to generate sponsor logo upload URL');
+  }
+
+  if (!response.data) {
+    throw new Error('No data received from sponsor logo upload URL generation');
+  }
+
+  return response.data;
+}
+
+/**
+ * Confirm a sponsor logo upload after the file has been uploaded to S3.
+ */
+export async function confirmSponsorLogoUpload(
+  sponsorId: string,
+  key: string
+): Promise<{ message: string; logoUrl: string; key: string }> {
+  const response = await apiClient.put<{ message: string; logoUrl: string; key: string }>(
+    `/sponsors/${sponsorId}/logo`,
+    { key }
+  );
+
+  if (!response.success) {
+    throw new Error(response.error || 'Failed to confirm sponsor logo upload');
+  }
+
+  if (!response.data) {
+    throw new Error('No data received from sponsor logo upload confirmation');
+  }
+
+  return response.data;
+}
+
+/**
+ * Upload a sponsor logo using the three-step flow:
+ * 1. Generate presigned URL
+ * 2. PUT file directly to S3
+ * 3. Confirm upload with backend
+ *
+ * Returns the public URL of the uploaded logo.
+ */
+export async function uploadSponsorLogo(
+  sponsorId: string,
+  file: File
+): Promise<string> {
+  // Step 1: Generate presigned URL
+  const { uploadUrl, key, publicUrl } = await generateSponsorLogoUploadUrl(
+    sponsorId,
+    file.name,
+    file.type
+  );
+
+  // Step 2: Upload file directly to S3
+  const uploadResponse = await fetch(uploadUrl, {
+    method: 'PUT',
+    body: file,
+    headers: {
+      'Content-Type': file.type,
+    },
+  });
+
+  if (!uploadResponse.ok) {
+    throw new Error(`Logo upload failed: ${uploadResponse.statusText}`);
+  }
+
+  // Step 3: Confirm upload with backend
+  await confirmSponsorLogoUpload(sponsorId, key);
+
+  return publicUrl;
 }
 
 // --- Client-side utilities ---

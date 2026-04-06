@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import {
   getSponsor,
   updateSponsor,
+  uploadSponsorLogo,
   archiveSponsor,
   restoreSponsor,
   listSponsorships,
@@ -20,6 +21,7 @@ import {
   listOutreachEmails,
   pollOutreachJob,
 } from '../../services/sponsorService';
+import { SponsorPhotoUpload } from '../../components/forms/SponsorPhotoUpload';
 import type {
   SponsorRecord,
   SponsorshipEntry,
@@ -175,6 +177,12 @@ export const SponsorDetailPage: React.FC = () => {
   const outreachPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const outreachTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Logo upload
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [logoUploading, setLogoUploading] = useState(false);
+  const [logoUploadError, setLogoUploadError] = useState<string | undefined>(undefined);
+  const [logoRemoved, setLogoRemoved] = useState(false);
+
   // --- Data loading ---
 
   const loadData = useCallback(async () => {
@@ -230,23 +238,47 @@ export const SponsorDetailPage: React.FC = () => {
       contactEmail: sponsor.contactEmail,
       notes: sponsor.notes ?? '',
     });
+    setLogoFile(null);
+    setLogoUploadError(undefined);
+    setLogoRemoved(false);
     setEditing(true);
   };
 
   const cancelEditing = () => {
     setEditing(false);
     setEditForm({});
+    setLogoFile(null);
+    setLogoUploadError(undefined);
+    setLogoRemoved(false);
   };
 
   const saveEdits = async () => {
     if (!sponsor || !sponsorId) return;
     setSaving(true);
     try {
+      // If a new logo file was selected, upload it first
+      if (logoFile) {
+        try {
+          setLogoUploading(true);
+          const publicUrl = await uploadSponsorLogo(sponsorId, logoFile);
+          // The upload flow already updates logoUrl on the backend,
+          // so we update the edit form to reflect the new URL
+          setEditForm((prev) => ({ ...prev, logoUrl: publicUrl }));
+        } catch (uploadErr) {
+          setLogoUploadError(uploadErr instanceof Error ? uploadErr.message : 'Failed to upload logo');
+          setSaving(false);
+          setLogoUploading(false);
+          return;
+        } finally {
+          setLogoUploading(false);
+        }
+      }
+
       const payload: UpdateSponsorRequest = {
         sponsorName: editForm.sponsorName,
         shortDescription: editForm.shortDescription,
         longDescription: editForm.longDescription,
-        logoUrl: editForm.logoUrl,
+        logoUrl: logoRemoved ? '' : (logoFile ? undefined : editForm.logoUrl),
         contactName: editForm.contactName,
         contactEmail: editForm.contactEmail,
         notes: editForm.notes,
@@ -255,6 +287,9 @@ export const SponsorDetailPage: React.FC = () => {
       const updated = await updateSponsor(sponsorId, payload);
       setSponsor(updated);
       setEditing(false);
+      setLogoFile(null);
+      setLogoUploadError(undefined);
+      setLogoRemoved(false);
       addToast({ title: 'Sponsor Updated', type: 'success' });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Update failed';
@@ -600,7 +635,33 @@ export const SponsorDetailPage: React.FC = () => {
               <EditableField label="Sponsor Name" value={editing ? (editForm.sponsorName ?? '') : sponsor.sponsorName} editing={editing} onChange={(v) => updateEditField('sponsorName', v)} />
               <EditableField label="Contact Email" value={editing ? (editForm.contactEmail ?? '') : sponsor.contactEmail} editing={editing} onChange={(v) => updateEditField('contactEmail', v)} />
               <EditableField label="Contact Name" value={editing ? (editForm.contactName ?? '') : (sponsor.contactName ?? '')} editing={editing} onChange={(v) => updateEditField('contactName', v)} />
-              <EditableField label="Logo URL" value={editing ? (editForm.logoUrl ?? '') : (sponsor.logoUrl ?? '')} editing={editing} onChange={(v) => updateEditField('logoUrl', v)} />
+              {editing ? (
+                <SponsorPhotoUpload
+                  sponsorId={sponsorId}
+                  currentPhoto={logoRemoved ? undefined : (sponsor.logoUrl ?? undefined)}
+                  onPhotoChange={(file) => {
+                    setLogoFile(file);
+                    setLogoUploadError(undefined);
+                    setLogoRemoved(false);
+                  }}
+                  onPhotoRemove={() => {
+                    setLogoFile(null);
+                    setLogoUploadError(undefined);
+                    setLogoRemoved(true);
+                  }}
+                  isUploading={logoUploading}
+                  error={logoUploadError}
+                />
+              ) : (
+                <div>
+                  <span className="block text-xs font-medium text-muted-foreground mb-1">Logo</span>
+                  {sponsor.logoUrl ? (
+                    <img src={sponsor.logoUrl} alt="Sponsor logo" className="h-16 w-16 object-cover rounded-lg border border-border" />
+                  ) : (
+                    <p className="text-sm text-foreground">—</p>
+                  )}
+                </div>
+              )}
               <EditableField label="Short Description" value={editing ? (editForm.shortDescription ?? '') : (sponsor.shortDescription ?? '')} editing={editing} maxLength={200} onChange={(v) => updateEditField('shortDescription', v)} />
               <EditableField label="Notes" value={editing ? (editForm.notes ?? '') : (sponsor.notes ?? '')} editing={editing} multiline onChange={(v) => updateEditField('notes', v)} />
               <div className="md:col-span-2">

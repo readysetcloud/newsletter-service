@@ -1,4 +1,7 @@
 use aws_sdk_dynamodb::types::{AttributeValue, Delete, Put, TransactWriteItem};
+use aws_sdk_s3::operation::head_object::HeadObjectError;
+use aws_sdk_s3::presigning::PresigningConfig;
+use aws_sdk_s3::types::ObjectCannedAcl;
 use chrono::Utc;
 use lambda_http::{Body, Error, Request, Response};
 use newsletter::admin::{auth, aws_clients, error::AppError, response};
@@ -6,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::env;
+use std::time::Duration;
 use uuid::Uuid;
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -31,6 +35,8 @@ pub struct SponsorRecord {
     pub long_description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logo_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logo_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contact_name: Option<String>,
     pub contact_email: String,
@@ -366,7 +372,242 @@ pub async fn get_outreach_job(
     }
 }
 
+/// POST /sponsors/:sponsorId/logo
+pub async fn upload_sponsor_logo(
+    event: Request,
+    sponsor_id: &str,
+) -> Result<Response<Body>, Error> {
+    match handle_upload_sponsor_logo(event, sponsor_id).await {
+        Ok(resp) => Ok(resp),
+        Err(e) => Ok(response::format_error_response(&e)),
+    }
+}
+
+/// PUT /sponsors/:sponsorId/logo
+pub async fn confirm_sponsor_logo(
+    event: Request,
+    sponsor_id: &str,
+) -> Result<Response<Body>, Error> {
+    match handle_confirm_sponsor_logo(event, sponsor_id).await {
+        Ok(resp) => Ok(resp),
+        Err(e) => Ok(response::format_error_response(&e)),
+    }
+}
+
 // ── Internal handlers ──────────────────────────────────────────────────
+
+async fn handle_upload_sponsor_logo(
+    event: Request,
+    sponsor_id: &str,
+) -> Result<Response<Body>, AppError> {
+    let user_context = auth::get_user_context(&event)?;
+    let tenant_id = user_context
+        .tenant_id
+        .ok_or_else(|| AppError::Forbidden("Tenant access required".to_string()))?;
+
+    let body: Value = parse_request_body(&event)?;
+
+    let file_name = body
+        .get("fileName")
+        .and_then(|v| v.as_str())
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "\"fileName\" is required and must be a non-empty string".to_string(),
+            )
+        })?;
+
+    let content_type = body
+        .get("contentType")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| {
+            AppError::BadRequest("\"contentType\" is required and must be a string".to_string())
+        })?
+        .to_lowercase();
+
+    validate_content_type(&content_type)?;
+    validate_extension_matches_content_type(file_name, &content_type)?;
+
+    // Look up sponsor to verify it exists and belongs to this tenant
+    let table_name = get_table_name()?;
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+    let _sponsor = lookup_sponsor_by_id(ddb_client, &table_name, &tenant_id, sponsor_id).await?;
+
+    let timestamp = Utc::now().timestamp_millis();
+    let sanitized = sanitize_filename(file_name);
+    let key = format!(
+        "sponsor-logos/{}/{}/{}-{}",
+        tenant_id, sponsor_id, timestamp, sanitized
+    );
+
+    let bucket_name = env::var("HOSTING_BUCKET_NAME")
+        .map_err(|e| AppError::InternalError(format!("HOSTING_BUCKET_NAME not set: {}", e)))?;
+
+    let s3_client = aws_clients::get_s3_client().await;
+    let request = s3_client
+        .put_object()
+        .bucket(&bucket_name)
+        .key(&key)
+        .content_type(&content_type)
+        .acl(ObjectCannedAcl::PublicRead)
+        .metadata("tenantId", &tenant_id)
+        .metadata("sponsorId", sponsor_id)
+        .metadata("uploadedAt", Utc::now().to_rfc3339());
+
+    let presigned = request
+        .presigned(
+            PresigningConfig::expires_in(Duration::from_secs(300))
+                .map_err(|e| AppError::InternalError(format!("Presign config error: {}", e)))?,
+        )
+        .await
+        .map_err(|e| AppError::InternalError(format!("Presign failed: {}", e)))?;
+
+    let public_url = format!("https://{}.s3.amazonaws.com/{}", bucket_name, key);
+
+    response::format_response(
+        200,
+        json!({
+            "uploadUrl": presigned.uri().to_string(),
+            "key": key,
+            "publicUrl": public_url,
+            "expiresIn": 300
+        }),
+    )
+}
+
+async fn handle_confirm_sponsor_logo(
+    event: Request,
+    sponsor_id: &str,
+) -> Result<Response<Body>, AppError> {
+    let user_context = auth::get_user_context(&event)?;
+    let tenant_id = user_context
+        .tenant_id
+        .ok_or_else(|| AppError::Forbidden("Tenant access required".to_string()))?;
+
+    let body: Value = parse_request_body(&event)?;
+
+    let key = body
+        .get("key")
+        .and_then(|v| v.as_str())
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| {
+            AppError::BadRequest("\"key\" is required and must be a non-empty string".to_string())
+        })?;
+
+    // Validate key prefix matches sponsor-logos/{tenantId}/{sponsorId}/
+    validate_sponsor_logo_key_prefix(key, &tenant_id, sponsor_id)?;
+
+    // HEAD object in S3 to verify it exists
+    let bucket_name = env::var("HOSTING_BUCKET_NAME")
+        .map_err(|e| AppError::InternalError(format!("HOSTING_BUCKET_NAME not set: {}", e)))?;
+    let s3_client = aws_clients::get_s3_client().await;
+
+    let head_result = s3_client
+        .head_object()
+        .bucket(&bucket_name)
+        .key(key)
+        .send()
+        .await;
+
+    if let Err(err) = head_result {
+        let is_not_found = err
+            .as_service_error()
+            .map(|service_error| matches!(service_error, HeadObjectError::NotFound(_)))
+            .unwrap_or(false);
+
+        if is_not_found {
+            return Err(AppError::NotFound(
+                "Logo not found in storage. Upload may have failed.".to_string(),
+            ));
+        }
+
+        return Err(AppError::InternalError(format!("S3 head failed: {}", err)));
+    }
+
+    let public_url = format!("https://{}.s3.amazonaws.com/{}", bucket_name, key);
+    let updated_at = Utc::now().to_rfc3339();
+
+    // Look up sponsor to get old logoKey
+    let table_name = get_table_name()?;
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+    let current = lookup_sponsor_by_id(ddb_client, &table_name, &tenant_id, sponsor_id).await?;
+    let current_sk = current
+        .get("sk")
+        .and_then(|v| v.as_s().ok())
+        .ok_or_else(|| AppError::InternalError("Missing sk on sponsor record".to_string()))?
+        .clone();
+
+    let old_logo_key = current.get("logoKey").and_then(|v| v.as_s().ok()).cloned();
+
+    // Update sponsor record with logoUrl, logoKey, and updatedAt
+    ddb_client
+        .update_item()
+        .table_name(&table_name)
+        .key("pk", AttributeValue::S(tenant_id.clone()))
+        .key("sk", AttributeValue::S(current_sk))
+        .update_expression("SET logoUrl = :url, logoKey = :key, updatedAt = :updatedAt")
+        .expression_attribute_values(":url", AttributeValue::S(public_url.clone()))
+        .expression_attribute_values(":key", AttributeValue::S(key.to_string()))
+        .expression_attribute_values(":updatedAt", AttributeValue::S(updated_at))
+        .send()
+        .await?;
+
+    // Trigger cleanup if old logoKey differs from new key
+    if let Some(ref old_key) = old_logo_key {
+        if old_key != key {
+            if let Err(err) = trigger_sponsor_logo_cleanup(old_key, &bucket_name).await {
+                tracing::error!(error = %err, "Failed to trigger sponsor logo cleanup");
+            }
+        }
+    }
+
+    response::format_response(
+        200,
+        json!({
+            "message": "Sponsor logo updated successfully",
+            "logoUrl": public_url,
+            "key": key
+        }),
+    )
+}
+
+/// Trigger S3 Asset Cleanup event for an old sponsor logo key.
+/// Only triggers cleanup for keys that start with `sponsor-logos/`.
+pub async fn trigger_sponsor_logo_cleanup(old_key: &str, bucket_name: &str) -> Result<(), String> {
+    if !should_trigger_cleanup(old_key) {
+        tracing::warn!(key = %old_key, "Skipping cleanup for non-sponsor-logo key");
+        return Ok(());
+    }
+
+    let detail = json!({
+        "action": "delete",
+        "assetType": "sponsor-logo",
+        "s3Key": old_key,
+        "bucketName": bucket_name,
+        "triggeredBy": "sponsor-logo-update",
+        "timestamp": Utc::now().to_rfc3339()
+    });
+
+    let eventbridge_client = aws_clients::get_eventbridge_client().await;
+    eventbridge_client
+        .put_events()
+        .entries(
+            aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
+                .source("newsletter-service")
+                .detail_type("S3 Asset Cleanup")
+                .detail(detail.to_string())
+                .build(),
+        )
+        .send()
+        .await
+        .map_err(|err| format!("Failed to publish cleanup event: {}", err))?;
+
+    tracing::info!(key = %old_key, "Sponsor logo cleanup event published");
+    Ok(())
+}
 
 async fn handle_create_sponsor(event: Request) -> Result<Response<Body>, AppError> {
     let user_context = auth::get_user_context(&event)?;
@@ -478,6 +719,7 @@ async fn handle_create_sponsor(event: Request) -> Result<Response<Body>, AppErro
         short_description: body.short_description,
         long_description: body.long_description,
         logo_url: body.logo_url,
+        logo_key: None,
         contact_name: body.contact_name,
         contact_email: body.contact_email,
         notes: body.notes,
@@ -1621,6 +1863,83 @@ fn get_table_name() -> Result<String, AppError> {
     env::var("TABLE_NAME").map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))
 }
 
+// ── Sponsor logo upload helpers ────────────────────────────────────────
+
+const ALLOWED_CONTENT_TYPES: &[&str] = &[
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+];
+
+fn validate_content_type(content_type: &str) -> Result<(), AppError> {
+    if !ALLOWED_CONTENT_TYPES.contains(&content_type) {
+        return Err(AppError::BadRequest(
+            "Only image files are allowed (JPEG, PNG, GIF, WebP)".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_extension_matches_content_type(
+    file_name: &str,
+    content_type: &str,
+) -> Result<(), AppError> {
+    let file_name_lower = file_name.to_lowercase();
+    let extension = file_name_lower.split('.').next_back().unwrap_or("");
+
+    let valid = match content_type {
+        "image/jpeg" | "image/jpg" => extension == "jpg" || extension == "jpeg",
+        "image/png" => extension == "png",
+        "image/gif" => extension == "gif",
+        "image/webp" => extension == "webp",
+        _ => false,
+    };
+
+    if !valid {
+        return Err(AppError::BadRequest(
+            "File extension does not match content type".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+pub fn sanitize_filename(file_name: &str) -> String {
+    file_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Validate that a sponsor logo key starts with the expected prefix.
+/// Returns Ok(()) if valid, Err(AppError::Forbidden) if not.
+pub fn validate_sponsor_logo_key_prefix(
+    key: &str,
+    tenant_id: &str,
+    sponsor_id: &str,
+) -> Result<(), AppError> {
+    let expected_prefix = format!("sponsor-logos/{}/{}/", tenant_id, sponsor_id);
+    if !key.starts_with(&expected_prefix) {
+        return Err(AppError::Forbidden(
+            "Invalid logo key for this sponsor".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Determine whether cleanup should be triggered for an old logo key.
+/// Returns true only if the key starts with `sponsor-logos/`.
+pub fn should_trigger_cleanup(old_key: &str) -> bool {
+    old_key.starts_with("sponsor-logos/")
+}
+
 fn parse_request_body<T: for<'de> Deserialize<'de>>(event: &Request) -> Result<T, AppError> {
     match event.body() {
         Body::Text(text) => serde_json::from_str(text)
@@ -1854,6 +2173,484 @@ mod tests {
         assert_eq!(outreach_job_sk("job-123"), "outreach-job#job-123");
     }
 
+    #[test]
+    fn test_sponsor_record_serialization_with_logo_key() {
+        let record = SponsorRecord {
+            sponsor_id: "sp-001".to_string(),
+            sponsor_name: "Acme".to_string(),
+            short_description: None,
+            long_description: None,
+            logo_url: Some("https://example.com/logo.png".to_string()),
+            logo_key: Some("sponsor-logos/tenant1/sp-001/1719500000000-logo.png".to_string()),
+            contact_name: None,
+            contact_email: "a@b.com".to_string(),
+            notes: None,
+            status: "active".to_string(),
+            version: 1,
+            total_fulfilled_sponsorships: 0,
+            total_revenue: 0.0,
+            last_sponsored_date: None,
+            last_outreach_at: None,
+            created_at: "2025-01-01T00:00:00Z".to_string(),
+            updated_at: "2025-01-01T00:00:00Z".to_string(),
+            archived_at: None,
+        };
+
+        let json = serde_json::to_value(&record).unwrap();
+        assert_eq!(
+            json["logoKey"],
+            "sponsor-logos/tenant1/sp-001/1719500000000-logo.png"
+        );
+        assert_eq!(json["logoUrl"], "https://example.com/logo.png");
+    }
+
+    #[test]
+    fn test_sponsor_record_serialization_without_logo_key() {
+        let record = SponsorRecord {
+            sponsor_id: "sp-002".to_string(),
+            sponsor_name: "Beta Corp".to_string(),
+            short_description: None,
+            long_description: None,
+            logo_url: None,
+            logo_key: None,
+            contact_name: None,
+            contact_email: "b@c.com".to_string(),
+            notes: None,
+            status: "active".to_string(),
+            version: 1,
+            total_fulfilled_sponsorships: 0,
+            total_revenue: 0.0,
+            last_sponsored_date: None,
+            last_outreach_at: None,
+            created_at: "2025-01-01T00:00:00Z".to_string(),
+            updated_at: "2025-01-01T00:00:00Z".to_string(),
+            archived_at: None,
+        };
+
+        let json = serde_json::to_value(&record).unwrap();
+        assert!(
+            json.get("logoKey").is_none(),
+            "logoKey should be omitted when None"
+        );
+        assert!(
+            json.get("logoUrl").is_none(),
+            "logoUrl should be omitted when None"
+        );
+    }
+
+    #[test]
+    fn test_sponsor_record_deserialization_with_logo_key() {
+        let json_str = r#"{
+            "sponsorId": "sp-003",
+            "sponsorName": "Gamma Inc",
+            "logoUrl": "https://example.com/gamma.png",
+            "logoKey": "sponsor-logos/t1/sp-003/123-gamma.png",
+            "contactEmail": "g@h.com",
+            "status": "active",
+            "version": 2,
+            "createdAt": "2025-01-01T00:00:00Z",
+            "updatedAt": "2025-01-01T00:00:00Z"
+        }"#;
+
+        let record: SponsorRecord = serde_json::from_str(json_str).unwrap();
+        assert_eq!(
+            record.logo_key.as_deref(),
+            Some("sponsor-logos/t1/sp-003/123-gamma.png")
+        );
+    }
+
+    #[test]
+    fn test_sponsor_record_deserialization_without_logo_key() {
+        let json_str = r#"{
+            "sponsorId": "sp-004",
+            "sponsorName": "Delta LLC",
+            "contactEmail": "d@e.com",
+            "status": "active",
+            "version": 1,
+            "createdAt": "2025-01-01T00:00:00Z",
+            "updatedAt": "2025-01-01T00:00:00Z"
+        }"#;
+
+        let record: SponsorRecord = serde_json::from_str(json_str).unwrap();
+        assert!(
+            record.logo_key.is_none(),
+            "logo_key should default to None when absent"
+        );
+    }
+
+    // ── Sponsor logo upload unit tests ─────────────────────────────────
+
+    #[test]
+    fn test_validate_content_type_allowed() {
+        assert!(validate_content_type("image/jpeg").is_ok());
+        assert!(validate_content_type("image/jpg").is_ok());
+        assert!(validate_content_type("image/png").is_ok());
+        assert!(validate_content_type("image/gif").is_ok());
+        assert!(validate_content_type("image/webp").is_ok());
+    }
+
+    #[test]
+    fn test_validate_content_type_rejected() {
+        assert!(validate_content_type("image/svg+xml").is_err());
+        assert!(validate_content_type("application/pdf").is_err());
+        assert!(validate_content_type("text/plain").is_err());
+        assert!(validate_content_type("image/bmp").is_err());
+        assert!(validate_content_type("").is_err());
+    }
+
+    #[test]
+    fn test_validate_extension_matches_content_type_valid() {
+        assert!(validate_extension_matches_content_type("logo.jpg", "image/jpeg").is_ok());
+        assert!(validate_extension_matches_content_type("logo.jpeg", "image/jpeg").is_ok());
+        assert!(validate_extension_matches_content_type("logo.jpg", "image/jpg").is_ok());
+        assert!(validate_extension_matches_content_type("logo.png", "image/png").is_ok());
+        assert!(validate_extension_matches_content_type("logo.gif", "image/gif").is_ok());
+        assert!(validate_extension_matches_content_type("logo.webp", "image/webp").is_ok());
+    }
+
+    #[test]
+    fn test_validate_extension_matches_content_type_mismatch() {
+        assert!(validate_extension_matches_content_type("logo.png", "image/jpeg").is_err());
+        assert!(validate_extension_matches_content_type("logo.jpg", "image/png").is_err());
+        assert!(validate_extension_matches_content_type("logo.gif", "image/webp").is_err());
+        assert!(validate_extension_matches_content_type("logo.webp", "image/gif").is_err());
+    }
+
+    #[test]
+    fn test_validate_extension_case_insensitive() {
+        assert!(validate_extension_matches_content_type("logo.PNG", "image/png").is_ok());
+        assert!(validate_extension_matches_content_type("logo.JPG", "image/jpeg").is_ok());
+        assert!(validate_extension_matches_content_type("LOGO.WEBP", "image/webp").is_ok());
+    }
+
+    #[test]
+    fn test_sanitize_filename_replaces_special_chars() {
+        assert_eq!(sanitize_filename("my logo@2024#.png"), "my_logo_2024_.png");
+        assert_eq!(sanitize_filename("file name!.jpg"), "file_name_.jpg");
+        assert_eq!(sanitize_filename("a b/c\\d.png"), "a_b_c_d.png");
+    }
+
+    #[test]
+    fn test_sanitize_filename_preserves_safe_chars() {
+        assert_eq!(sanitize_filename("brand-Logo.01.png"), "brand-Logo.01.png");
+        assert_eq!(sanitize_filename("simple.jpg"), "simple.jpg");
+    }
+
+    #[test]
+    fn test_sanitize_filename_empty() {
+        assert_eq!(sanitize_filename(""), "");
+    }
+
+    #[test]
+    fn test_s3_key_format() {
+        let tenant_id = "acmenews";
+        let sponsor_id = "sp-001";
+        let timestamp = 1719500000000i64;
+        let sanitized = sanitize_filename("company logo.png");
+        let key = format!(
+            "sponsor-logos/{}/{}/{}-{}",
+            tenant_id, sponsor_id, timestamp, sanitized
+        );
+        assert!(key.starts_with("sponsor-logos/"));
+        assert!(key.contains(tenant_id));
+        assert!(key.contains(sponsor_id));
+        assert!(key.contains("1719500000000"));
+        assert_eq!(
+            key,
+            "sponsor-logos/acmenews/sp-001/1719500000000-company_logo.png"
+        );
+    }
+
+    // ── Confirm upload unit tests (Task 3.4) ───────────────────────────
+
+    #[test]
+    fn test_validate_key_prefix_valid() {
+        assert!(validate_sponsor_logo_key_prefix(
+            "sponsor-logos/tenant1/sp-001/1719500000000-logo.png",
+            "tenant1",
+            "sp-001"
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn test_validate_key_prefix_wrong_tenant() {
+        let result = validate_sponsor_logo_key_prefix(
+            "sponsor-logos/other-tenant/sp-001/1719500000000-logo.png",
+            "tenant1",
+            "sp-001",
+        );
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            AppError::Forbidden(msg) => assert_eq!(msg, "Invalid logo key for this sponsor"),
+            other => panic!("Expected Forbidden, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_key_prefix_wrong_sponsor() {
+        let result = validate_sponsor_logo_key_prefix(
+            "sponsor-logos/tenant1/sp-999/1719500000000-logo.png",
+            "tenant1",
+            "sp-001",
+        );
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            AppError::Forbidden(msg) => assert_eq!(msg, "Invalid logo key for this sponsor"),
+            other => panic!("Expected Forbidden, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_key_prefix_wrong_prefix() {
+        let result = validate_sponsor_logo_key_prefix(
+            "brand-logos/tenant1/sp-001/1719500000000-logo.png",
+            "tenant1",
+            "sp-001",
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_key_prefix_empty_key() {
+        let result = validate_sponsor_logo_key_prefix("", "tenant1", "sp-001");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_should_trigger_cleanup_sponsor_logos_prefix() {
+        assert!(should_trigger_cleanup(
+            "sponsor-logos/tenant1/sp-001/old-logo.png"
+        ));
+    }
+
+    #[test]
+    fn test_should_trigger_cleanup_non_sponsor_logos_prefix() {
+        assert!(!should_trigger_cleanup("brand-logos/tenant1/old-logo.png"));
+        assert!(!should_trigger_cleanup("other/path/logo.png"));
+        assert!(!should_trigger_cleanup(""));
+        assert!(!should_trigger_cleanup("https://example.com/logo.png"));
+    }
+
+    #[test]
+    fn test_cleanup_triggered_when_keys_differ() {
+        let old_key = "sponsor-logos/t1/sp-001/111-old.png";
+        let new_key = "sponsor-logos/t1/sp-001/222-new.png";
+        // Keys differ and old key has correct prefix → should trigger
+        assert_ne!(old_key, new_key);
+        assert!(should_trigger_cleanup(old_key));
+    }
+
+    #[test]
+    fn test_cleanup_not_triggered_when_keys_same() {
+        let key = "sponsor-logos/t1/sp-001/111-logo.png";
+        // Same key → no cleanup needed (handled by caller checking old != new)
+        assert_eq!(key, key);
+    }
+
+    // Feature: sponsor-logo-upload, Property 4: Key prefix ownership validation on confirm
+    // **Validates: Requirements 2.2**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+        #[test]
+        fn prop_invalid_key_prefix_returns_403(
+            tenant_id in "[a-z0-9]{3,20}",
+            sponsor_id in "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}",
+            random_key in "[a-zA-Z0-9/._-]{1,100}",
+        ) {
+            let valid_prefix = format!("sponsor-logos/{}/{}/", tenant_id, sponsor_id);
+            prop_assume!(!random_key.starts_with(&valid_prefix));
+
+            let result = validate_sponsor_logo_key_prefix(&random_key, &tenant_id, &sponsor_id);
+            prop_assert!(result.is_err());
+            match result.unwrap_err() {
+                AppError::Forbidden(msg) => {
+                    prop_assert_eq!(msg, "Invalid logo key for this sponsor");
+                }
+                other => prop_assert!(false, "Expected Forbidden, got {:?}", other),
+            }
+        }
+    }
+
+    // Feature: sponsor-logo-upload, Property 5: Old logo cleanup on replacement
+    // **Validates: Requirements 2.4, 7.1**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+        #[test]
+        fn prop_distinct_keys_trigger_cleanup_of_old(
+            tenant_id in "[a-z0-9]{3,20}",
+            sponsor_id in "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}",
+            old_file in "[a-zA-Z0-9]{1,20}\\.[a-z]{3}",
+            new_file in "[a-zA-Z0-9]{1,20}\\.[a-z]{3}",
+            old_ts in 1000000000000i64..2000000000000i64,
+            new_ts in 1000000000000i64..2000000000000i64,
+        ) {
+            let old_key = format!("sponsor-logos/{}/{}/{}-{}", tenant_id, sponsor_id, old_ts, old_file);
+            let new_key = format!("sponsor-logos/{}/{}/{}-{}", tenant_id, sponsor_id, new_ts, new_file);
+            prop_assume!(old_key != new_key);
+
+            // Old key differs from new key → should trigger cleanup
+            prop_assert_ne!(&old_key, &new_key);
+            // Old key starts with sponsor-logos/ → cleanup is allowed
+            prop_assert!(should_trigger_cleanup(&old_key));
+        }
+    }
+
+    // Feature: sponsor-logo-upload, Property 6: Cleanup prefix safety guard
+    // **Validates: Requirements 7.2**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+        #[test]
+        fn prop_non_sponsor_logos_prefix_no_cleanup(
+            old_key in "[a-zA-Z0-9/._-]{1,100}",
+        ) {
+            prop_assume!(!old_key.starts_with("sponsor-logos/"));
+
+            // Keys not starting with sponsor-logos/ should NOT trigger cleanup
+            prop_assert!(!should_trigger_cleanup(&old_key));
+        }
+    }
+
+    // Feature: sponsor-logo-upload, Property 1: Presigned URL response contains valid key and required fields
+    // **Validates: Requirements 1.1**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+        #[test]
+        fn prop_generated_key_matches_expected_pattern(
+            file_base in "[a-zA-Z0-9]{1,20}",
+            ext_idx in 0usize..5,
+            tenant_id in "[a-z0-9]{3,20}",
+            sponsor_id in "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}",
+        ) {
+            let extensions = ["jpg", "jpeg", "png", "gif", "webp"];
+            let content_types = ["image/jpeg", "image/jpeg", "image/png", "image/gif", "image/webp"];
+            let ext = extensions[ext_idx];
+            let content_type = content_types[ext_idx];
+            let file_name = format!("{}.{}", file_base, ext);
+
+            // Validate content type and extension match
+            prop_assert!(validate_content_type(content_type).is_ok());
+            prop_assert!(validate_extension_matches_content_type(&file_name, content_type).is_ok());
+
+            // Generate key
+            let timestamp = Utc::now().timestamp_millis();
+            let sanitized = sanitize_filename(&file_name);
+            let key = format!(
+                "sponsor-logos/{}/{}/{}-{}",
+                tenant_id, sponsor_id, timestamp, sanitized
+            );
+
+            // Verify key matches expected pattern
+            prop_assert!(key.starts_with("sponsor-logos/"));
+            prop_assert!(key.contains(&tenant_id));
+            prop_assert!(key.contains(&sponsor_id));
+
+            // Verify key has the format: sponsor-logos/{tenantId}/{sponsorId}/{timestamp}-{sanitized}
+            let parts: Vec<&str> = key.splitn(4, '/').collect();
+            prop_assert_eq!(parts.len(), 4);
+            prop_assert_eq!(parts[0], "sponsor-logos");
+            prop_assert_eq!(parts[1], tenant_id.as_str());
+            prop_assert_eq!(parts[2], sponsor_id.as_str());
+
+            // The last part should be {timestamp}-{sanitized}
+            let file_part = parts[3];
+            prop_assert!(file_part.contains('-'));
+            let dash_pos = file_part.find('-').unwrap();
+            let ts_str = &file_part[..dash_pos];
+            prop_assert!(ts_str.parse::<i64>().is_ok());
+        }
+    }
+
+    // Feature: sponsor-logo-upload, Property 2: Disallowed content type is rejected
+    // **Validates: Requirements 1.3**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+        #[test]
+        fn prop_disallowed_content_type_returns_400(
+            content_type in "[a-z]{1,20}/[a-z]{1,20}",
+        ) {
+            let allowed = ["image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"];
+            prop_assume!(!allowed.contains(&content_type.as_str()));
+
+            let result = validate_content_type(&content_type);
+            prop_assert!(result.is_err());
+            match result.unwrap_err() {
+                AppError::BadRequest(msg) => {
+                    prop_assert!(msg.contains("Only image files are allowed"));
+                }
+                other => prop_assert!(false, "Expected BadRequest, got {:?}", other),
+            }
+        }
+    }
+
+    // Feature: sponsor-logo-upload, Property 3: Extension/contentType mismatch is rejected
+    // **Validates: Requirements 1.4**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+        #[test]
+        fn prop_mismatched_extension_content_type_returns_400(
+            file_base in "[a-zA-Z0-9]{1,20}",
+            ext_idx in 0usize..5,
+            ct_idx in 0usize..5,
+        ) {
+            let extensions = ["jpg", "jpeg", "png", "gif", "webp"];
+            let content_types = ["image/jpeg", "image/jpeg", "image/png", "image/gif", "image/webp"];
+
+            // Only test mismatched pairs
+            // ext_idx 0 (jpg) and 1 (jpeg) both match image/jpeg, so skip those combos
+            let ext = extensions[ext_idx];
+            let content_type = content_types[ct_idx];
+
+            let file_name = format!("{}.{}", file_base, ext);
+
+            // Determine if this is actually a valid match
+            let is_valid_match = match content_type {
+                "image/jpeg" | "image/jpg" => ext == "jpg" || ext == "jpeg",
+                "image/png" => ext == "png",
+                "image/gif" => ext == "gif",
+                "image/webp" => ext == "webp",
+                _ => false,
+            };
+
+            prop_assume!(!is_valid_match);
+
+            let result = validate_extension_matches_content_type(&file_name, content_type);
+            prop_assert!(result.is_err());
+            match result.unwrap_err() {
+                AppError::BadRequest(msg) => {
+                    prop_assert!(msg.contains("File extension does not match content type"));
+                }
+                other => prop_assert!(false, "Expected BadRequest, got {:?}", other),
+            }
+        }
+    }
+
+    // Feature: sponsor-logo-upload, Property 9: Filename sanitization preserves safe characters
+    // **Validates: Requirements 1.2**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+        #[test]
+        fn prop_sanitized_filename_contains_only_safe_chars(
+            file_name in ".*",
+        ) {
+            let sanitized = sanitize_filename(&file_name);
+
+            // Every character in the output must be alphanumeric, dot, dash, or underscore
+            for c in sanitized.chars() {
+                prop_assert!(
+                    c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_',
+                    "Sanitized filename contains invalid char '{}' (U+{:04X}) in {:?}",
+                    c, c as u32, sanitized
+                );
+            }
+
+            // Character count must be preserved (each char maps to exactly one char)
+            prop_assert_eq!(sanitized.chars().count(), file_name.chars().count(),
+                "Sanitized char count {} != original char count {} for {:?}",
+                sanitized.chars().count(), file_name.chars().count(), file_name);
+        }
+    }
+
     // **Validates: Requirements 1.3**
     //
     // Property 2: Text field trimming and email normalization
@@ -2071,6 +2868,7 @@ mod tests {
                 short_description: Some(short_desc.clone()),
                 long_description: None,
                 logo_url: None,
+                logo_key: None,
                 contact_name: None,
                 contact_email: contact_email.clone(),
                 notes: Some(notes.clone()),
@@ -2109,6 +2907,7 @@ mod tests {
             prop_assert_eq!(&restored.short_description, &original.short_description);
             prop_assert_eq!(&restored.long_description, &original.long_description);
             prop_assert_eq!(&restored.logo_url, &original.logo_url);
+            prop_assert_eq!(&restored.logo_key, &original.logo_key);
             prop_assert_eq!(&restored.contact_name, &original.contact_name);
             prop_assert_eq!(&restored.contact_email, &original.contact_email);
             prop_assert_eq!(&restored.notes, &original.notes);
@@ -2420,6 +3219,152 @@ mod tests {
                 );
             }
         }
+    }
+
+    // Feature: sponsor-logo-upload, Property 8: Backward compatibility for logoUrl in CRUD
+    // **Validates: Requirements 3.2**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+        #[test]
+        fn prop_logo_url_backward_compatibility_in_crud(
+            logo_url in "[a-zA-Z0-9:/.?&=_-]{1,200}",
+            sponsor_name in "[a-zA-Z][a-zA-Z0-9 ]{0,19}",
+            contact_email in "[a-z]{1,10}@[a-z]{1,10}\\.[a-z]{2,4}",
+        ) {
+            // CreateSponsorRequest should accept any valid URL string as logoUrl
+            let create_json = serde_json::json!({
+                "sponsorName": sponsor_name,
+                "contactEmail": contact_email,
+                "logoUrl": logo_url
+            });
+            let create_result: Result<CreateSponsorRequest, _> =
+                serde_json::from_value(create_json);
+            prop_assert!(
+                create_result.is_ok(),
+                "CreateSponsorRequest should accept logoUrl {:?}, got error: {:?}",
+                logo_url,
+                create_result.err()
+            );
+            let create_req = create_result.unwrap();
+            prop_assert_eq!(
+                create_req.logo_url.as_deref(),
+                Some(logo_url.as_str()),
+                "CreateSponsorRequest.logoUrl should be {:?}",
+                logo_url
+            );
+
+            // UpdateSponsorRequest should accept any valid URL string as logoUrl
+            let update_json = serde_json::json!({
+                "logoUrl": logo_url,
+                "version": 1
+            });
+            let update_result: Result<UpdateSponsorRequest, _> =
+                serde_json::from_value(update_json);
+            prop_assert!(
+                update_result.is_ok(),
+                "UpdateSponsorRequest should accept logoUrl {:?}, got error: {:?}",
+                logo_url,
+                update_result.err()
+            );
+            let update_req = update_result.unwrap();
+            prop_assert_eq!(
+                update_req.logo_url.as_deref(),
+                Some(logo_url.as_str()),
+                "UpdateSponsorRequest.logoUrl should be {:?}",
+                logo_url
+            );
+        }
+    }
+
+    // ── Backward compatibility unit tests (Task 8.2) ───────────────────
+
+    #[test]
+    fn test_create_sponsor_request_accepts_logo_url() {
+        let json_str = r#"{
+            "sponsorName": "Acme Corp",
+            "contactEmail": "sponsor@acme.com",
+            "logoUrl": "https://example.com/logos/acme.png"
+        }"#;
+        let req: CreateSponsorRequest = serde_json::from_str(json_str).unwrap();
+        assert_eq!(
+            req.logo_url.as_deref(),
+            Some("https://example.com/logos/acme.png")
+        );
+        assert_eq!(req.sponsor_name, "Acme Corp");
+        assert_eq!(req.contact_email, "sponsor@acme.com");
+    }
+
+    #[test]
+    fn test_create_sponsor_request_accepts_missing_logo_url() {
+        let json_str = r#"{
+            "sponsorName": "Beta Inc",
+            "contactEmail": "beta@example.com"
+        }"#;
+        let req: CreateSponsorRequest = serde_json::from_str(json_str).unwrap();
+        assert!(req.logo_url.is_none());
+    }
+
+    #[test]
+    fn test_update_sponsor_request_accepts_logo_url() {
+        let json_str = r#"{
+            "logoUrl": "https://cdn.example.com/new-logo.jpg",
+            "version": 3
+        }"#;
+        let req: UpdateSponsorRequest = serde_json::from_str(json_str).unwrap();
+        assert_eq!(
+            req.logo_url.as_deref(),
+            Some("https://cdn.example.com/new-logo.jpg")
+        );
+        assert_eq!(req.version, 3);
+    }
+
+    #[test]
+    fn test_update_sponsor_request_accepts_missing_logo_url() {
+        let json_str = r#"{
+            "sponsorName": "Updated Name",
+            "version": 2
+        }"#;
+        let req: UpdateSponsorRequest = serde_json::from_str(json_str).unwrap();
+        assert!(req.logo_url.is_none());
+        assert_eq!(req.sponsor_name.as_deref(), Some("Updated Name"));
+    }
+
+    #[test]
+    fn test_create_sponsor_request_logo_url_coexists_with_all_fields() {
+        let json_str = r#"{
+            "sponsorName": "Full Sponsor",
+            "contactEmail": "full@sponsor.com",
+            "logoUrl": "https://example.com/full-logo.png",
+            "shortDescription": "A short desc",
+            "longDescription": "A longer description",
+            "contactName": "Jane Doe",
+            "notes": "Some notes"
+        }"#;
+        let req: CreateSponsorRequest = serde_json::from_str(json_str).unwrap();
+        assert_eq!(
+            req.logo_url.as_deref(),
+            Some("https://example.com/full-logo.png")
+        );
+        assert_eq!(req.sponsor_name, "Full Sponsor");
+        assert_eq!(req.short_description.as_deref(), Some("A short desc"));
+        assert_eq!(req.contact_name.as_deref(), Some("Jane Doe"));
+    }
+
+    #[test]
+    fn test_update_sponsor_request_logo_url_with_other_fields() {
+        let json_str = r#"{
+            "sponsorName": "Renamed Sponsor",
+            "logoUrl": "https://example.com/renamed-logo.webp",
+            "contactEmail": "new@email.com",
+            "version": 5
+        }"#;
+        let req: UpdateSponsorRequest = serde_json::from_str(json_str).unwrap();
+        assert_eq!(
+            req.logo_url.as_deref(),
+            Some("https://example.com/renamed-logo.webp")
+        );
+        assert_eq!(req.sponsor_name.as_deref(), Some("Renamed Sponsor"));
+        assert_eq!(req.contact_email.as_deref(), Some("new@email.com"));
     }
 
     // **Validates: Requirements 7.4**

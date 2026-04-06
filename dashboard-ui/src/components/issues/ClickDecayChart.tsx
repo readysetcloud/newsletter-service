@@ -9,7 +9,7 @@ interface ClickDecayChartProps {
 interface ChartTooltipEntry {
   color?: string;
   name?: string | number;
-  value?: number | string;
+  value?: number | string | readonly (string | number)[];
 }
 
 interface ChartTooltipProps {

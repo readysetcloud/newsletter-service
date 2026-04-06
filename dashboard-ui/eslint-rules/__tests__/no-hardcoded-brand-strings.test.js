@@ -1,5 +1,6 @@
+// @vitest-environment node
 import { RuleTester } from 'eslint';
-import { describe, it } from 'vitest';
+import { describe } from 'vitest';
 import rule from '../no-hardcoded-brand-strings.js';
 
 const ruleTester = new RuleTester({

@@ -64,8 +64,9 @@ describe('Mobile Drawer Parity - Property-Based Tests', () => {
             'Dashboard',
             'Issues',
             'Subscribers',
-            'Brand',
             'Sponsors',
+            'Brand',
+            'Pricing',
           ]);
         }),
         { numRuns: 100 },

@@ -31,11 +31,11 @@ describe('AppSidebar', () => {
   // ---- Requirement 2.2: Renders exactly 5 nav items with icons ----
 
   describe('nav items', () => {
-    it('renders exactly 5 navigation links', () => {
+    it('renders exactly 6 navigation links', () => {
       renderSidebar();
       const nav = screen.getByRole('navigation', { name: 'Main navigation' });
       const links = nav.querySelectorAll('a');
-      expect(links).toHaveLength(5);
+      expect(links).toHaveLength(6);
     });
 
     it('renders the correct nav item labels', () => {
@@ -43,15 +43,16 @@ describe('AppSidebar', () => {
       expect(screen.getByText('Dashboard')).toBeInTheDocument();
       expect(screen.getByText('Issues')).toBeInTheDocument();
       expect(screen.getByText('Subscribers')).toBeInTheDocument();
-      expect(screen.getByText('Brand')).toBeInTheDocument();
       expect(screen.getByText('Sponsors')).toBeInTheDocument();
+      expect(screen.getByText('Brand')).toBeInTheDocument();
+      expect(screen.getByText('Pricing')).toBeInTheDocument();
     });
 
     it('renders an icon for each nav item', () => {
       renderSidebar();
       const nav = screen.getByRole('navigation', { name: 'Main navigation' });
       const icons = nav.querySelectorAll('svg[aria-hidden="true"]');
-      expect(icons).toHaveLength(5);
+      expect(icons).toHaveLength(6);
     });
   });
 
@@ -119,8 +120,14 @@ describe('AppSidebar', () => {
       expect(link).toHaveAttribute('aria-current', 'page');
     });
 
-    it('marks Sponsors as active on /pricing', () => {
+    it('marks Pricing as active on /pricing', () => {
       renderSidebar(['/pricing']);
+      const link = screen.getByText('Pricing').closest('a');
+      expect(link).toHaveAttribute('aria-current', 'page');
+    });
+
+    it('marks Sponsors as active on /sponsors', () => {
+      renderSidebar(['/sponsors']);
       const link = screen.getByText('Sponsors').closest('a');
       expect(link).toHaveAttribute('aria-current', 'page');
     });

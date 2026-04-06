@@ -177,10 +177,12 @@ const QuestionnaireForm: React.FC<{
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const responses = Object.entries(answers).map(([questionId, answer]) => ({
-      questionId,
-      answer,
-    }));
+    const responses = Object.entries(answers)
+      .filter(([, answer]) => answer !== undefined && answer !== '')
+      .map(([questionId, answer]) => ({
+        questionId,
+        answer,
+      }));
     onSubmit(questionnaire.version, responses);
   };
 
@@ -234,6 +236,9 @@ const QuestionnaireForm: React.FC<{
     }
   };
 
+  const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  const PUBLISHING_INTERVALS = ['Weekly', 'Biweekly', 'Monthly', 'Irregular'];
+
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
       {questionnaire.questions.map((q) => (
@@ -244,6 +249,49 @@ const QuestionnaireForm: React.FC<{
           {renderQuestion(q)}
         </div>
       ))}
+
+      {/* Publishing Cadence fields */}
+      <div className="border-t border-border pt-6">
+        <h3 className="text-sm font-semibold text-foreground mb-4">Publishing Cadence</h3>
+        <p className="text-sm text-muted-foreground mb-4">
+          Set your publishing schedule to help generate accurate outreach emails with upcoming publication dates.
+        </p>
+        <div className="space-y-4">
+          <div>
+            <label htmlFor="publishingDayOfWeek" className="block text-sm font-medium text-foreground mb-2">
+              Preferred publishing day of week
+            </label>
+            <select
+              id="publishingDayOfWeek"
+              value={(answers['publishingDayOfWeek'] as string) ?? ''}
+              onChange={(e) => handleChange('publishingDayOfWeek', e.target.value || undefined)}
+              className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            >
+              <option value="">Select a day…</option>
+              {DAYS_OF_WEEK.map((day) => (
+                <option key={day} value={day}>{day}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="publishingInterval" className="block text-sm font-medium text-foreground mb-2">
+              Publishing interval
+            </label>
+            <select
+              id="publishingInterval"
+              value={(answers['publishingInterval'] as string) ?? ''}
+              onChange={(e) => handleChange('publishingInterval', e.target.value || undefined)}
+              className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            >
+              <option value="">Select an interval…</option>
+              {PUBLISHING_INTERVALS.map((interval) => (
+                <option key={interval} value={interval}>{interval}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </div>
+
       <Button type="submit" isLoading={isSubmitting} disabled={isSubmitting}>
         Save &amp; Recalculate
       </Button>

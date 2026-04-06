@@ -121,6 +121,22 @@ export const LazySubscribersPage = lazy(() =>
     })
 );
 
+export const LazySponsorDirectoryPage = lazy(() =>
+  import('@/pages/sponsors/SponsorDirectoryPage').then(module => ({ default: module.SponsorDirectoryPage }))
+    .catch(error => {
+      console.error('Failed to load SponsorDirectoryPage:', error);
+      throw error;
+    })
+);
+
+export const LazySponsorDetailPage = lazy(() =>
+  import('@/pages/sponsors/SponsorDetailPage').then(module => ({ default: module.SponsorDetailPage }))
+    .catch(error => {
+      console.error('Failed to load SponsorDetailPage:', error);
+      throw error;
+    })
+);
+
 // Preload critical routes
 export const preloadCriticalRoutes = () => {
   // Preload dashboard since it's the default route
@@ -169,6 +185,10 @@ export const preloadRoute = (routeName: string) => {
       break;
     case 'subscribers':
       import('@/pages/subscribers/SubscribersPage');
+      break;
+    case 'sponsors':
+      import('@/pages/sponsors/SponsorDirectoryPage');
+      import('@/pages/sponsors/SponsorDetailPage');
       break;
     case 'login':
       import('@/pages/auth/LoginPage');

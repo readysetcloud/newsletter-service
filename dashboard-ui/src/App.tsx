@@ -21,6 +21,8 @@ import {
   LazySponsorshipPricingPage,
   LazySegmentDetailPage,
   LazySubscribersPage,
+  LazySponsorDirectoryPage,
+  LazySponsorDetailPage,
   preloadCriticalRoutes
 } from '@/utils/lazyImports';
 import { AppShell } from '@/components/layout/AppShell';
@@ -230,6 +232,38 @@ function App() {
                             <AppShell>
                               <PageLoader>
                                 <LazySubscribersPage />
+                              </PageLoader>
+                            </AppShell>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/sponsors"
+                    element={
+                      <RouteErrorBoundary routeName="Sponsors">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <AppShell>
+                              <PageLoader>
+                                <LazySponsorDirectoryPage />
+                              </PageLoader>
+                            </AppShell>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/sponsors/:sponsorId"
+                    element={
+                      <RouteErrorBoundary routeName="Sponsor Details">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <AppShell>
+                              <PageLoader>
+                                <LazySponsorDetailPage />
                               </PageLoader>
                             </AppShell>
                           </OnboardingGuard>

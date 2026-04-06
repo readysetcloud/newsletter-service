@@ -1069,14 +1069,15 @@ async fn handle_update_sponsorship(
 
     let new_status = body.status.as_str();
 
-    // Validate status transitions: draft → booked → fulfilled, or cancel from any
-    let valid_transition = match (current_status.as_str(), new_status) {
-        ("draft", "booked") => true,
-        ("booked", "fulfilled") => true,
-        ("draft", "fulfilled") => true,
-        (_, "cancelled") => current_status != "cancelled",
-        _ => false,
-    };
+    // Validate status transitions: draft → booked → fulfilled, or cancel from draft/booked only
+    let valid_transition = matches!(
+        (current_status.as_str(), new_status),
+        ("draft", "booked")
+            | ("booked", "fulfilled")
+            | ("draft", "fulfilled")
+            | ("draft", "cancelled")
+            | ("booked", "cancelled")
+    );
 
     if !valid_transition {
         return Err(AppError::BadRequest(format!(
@@ -1220,8 +1221,26 @@ async fn handle_update_sponsorship(
                 .unwrap_or(0.0)
         });
 
-        ddb_client
-            .update_item()
+        // Use DynamoDB TransactWriteItems to atomically update both the sponsor
+        // aggregate counters and the sponsorship status in a single transaction.
+        let sponsorship_update = {
+            let mut builder = aws_sdk_dynamodb::types::Update::builder()
+                .table_name(&table_name)
+                .key("pk", AttributeValue::S(tenant_id.clone()))
+                .key("sk", AttributeValue::S(entry_sk.clone()))
+                .update_expression(&update_expr);
+            for (k, v) in &expr_attr_names {
+                builder = builder.expression_attribute_names(k, v);
+            }
+            for (k, v) in &expr_attr_values {
+                builder = builder.expression_attribute_values(k, v.clone());
+            }
+            builder.build().map_err(|e| {
+                AppError::InternalError(format!("Failed to build sponsorship update: {}", e))
+            })?
+        };
+
+        let sponsor_update = aws_sdk_dynamodb::types::Update::builder()
             .table_name(&table_name)
             .key("pk", AttributeValue::S(tenant_id.clone()))
             .key("sk", AttributeValue::S(sponsor_sk_val))
@@ -1238,11 +1257,44 @@ async fn handle_update_sponsorship(
                 AttributeValue::S(sponsorship_date),
             )
             .expression_attribute_values(":now", AttributeValue::S(now.clone()))
+            .build()
+            .map_err(|e| {
+                AppError::InternalError(format!("Failed to build sponsor update: {}", e))
+            })?;
+
+        ddb_client
+            .transact_write_items()
+            .transact_items(
+                TransactWriteItem::builder()
+                    .update(sponsorship_update)
+                    .build(),
+            )
+            .transact_items(TransactWriteItem::builder().update(sponsor_update).build())
+            .send()
+            .await
+            .map_err(|e| AppError::AwsError(format!("Transaction failed: {}", e)))?;
+
+        // TransactWriteItems doesn't return updated attributes, so fetch the
+        // sponsorship record to return the updated state.
+        let refreshed = ddb_client
+            .get_item()
+            .table_name(&table_name)
+            .key("pk", AttributeValue::S(tenant_id.clone()))
+            .key("sk", AttributeValue::S(entry_sk.clone()))
             .send()
             .await?;
+
+        if let Some(attrs) = refreshed.item() {
+            let updated = dynamodb_item_to_json(attrs);
+            return response::format_response(200, updated);
+        }
+
+        return Err(AppError::InternalError(
+            "Failed to retrieve updated sponsorship entry after transaction".to_string(),
+        ));
     }
 
-    // Execute the sponsorship update
+    // Non-fulfillment status update (draft→booked, draft/booked→cancelled)
     let result = ddb_client
         .update_item()
         .table_name(&table_name)
@@ -1526,7 +1578,7 @@ async fn handle_list_outreach(
 
 async fn handle_get_outreach_job(
     event: Request,
-    _sponsor_id: &str,
+    sponsor_id: &str,
     job_id: &str,
 ) -> Result<Response<Body>, AppError> {
     let user_context = auth::get_user_context(&event)?;
@@ -1550,6 +1602,16 @@ async fn handle_get_outreach_job(
     let item = result
         .item()
         .ok_or_else(|| AppError::NotFound("Outreach job not found".to_string()))?;
+
+    // Enforce sponsor ownership: the job must belong to the sponsor in the route
+    let job_sponsor_id = item
+        .get("sponsorId")
+        .and_then(|v| v.as_s().ok())
+        .unwrap_or(&String::new())
+        .clone();
+    if job_sponsor_id != sponsor_id {
+        return Err(AppError::NotFound("Outreach job not found".to_string()));
+    }
 
     let job = dynamodb_item_to_json(item);
     response::format_response(200, job)

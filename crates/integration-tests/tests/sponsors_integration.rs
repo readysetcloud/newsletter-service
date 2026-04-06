@@ -45,7 +45,8 @@ async fn insert_sponsor(p: &InsertSponsorParams<'_>) -> String {
     let name_lower = p.name.to_lowercase();
     let sk = sponsor_sk(&name_lower, p.sponsor_id);
     let now = chrono::Utc::now().to_rfc3339();
-    let mut put = p.client
+    let mut put = p
+        .client
         .put_item()
         .table_name(p.table)
         .item("pk", AttributeValue::S(p.tenant_id.to_string()))
@@ -89,7 +90,8 @@ struct InsertSponsorshipParams<'a> {
 async fn insert_sponsorship(p: &InsertSponsorshipParams<'_>) -> String {
     let sk = sponsorship_sk(p.sponsor_id, p.date, p.sponsorship_id);
     let now = chrono::Utc::now().to_rfc3339();
-    let mut put = p.client
+    let mut put = p
+        .client
         .put_item()
         .table_name(p.table)
         .item("pk", AttributeValue::S(p.tenant_id.to_string()))
@@ -309,8 +311,14 @@ async fn test_sponsor_crud_lifecycle() {
 
     // 1. Create
     let sk = insert_sponsor(&InsertSponsorParams {
-        client: &client, table: &table, tenant_id: &tenant_id, sponsor_id: &sponsor_id,
-        name: "Acme Corp", email: "jane@acme.com", status: "active", version: 1,
+        client: &client,
+        table: &table,
+        tenant_id: &tenant_id,
+        sponsor_id: &sponsor_id,
+        name: "Acme Corp",
+        email: "jane@acme.com",
+        status: "active",
+        version: 1,
     })
     .await;
 
@@ -452,17 +460,29 @@ async fn test_sponsorship_lifecycle_with_pricing_snapshot() {
     println!("=== 15.2: Sponsorship Lifecycle with Pricing Snapshot ===");
 
     let sponsor_sk = insert_sponsor(&InsertSponsorParams {
-        client: &client, table: &table, tenant_id: &tenant_id, sponsor_id: &sponsor_id,
-        name: "Lifecycle Sponsor", email: "lifecycle@test.com", status: "active", version: 1,
+        client: &client,
+        table: &table,
+        tenant_id: &tenant_id,
+        sponsor_id: &sponsor_id,
+        name: "Lifecycle Sponsor",
+        email: "lifecycle@test.com",
+        status: "active",
+        version: 1,
     })
     .await;
     insert_pricing_record(&client, &table, &tenant_id, 5000.0, 150.0, 0.48, 0.12).await;
 
     // 1. Create sponsorship (draft)
     let ship_sk = insert_sponsorship(&InsertSponsorshipParams {
-        client: &client, table: &table, tenant_id: &tenant_id, sponsor_id: &sponsor_id,
-        sponsorship_id: &sponsorship_id, date: "2025-01-15", amount: 150.0,
-        status: "draft", issue_id: &format!("{}#42", tenant_id),
+        client: &client,
+        table: &table,
+        tenant_id: &tenant_id,
+        sponsor_id: &sponsor_id,
+        sponsorship_id: &sponsorship_id,
+        date: "2025-01-15",
+        amount: 150.0,
+        status: "draft",
+        issue_id: &format!("{}#42", tenant_id),
     })
     .await;
     println!("✓ Sponsorship created (draft)");
@@ -635,14 +655,26 @@ async fn test_link_attribution_and_click_totals() {
     println!("=== 15.3: Link Attribution and Click Totals ===");
 
     let sponsor_sk = insert_sponsor(&InsertSponsorParams {
-        client: &client, table: &table, tenant_id: &tenant_id, sponsor_id: &sponsor_id,
-        name: "Link Sponsor", email: "links@test.com", status: "active", version: 1,
+        client: &client,
+        table: &table,
+        tenant_id: &tenant_id,
+        sponsor_id: &sponsor_id,
+        name: "Link Sponsor",
+        email: "links@test.com",
+        status: "active",
+        version: 1,
     })
     .await;
     let ship_sk = insert_sponsorship(&InsertSponsorshipParams {
-        client: &client, table: &table, tenant_id: &tenant_id, sponsor_id: &sponsor_id,
-        sponsorship_id: &sponsorship_id, date: "2025-01-15", amount: 100.0,
-        status: "booked", issue_id: &issue_id,
+        client: &client,
+        table: &table,
+        tenant_id: &tenant_id,
+        sponsor_id: &sponsor_id,
+        sponsorship_id: &sponsorship_id,
+        date: "2025-01-15",
+        amount: 100.0,
+        status: "booked",
+        issue_id: &issue_id,
     })
     .await;
 
@@ -786,8 +818,14 @@ async fn test_outreach_generation_with_mocked_bedrock() {
     println!("=== 15.4: Outreach Generation with Mocked Bedrock ===");
 
     let sponsor_sk = insert_sponsor(&InsertSponsorParams {
-        client: &client, table: &table, tenant_id: &tenant_id, sponsor_id: &sponsor_id,
-        name: "Outreach Sponsor", email: "outreach@test.com", status: "active", version: 1,
+        client: &client,
+        table: &table,
+        tenant_id: &tenant_id,
+        sponsor_id: &sponsor_id,
+        name: "Outreach Sponsor",
+        email: "outreach@test.com",
+        status: "active",
+        version: 1,
     })
     .await;
     insert_pricing_record(&client, &table, &tenant_id, 5000.0, 150.0, 0.48, 0.12).await;
@@ -824,7 +862,10 @@ async fn test_outreach_generation_with_mocked_bedrock() {
     // 2. Simulate Bedrock completion
     let generated_at = chrono::Utc::now().to_rfc3339();
     let outreach_record_sk = insert_outreach_record(&InsertOutreachRecordParams {
-        client: &client, table: &table, tenant_id: &tenant_id, sponsor_id: &sponsor_id,
+        client: &client,
+        table: &table,
+        tenant_id: &tenant_id,
+        sponsor_id: &sponsor_id,
         generated_at: &generated_at,
         subject: "Sponsorship Opportunity — Test Newsletter",
         body: "Hi there, I wanted to reach out about a sponsorship opportunity...",
@@ -929,8 +970,14 @@ async fn test_outreach_template_fallback() {
     println!("=== 15.5: Outreach Template Fallback ===");
 
     let sponsor_sk = insert_sponsor(&InsertSponsorParams {
-        client: &client, table: &table, tenant_id: &tenant_id, sponsor_id: &sponsor_id,
-        name: "Fallback Sponsor", email: "fallback@test.com", status: "active", version: 1,
+        client: &client,
+        table: &table,
+        tenant_id: &tenant_id,
+        sponsor_id: &sponsor_id,
+        name: "Fallback Sponsor",
+        email: "fallback@test.com",
+        status: "active",
+        version: 1,
     })
     .await;
 
@@ -1042,13 +1089,25 @@ async fn test_tenant_isolation() {
     println!("=== 15.6: Tenant Isolation ===");
 
     let sk_a = insert_sponsor(&InsertSponsorParams {
-        client: &client, table: &table, tenant_id: &tenant_a, sponsor_id: &sponsor_a_id,
-        name: "Tenant A Sponsor", email: "a@tenant-a.com", status: "active", version: 1,
+        client: &client,
+        table: &table,
+        tenant_id: &tenant_a,
+        sponsor_id: &sponsor_a_id,
+        name: "Tenant A Sponsor",
+        email: "a@tenant-a.com",
+        status: "active",
+        version: 1,
     })
     .await;
     let sk_b = insert_sponsor(&InsertSponsorParams {
-        client: &client, table: &table, tenant_id: &tenant_b, sponsor_id: &sponsor_b_id,
-        name: "Tenant B Sponsor", email: "b@tenant-b.com", status: "active", version: 1,
+        client: &client,
+        table: &table,
+        tenant_id: &tenant_b,
+        sponsor_id: &sponsor_b_id,
+        name: "Tenant B Sponsor",
+        email: "b@tenant-b.com",
+        status: "active",
+        version: 1,
     })
     .await;
     println!("✓ Sponsors created for both tenants");
@@ -1109,9 +1168,15 @@ async fn test_tenant_isolation() {
     // Sponsorship isolation
     let ship_id = uuid::Uuid::new_v4().to_string();
     let ship_sk = insert_sponsorship(&InsertSponsorshipParams {
-        client: &client, table: &table, tenant_id: &tenant_a, sponsor_id: &sponsor_a_id,
-        sponsorship_id: &ship_id, date: "2025-01-15", amount: 100.0,
-        status: "draft", issue_id: &format!("{}#1", tenant_a),
+        client: &client,
+        table: &table,
+        tenant_id: &tenant_a,
+        sponsor_id: &sponsor_a_id,
+        sponsorship_id: &ship_id,
+        date: "2025-01-15",
+        amount: 100.0,
+        status: "draft",
+        issue_id: &format!("{}#1", tenant_a),
     })
     .await;
 
@@ -1153,8 +1218,14 @@ async fn test_concurrent_edit_conflict() {
     println!("=== 15.7: Concurrent Edit Conflict ===");
 
     let sk = insert_sponsor(&InsertSponsorParams {
-        client: &client, table: &table, tenant_id: &tenant_id, sponsor_id: &sponsor_id,
-        name: "Conflict Sponsor", email: "conflict@test.com", status: "active", version: 1,
+        client: &client,
+        table: &table,
+        tenant_id: &tenant_id,
+        sponsor_id: &sponsor_id,
+        name: "Conflict Sponsor",
+        email: "conflict@test.com",
+        status: "active",
+        version: 1,
     })
     .await;
     println!("✓ Sponsor created with version 1");

@@ -102,10 +102,16 @@ describe('SubscriptionStatusCard', () => {
       />
     );
 
+    const expectedDate = new Date('2024-02-01T00:00:00Z').toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+
     expect(screen.getByText('Creator Plan')).toBeInTheDocument();
     expect(screen.getByText('$29')).toBeInTheDocument();
     expect(screen.getByText('Active')).toBeInTheDocument();
-    expect(screen.getByText('January 31, 2024')).toBeInTheDocument();
+    expect(screen.getByText(expectedDate)).toBeInTheDocument();
     expect(screen.getByText('VISA ••••4242')).toBeInTheDocument();
   });
 
@@ -119,8 +125,14 @@ describe('SubscriptionStatusCard', () => {
       />
     );
 
+    const expectedDate = new Date('2024-02-01T00:00:00Z').toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+
     expect(screen.getByText('Subscription Cancelled')).toBeInTheDocument();
-    expect(screen.getByText(/will end on January 31, 2024/)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`will end on ${expectedDate}`))).toBeInTheDocument();
   });
 
   it('renders usage information', () => {

@@ -6,18 +6,23 @@ import { AuthProvider } from '../../../contexts/AuthContext';
 // Mock AWS Amplify
 vi.mock('aws-amplify/auth', () => ({
   signUp: vi.fn(),
-  getCurrentUser: vi.fn().mockResolvedValue(null),
+  getCurrentUser: vi.fn().mockRejectedValue(new Error('No user')),
   fetchAuthSession: vi.fn().mockResolvedValue({
     tokens: null
   })
 }));
 
-const renderWithAuth = (component: React.ReactElement) => {
-  return render(
+const renderWithAuth = async (component: React.ReactElement) => {
+  const result = render(
     <AuthProvider>
       {component}
     </AuthProvider>
   );
+  // Wait for AuthProvider to finish its initial checkAuthStatus
+  await waitFor(() => {
+    expect(screen.getByRole('button', { name: /create account/i })).not.toBeDisabled();
+  });
+  return result;
 };
 
 describe('SignUpForm', () => {
@@ -28,15 +33,15 @@ describe('SignUpForm', () => {
     vi.clearAllMocks();
   });
 
-  it('renders sign up form', () => {
-    renderWithAuth(
+  it('renders sign up form', async () => {
+    await renderWithAuth(
       <SignUpForm
         onSuccess={mockOnSuccess}
         onNeedConfirmation={mockOnNeedConfirmation}
       />
     );
 
-    expect(screen.getByText('Create Account')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Create Account' })).toBeInTheDocument();
     expect(screen.getByLabelText(/first name/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/last name/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/email address/i)).toBeInTheDocument();
@@ -45,7 +50,7 @@ describe('SignUpForm', () => {
   });
 
   it('validates required fields', async () => {
-    renderWithAuth(
+    await renderWithAuth(
       <SignUpForm
         onSuccess={mockOnSuccess}
         onNeedConfirmation={mockOnNeedConfirmation}
@@ -64,7 +69,7 @@ describe('SignUpForm', () => {
   });
 
   it('validates password requirements', async () => {
-    renderWithAuth(
+    await renderWithAuth(
       <SignUpForm
         onSuccess={mockOnSuccess}
         onNeedConfirmation={mockOnNeedConfirmation}
@@ -72,7 +77,7 @@ describe('SignUpForm', () => {
     );
 
     const passwordInput = screen.getByLabelText(/^password$/i);
-    fireEvent.change(passwordInput, { target: { value: 'weak' } });
+    fireEvent.change(passwordInput, { target: { value: 'weakpass1' } });
 
     const submitButton = screen.getByRole('button', { name: /create account/i });
     fireEvent.click(submitButton);
@@ -83,7 +88,7 @@ describe('SignUpForm', () => {
   });
 
   it('validates password confirmation', async () => {
-    renderWithAuth(
+    await renderWithAuth(
       <SignUpForm
         onSuccess={mockOnSuccess}
         onNeedConfirmation={mockOnNeedConfirmation}
@@ -104,8 +109,8 @@ describe('SignUpForm', () => {
     });
   });
 
-  it('shows password requirements', () => {
-    renderWithAuth(
+  it('shows password requirements', async () => {
+    await renderWithAuth(
       <SignUpForm
         onSuccess={mockOnSuccess}
         onNeedConfirmation={mockOnNeedConfirmation}
@@ -118,8 +123,8 @@ describe('SignUpForm', () => {
     expect(screen.getByText('Contains at least one number')).toBeInTheDocument();
   });
 
-  it('toggles password visibility', () => {
-    renderWithAuth(
+  it('toggles password visibility', async () => {
+    await renderWithAuth(
       <SignUpForm
         onSuccess={mockOnSuccess}
         onNeedConfirmation={mockOnNeedConfirmation}

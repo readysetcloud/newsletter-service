@@ -410,6 +410,12 @@ describe('Property 17: Data Validation Before Rendering', () => {
           newClickers: 50,
           returningClickers: 50,
         },
+        trafficSource: {
+          clicks: {
+            email: 80,
+            web: 20,
+          },
+        },
         bounceReasons: {
           permanent: 10,
           temporary: 5,
@@ -573,6 +579,12 @@ describe('Property 17: Data Validation Before Rendering', () => {
         engagementType: {
           newClickers: 0,
           returningClickers: 0,
+        },
+        trafficSource: {
+          clicks: {
+            email: 0,
+            web: 0,
+          },
         },
         bounceReasons: {
           permanent: 0,

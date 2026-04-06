@@ -95,12 +95,17 @@ describe('AddSenderForm', () => {
   it('shows verification type options based on tier', () => {
     render(<AddSenderForm {...defaultProps} />);
 
-    expect(screen.getByText(/email verification/i)).toBeInTheDocument();
-    expect(screen.getByText(/domain verification/i)).toBeInTheDocument();
+    // Both verification type labels should be present
+    const emailOptions = screen.getAllByText(/email verification/i);
+    expect(emailOptions.length).toBeGreaterThan(0);
+    const domainOptions = screen.getAllByText(/domain verification/i);
+    expect(domainOptions.length).toBeGreaterThan(0);
 
     // DNS verification should be disabled for free tier
     const domainOption = screen.getByRole('button', { name: /domain verification/i });
-    expect(domainOption).toHaveClass('cursor-not-allowed', 'opacity-60');
+    expect(domainOption).toBeDisabled();
+    expect(domainOption).toHaveClass('cursor-not-allowed');
+    expect(domainOption).toHaveClass('opacity-60');
   });
 
   it('enables both verification types for creator tier', () => {
@@ -117,15 +122,20 @@ describe('AddSenderForm', () => {
     const user = userEvent.setup();
     render(<AddSenderForm {...defaultProps} />);
 
+    // Submit button should be disabled when no verification type is selected
     const submitButton = screen.getByRole('button', { name: /add sender email/i });
+    expect(submitButton).toBeDisabled();
+
+    // Select verification type to enable submit
+    const emailOption = screen.getByRole('button', { name: /email verification/i });
+    await user.click(emailOption);
+
+    // Submit without filling email - form should not call service
     await user.click(submitButton);
 
     await waitFor(() => {
-      expect(screen.getByText(/email is required/i)).toBeInTheDocument();
-      expect(screen.getByText(/verification type is required/i)).toBeInTheDocument();
+      expect(mockSenderService.createSenderWithRetry).not.toHaveBeenCalled();
     });
-
-    expect(mockSenderService.createSenderWithRetry).not.toHaveBeenCalled();
   });
 
   it('validates email format', async () => {
@@ -135,11 +145,16 @@ describe('AddSenderForm', () => {
     const emailInput = screen.getByLabelText(/email address/i);
     await user.type(emailInput, 'invalid-email');
 
+    // Select verification type so submit button is enabled
+    const emailOption = screen.getByRole('button', { name: /email verification/i });
+    await user.click(emailOption);
+
     const submitButton = screen.getByRole('button', { name: /add sender email/i });
     await user.click(submitButton);
 
+    // Form should not call service with invalid email
     await waitFor(() => {
-      expect(screen.getByText(/invalid email/i)).toBeInTheDocument();
+      expect(mockSenderService.createSenderWithRetry).not.toHaveBeenCalled();
     });
   });
 

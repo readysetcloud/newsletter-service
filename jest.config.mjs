@@ -14,5 +14,9 @@ export default {
     '**/?(*.)+(spec|test).[j]s?(x)',
     '**/?(*.)+(spec|test).mjs'
   ],
+  testPathIgnorePatterns: [
+    '/node_modules/',
+    '/dashboard-ui/'
+  ],
   testEnvironment: 'node'
 };

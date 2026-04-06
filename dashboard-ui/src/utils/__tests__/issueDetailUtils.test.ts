@@ -150,7 +150,7 @@ describe('Scroll Position', () => {
         position,
         timestamp: Date.now() - 10 * 60 * 1000, // 10 minutes ago
       };
-      sessionStorage.setItem('issue-detail-scroll-position', JSON.stringify(scrollData));
+      sessionStorage.setItem('outboxed-issue-detail-scroll-position', JSON.stringify(scrollData));
 
       // Load with 5 minute max age (default)
       const loaded = loadScrollPosition(issueId);
@@ -167,7 +167,7 @@ describe('Scroll Position', () => {
         position,
         timestamp: Date.now() - 2 * 60 * 1000, // 2 minutes ago
       };
-      sessionStorage.setItem('issue-detail-scroll-position', JSON.stringify(scrollData));
+      sessionStorage.setItem('outboxed-issue-detail-scroll-position', JSON.stringify(scrollData));
 
       // Load with 5 minute max age (default)
       const loaded = loadScrollPosition(issueId);
@@ -175,7 +175,7 @@ describe('Scroll Position', () => {
     });
 
     it('should return null when saved data structure is invalid', () => {
-      sessionStorage.setItem('issue-detail-scroll-position', 'invalid json');
+      sessionStorage.setItem('outboxed-issue-detail-scroll-position', 'invalid json');
       const loaded = loadScrollPosition('issue-123');
       expect(loaded).toBeNull();
     });

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { BrandForm } from '../BrandForm';
 import { BrandInfo } from '../../../types';
+import { ToastProvider } from '../../ui/Toast';
 
 describe('BrandForm', () => {
   const mockOnSubmit = vi.fn();
@@ -22,10 +23,12 @@ describe('BrandForm', () => {
 
   it('renders form fields correctly', () => {
     render(
-      <BrandForm
-        onSubmit={mockOnSubmit}
-        onPreviewChange={mockOnPreviewChange}
-      />
+      <ToastProvider>
+        <BrandForm
+          onSubmit={mockOnSubmit}
+          onPreviewChange={mockOnPreviewChange}
+        />
+      </ToastProvider>
     );
 
     expect(screen.getByPlaceholderText(/enter your brand name/i)).toBeInTheDocument();
@@ -37,11 +40,13 @@ describe('BrandForm', () => {
 
   it('populates form with initial data', () => {
     render(
-      <BrandForm
-        initialData={mockInitialData}
-        onSubmit={mockOnSubmit}
-        onPreviewChange={mockOnPreviewChange}
-      />
+      <ToastProvider>
+        <BrandForm
+          initialData={mockInitialData}
+          onSubmit={mockOnSubmit}
+          onPreviewChange={mockOnPreviewChange}
+        />
+      </ToastProvider>
     );
 
     expect(screen.getByDisplayValue('Test Brand')).toBeInTheDocument();
@@ -52,36 +57,45 @@ describe('BrandForm', () => {
 
   it('displays brand ID when provided', () => {
     render(
-      <BrandForm
-        initialData={mockInitialData}
-        onSubmit={mockOnSubmit}
-        onPreviewChange={mockOnPreviewChange}
-      />
+      <ToastProvider>
+        <BrandForm
+          initialData={mockInitialData}
+          onSubmit={mockOnSubmit}
+          onPreviewChange={mockOnPreviewChange}
+        />
+      </ToastProvider>
     );
 
-    expect(screen.getByText('Brand ID (Immutable)')).toBeInTheDocument();
-    expect(screen.getByText('test-brand-123')).toBeInTheDocument();
-    expect(screen.getByText(/this id cannot be changed/i)).toBeInTheDocument();
+    expect(screen.getByText('Brand ID *')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('test-brand-123')).toBeInTheDocument();
+    // Brand ID input should be disabled when brand already exists
+    expect(screen.getByDisplayValue('test-brand-123')).toBeDisabled();
   });
 
   it('shows correct button text based on initial data', () => {
-    // Test create mode
+    // Test create mode (default submitButtonText)
     const { rerender } = render(
-      <BrandForm
-        onSubmit={mockOnSubmit}
-        onPreviewChange={mockOnPreviewChange}
-      />
+      <ToastProvider>
+        <BrandForm
+          onSubmit={mockOnSubmit}
+          onPreviewChange={mockOnPreviewChange}
+          submitButtonText="Create Brand"
+        />
+      </ToastProvider>
     );
 
     expect(screen.getByRole('button', { name: /create brand/i })).toBeInTheDocument();
 
     // Test update mode
     rerender(
-      <BrandForm
-        initialData={mockInitialData}
-        onSubmit={mockOnSubmit}
-        onPreviewChange={mockOnPreviewChange}
-      />
+      <ToastProvider>
+        <BrandForm
+          initialData={mockInitialData}
+          onSubmit={mockOnSubmit}
+          onPreviewChange={mockOnPreviewChange}
+          submitButtonText="Update Brand"
+        />
+      </ToastProvider>
     );
 
     expect(screen.getByRole('button', { name: /update brand/i })).toBeInTheDocument();
@@ -89,11 +103,14 @@ describe('BrandForm', () => {
 
   it('disables submit button when not dirty and no logo file', () => {
     render(
-      <BrandForm
-        initialData={mockInitialData}
-        onSubmit={mockOnSubmit}
-        onPreviewChange={mockOnPreviewChange}
-      />
+      <ToastProvider>
+        <BrandForm
+          initialData={mockInitialData}
+          onSubmit={mockOnSubmit}
+          onPreviewChange={mockOnPreviewChange}
+          submitButtonText="Update Brand"
+        />
+      </ToastProvider>
     );
 
     const submitButton = screen.getByRole('button', { name: /update brand/i });
@@ -102,14 +119,17 @@ describe('BrandForm', () => {
 
   it('shows loading state when submitting', () => {
     render(
-      <BrandForm
-        onSubmit={mockOnSubmit}
-        onPreviewChange={mockOnPreviewChange}
-        isSubmitting={true}
-      />
+      <ToastProvider>
+        <BrandForm
+          onSubmit={mockOnSubmit}
+          onPreviewChange={mockOnPreviewChange}
+          isSubmitting={true}
+          submitButtonText="Create Brand"
+        />
+      </ToastProvider>
     );
 
-    const submitButton = screen.getByRole('button', { name: /create brand/i });
+    const submitButton = screen.getByRole('button', { name: /saving.../i });
     expect(submitButton).toBeDisabled();
   });
 });

@@ -131,8 +131,8 @@ describe('ConfirmationDialog', () => {
     );
 
     expect(screen.getByText('This action cannot be undone')).toBeInTheDocument();
-    expect(screen.getByText('• This action cannot be undone')).toBeInTheDocument();
-    expect(screen.getByText('• All data will be lost')).toBeInTheDocument();
+    expect(screen.getByText('- This action cannot be undone')).toBeInTheDocument();
+    expect(screen.getByText('- All data will be lost')).toBeInTheDocument();
   });
 
   it('applies correct styling for different types', () => {

@@ -5,7 +5,10 @@ import type { TierLimits, SenderEmail, DomainVerification } from '@/types/api';
 // Mock dependencies
 vi.mock('../api');
 vi.mock('@/utils/errorHandling', () => ({
-  getUserFriendlyErrorMessage: vi.fn((error) => error || 'Unknown error'),
+  getUserFriendlyErrorMessage: vi.fn((error) => {
+    if (error instanceof Error) return error.message;
+    return error || 'Unknown error';
+  }),
   shouldRetryError: vi.fn(() => true),
   getRetryDelay: vi.fn((attempt, baseDelay) => baseDelay * attempt)
 }));
@@ -191,23 +194,23 @@ describe('SenderService', () => {
   describe('verification polling', () => {
     it('starts polling for sender verification', async () => {
       const mockCallback = vi.fn();
+      const pendingSender = { ...mockSender, verificationStatus: 'pending' as const };
       mockApiClient.get.mockResolvedValue({
         success: true,
         data: {
-          senders: [mockSender],
+          senders: [pendingSender],
           tierLimits: mockTierLimits
         }
       });
 
       senderService.startVerificationPolling('sender-123', mockCallback, 1000);
 
-      // Initial poll should happen immediately
-      await vi.runOnlyPendingTimersAsync();
-      expect(mockCallback).toHaveBeenCalledWith(mockSender);
+      // Initial poll is called directly (not via timer), flush microtasks
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockCallback).toHaveBeenCalledWith(pendingSender);
 
       // Should poll again after interval
-      vi.advanceTimersByTime(1000);
-      await vi.runOnlyPendingTimersAsync();
+      await vi.advanceTimersByTimeAsync(1000);
       expect(mockCallback).toHaveBeenCalledTimes(2);
     });
 
@@ -372,10 +375,15 @@ describe('SenderService', () => {
         .mockResolvedValueOnce({ success: false, error: 'Temporary error' })
         .mockResolvedValueOnce({ success: true, data: mockSender });
 
-      const result = await senderService.createSenderWithRetry({
+      const resultPromise = senderService.createSenderWithRetry({
         email: 'test@example.com',
         verificationType: 'mailbox'
       });
+
+      // Advance past the retry delay (attempt 1 * 1000ms base = 1000ms)
+      await vi.advanceTimersByTimeAsync(1000);
+
+      const result = await resultPromise;
 
       expect(mockApiClient.post).toHaveBeenCalledTimes(2);
       expect(result.success).toBe(true);
@@ -384,10 +392,17 @@ describe('SenderService', () => {
     it('stops retrying after max attempts', async () => {
       mockApiClient.post.mockResolvedValue({ success: false, error: 'Persistent error' });
 
-      const result = await senderService.createSenderWithRetry({
+      const resultPromise = senderService.createSenderWithRetry({
         email: 'test@example.com',
         verificationType: 'mailbox'
       });
+
+      // Advance past all retry delays: attempt1=1000, attempt2=2000, attempt3=3000
+      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(2000);
+      await vi.advanceTimersByTimeAsync(3000);
+
+      const result = await resultPromise;
 
       expect(mockApiClient.post).toHaveBeenCalledTimes(4); // 1 initial + 3 retries
       expect(result.success).toBe(false);

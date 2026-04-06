@@ -183,7 +183,12 @@ describe('UsageDisplay', () => {
       />
     );
 
-    expect(screen.getByText('Resets on Jan 31')).toBeInTheDocument();
+    const expectedResetDate = new Date('2024-02-01T00:00:00Z').toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+    });
+
+    expect(screen.getByText(`Resets on ${expectedResetDate}`)).toBeInTheDocument();
   });
 
   it('does not show upgrade prompt when showUpgradePrompt is false', () => {

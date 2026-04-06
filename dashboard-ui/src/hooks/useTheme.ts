@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
+import { STORAGE_KEYS } from '@/constants/brand';
 
 type Theme = 'light' | 'dark';
 
-const STORAGE_KEY = 'outboxed-theme';
+const STORAGE_KEY = STORAGE_KEYS.theme;
 
 const getSystemTheme = (): Theme => {
   if (typeof window === 'undefined') {

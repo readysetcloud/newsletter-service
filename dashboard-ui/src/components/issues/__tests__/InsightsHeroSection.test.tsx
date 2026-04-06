@@ -75,7 +75,7 @@ describe('InsightsHeroSection', () => {
       const onRefresh = vi.fn();
       render(<InsightsHeroSection insights={mockInsights} onRefreshInsights={onRefresh} />);
 
-      const refreshButton = screen.getByLabelText('Refresh insights');
+      const refreshButton = screen.getByLabelText('Refresh insights to get latest analytics data');
       fireEvent.click(refreshButton);
 
       expect(onRefresh).toHaveBeenCalledTimes(1);
@@ -91,7 +91,7 @@ describe('InsightsHeroSection', () => {
         />
       );
 
-      const refreshButton = screen.getByLabelText('Refresh insights');
+      const refreshButton = screen.getByLabelText('Refresh insights to get latest analytics data');
       expect(refreshButton).toBeDisabled();
     });
 
@@ -99,14 +99,14 @@ describe('InsightsHeroSection', () => {
       const onRefresh = vi.fn();
       render(<InsightsHeroSection insights={[]} onRefreshInsights={onRefresh} />);
 
-      const refreshButton = screen.getByLabelText('Refresh insights');
+      const refreshButton = screen.getByLabelText('Refresh insights to get latest analytics data');
       expect(refreshButton).toBeInTheDocument();
       expect(refreshButton).toHaveTextContent('Refresh Insights');
     });
 
     it('should not show refresh button when onRefreshInsights is not provided', () => {
       render(<InsightsHeroSection insights={[]} />);
-      expect(screen.queryByLabelText('Refresh insights')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Refresh insights to get latest analytics data')).not.toBeInTheDocument();
     });
   });
 
@@ -194,14 +194,14 @@ describe('InsightsHeroSection', () => {
     it('should have proper ARIA labels', () => {
       render(<InsightsHeroSection insights={mockInsights} />);
 
-      expect(screen.getByLabelText('Insights section')).toBeInTheDocument();
+      expect(screen.getByRole('region', { name: 'Insights' })).toBeInTheDocument();
       expect(screen.getByLabelText('Insight cards')).toBeInTheDocument();
     });
 
     it('should have proper role attributes', () => {
       render(<InsightsHeroSection insights={mockInsights} />);
 
-      const section = screen.getByRole('region', { name: 'Insights section' });
+      const section = screen.getByRole('region', { name: 'Insights' });
       expect(section).toBeInTheDocument();
 
       const list = screen.getByRole('list', { name: 'Insight cards' });

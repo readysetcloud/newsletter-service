@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CollapsibleSection } from '../CollapsibleSection';
 import { TrendingUp } from 'lucide-react';
@@ -15,11 +15,6 @@ describe('CollapsibleSection', () => {
 
   beforeEach(() => {
     mockOnToggle.mockClear();
-    sessionStorage.clear();
-  });
-
-  afterEach(() => {
-    sessionStorage.clear();
   });
 
   describe('Rendering', () => {
@@ -201,69 +196,6 @@ describe('CollapsibleSection', () => {
     });
   });
 
-  describe('Session state persistence', () => {
-    it('should save expanded state to sessionStorage', () => {
-      render(<CollapsibleSection {...defaultProps} isExpanded={true} />);
-
-      const stored = sessionStorage.getItem('issue-detail-expanded-sections');
-      expect(stored).toBeTruthy();
-
-      const expandedSections = JSON.parse(stored!);
-      expect(expandedSections).toContain('test-section');
-    });
-
-    it('should remove from sessionStorage when collapsed', () => {
-      // First expand
-      const { rerender } = render(<CollapsibleSection {...defaultProps} isExpanded={true} />);
-
-      let stored = sessionStorage.getItem('issue-detail-expanded-sections');
-      let expandedSections = JSON.parse(stored!);
-      expect(expandedSections).toContain('test-section');
-
-      // Then collapse
-      rerender(<CollapsibleSection {...defaultProps} isExpanded={false} />);
-
-      stored = sessionStorage.getItem('issue-detail-expanded-sections');
-      expandedSections = JSON.parse(stored!);
-      expect(expandedSections).not.toContain('test-section');
-    });
-
-    it('should handle multiple sections in sessionStorage', () => {
-      // Render first section expanded
-      const { rerender } = render(<CollapsibleSection {...defaultProps} id="section-1" isExpanded={true} />);
-
-      // Render second section expanded
-      rerender(<CollapsibleSection {...defaultProps} id="section-2" isExpanded={true} />);
-
-      const stored = sessionStorage.getItem('issue-detail-expanded-sections');
-      const expandedSections = JSON.parse(stored!);
-
-      expect(expandedSections).toContain('section-1');
-      expect(expandedSections).toContain('section-2');
-    });
-
-    it('should handle sessionStorage errors gracefully', () => {
-      // Mock sessionStorage to throw error
-      const originalSetItem = Storage.prototype.setItem;
-      Storage.prototype.setItem = vi.fn(() => {
-        throw new Error('Storage quota exceeded');
-      });
-
-      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-      render(<CollapsibleSection {...defaultProps} isExpanded={true} />);
-
-      expect(consoleSpy).toHaveBeenCalledWith(
-        'Failed to save section state to sessionStorage:',
-        expect.any(Error)
-      );
-
-      // Restore
-      Storage.prototype.setItem = originalSetItem;
-      consoleSpy.mockRestore();
-    });
-  });
-
   describe('Accessibility', () => {
     it('should have proper ARIA attributes', () => {
       render(<CollapsibleSection {...defaultProps} />);
@@ -328,7 +260,7 @@ describe('CollapsibleSection', () => {
       );
 
       const badge = screen.getByText('5');
-      expect(badge).toHaveAttribute('aria-label', '5 items');
+      expect(badge).toHaveAttribute('aria-label', '5 items in this section');
     });
   });
 

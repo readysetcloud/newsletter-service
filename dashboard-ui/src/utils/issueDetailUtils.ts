@@ -3,6 +3,7 @@
  */
 
 import type { IssueMetrics } from '../types/issues';
+import { STORAGE_KEYS } from '@/constants/brand';
 
 /**
  * Comparison result for metrics
@@ -302,7 +303,7 @@ export function getDefaultPreferences(): UserPreferences['issueDetail'] {
 /**
  * LocalStorage key for user preferences
  */
-const PREFERENCES_KEY = 'issue-detail-preferences';
+const PREFERENCES_KEY = STORAGE_KEYS.issueDetailPreferences;
 
 /**
  * Save user preferences to localStorage
@@ -398,7 +399,7 @@ export function updatePreference<K extends keyof UserPreferences['issueDetail']>
 /**
  * SessionStorage key for scroll position
  */
-const SCROLL_POSITION_KEY = 'issue-detail-scroll-position';
+const SCROLL_POSITION_KEY = STORAGE_KEYS.issueDetailScrollPosition;
 
 /**
  * Save scroll position to sessionStorage

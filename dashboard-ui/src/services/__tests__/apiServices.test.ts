@@ -116,6 +116,9 @@ describe('API Services', () => {
       const mockUploadResponse = {
         uploadUrl: 'https://s3.amazonaws.com/upload-url',
         publicUrl: 'https://s3.amazonaws.com/public-url',
+        key: 'brand-logos/test.jpg',
+        expiresIn: 3600,
+        maxSize: 5242880,
       };
 
       const { apiClient } = await import('../api');
@@ -149,7 +152,7 @@ describe('API Services', () => {
         headers: { 'Content-Type': 'image/jpeg' },
       });
       expect(apiClient.put).toHaveBeenCalledWith('/brand/logo', {
-        photoUrl: mockUploadResponse.publicUrl,
+        key: mockUploadResponse.key,
       });
     });
   });
@@ -272,7 +275,7 @@ describe('API Services', () => {
         createdAt: '2024-01-01T00:00:00Z',
         status: 'active' as const,
         usageCount: 0,
-        expiresAt: '2025-12-31T23:59:59Z', // Future date
+        expiresAt: '2099-12-31T23:59:59Z', // Future date
       };
 
       const noExpiryKey = {
@@ -311,7 +314,12 @@ describe('API Services', () => {
               openRate: 45.2,
               clickRate: 12.5,
               bounceRate: 2.1,
-              delivered: 1500
+              delivered: 1500,
+              opens: 678,
+              clicks: 188,
+              bounces: 32,
+              complaints: 1,
+              subscribers: 1600,
             }
           }
         ],

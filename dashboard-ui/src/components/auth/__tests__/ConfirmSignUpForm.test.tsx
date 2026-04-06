@@ -7,18 +7,23 @@ import { AuthProvider } from '../../../contexts/AuthContext';
 vi.mock('aws-amplify/auth', () => ({
   confirmSignUp: vi.fn(),
   resendSignUpCode: vi.fn(),
-  getCurrentUser: vi.fn().mockResolvedValue(null),
+  getCurrentUser: vi.fn().mockRejectedValue(new Error('No user')),
   fetchAuthSession: vi.fn().mockResolvedValue({
     tokens: null
   })
 }));
 
-const renderWithAuth = (component: React.ReactElement) => {
-  return render(
+const renderWithAuth = async (component: React.ReactElement) => {
+  const result = render(
     <AuthProvider>
       {component}
     </AuthProvider>
   );
+  // Wait for AuthProvider to finish its initial checkAuthStatus
+  await waitFor(() => {
+    expect(screen.getByRole('button', { name: /verify email/i })).not.toBeDisabled();
+  });
+  return result;
 };
 
 describe('ConfirmSignUpForm', () => {
@@ -30,8 +35,8 @@ describe('ConfirmSignUpForm', () => {
     vi.clearAllMocks();
   });
 
-  it('renders confirmation form with email', () => {
-    renderWithAuth(
+  it('renders confirmation form with email', async () => {
+    await renderWithAuth(
       <ConfirmSignUpForm
         email={testEmail}
         onSuccess={mockOnSuccess}
@@ -45,7 +50,7 @@ describe('ConfirmSignUpForm', () => {
   });
 
   it('validates confirmation code format', async () => {
-    renderWithAuth(
+    await renderWithAuth(
       <ConfirmSignUpForm
         email={testEmail}
         onSuccess={mockOnSuccess}
@@ -70,8 +75,8 @@ describe('ConfirmSignUpForm', () => {
     });
   });
 
-  it('only allows numeric input and limits to 6 digits', () => {
-    renderWithAuth(
+  it('only allows numeric input and limits to 6 digits', async () => {
+    await renderWithAuth(
       <ConfirmSignUpForm
         email={testEmail}
         onSuccess={mockOnSuccess}
@@ -91,7 +96,7 @@ describe('ConfirmSignUpForm', () => {
   });
 
   it('shows resend code button with cooldown', async () => {
-    renderWithAuth(
+    await renderWithAuth(
       <ConfirmSignUpForm
         email={testEmail}
         onSuccess={mockOnSuccess}
@@ -104,8 +109,8 @@ describe('ConfirmSignUpForm', () => {
     expect(resendButton).not.toBeDisabled();
   });
 
-  it('shows back to sign up button when provided', () => {
-    renderWithAuth(
+  it('shows back to sign up button when provided', async () => {
+    await renderWithAuth(
       <ConfirmSignUpForm
         email={testEmail}
         onSuccess={mockOnSuccess}
@@ -120,8 +125,8 @@ describe('ConfirmSignUpForm', () => {
     expect(mockOnBackToSignUp).toHaveBeenCalled();
   });
 
-  it('does not show back button when not provided', () => {
-    renderWithAuth(
+  it('does not show back button when not provided', async () => {
+    await renderWithAuth(
       <ConfirmSignUpForm
         email={testEmail}
         onSuccess={mockOnSuccess}

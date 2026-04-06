@@ -29,6 +29,7 @@ import { AppShell } from '@/components/layout/AppShell';
 import { BrandOnboardingPage, ProfileOnboardingPage, SenderOnboardingPage } from '@/pages/onboarding';
 import { useEffect } from 'react';
 import { useTheme } from '@/hooks/useTheme';
+import { BRAND } from '@/constants/brand';
 
 function App() {
   useTheme();
@@ -362,7 +363,7 @@ function App() {
               </div>
               <footer className="border-t border-border bg-surface">
                 <div className="mx-auto max-w-7xl px-4 py-3 text-xs text-muted-foreground sm:px-6 lg:px-8">
-                  <div>© {new Date().getFullYear()} Outboxed</div>
+                  <div>© {new Date().getFullYear()} {BRAND.copyrightHolder}</div>
                 </div>
               </footer>
             </div>

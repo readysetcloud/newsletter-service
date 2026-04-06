@@ -324,6 +324,10 @@ Resources:
           AttributeType: S
         - AttributeName: stripeCustomerId
           AttributeType: S
+        - AttributeName: GSI2PK
+          AttributeType: S
+        - AttributeName: GSI2SK
+          AttributeType: S
       GlobalSecondaryIndexes:
         - IndexName: GSI1
           KeySchema:
@@ -337,6 +341,14 @@ Resources:
           KeySchema:
             - AttributeName: stripeCustomerId
               KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: GSI2
+          KeySchema:
+            - AttributeName: GSI2PK
+              KeyType: HASH
+            - AttributeName: GSI2SK
+              KeyType: RANGE
           Projection:
             ProjectionType: ALL
       TimeToLiveSpecification:
@@ -1173,6 +1185,7 @@ Resources:
                 - lambda:InvokeFunction
               Resource:
                 - !GetAtt SegmentExportFunction.Arn
+                - !GetAtt GenerateOutreachFunction.Arn
             - Effect: Allow
               Action:
                 - s3:PutObject
@@ -1199,6 +1212,7 @@ Resources:
           ENVIRONMENT: !Ref Environment
           RESOURCE_ARN_PREFIX: !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/
           CHECK_SENDER_STATUS_FUNCTION_ARN: !GetAtt CheckSenderStatusAutomaticallyFunction.Arn
+          GENERATE_OUTREACH_FUNCTION_ARN: !GetAtt GenerateOutreachFunction.Arn
           SCHEDULER_ROLE_ARN: !GetAtt SchedulerExecutionRole.Arn
       Events:
         ApiProxy:
@@ -3682,6 +3696,43 @@ Resources:
                 - newsletter-service
               detail-type:
                 - PRICING_RECALCULATION_REQUESTED
+
+  GenerateOutreachFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - generate-outreach.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: generate-outreach.handler
+      Timeout: 60
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/*"
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource:
+                - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/*
+                - !Sub arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          BEDROCK_MODEL_ID: us.amazon.nova-pro-v1:0
 
   SeedPricingConfigFunction:
     Type: AWS::Serverless::Function

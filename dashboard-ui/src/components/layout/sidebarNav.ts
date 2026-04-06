@@ -4,7 +4,7 @@ import {
   CurrencyDollarIcon,
   UserGroupIcon,
 } from '@heroicons/react/24/outline';
-import { FileText } from 'lucide-react';
+import { FileText, Building2 } from 'lucide-react';
 
 export interface SidebarNavItem {
   name: string;
@@ -18,8 +18,9 @@ export const NAV_ITEMS: SidebarNavItem[] = [
   { name: 'Dashboard', href: '/', icon: HomeIcon, preloadKey: 'dashboard', matchPaths: ['/'] },
   { name: 'Issues', href: '/issues', icon: FileText, preloadKey: 'issues', matchPaths: ['/issues'] },
   { name: 'Subscribers', href: '/subscribers', icon: UserGroupIcon, preloadKey: 'subscribers', matchPaths: ['/subscribers', '/segments'] },
+  { name: 'Sponsors', href: '/sponsors', icon: Building2, preloadKey: 'sponsors', matchPaths: ['/sponsors'] },
   { name: 'Brand', href: '/brand', icon: BuildingOfficeIcon, preloadKey: 'brand', matchPaths: ['/brand'] },
-  { name: 'Sponsors', href: '/pricing', icon: CurrencyDollarIcon, preloadKey: 'pricing', matchPaths: ['/pricing'] },
+  { name: 'Pricing', href: '/pricing', icon: CurrencyDollarIcon, preloadKey: 'pricing', matchPaths: ['/pricing'] },
 ];
 
 /**

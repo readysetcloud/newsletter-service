@@ -2,7 +2,7 @@ use lambda_http::{http::Method, Body, Error, Request, Response};
 use serde_json::json;
 
 use crate::controllers::{
-    api_keys, brand, domain, issues, pricing, profile, segments, senders, subscribers,
+    api_keys, brand, domain, issues, pricing, profile, segments, senders, sponsors, subscribers,
 };
 
 pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
@@ -175,6 +175,105 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
             }
         }
 
+        // Sponsors endpoints
+        (&Method::POST, "/sponsors") => sponsors::create_sponsor(event).await,
+        (&Method::GET, "/sponsors") => sponsors::list_sponsors(event).await,
+        // Outreach job status: GET /sponsors/:id/outreach/jobs/:jobId
+        (&Method::GET, path)
+            if path.starts_with("/sponsors/") && path.contains("/outreach/jobs/") =>
+        {
+            match extract_sponsor_and_outreach_job_id(path) {
+                Some((sponsor_id, job_id)) => {
+                    sponsors::get_outreach_job(event, &sponsor_id, &job_id).await
+                }
+                None => Ok(format_not_found()),
+            }
+        }
+        // Sponsorship links: PUT /sponsors/:id/sponsorships/:sid/links
+        (&Method::PUT, path)
+            if path.starts_with("/sponsors/")
+                && path.contains("/sponsorships/")
+                && path.ends_with("/links") =>
+        {
+            match extract_sponsor_and_sponsorship_id(path) {
+                Some((sponsor_id, sponsorship_id)) => {
+                    sponsors::update_sponsorship_links(event, &sponsor_id, &sponsorship_id).await
+                }
+                None => Ok(format_not_found()),
+            }
+        }
+        // Update sponsorship: PUT /sponsors/:id/sponsorships/:sid
+        (&Method::PUT, path)
+            if path.starts_with("/sponsors/") && path.contains("/sponsorships/") =>
+        {
+            match extract_sponsor_and_sponsorship_id(path) {
+                Some((sponsor_id, sponsorship_id)) => {
+                    sponsors::update_sponsorship(event, &sponsor_id, &sponsorship_id).await
+                }
+                None => Ok(format_not_found()),
+            }
+        }
+        // Create sponsorship: POST /sponsors/:id/sponsorships
+        (&Method::POST, path)
+            if path.starts_with("/sponsors/") && path.ends_with("/sponsorships") =>
+        {
+            match extract_sponsor_id_from_path(path) {
+                Some(sponsor_id) => sponsors::create_sponsorship(event, &sponsor_id).await,
+                None => Ok(format_not_found()),
+            }
+        }
+        // List sponsorships: GET /sponsors/:id/sponsorships
+        (&Method::GET, path)
+            if path.starts_with("/sponsors/") && path.ends_with("/sponsorships") =>
+        {
+            match extract_sponsor_id_from_path(path) {
+                Some(sponsor_id) => sponsors::list_sponsorships(event, &sponsor_id).await,
+                None => Ok(format_not_found()),
+            }
+        }
+        // Archive sponsor: POST /sponsors/:id/archive
+        (&Method::POST, path) if path.starts_with("/sponsors/") && path.ends_with("/archive") => {
+            match extract_sponsor_id_from_path(path) {
+                Some(sponsor_id) => sponsors::archive_sponsor(event, &sponsor_id).await,
+                None => Ok(format_not_found()),
+            }
+        }
+        // Restore sponsor: POST /sponsors/:id/restore
+        (&Method::POST, path) if path.starts_with("/sponsors/") && path.ends_with("/restore") => {
+            match extract_sponsor_id_from_path(path) {
+                Some(sponsor_id) => sponsors::restore_sponsor(event, &sponsor_id).await,
+                None => Ok(format_not_found()),
+            }
+        }
+        // Trigger outreach: POST /sponsors/:id/outreach
+        (&Method::POST, path) if path.starts_with("/sponsors/") && path.ends_with("/outreach") => {
+            match extract_sponsor_id_from_path(path) {
+                Some(sponsor_id) => sponsors::trigger_outreach(event, &sponsor_id).await,
+                None => Ok(format_not_found()),
+            }
+        }
+        // List outreach: GET /sponsors/:id/outreach
+        (&Method::GET, path) if path.starts_with("/sponsors/") && path.ends_with("/outreach") => {
+            match extract_sponsor_id_from_path(path) {
+                Some(sponsor_id) => sponsors::list_outreach(event, &sponsor_id).await,
+                None => Ok(format_not_found()),
+            }
+        }
+        // Update sponsor: PUT /sponsors/:id
+        (&Method::PUT, path) if path.starts_with("/sponsors/") => {
+            match extract_path_param(path, "/sponsors/") {
+                Some(sponsor_id) => sponsors::update_sponsor(event, &sponsor_id).await,
+                None => Ok(format_not_found()),
+            }
+        }
+        // Get sponsor: GET /sponsors/:id
+        (&Method::GET, path) if path.starts_with("/sponsors/") => {
+            match extract_path_param(path, "/sponsors/") {
+                Some(sponsor_id) => sponsors::get_sponsor(event, &sponsor_id).await,
+                None => Ok(format_not_found()),
+            }
+        }
+
         // Method not allowed for valid paths
         (_, path) if is_valid_api_path(path) => Ok(format_method_not_allowed()),
 
@@ -224,6 +323,9 @@ fn is_valid_api_path(path: &str) -> bool {
         // Segments paths
         || path == "/segments"
         || path.starts_with("/segments/")
+        // Sponsors paths
+        || path == "/sponsors"
+        || path.starts_with("/sponsors/")
 }
 
 fn extract_path_param(path: &str, prefix: &str) -> Option<String> {
@@ -257,6 +359,48 @@ fn extract_segment_id_before(path: &str, suffix: &str) -> Option<String> {
         .and_then(|s| s.strip_suffix(suffix))
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
+}
+
+/// Extract sponsor ID from paths like `/sponsors/:id/archive`, `/sponsors/:id/sponsorships`, etc.
+fn extract_sponsor_id_from_path(path: &str) -> Option<String> {
+    path.strip_prefix("/sponsors/")
+        .and_then(|s| s.split('/').next())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
+/// Extract sponsor ID and sponsorship ID from paths like `/sponsors/:id/sponsorships/:sid`
+/// or `/sponsors/:id/sponsorships/:sid/links`.
+fn extract_sponsor_and_sponsorship_id(path: &str) -> Option<(String, String)> {
+    let rest = path.strip_prefix("/sponsors/")?;
+    let parts: Vec<&str> = rest.split('/').collect();
+    // parts: [sponsor_id, "sponsorships", sponsorship_id, ...]
+    if parts.len() >= 3
+        && parts[1] == "sponsorships"
+        && !parts[0].is_empty()
+        && !parts[2].is_empty()
+    {
+        Some((parts[0].to_string(), parts[2].to_string()))
+    } else {
+        None
+    }
+}
+
+/// Extract sponsor ID and job ID from paths like `/sponsors/:id/outreach/jobs/:jobId`.
+fn extract_sponsor_and_outreach_job_id(path: &str) -> Option<(String, String)> {
+    let rest = path.strip_prefix("/sponsors/")?;
+    let parts: Vec<&str> = rest.split('/').collect();
+    // parts: [sponsor_id, "outreach", "jobs", job_id]
+    if parts.len() >= 4
+        && parts[1] == "outreach"
+        && parts[2] == "jobs"
+        && !parts[0].is_empty()
+        && !parts[3].is_empty()
+    {
+        Some((parts[0].to_string(), parts[3].to_string()))
+    } else {
+        None
+    }
 }
 
 fn format_method_not_allowed() -> Response<Body> {
@@ -637,5 +781,82 @@ mod tests {
         assert!(is_valid_api_path("/segments/seg-123/members"));
         assert!(is_valid_api_path("/segments/seg-123/export"));
         assert!(is_valid_api_path("/segments/jobs/job-456"));
+    }
+
+    // Sponsor helper tests
+    #[test]
+    fn test_is_valid_api_path_sponsors() {
+        assert!(is_valid_api_path("/sponsors"));
+        assert!(is_valid_api_path("/sponsors/sp-123"));
+        assert!(is_valid_api_path("/sponsors/sp-123/archive"));
+        assert!(is_valid_api_path("/sponsors/sp-123/restore"));
+        assert!(is_valid_api_path("/sponsors/sp-123/sponsorships"));
+        assert!(is_valid_api_path("/sponsors/sp-123/sponsorships/ss-456"));
+        assert!(is_valid_api_path(
+            "/sponsors/sp-123/sponsorships/ss-456/links"
+        ));
+        assert!(is_valid_api_path("/sponsors/sp-123/outreach"));
+        assert!(is_valid_api_path("/sponsors/sp-123/outreach/jobs/job-789"));
+    }
+
+    #[test]
+    fn test_extract_sponsor_id_from_path_valid() {
+        let result = extract_sponsor_id_from_path("/sponsors/sp-123/archive");
+        assert_eq!(result, Some("sp-123".to_string()));
+    }
+
+    #[test]
+    fn test_extract_sponsor_id_from_path_sponsorships() {
+        let result = extract_sponsor_id_from_path("/sponsors/sp-abc/sponsorships");
+        assert_eq!(result, Some("sp-abc".to_string()));
+    }
+
+    #[test]
+    fn test_extract_sponsor_id_from_path_empty() {
+        let result = extract_sponsor_id_from_path("/sponsors//archive");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_sponsor_and_sponsorship_id_valid() {
+        let result = extract_sponsor_and_sponsorship_id("/sponsors/sp-123/sponsorships/ss-456");
+        assert_eq!(result, Some(("sp-123".to_string(), "ss-456".to_string())));
+    }
+
+    #[test]
+    fn test_extract_sponsor_and_sponsorship_id_with_links() {
+        let result =
+            extract_sponsor_and_sponsorship_id("/sponsors/sp-123/sponsorships/ss-456/links");
+        assert_eq!(result, Some(("sp-123".to_string(), "ss-456".to_string())));
+    }
+
+    #[test]
+    fn test_extract_sponsor_and_sponsorship_id_missing_sid() {
+        let result = extract_sponsor_and_sponsorship_id("/sponsors/sp-123/sponsorships/");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_sponsor_and_sponsorship_id_no_sponsorships() {
+        let result = extract_sponsor_and_sponsorship_id("/sponsors/sp-123/other/ss-456");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_sponsor_and_outreach_job_id_valid() {
+        let result = extract_sponsor_and_outreach_job_id("/sponsors/sp-123/outreach/jobs/job-789");
+        assert_eq!(result, Some(("sp-123".to_string(), "job-789".to_string())));
+    }
+
+    #[test]
+    fn test_extract_sponsor_and_outreach_job_id_missing_job() {
+        let result = extract_sponsor_and_outreach_job_id("/sponsors/sp-123/outreach/jobs/");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_sponsor_and_outreach_job_id_wrong_path() {
+        let result = extract_sponsor_and_outreach_job_id("/sponsors/sp-123/outreach/other/job-1");
+        assert_eq!(result, None);
     }
 }

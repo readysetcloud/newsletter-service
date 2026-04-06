@@ -18,6 +18,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { FileText } from 'lucide-react';
 import { useTheme } from '@/hooks/useTheme';
+import { BRAND } from '@/constants/brand';
 
 export const AppHeader: React.FC = () => {
   const { user } = useAuth();
@@ -69,13 +70,13 @@ export const AppHeader: React.FC = () => {
                 {...ariaPatterns.link('Go to home')}
               >
                 <img
-                  src="/logo.svg"
-                  alt="Outboxed"
+                  src={BRAND.assets.logo}
+                  alt={BRAND.appName}
                   className="h-8 w-8 shrink-0"
                 />
                 <div className="min-w-0">
                   <h1 className="text-xl md:text-2xl font-bold text-foreground truncate">
-                    Outboxed
+                    {BRAND.appName}
                   </h1>
                 </div>
               </Link>

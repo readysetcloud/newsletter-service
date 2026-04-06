@@ -224,7 +224,7 @@ describe('DeliverabilityHealthCard', () => {
       render(<DeliverabilityHealthCard bounceRate={1.5} complaintRate={0.005} />);
 
       const status = screen.getByRole('status');
-      expect(status).toHaveAttribute('aria-label', 'Deliverability health: Excellent');
+      expect(status).toHaveAttribute('aria-label', 'Deliverability health status: Excellent');
     });
 
     it('should have descriptive card title and description', () => {

@@ -19,7 +19,6 @@ describe('SocialLinksManager', () => {
 
     expect(screen.getByText(/social links/i)).toBeInTheDocument();
     expect(screen.getByText(/link 1/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/platform/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/url/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/display name/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /add link/i })).toBeInTheDocument();
@@ -31,20 +30,19 @@ describe('SocialLinksManager', () => {
 
     render(<SocialLinksManager {...defaultProps} />);
 
-    const platformSelect = screen.getByLabelText(/platform/i);
     const urlInput = screen.getByLabelText(/url/i);
+    const nameInput = screen.getByLabelText(/display name/i);
     const submitButton = screen.getByRole('button', { name: /save links/i });
 
-    fireEvent.change(platformSelect, { target: { value: 'twitter' } });
     fireEvent.change(urlInput, { target: { value: 'https://twitter.com/user' } });
+    fireEvent.change(nameInput, { target: { value: 'Twitter' } });
     fireEvent.click(submitButton);
 
     await waitFor(() => {
       expect(mockOnUpdate).toHaveBeenCalledWith([
         {
-          platform: 'twitter',
           url: 'https://twitter.com/user',
-          name: '',
+          name: 'Twitter',
         },
       ]);
     });
@@ -60,12 +58,12 @@ describe('SocialLinksManager', () => {
     render(<SocialLinksManager {...defaultProps} />);
 
     // Fill in valid data first
-    const platformSelect = screen.getByLabelText(/platform/i);
     const urlInput = screen.getByLabelText(/url/i);
+    const nameInput = screen.getByLabelText(/display name/i);
     const submitButton = screen.getByRole('button', { name: /save links/i });
 
-    fireEvent.change(platformSelect, { target: { value: 'twitter' } });
     fireEvent.change(urlInput, { target: { value: 'https://twitter.com/user' } });
+    fireEvent.change(nameInput, { target: { value: 'Twitter' } });
     fireEvent.click(submitButton);
 
     await waitFor(() => {

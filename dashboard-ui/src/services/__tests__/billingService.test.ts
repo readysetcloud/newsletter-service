@@ -6,6 +6,7 @@ import type {
   CheckoutSessionRequest,
   CheckoutSessionResponse,
   CustomerPortalRequest,
+  CustomerPortalResponse,
   PlanChangeRequest,
 } from '@/types';
 
@@ -111,7 +112,7 @@ describe('BillingService', () => {
 
       expect(result.success).toBe(true);
       expect(result.data).toEqual(mockResponse);
-      expect(apiClient.get).toHaveBeenCalledWith('/billing/subscription/status');
+      expect(apiClient.get).toHaveBeenCalledWith('/billing/subscription-status');
     });
 
     it('should handle API errors', async () => {
@@ -149,7 +150,7 @@ describe('BillingService', () => {
 
       expect(result.success).toBe(true);
       expect(result.data).toEqual(mockResponse);
-      expect(apiClient.post).toHaveBeenCalledWith('/billing/checkout/create', request);
+      expect(apiClient.post).toHaveBeenCalledWith('/billing/checkout-session', request);
     });
 
     it('should validate request data', async () => {
@@ -200,7 +201,7 @@ describe('BillingService', () => {
 
       expect(result.success).toBe(true);
       expect(result.data).toEqual(mockResponse);
-      expect(apiClient.post).toHaveBeenCalledWith('/billing/portal/create', request);
+      expect(apiClient.post).toHaveBeenCalledWith('/billing/customer-portal', request);
     });
 
     it('should work with empty request', async () => {
@@ -217,7 +218,7 @@ describe('BillingService', () => {
 
       expect(result.success).toBe(true);
       expect(result.data).toEqual(mockResponse);
-      expect(apiClient.post).toHaveBeenCalledWith('/billing/portal/create', {});
+      expect(apiClient.post).toHaveBeenCalledWith('/billing/customer-portal', {});
     });
   });
 
@@ -348,7 +349,7 @@ describe('BillingService', () => {
 
       expect(result.success).toBe(true);
       expect(result.data).toEqual(mockResponse);
-      expect(apiClient.post).toHaveBeenCalledWith('/billing/portal/create', {
+      expect(apiClient.post).toHaveBeenCalledWith('/billing/customer-portal', {
         returnUrl: 'http://localhost:3000/billing'
       });
     });
@@ -367,7 +368,7 @@ describe('BillingService', () => {
 
       expect(result.success).toBe(true);
       expect(result.data).toEqual(mockResponse);
-      expect(apiClient.post).toHaveBeenCalledWith('/billing/portal/create', {
+      expect(apiClient.post).toHaveBeenCalledWith('/billing/customer-portal', {
         returnUrl: 'http://localhost:3000/billing'
       });
     });

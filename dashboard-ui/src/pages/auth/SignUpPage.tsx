@@ -3,6 +3,7 @@ import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { SignUpForm } from '@/components/auth/SignUpForm';
 import { ConfirmSignUpForm } from '@/components/auth/ConfirmSignUpForm';
+import { BRAND } from '@/constants/brand';
 
 type SignUpStep = 'signup' | 'confirm';
 
@@ -57,8 +58,8 @@ export function SignUpPage() {
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
         <div className="text-center">
           <img
-            src="/logo-full.svg"
-            alt="Outboxed"
+            src={BRAND.assets.logoFull}
+            alt={BRAND.appName}
             className="mx-auto h-10 sm:h-12"
           />
           <p className="text-muted-foreground">

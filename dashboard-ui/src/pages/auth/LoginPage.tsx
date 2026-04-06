@@ -2,6 +2,7 @@
 import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { LoginForm } from '@/components/auth/LoginForm';
+import { BRAND } from '@/constants/brand';
 
 export function LoginPage() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -31,8 +32,8 @@ export function LoginPage() {
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
         <div className="text-center">
           <img
-            src="/logo-full.svg"
-            alt="Outboxed"
+            src={BRAND.assets.logoFull}
+            alt={BRAND.appName}
             className="mx-auto h-10 sm:h-12"
           />
           <p className="text-muted-foreground">

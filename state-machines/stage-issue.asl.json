@@ -560,7 +560,7 @@
             "S": "published"
           },
           ":publishedAt": {
-            "S.$": "$.State.EnteredTime"
+            "S.$": "$$.State.EnteredTime"
           }
         }
       },

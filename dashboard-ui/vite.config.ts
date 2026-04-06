@@ -2,6 +2,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 import { visualizer } from 'rollup-plugin-visualizer'
+import { brandHtmlPlugin } from './vite-plugin-brand-html'
 
 // https://vitejs.dev/config/
 export default defineConfig(({ command: _command, mode }) => {
@@ -11,6 +12,7 @@ export default defineConfig(({ command: _command, mode }) => {
   return {
     plugins: [
       react(),
+      brandHtmlPlugin(),
       // Add bundle visualizer in analyze mode
       ...(isAnalyze ? [
         visualizer({

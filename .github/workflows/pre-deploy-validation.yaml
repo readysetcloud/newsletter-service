@@ -49,11 +49,14 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             dashboard-ui/package-lock.json
-      - name: Unit Tests
+      - name: Install dependencies
         run: |
           npm install --no-fund --no-audit
           npm --prefix dashboard-ui ci
-          npm run coverage
+      - name: Backend unit tests
+        run: npm run coverage
+      - name: Frontend unit tests
+        run: npm --prefix dashboard-ui run test:run
 
   rust-tests:
     name: Run Rust Tests

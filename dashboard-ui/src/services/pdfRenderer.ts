@@ -1,5 +1,6 @@
 import { jsPDF } from 'jspdf';
 import type { ReportData } from '@/types/report';
+import { BRAND } from '@/constants/brand';
 import {
   formatSubscriberCount,
   formatPercentage,
@@ -235,7 +236,7 @@ function renderFooter(doc: jsPDF, data: ReportData) {
   doc.setFontSize(8);
   setColor(doc, COLOR_GRAY);
 
-  doc.text('Data verified by Outboxed analytics', MARGIN_LEFT, footerY);
+  doc.text(`Data verified by ${BRAND.appName} analytics`, MARGIN_LEFT, footerY);
   doc.text(
     `Generated ${formatReportDate(data.generatedAt.toISOString())}`,
     MARGIN_LEFT,

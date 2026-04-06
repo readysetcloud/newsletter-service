@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { ErrorBoundary } from './ErrorBoundary';
 import { AlertCircle, ArrowLeft } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
+import { formatPageTitle } from '@/constants/brand';
 import { useNavigate } from 'react-router-dom';
 
 interface RouteErrorBoundaryProps {
@@ -58,8 +59,7 @@ export const RouteErrorBoundary: React.FC<RouteErrorBoundaryProps> = ({
   routeName
 }) => {
   useEffect(() => {
-    const pageTitle = routeName ? `${routeName} | Outboxed` : 'Outboxed';
-    document.title = pageTitle;
+    document.title = formatPageTitle(routeName);
   }, [routeName]);
 
   return (

@@ -5,6 +5,7 @@ import { useTheme } from '@/hooks/useTheme';
 import { keyboardUtils, responsiveA11y } from '@/utils/accessibility';
 import { NAV_ITEMS } from './sidebarNav';
 import { ACCOUNT_ITEMS } from './accountNav';
+import { BRAND } from '@/constants/brand';
 import { cn } from '@/utils/cn';
 import {
   MoonIcon,
@@ -123,8 +124,8 @@ export function MobileDrawer({ isOpen, onClose }: MobileDrawerProps) {
           {/* Header with logo and close button */}
           <div className="flex items-center justify-between px-4 py-4 border-b border-border">
             <div className="flex items-center gap-3">
-              <img src="/logo.svg" alt="Outboxed" className="h-8 w-8 shrink-0" />
-              <span className="text-xl font-bold text-foreground">Outboxed</span>
+              <img src={BRAND.assets.logo} alt={BRAND.appName} className="h-8 w-8 shrink-0" />
+              <span className="text-xl font-bold text-foreground">{BRAND.appName}</span>
             </div>
             <button
               type="button"

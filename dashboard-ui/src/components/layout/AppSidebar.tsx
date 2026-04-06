@@ -3,6 +3,7 @@ import { responsiveA11y } from '@/utils/accessibility';
 import { preloadRoute } from '@/utils/lazyImports';
 import { cn } from '@/utils/cn';
 import { NAV_ITEMS, isNavItemActive } from './sidebarNav';
+import { BRAND } from '@/constants/brand';
 
 export function AppSidebar() {
   const location = useLocation();
@@ -12,11 +13,11 @@ export function AppSidebar() {
       {/* Logo + Brand */}
       <div className="flex items-center gap-3 px-4 py-5">
         <img
-          src="/logo.svg"
-          alt="Outboxed"
+          src={BRAND.assets.logo}
+          alt={BRAND.appName}
           className="h-8 w-8 shrink-0"
         />
-        <span className="text-xl font-bold text-foreground">Outboxed</span>
+        <span className="text-xl font-bold text-foreground">{BRAND.appName}</span>
       </div>
 
       {/* Navigation */}

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Pencil, Trash, RefreshCw, AlertCircle, TrendingUp, Users, Shield, FileText } from 'lucide-react';
+import { ArrowLeft, Pencil, Trash, RefreshCw, AlertCircle, TrendingUp, Users, Shield, FileText, CheckCircle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { useToast } from '../../components/ui/Toast';
@@ -113,6 +113,7 @@ export const IssueDetailPage: React.FC = () => {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedLinkId, setSelectedLinkId] = useState<string | null>(null);
   const [isAnalyticsRebuilding, setIsAnalyticsRebuilding] = useState(false);
+  const [isMarkingPublished, setIsMarkingPublished] = useState(false);
 
   // New state for single-page layout
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
@@ -429,6 +430,38 @@ export const IssueDetailPage: React.FC = () => {
     }
   }, [id, addToast]);
 
+  const handleMarkAsPublished = useCallback(async () => {
+    if (!id || !issue) return;
+
+    try {
+      setIsMarkingPublished(true);
+      const response = await issuesService.updateIssue(id, { status: 'published' });
+
+      if (response.success && response.data) {
+        setIssue(response.data);
+        addToast({
+          type: 'success',
+          title: 'Issue marked as published',
+          message: 'You can now refresh insights to generate analytics.',
+        });
+      } else {
+        addToast({
+          type: 'error',
+          title: 'Failed to update status',
+          message: response.error || 'Could not mark issue as published.',
+        });
+      }
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: 'Failed to update status',
+        message: err instanceof Error ? err.message : 'Could not mark issue as published.',
+      });
+    } finally {
+      setIsMarkingPublished(false);
+    }
+  }, [id, issue, addToast]);
+
   const handleDelete = useCallback(async () => {
     if (!issue) return;
 
@@ -474,6 +507,7 @@ export const IssueDetailPage: React.FC = () => {
 
   const isDraft = useMemo(() => issue?.status === 'draft', [issue?.status]);
   const isPublished = useMemo(() => issue?.status === 'published', [issue?.status]);
+  const canMarkAsPublished = useMemo(() => issue?.status === 'in progress' || issue?.status === 'failed', [issue?.status]);
 
   const complaintRate = useMemo(() => {
     if (!issue?.stats) return 0;
@@ -742,6 +776,20 @@ export const IssueDetailPage: React.FC = () => {
                       <span className="hidden sm:inline">Delete</span>
                     </Button>
                   </>
+                )}
+                {canMarkAsPublished && (
+                  <Button
+                    onClick={handleMarkAsPublished}
+                    variant="outline"
+                    size="sm"
+                    aria-label="Mark this issue as published"
+                    disabled={isMarkingPublished}
+                    className="hover:bg-success-50 hover:border-success-300 dark:hover:bg-success-900/20 transition-colors min-h-[44px] min-w-[44px]"
+                  >
+                    <CheckCircle className="h-4 w-4 mr-2" />
+                    <span className="hidden sm:inline">{isMarkingPublished ? 'Updating…' : 'Mark as Published'}</span>
+                    <span className="sm:hidden">{isMarkingPublished ? 'Updating…' : 'Publish'}</span>
+                  </Button>
                 )}
               </div>
             </div>

@@ -1,4 +1,4 @@
-export type IssueStatus = 'draft' | 'scheduled' | 'published' | 'failed';
+export type IssueStatus = 'draft' | 'scheduled' | 'in progress' | 'published' | 'failed';
 
 export interface IssueListItem {
   id: string;
@@ -113,6 +113,7 @@ export interface UpdateIssueRequest {
   content?: string;
   scheduledAt?: string;
   metadata?: Record<string, unknown>;
+  status?: 'published';
 }
 
 export interface ListIssuesParams {

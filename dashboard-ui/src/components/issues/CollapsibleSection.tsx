@@ -170,7 +170,7 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = React.memo(
         aria-labelledby={`${id}-title`}
       >
         <div className="px-4 sm:px-6 pb-4 sm:pb-6 pt-0">
-          {children}
+          {isExpanded && children}
         </div>
       </div>
     </section>

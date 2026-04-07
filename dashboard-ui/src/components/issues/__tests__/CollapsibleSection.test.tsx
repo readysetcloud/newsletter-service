@@ -55,8 +55,8 @@ describe('CollapsibleSection', () => {
     it('should hide children when collapsed', () => {
       render(<CollapsibleSection {...defaultProps} isExpanded={false} />);
 
-      const content = screen.getByText('Test Content');
-      const contentContainer = content.closest('[id$="-content"]');
+      expect(screen.queryByText('Test Content')).not.toBeInTheDocument();
+      const contentContainer = document.getElementById('test-section-content');
       expect(contentContainer).toHaveClass('max-h-0');
       expect(contentContainer).toHaveClass('opacity-0');
     });
@@ -204,7 +204,7 @@ describe('CollapsibleSection', () => {
       expect(header).toHaveAttribute('aria-expanded', 'false');
       expect(header).toHaveAttribute('aria-controls', 'test-section-content');
 
-      const content = screen.getByText('Test Content').closest('[id$="-content"]');
+      const content = document.getElementById('test-section-content');
       expect(content).toHaveAttribute('id', 'test-section-content');
       expect(content).toHaveAttribute('aria-hidden', 'true');
     });
@@ -224,7 +224,7 @@ describe('CollapsibleSection', () => {
     it('should update aria-hidden on content when state changes', () => {
       const { rerender } = render(<CollapsibleSection {...defaultProps} isExpanded={false} />);
 
-      let content = screen.getByText('Test Content').closest('[id$="-content"]');
+      let content = document.getElementById('test-section-content');
       expect(content).toHaveAttribute('aria-hidden', 'true');
 
       rerender(<CollapsibleSection {...defaultProps} isExpanded={true} />);
@@ -268,7 +268,7 @@ describe('CollapsibleSection', () => {
     it('should apply correct classes when collapsed', () => {
       render(<CollapsibleSection {...defaultProps} isExpanded={false} />);
 
-      const content = screen.getByText('Test Content').closest('[id$="-content"]');
+      const content = document.getElementById('test-section-content');
       expect(content).toHaveClass('max-h-0');
       expect(content).toHaveClass('opacity-0');
       expect(content).toHaveClass('transition-all');

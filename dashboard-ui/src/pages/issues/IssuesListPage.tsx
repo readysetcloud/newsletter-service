@@ -29,6 +29,9 @@ export const IssuesListPage: React.FC = () => {
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [showStatusFilter, setShowStatusFilter] = useState(false);
 
+  const nextTokenRef = React.useRef<string | null>(null);
+  nextTokenRef.current = nextToken;
+
   const loadIssues = useCallback(async (reset = false) => {
     try {
       if (reset) {
@@ -41,7 +44,7 @@ export const IssuesListPage: React.FC = () => {
       const params = {
         limit: 20,
         ...(statusFilter !== 'all' && { status: statusFilter }),
-        ...(reset ? {} : { nextToken: nextToken || undefined })
+        ...(reset ? {} : { nextToken: nextTokenRef.current || undefined })
       };
 
       const response = await issuesService.listIssues(params);
@@ -85,7 +88,7 @@ export const IssuesListPage: React.FC = () => {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [statusFilter, nextToken, addToast]);
+  }, [statusFilter, addToast]);
 
   useEffect(() => {
     loadIssues(true);
@@ -240,6 +243,7 @@ export const IssuesListPage: React.FC = () => {
     { value: 'all', label: 'All Issues' },
     { value: 'draft', label: 'Draft' },
     { value: 'scheduled', label: 'Scheduled' },
+    { value: 'in progress', label: 'In Progress' },
     { value: 'published', label: 'Published' },
     { value: 'failed', label: 'Failed' }
   ], []);

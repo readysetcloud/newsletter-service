@@ -89,6 +89,8 @@ pub struct UpdateIssueRequest {
     scheduled_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     metadata: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
 }
 
 // Response type for get single issue endpoint
@@ -589,9 +591,37 @@ async fn handle_update_issue(
     validate_update_request(&body)?;
 
     let existing = get_issue_by_id(&tenant_id, &issue_id).await?;
-    check_update_allowed(&existing)?;
+
+    // If setting status to published, only allow from in progress or failed
+    if body.status.as_deref() == Some("published") {
+        match existing.status.as_str() {
+            "in progress" | "failed" => {}
+            other => {
+                return Err(AppError::BadRequest(format!(
+                    "Cannot mark issue as published from status '{}'. Only 'in progress' or 'failed' issues can be marked as published",
+                    other
+                )));
+            }
+        }
+    } else {
+        check_update_allowed(&existing)?;
+    }
+
+    let is_publishing = body.status.as_deref() == Some("published");
 
     let updated = update_issue_record(&tenant_id, &issue_id, &body).await?;
+
+    if is_publishing {
+        let published_at = chrono::Utc::now().to_rfc3339();
+        let _ = publish_issue_published_event(
+            &tenant_id,
+            &user_context.user_id,
+            existing.issue_number,
+            &existing.subject,
+            &published_at,
+        )
+        .await;
+    }
 
     publish_event(&tenant_id, "ISSUE_UPDATED", &updated).await?;
 
@@ -701,6 +731,7 @@ fn validate_update_request(body: &UpdateIssueRequest) -> Result<(), AppError> {
         && body.content.is_none()
         && body.scheduled_at.is_none()
         && body.metadata.is_none()
+        && body.status.is_none()
     {
         return Err(AppError::BadRequest(
             "At least one field must be provided for update".to_string(),
@@ -724,17 +755,25 @@ fn validate_update_request(body: &UpdateIssueRequest) -> Result<(), AppError> {
         }
     }
 
+    if let Some(status) = &body.status {
+        if status != "published" {
+            return Err(AppError::BadRequest(
+                "Status can only be set to 'published'".to_string(),
+            ));
+        }
+    }
+
     Ok(())
 }
 
 fn check_update_allowed(issue: &IssueRecord) -> Result<(), AppError> {
-    if issue.status != "draft" {
-        return Err(AppError::BadRequest(format!(
-            "Cannot update issue with status '{}'. Only draft issues can be updated",
+    match issue.status.as_str() {
+        "draft" | "in progress" | "failed" => Ok(()),
+        _ => Err(AppError::BadRequest(format!(
+            "Cannot update issue with status '{}'. Only draft, in progress, or failed issues can be updated",
             issue.status
-        )));
+        ))),
     }
-    Ok(())
 }
 
 fn check_delete_allowed(issue: &IssueRecord) -> Result<(), AppError> {
@@ -1715,6 +1754,19 @@ async fn update_issue_record(
         }
     }
 
+    if let Some(status) = &body.status {
+        update_expression_parts.push("#status = :status".to_string());
+        expression_attribute_names.insert("#status".to_string(), "status".to_string());
+        expression_attribute_values
+            .insert(":status".to_string(), AttributeValue::S(status.clone()));
+
+        if status == "published" {
+            update_expression_parts.push("publishedAt = :published_at".to_string());
+            expression_attribute_values
+                .insert(":published_at".to_string(), AttributeValue::S(now.clone()));
+        }
+    }
+
     let update_expression = update_expression_parts.join(", ");
 
     let mut update_builder = ddb_client
@@ -2330,6 +2382,7 @@ mod tests {
             content: None,
             scheduled_at: None,
             metadata: None,
+            status: None,
         };
 
         let result = validate_update_request(&request);
@@ -2343,6 +2396,7 @@ mod tests {
             content: Some("Updated content".to_string()),
             scheduled_at: None,
             metadata: None,
+            status: None,
         };
 
         let result = validate_update_request(&request);
@@ -2356,6 +2410,7 @@ mod tests {
             content: None,
             scheduled_at: None,
             metadata: None,
+            status: None,
         };
 
         let result = validate_update_request(&request);
@@ -2370,6 +2425,7 @@ mod tests {
             content: None,
             scheduled_at: None,
             metadata: None,
+            status: None,
         };
 
         let result = validate_update_request(&request);
@@ -2384,6 +2440,7 @@ mod tests {
             content: None,
             scheduled_at: None,
             metadata: None,
+            status: None,
         };
 
         let result = validate_update_request(&request);
@@ -2398,6 +2455,7 @@ mod tests {
             content: Some("".to_string()),
             scheduled_at: None,
             metadata: None,
+            status: None,
         };
 
         let result = validate_update_request(&request);

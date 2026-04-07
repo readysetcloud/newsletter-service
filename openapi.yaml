@@ -1212,7 +1212,7 @@ paths:
 
     put:
       summary: Update an issue
-      description: Updates an existing draft issue (published/scheduled issues cannot be updated)
+      description: Updates an existing issue. Draft issues can have their content modified. Issues with 'in progress' or 'failed' status can be marked as published.
       tags:
         - Issues
       requestBody:
@@ -2473,6 +2473,11 @@ components:
         metadata:
           type: object
           description: Optional metadata for the issue
+        status:
+          type: string
+          enum:
+            - published
+          description: Set to 'published' to manually mark an in-progress or failed issue as published
 
     IssueStats:
       type: object

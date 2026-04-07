@@ -122,6 +122,7 @@ struct BotFlags {
     disposable_domain: bool,
     suspicious_user_agent: bool,
     fast_submission: bool,
+    suspicious_email_pattern: bool,
 }
 
 // ── Public endpoint handlers ───────────────────────────────────────────
@@ -556,9 +557,13 @@ async fn query_all_subscribers(
             let disposable_domain = get_bool_flag("disposableDomain");
             let suspicious_user_agent = get_bool_flag("suspiciousUserAgent");
             let fast_submission = get_bool_flag("fastSubmission");
+            let suspicious_email_pattern = get_bool_flag("suspiciousEmailPattern");
 
-            let suspected_bot =
-                honeypot_triggered || disposable_domain || suspicious_user_agent || fast_submission;
+            let suspected_bot = honeypot_triggered
+                || disposable_domain
+                || suspicious_user_agent
+                || fast_submission
+                || suspicious_email_pattern;
 
             let bot_flags = if suspected_bot {
                 Some(BotFlags {
@@ -566,6 +571,7 @@ async fn query_all_subscribers(
                     disposable_domain,
                     suspicious_user_agent,
                     fast_submission,
+                    suspicious_email_pattern,
                 })
             } else {
                 None

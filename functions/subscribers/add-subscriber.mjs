@@ -9,6 +9,7 @@ import {
   evaluateHoneypot,
   isDisposableDomain,
   isSuspiciousUserAgent,
+  isSuspiciousEmailPattern,
   sanitizeElapsedMs,
   isFastSubmission,
   buildDetectionFlags,
@@ -109,11 +110,12 @@ export const handler = async (event) => {
     const honeypotTriggered = evaluateHoneypot(contact.website);
     const disposableDomain = isDisposableDomain(normalizedEmail, disposableDomainSet);
     const suspiciousUa = isSuspiciousUserAgent(userAgent, uaPatterns);
+    const suspiciousEmail = isSuspiciousEmailPattern(normalizedEmail);
     const sanitizedElapsedMs = sanitizeElapsedMs(contact.elapsedMs);
     const fastSubmission = isFastSubmission(sanitizedElapsedMs);
 
     // Step 7: Build detection flags
-    const detectionFlags = buildDetectionFlags(honeypotTriggered, disposableDomain, suspiciousUa, unknownIp, fastSubmission);
+    const detectionFlags = buildDetectionFlags(honeypotTriggered, disposableDomain, suspiciousUa, unknownIp, fastSubmission, suspiciousEmail);
 
     // Step 8: Evaluate policy
     const policyResult = evaluatePolicy(detectionFlags, policy);
@@ -231,6 +233,7 @@ const addSubscriber = async (tenantId, contact, normalizedEmail, detectionData) 
     suspiciousUserAgent: detectionData.detectionFlags.suspiciousUserAgent,
     unknownIp: detectionData.detectionFlags.unknownIp,
     fastSubmission: detectionData.detectionFlags.fastSubmission,
+    suspiciousEmailPattern: detectionData.detectionFlags.suspiciousEmailPattern,
     // Additional detection attributes
     requestCountInWindow: detectionData.requestCountInWindow,
     ...(detectionData.elapsedMs !== null && detectionData.elapsedMs !== undefined && { elapsedMs: detectionData.elapsedMs })

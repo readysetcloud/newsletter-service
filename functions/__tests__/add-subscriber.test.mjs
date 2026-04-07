@@ -15,6 +15,7 @@ let mockExtractRequestMetadata;
 let mockEvaluateHoneypot;
 let mockIsDisposableDomain;
 let mockIsSuspiciousUserAgent;
+let mockIsSuspiciousEmailPattern;
 let mockSanitizeElapsedMs;
 let mockIsFastSubmission;
 let mockBuildDetectionFlags;
@@ -38,7 +39,8 @@ const DEFAULT_FLAGS = {
   disposableDomain: false,
   suspiciousUserAgent: false,
   unknownIp: false,
-  fastSubmission: false
+  fastSubmission: false,
+  suspiciousEmailPattern: false
 };
 
 function makeEvent(body = { email: 'test@example.com' }, tenant = 't1') {
@@ -95,6 +97,7 @@ async function loadIsolated() {
     mockEvaluateHoneypot = jest.fn().mockReturnValue(false);
     mockIsDisposableDomain = jest.fn().mockReturnValue(false);
     mockIsSuspiciousUserAgent = jest.fn().mockReturnValue(false);
+    mockIsSuspiciousEmailPattern = jest.fn().mockReturnValue(false);
     mockSanitizeElapsedMs = jest.fn().mockReturnValue(null);
     mockIsFastSubmission = jest.fn().mockReturnValue(false);
     mockBuildDetectionFlags = jest.fn().mockReturnValue({ ...DEFAULT_FLAGS });
@@ -108,6 +111,7 @@ async function loadIsolated() {
       evaluateHoneypot: mockEvaluateHoneypot,
       isDisposableDomain: mockIsDisposableDomain,
       isSuspiciousUserAgent: mockIsSuspiciousUserAgent,
+      isSuspiciousEmailPattern: mockIsSuspiciousEmailPattern,
       sanitizeElapsedMs: mockSanitizeElapsedMs,
       isFastSubmission: mockIsFastSubmission,
       buildDetectionFlags: mockBuildDetectionFlags,

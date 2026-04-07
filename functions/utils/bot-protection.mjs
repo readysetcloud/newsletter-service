@@ -138,6 +138,25 @@ export function isFastSubmission(elapsedMs) {
   return elapsedMs !== null && elapsedMs < 1500;
 }
 
+/** Domains where dots in the local part are ignored (aliases). */
+const DOT_ALIAS_DOMAINS = new Set(['gmail.com', 'googlemail.com']);
+
+/**
+ * Detect suspicious email patterns — currently flags Gmail-style dot-trick
+ * abuse where the local part has 3+ dots (e.g. "j.o.h.n@gmail.com").
+ * @param {string} normalizedEmail - Lowercase email
+ * @returns {boolean}
+ */
+export function isSuspiciousEmailPattern(normalizedEmail) {
+  const atIndex = normalizedEmail.indexOf('@');
+  if (atIndex === -1) return false;
+  const localPart = normalizedEmail.substring(0, atIndex);
+  const domain = normalizedEmail.substring(atIndex + 1);
+  if (!DOT_ALIAS_DOMAINS.has(domain)) return false;
+  const dotCount = (localPart.match(/\./g) || []).length;
+  return dotCount >= 3;
+}
+
 /**
  * Build the Detection_Flags object.
  * @param {boolean} honeypot
@@ -145,15 +164,17 @@ export function isFastSubmission(elapsedMs) {
  * @param {boolean} suspiciousUa
  * @param {boolean} unknownIp
  * @param {boolean} fastSubmission
+ * @param {boolean} [suspiciousEmailPattern=false]
  * @returns {object}
  */
-export function buildDetectionFlags(honeypot, disposable, suspiciousUa, unknownIp, fastSubmission) {
+export function buildDetectionFlags(honeypot, disposable, suspiciousUa, unknownIp, fastSubmission, suspiciousEmailPattern = false) {
   return {
     honeypotTriggered: honeypot,
     disposableDomain: disposable,
     suspiciousUserAgent: suspiciousUa,
     unknownIp,
-    fastSubmission
+    fastSubmission,
+    suspiciousEmailPattern
   };
 }
 

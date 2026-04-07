@@ -60,11 +60,13 @@ async function loadIsolated() {
       evaluateHoneypot: jest.fn().mockReturnValue(false),
       isDisposableDomain: jest.fn().mockReturnValue(false),
       isSuspiciousUserAgent: jest.fn().mockReturnValue(false),
+      isSuspiciousEmailPattern: jest.fn().mockReturnValue(false),
       sanitizeElapsedMs: jest.fn().mockReturnValue(null),
       isFastSubmission: jest.fn().mockReturnValue(false),
       buildDetectionFlags: jest.fn().mockReturnValue({
         honeypotTriggered: false, disposableDomain: false,
-        suspiciousUserAgent: false, unknownIp: false, fastSubmission: false
+        suspiciousUserAgent: false, unknownIp: false, fastSubmission: false,
+        suspiciousEmailPattern: false
       }),
       resolvePolicy: jest.fn().mockReturnValue({
         honeypotAction: 'block', disposableDomainAction: 'flag',

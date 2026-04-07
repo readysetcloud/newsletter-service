@@ -250,6 +250,7 @@ export const SubscribersPage: React.FC = () => {
           if (sub.botFlags?.disposableDomain) reasons.push('Disposable email domain');
           if (sub.botFlags?.suspiciousUserAgent) reasons.push('Suspicious user agent');
           if (sub.botFlags?.fastSubmission) reasons.push('Fast form submission');
+          if (sub.botFlags?.suspiciousEmailPattern) reasons.push('Suspicious email pattern (dot-trick)');
           const tooltip = reasons.length > 0
             ? `Flagged for: ${reasons.join(', ')}`
             : 'One or more bot detection flags were triggered';

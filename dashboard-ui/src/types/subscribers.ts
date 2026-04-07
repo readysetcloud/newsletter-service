@@ -26,6 +26,7 @@ export interface BotFlags {
   disposableDomain: boolean;
   suspiciousUserAgent: boolean;
   fastSubmission: boolean;
+  suspiciousEmailPattern: boolean;
 }
 
 export interface SubscriberListItem {

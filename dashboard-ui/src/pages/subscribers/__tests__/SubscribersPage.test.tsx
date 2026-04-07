@@ -12,6 +12,7 @@ vi.mock('@/services/subscriberService', () => ({
   subscriberService: {
     getCount: vi.fn(),
     getTrends: vi.fn(),
+    getList: vi.fn(),
   },
 }));
 
@@ -98,12 +99,18 @@ const renderPage = () =>
 describe('SubscribersPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: subscriber list returns empty so it doesn't interfere with other tests
+    vi.mocked(subscriberService.getList).mockResolvedValue({
+      success: true,
+      data: { subscribers: [], total: 0 },
+    });
   });
 
   // --- Loading state ---
   it('displays skeleton placeholders while data is loading', () => {
     vi.mocked(subscriberService.getCount).mockReturnValue(new Promise(() => {}));
     vi.mocked(subscriberService.getTrends).mockReturnValue(new Promise(() => {}));
+    vi.mocked(subscriberService.getList).mockReturnValue(new Promise(() => {}));
     vi.mocked(segmentService.listSegments).mockReturnValue(new Promise(() => {}));
 
     const { container } = renderPage();

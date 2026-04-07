@@ -93,6 +93,25 @@ fn default_issue_count() -> i32 {
     10
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SubscriberListResponse {
+    subscribers: Vec<SubscriberListItem>,
+    total: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SubscriberListItem {
+    email: String,
+    added_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    first_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_name: Option<String>,
+    last_engaged_issue: Option<i64>,
+}
+
 // ── Public endpoint handlers ───────────────────────────────────────────
 
 /// GET /subscribers?type=sunset
@@ -103,7 +122,7 @@ pub async fn get_sunset_candidates(event: Request) -> Result<Response<Body>, Err
     }
 }
 
-/// GET /subscribers — dispatches based on `type` query parameter
+/// GET /subscribers — returns subscriber list, or dispatches based on `type` query parameter
 pub async fn list_subscribers(event: Request) -> Result<Response<Body>, Error> {
     let query_params = event.query_string_parameters();
     match query_params.first("type") {
@@ -112,12 +131,15 @@ pub async fn list_subscribers(event: Request) -> Result<Response<Body>, Error> {
             let err = AppError::BadRequest(format!("Unknown subscriber type: {}", t));
             Ok(response::format_error_response(&err))
         }
-        None => {
-            let err = AppError::BadRequest(
-                "type query parameter is required (e.g. ?type=sunset)".to_string(),
-            );
-            Ok(response::format_error_response(&err))
-        }
+        None => get_subscriber_list(event).await,
+    }
+}
+
+/// GET /subscribers (no type param) — returns full subscriber list
+pub async fn get_subscriber_list(event: Request) -> Result<Response<Body>, Error> {
+    match handle_get_subscriber_list(event).await {
+        Ok(resp) => Ok(resp),
+        Err(e) => Ok(response::format_error_response(&e)),
     }
 }
 
@@ -255,6 +277,21 @@ async fn handle_get_sunset_candidates(event: Request) -> Result<Response<Body>, 
     )
 }
 
+async fn handle_get_subscriber_list(event: Request) -> Result<Response<Body>, AppError> {
+    let user_context = auth::get_user_context(&event)?;
+    let tenant_id = user_context
+        .tenant_id
+        .ok_or_else(|| AppError::Forbidden("Tenant access required".to_string()))?;
+
+    let subscribers_table = get_subscribers_table_name()?;
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+
+    let subscribers = query_all_subscribers(ddb_client, &subscribers_table, &tenant_id).await?;
+    let total = subscribers.len() as i64;
+
+    response::format_response(200, SubscriberListResponse { subscribers, total })
+}
+
 // ── Helper functions ───────────────────────────────────────────────────
 
 fn get_subscribers_table_name() -> Result<String, AppError> {
@@ -386,6 +423,75 @@ fn calculate_trend_summary(points: &[SubscriberTrendPoint]) -> SubscriberTrendSu
         percentage_change,
         points_returned: points.len() as i64,
     }
+}
+
+/// Query all subscribers for a tenant and return their list details.
+async fn query_all_subscribers(
+    ddb_client: &aws_sdk_dynamodb::Client,
+    table_name: &str,
+    tenant_id: &str,
+) -> Result<Vec<SubscriberListItem>, AppError> {
+    let mut subscribers = Vec::new();
+    let mut exclusive_start_key = None;
+
+    loop {
+        let mut query = ddb_client
+            .query()
+            .table_name(table_name)
+            .key_condition_expression("tenantId = :tid")
+            .expression_attribute_values(":tid", AttributeValue::S(tenant_id.to_string()));
+
+        if let Some(start_key) = exclusive_start_key.take() {
+            query = query.set_exclusive_start_key(Some(start_key));
+        }
+
+        let result = query.send().await?;
+
+        for item in result.items() {
+            let email = item
+                .get("email")
+                .and_then(|v| v.as_s().ok())
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+
+            let added_at = item
+                .get("addedAt")
+                .and_then(|v| v.as_s().ok())
+                .map(|s| s.to_string());
+
+            let first_name = item
+                .get("firstName")
+                .and_then(|v| v.as_s().ok())
+                .map(|s| s.to_string());
+
+            let last_name = item
+                .get("lastName")
+                .and_then(|v| v.as_s().ok())
+                .map(|s| s.to_string());
+
+            let last_engaged_issue = item
+                .get("lastEngagedIssue")
+                .and_then(|v| v.as_n().ok())
+                .and_then(|n| n.parse::<i64>().ok());
+
+            subscribers.push(SubscriberListItem {
+                email,
+                added_at,
+                first_name,
+                last_name,
+                last_engaged_issue,
+            });
+        }
+
+        match result.last_evaluated_key() {
+            Some(key) if !key.is_empty() => {
+                exclusive_start_key = Some(key.clone());
+            }
+            _ => break,
+        }
+    }
+
+    Ok(subscribers)
 }
 
 /// Query all subscribers for a tenant and filter for sunset candidates.

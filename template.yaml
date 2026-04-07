@@ -1011,10 +1011,21 @@ Resources:
               Action:
                 - dynamodb:PutItem
               Resource: !GetAtt SubscribersTable.Arn
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
+          TABLE_NAME: !Ref NewsletterTable
+          HONEYPOT_ACTION: block
+          DISPOSABLE_DOMAIN_ACTION: flag
+          RATE_LIMIT_THRESHOLD: "10"
+          RATE_LIMIT_WINDOW_SECONDS: "3600"
+          UNKNOWN_IP_RATE_LIMIT_THRESHOLD: "5"
+          SUSPICIOUS_UA_PATTERNS: "bot,crawler,spider,curl,wget,python,http"
+          PUBLISH_BLOCKED_EVENTS: "false"
       Events:
         FromApi:
           Type: Api

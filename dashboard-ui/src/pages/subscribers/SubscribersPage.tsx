@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, FolderOpen, AlertCircle, RefreshCw, X, ArrowUp, ArrowDown } from 'lucide-react';
+import { Users, FolderOpen, AlertCircle, RefreshCw, X, ArrowUp, ArrowDown, Bot } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/Toast';
@@ -106,6 +106,18 @@ export const SubscribersPage: React.FC = () => {
   const [createDescription, setCreateDescription] = useState('');
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+
+  const handleUnsubscribe = useCallback(async (email: string) => {
+    if (!confirm(`Remove ${email} from your subscriber list?`)) return;
+    const result = await subscriberService.unsubscribe(email);
+    if (result.success) {
+      setSubscriberList((prev) => prev.filter((s) => s.email !== email));
+      setSubscriberCount((prev) => Math.max(0, prev - 1));
+      addToast({ type: 'success', title: 'Subscriber removed', message: `${email} has been unsubscribed.` });
+    } else {
+      addToast({ type: 'error', title: 'Failed to remove subscriber', message: result.error || 'Something went wrong.' });
+    }
+  }, [addToast]);
 
   const loadTrends = useCallback(async () => {
     try {
@@ -229,6 +241,31 @@ export const SubscribersPage: React.FC = () => {
         render: (sub) => <span className="text-foreground">{sub.email}</span>,
       },
       {
+        key: 'bot',
+        header: 'Bot',
+        render: (sub) => {
+          if (!sub.suspectedBot) return null;
+          const reasons: string[] = [];
+          if (sub.botFlags?.honeypotTriggered) reasons.push('Honeypot triggered');
+          if (sub.botFlags?.disposableDomain) reasons.push('Disposable email domain');
+          if (sub.botFlags?.suspiciousUserAgent) reasons.push('Suspicious user agent');
+          if (sub.botFlags?.fastSubmission) reasons.push('Fast form submission');
+          const tooltip = reasons.length > 0
+            ? `Flagged for: ${reasons.join(', ')}`
+            : 'One or more bot detection flags were triggered';
+          return (
+            <span
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800 dark:bg-orange-900/20 dark:text-orange-400 cursor-help"
+              role="status"
+              title={tooltip}
+            >
+              <Bot className="w-3 h-3" aria-hidden="true" />
+              Suspected
+            </span>
+          );
+        },
+      },
+      {
         key: 'name',
         header: 'Name',
         className: 'hidden md:table-cell',
@@ -275,8 +312,22 @@ export const SubscribersPage: React.FC = () => {
           </span>
         ),
       },
+      {
+        key: 'actions',
+        header: '',
+        render: (sub) => (
+          <button
+            type="button"
+            onClick={() => handleUnsubscribe(sub.email)}
+            className="text-xs text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 transition-colors"
+            aria-label={`Unsubscribe ${sub.email}`}
+          >
+            Remove
+          </button>
+        ),
+      },
     ],
-    [sortDirection, toggleSortDirection, SortIcon, getEngagementLabel]
+    [sortDirection, toggleSortDirection, SortIcon, getEngagementLabel, handleUnsubscribe]
   );
 
   const segmentColumns: DataListColumn<Segment>[] = useMemo(

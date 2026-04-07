@@ -45,9 +45,44 @@ async function loadIsolated() {
 
     // event publisher
     const _mockPublishSubscriberEvent = jest.fn();
+    const _mockPublishEvent = jest.fn();
     jest.unstable_mockModule('../functions/utils/event-publisher.mjs', () => ({
       publishSubscriberEvent: _mockPublishSubscriberEvent,
+      publishEvent: _mockPublishEvent,
       EVENT_TYPES: { SUBSCRIBER_ADDED: 'SUBSCRIBER_ADDED' },
+    }));
+
+    // bot-protection
+    jest.unstable_mockModule('../functions/utils/bot-protection.mjs', () => ({
+      extractRequestMetadata: jest.fn().mockReturnValue({ sourceIp: '1.2.3.4', userAgent: 'TestAgent', unknownIp: false }),
+      isValidEmail: jest.fn().mockReturnValue(true),
+      normalizeEmail: jest.fn((e) => e.toLowerCase()),
+      evaluateHoneypot: jest.fn().mockReturnValue(false),
+      isDisposableDomain: jest.fn().mockReturnValue(false),
+      isSuspiciousUserAgent: jest.fn().mockReturnValue(false),
+      sanitizeElapsedMs: jest.fn().mockReturnValue(null),
+      isFastSubmission: jest.fn().mockReturnValue(false),
+      buildDetectionFlags: jest.fn().mockReturnValue({
+        honeypotTriggered: false, disposableDomain: false,
+        suspiciousUserAgent: false, unknownIp: false, fastSubmission: false
+      }),
+      resolvePolicy: jest.fn().mockReturnValue({
+        honeypotAction: 'block', disposableDomainAction: 'flag',
+        rateLimitThreshold: 10, rateLimitWindowSeconds: 3600
+      }),
+      evaluatePolicy: jest.fn().mockReturnValue({ blocked: false, rejectionReason: null }),
+      emitBotProtectionLog: jest.fn(),
+      disposableDomainSet: new Set(['tempmail.com']),
+    }));
+
+    // rate-limiter
+    jest.unstable_mockModule('../functions/utils/rate-limiter.mjs', () => ({
+      checkRateLimit: jest.fn().mockResolvedValue({ count: 1, limited: false, retryAfterSeconds: null }),
+    }));
+
+    // structured-logger
+    jest.unstable_mockModule('../functions/utils/structured-logger.mjs', () => ({
+      createLogger: jest.fn().mockReturnValue({ info: jest.fn(), warn: jest.fn(), error: jest.fn() }),
     }));
 
     // Import AFTER mocks, inside isolation

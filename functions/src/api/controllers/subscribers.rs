@@ -110,6 +110,18 @@ struct SubscriberListItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     last_name: Option<String>,
     last_engaged_issue: Option<i64>,
+    suspected_bot: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bot_flags: Option<BotFlags>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BotFlags {
+    honeypot_triggered: bool,
+    disposable_domain: bool,
+    suspicious_user_agent: bool,
+    fast_submission: bool,
 }
 
 // ── Public endpoint handlers ───────────────────────────────────────────
@@ -290,6 +302,65 @@ async fn handle_get_subscriber_list(event: Request) -> Result<Response<Body>, Ap
     let total = subscribers.len() as i64;
 
     response::format_response(200, SubscriberListResponse { subscribers, total })
+}
+
+/// DELETE /subscribers/:email — remove a subscriber
+pub async fn delete_subscriber(
+    event: Request,
+    email: Option<String>,
+) -> Result<Response<Body>, Error> {
+    match handle_delete_subscriber(event, email).await {
+        Ok(resp) => Ok(resp),
+        Err(e) => Ok(response::format_error_response(&e)),
+    }
+}
+
+async fn handle_delete_subscriber(
+    event: Request,
+    email: Option<String>,
+) -> Result<Response<Body>, AppError> {
+    let user_context = auth::get_user_context(&event)?;
+    let tenant_id = user_context
+        .tenant_id
+        .ok_or_else(|| AppError::Forbidden("Tenant access required".to_string()))?;
+
+    let email = email.ok_or_else(|| AppError::BadRequest("Email is required".to_string()))?;
+
+    let decoded_email = email.replace("%40", "@").to_lowercase();
+
+    let subscribers_table = get_subscribers_table_name()?;
+    let newsletter_table = get_newsletter_table_name()?;
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+
+    // Delete subscriber, return old item to check if it existed
+    let delete_result = ddb_client
+        .delete_item()
+        .table_name(&subscribers_table)
+        .key("tenantId", AttributeValue::S(tenant_id.clone()))
+        .key("email", AttributeValue::S(decoded_email.clone()))
+        .return_values(aws_sdk_dynamodb::types::ReturnValue::AllOld)
+        .send()
+        .await
+        .map_err(|e| AppError::AwsError(format!("DynamoDB DeleteItem failed: {}", e)))?;
+
+    if delete_result.attributes().is_none() || delete_result.attributes().unwrap().is_empty() {
+        return Err(AppError::NotFound("Subscriber not found".to_string()));
+    }
+
+    // Decrement subscriber count
+    let _ = ddb_client
+        .update_item()
+        .table_name(&newsletter_table)
+        .key("pk", AttributeValue::S(tenant_id.clone()))
+        .key("sk", AttributeValue::S("tenant".to_string()))
+        .update_expression("SET subscribers = if_not_exists(subscribers, :zero) - :dec")
+        .expression_attribute_values(":dec", AttributeValue::N("1".to_string()))
+        .expression_attribute_values(":zero", AttributeValue::N("0".to_string()))
+        .condition_expression("if_not_exists(subscribers, :zero) >= :dec")
+        .send()
+        .await;
+
+    response::format_response(200, serde_json::json!({ "message": "Subscriber removed" }))
 }
 
 // ── Helper functions ───────────────────────────────────────────────────
@@ -474,12 +545,40 @@ async fn query_all_subscribers(
                 .and_then(|v| v.as_n().ok())
                 .and_then(|n| n.parse::<i64>().ok());
 
+            let get_bool_flag = |key: &str| -> bool {
+                item.get(key)
+                    .and_then(|v| v.as_bool().ok())
+                    .copied()
+                    .unwrap_or(false)
+            };
+
+            let honeypot_triggered = get_bool_flag("honeypotTriggered");
+            let disposable_domain = get_bool_flag("disposableDomain");
+            let suspicious_user_agent = get_bool_flag("suspiciousUserAgent");
+            let fast_submission = get_bool_flag("fastSubmission");
+
+            let suspected_bot =
+                honeypot_triggered || disposable_domain || suspicious_user_agent || fast_submission;
+
+            let bot_flags = if suspected_bot {
+                Some(BotFlags {
+                    honeypot_triggered,
+                    disposable_domain,
+                    suspicious_user_agent,
+                    fast_submission,
+                })
+            } else {
+                None
+            };
+
             subscribers.push(SubscriberListItem {
                 email,
                 added_at,
                 first_name,
                 last_name,
                 last_engaged_issue,
+                suspected_bot,
+                bot_flags,
             });
         }
 

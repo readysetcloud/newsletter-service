@@ -122,6 +122,10 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
         (&Method::GET, "/subscribers/trends") => subscribers::get_subscriber_trends(event).await,
         (&Method::GET, "/subscribers") => subscribers::list_subscribers(event).await,
         (&Method::GET, "/subscribers/health") => subscribers::get_audience_health(event).await,
+        (&Method::DELETE, path) if path.starts_with("/subscribers/") => {
+            let email = extract_path_param(path, "/subscribers/");
+            subscribers::delete_subscriber(event, email).await
+        }
 
         // Segments endpoints
         (&Method::POST, "/segments") => segments::create_segment(event).await,
@@ -334,6 +338,7 @@ fn is_valid_api_path(path: &str) -> bool {
         || path == "/subscribers/count"
         || path == "/subscribers/trends"
         || path == "/subscribers/health"
+        || path.starts_with("/subscribers/")
         // Segments paths
         || path == "/segments"
         || path.starts_with("/segments/")

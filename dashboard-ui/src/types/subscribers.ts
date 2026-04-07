@@ -20,3 +20,16 @@ export interface SubscriberTrendsResponse {
   points: SubscriberTrendPoint[];
   summary: SubscriberTrendSummary;
 }
+
+export interface SubscriberListItem {
+  email: string;
+  addedAt: string | null;
+  firstName?: string;
+  lastName?: string;
+  lastEngagedIssue: number | null;
+}
+
+export interface SubscriberListResponse {
+  subscribers: SubscriberListItem[];
+  total: number;
+}

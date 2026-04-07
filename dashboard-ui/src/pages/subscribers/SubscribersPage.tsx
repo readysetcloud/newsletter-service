@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, FolderOpen, AlertCircle, RefreshCw, X } from 'lucide-react';
+import { Users, FolderOpen, AlertCircle, RefreshCw, X, ArrowUp, ArrowDown } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/Toast';
 import { DataList } from '@/components/ui/DataList';
+import { VirtualTable } from '@/components/ui/VirtualTable';
+import type { VirtualTableColumn } from '@/components/ui/VirtualTable';
 import { LoadingSkeleton } from '@/components/ui/Loading';
 import { EmptyState } from '@/components/ui/EmptyState';
 import type { DataListColumn } from '@/components/ui/DataList';
@@ -13,7 +15,7 @@ import { AudienceHealthWidget } from '@/components/AudienceHealthWidget';
 import { subscriberService } from '@/services/subscriberService';
 import { segmentService } from '@/services/segmentService';
 import type { Segment } from '@/services/segmentService';
-import type { SubscriberTrendsResponse } from '@/types';
+import type { SubscriberTrendsResponse, SubscriberListItem } from '@/types';
 
 const formatDate = (dateString: string) =>
   new Date(dateString).toLocaleDateString('en-US', {
@@ -89,10 +91,14 @@ export const SubscribersPage: React.FC = () => {
   const [trendsData, setTrendsData] = useState<SubscriberTrendsResponse | null>(null);
   const [subscriberCount, setSubscriberCount] = useState(0);
   const [segments, setSegments] = useState<Segment[]>([]);
+  const [subscriberList, setSubscriberList] = useState<SubscriberListItem[]>([]);
   const [trendsLoading, setTrendsLoading] = useState(true);
   const [segmentsLoading, setSegmentsLoading] = useState(true);
+  const [subscriberListLoading, setSubscriberListLoading] = useState(true);
   const [trendsError, setTrendsError] = useState<string | null>(null);
   const [segmentsError, setSegmentsError] = useState<string | null>(null);
+  const [subscriberListError, setSubscriberListError] = useState<string | null>(null);
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
 
   // Create segment modal state
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -143,14 +149,135 @@ export const SubscribersPage: React.FC = () => {
     }
   }, []);
 
+  const loadSubscriberList = useCallback(async () => {
+    try {
+      setSubscriberListLoading(true);
+      setSubscriberListError(null);
+      const response = await subscriberService.getList();
+      if (response.success && response.data) {
+        setSubscriberList(response.data.subscribers);
+      } else {
+        setSubscriberListError(response.error || 'Failed to load subscriber list');
+      }
+    } catch {
+      setSubscriberListError('Failed to load subscriber list');
+    } finally {
+      setSubscriberListLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadTrends();
     loadSegments();
-  }, [loadTrends, loadSegments]);
+    loadSubscriberList();
+  }, [loadTrends, loadSegments, loadSubscriberList]);
 
   const latestIssueNumber = trendsData?.points?.[0]?.issueNumber
     ? Number(trendsData.points[0].issueNumber)
     : 0;
+
+  const sortedSubscribers = useMemo(() => {
+    return [...subscriberList].sort((a, b) => {
+      const aTime = a.addedAt ? new Date(a.addedAt).getTime() : 0;
+      const bTime = b.addedAt ? new Date(b.addedAt).getTime() : 0;
+      return sortDirection === 'asc' ? aTime - bTime : bTime - aTime;
+    });
+  }, [subscriberList, sortDirection]);
+
+  const toggleSortDirection = useCallback(() => {
+    setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+  }, []);
+
+  const SortIcon = sortDirection === 'asc' ? ArrowUp : ArrowDown;
+
+  const getEngagementLabel = useCallback(
+    (lastEngagedIssue: number | null): { text: string; className: string } => {
+      if (!latestIssueNumber || latestIssueNumber === 0) {
+        return { text: '—', className: 'text-muted-foreground' };
+      }
+      if (lastEngagedIssue === null) {
+        return {
+          text: 'Dormant',
+          className: 'bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-400',
+        };
+      }
+      if (lastEngagedIssue >= latestIssueNumber - 1) {
+        return {
+          text: 'Highly Engaged',
+          className: 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400',
+        };
+      }
+      if (lastEngagedIssue >= latestIssueNumber - 9) {
+        return {
+          text: 'Occasional',
+          className: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-400',
+        };
+      }
+      return {
+        text: 'Dormant',
+        className: 'bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-400',
+      };
+    },
+    [latestIssueNumber]
+  );
+
+  const subscriberColumns: VirtualTableColumn<SubscriberListItem>[] = useMemo(
+    () => [
+      {
+        key: 'email',
+        header: 'Email',
+        render: (sub) => <span className="text-foreground">{sub.email}</span>,
+      },
+      {
+        key: 'name',
+        header: 'Name',
+        className: 'hidden md:table-cell',
+        headerClassName: 'hidden md:table-cell',
+        render: (sub) => (
+          <span className="text-muted-foreground">
+            {[sub.firstName, sub.lastName].filter(Boolean).join(' ') || '—'}
+          </span>
+        ),
+      },
+      {
+        key: 'engagement',
+        header: 'Engagement',
+        className: 'hidden sm:block',
+        headerClassName: 'hidden sm:block',
+        render: (sub) => {
+          const label = getEngagementLabel(sub.lastEngagedIssue);
+          return (
+            <span
+              className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${label.className}`}
+              role="status"
+            >
+              {label.text}
+            </span>
+          );
+        },
+      },
+      {
+        key: 'subscribed',
+        header: (
+          <button
+            type="button"
+            onClick={toggleSortDirection}
+            className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
+            aria-label={`Sort by subscription date, currently ${sortDirection === 'asc' ? 'ascending' : 'descending'}`}
+          >
+            Subscribed
+            <SortIcon className="w-3.5 h-3.5" aria-hidden="true" />
+          </button>
+        ),
+        render: (sub) => (
+          <span className="text-muted-foreground">
+            {sub.addedAt ? formatDate(sub.addedAt) : '—'}
+          </span>
+        ),
+      },
+    ],
+    [sortDirection, toggleSortDirection, SortIcon, getEngagementLabel]
+  );
 
   const segmentColumns: DataListColumn<Segment>[] = useMemo(
     () => [
@@ -305,7 +432,37 @@ export const SubscribersPage: React.FC = () => {
         )}
       </div>
 
-      {/* Row 3: Segment Management */}
+      {/* Row 3: Subscriber List */}
+      {subscriberListLoading ? (
+        <Card padding="md">
+          <div className="h-6 w-32 bg-muted rounded animate-pulse mb-4" />
+          <LoadingSkeleton lines={5} className="mt-2" />
+        </Card>
+      ) : subscriberListError ? (
+        <Card padding="md">
+          <h3 className="text-lg font-semibold text-foreground mb-4">Subscribers</h3>
+          <SectionError message={subscriberListError} onRetry={loadSubscriberList} />
+        </Card>
+      ) : sortedSubscribers.length === 0 ? (
+        <Card padding="md">
+          <h3 className="text-lg font-semibold text-foreground mb-4">Subscribers</h3>
+          <p className="text-sm text-muted-foreground">No subscribers yet.</p>
+        </Card>
+      ) : (
+        <Card padding="md">
+          <h3 className="text-lg font-semibold text-foreground mb-4">Subscribers</h3>
+          <VirtualTable<SubscriberListItem>
+            items={sortedSubscribers}
+            getKey={(sub) => sub.email}
+            ariaLabel="Subscribers list"
+            rowHeight={44}
+            maxHeight={440}
+            columns={subscriberColumns}
+          />
+        </Card>
+      )}
+
+      {/* Row 4: Segment Management */}
       {segmentsLoading ? (
         <SegmentListSkeleton />
       ) : segmentsError ? (

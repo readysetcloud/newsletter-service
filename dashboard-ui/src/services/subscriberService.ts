@@ -1,6 +1,6 @@
 import { apiClient } from './api';
 import { validateSubscriberCountResponse, validateSubscriberTrendsResponse } from '@/utils/dataValidation';
-import type { ApiResponse, SubscriberCountResponse, SubscriberTrendsResponse } from '@/types';
+import type { ApiResponse, SubscriberCountResponse, SubscriberTrendsResponse, SubscriberListResponse } from '@/types';
 
 export class SubscriberService {
   async getCount(): Promise<ApiResponse<SubscriberCountResponse>> {
@@ -27,6 +27,10 @@ export class SubscriberService {
     }
 
     return response;
+  }
+
+  async getList(): Promise<ApiResponse<SubscriberListResponse>> {
+    return apiClient.get<SubscriberListResponse>('/subscribers');
   }
 }
 

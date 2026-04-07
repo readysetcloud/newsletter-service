@@ -1573,51 +1573,86 @@ paths:
 
   /subscribers:
     get:
-      summary: List subscribers by type
-      description: Returns subscriber data filtered by the `type` query parameter. Currently supports `type=sunset` to identify dormant subscribers for sunset policy evaluation.
+      summary: List subscribers
+      description: >
+        Returns subscriber data for the authenticated tenant. When called without
+        the `type` query parameter, returns the full subscriber list with email,
+        name, and subscription date. When `type=sunset` is provided, returns
+        dormant subscribers for sunset policy evaluation.
       tags:
         - Subscribers
       parameters:
         - name: type
           in: query
-          required: true
+          required: false
           schema:
             type: string
             enum: [sunset]
-          description: The type of subscriber query to perform
+          description: Optional subscriber query type. Omit for full list, use `sunset` for dormant subscribers.
         - name: latestIssueNumber
           in: query
-          required: true
+          required: false
           schema:
             type: integer
-          description: The most recently published issue number
+          description: The most recently published issue number (required when type=sunset)
         - name: threshold
           in: query
           required: false
           schema:
             type: integer
             default: 10
-          description: Number of issues without engagement before a subscriber is considered dormant
+          description: Number of issues without engagement before a subscriber is considered dormant (used with type=sunset)
       responses:
         "200":
-          description: List of dormant subscribers matching sunset criteria
+          description: Subscriber data. Shape depends on whether `type` is provided.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  dormantSubscribers:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        emailHash:
-                          type: string
-                          description: SHA-256 hash of the subscriber email
-                        lastEngagedIssue:
-                          type: integer
-                          nullable: true
-                          description: Issue number of the subscriber's most recent engagement, or null if never engaged
+                oneOf:
+                  - type: object
+                    description: Full subscriber list (no type param)
+                    properties:
+                      subscribers:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            email:
+                              type: string
+                              description: Subscriber email address
+                            addedAt:
+                              type: string
+                              nullable: true
+                              format: date-time
+                              description: ISO 8601 date when the subscriber was added
+                            firstName:
+                              type: string
+                              description: Subscriber first name
+                            lastName:
+                              type: string
+                              description: Subscriber last name
+                            lastEngagedIssue:
+                              type: integer
+                              nullable: true
+                              description: Issue number of the subscriber's most recent engagement, or null if never engaged
+                      total:
+                        type: integer
+                        description: Total number of subscribers returned
+                  - type: object
+                    description: Dormant subscribers (type=sunset)
+                    properties:
+                      dormantSubscribers:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            emailHash:
+                              type: string
+                              description: SHA-256 hash of the subscriber email
+                            lastEngagedIssue:
+                              type: integer
+                              nullable: true
+                              description: Issue number of the subscriber's most recent engagement, or null if never engaged
         "400":
           $ref: "#/components/responses/BadRequest"
         "403":

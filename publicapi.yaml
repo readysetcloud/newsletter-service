@@ -196,6 +196,13 @@ components:
           type: string
         lastName:
           type: string
+        website:
+          type: string
+          description: Honeypot field — should be empty for legitimate signups
+        elapsedMs:
+          type: integer
+          minimum: 0
+          description: Client-reported time between form render and submit (ms)
 
   responses:
     Created:

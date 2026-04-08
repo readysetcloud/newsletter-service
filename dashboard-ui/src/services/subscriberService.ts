@@ -32,6 +32,10 @@ export class SubscriberService {
   async getList(): Promise<ApiResponse<SubscriberListResponse>> {
     return apiClient.get<SubscriberListResponse>('/subscribers');
   }
+
+  async unsubscribe(email: string): Promise<ApiResponse<void>> {
+    return apiClient.delete(`/subscribers/${encodeURIComponent(email)}`);
+  }
 }
 
 export const subscriberService = new SubscriberService();

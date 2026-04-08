@@ -21,12 +21,22 @@ export interface SubscriberTrendsResponse {
   summary: SubscriberTrendSummary;
 }
 
+export interface BotFlags {
+  honeypotTriggered: boolean;
+  disposableDomain: boolean;
+  suspiciousUserAgent: boolean;
+  fastSubmission: boolean;
+  suspiciousEmailPattern: boolean;
+}
+
 export interface SubscriberListItem {
   email: string;
   addedAt: string | null;
   firstName?: string;
   lastName?: string;
   lastEngagedIssue: number | null;
+  suspectedBot?: boolean;
+  botFlags?: BotFlags;
 }
 
 export interface SubscriberListResponse {

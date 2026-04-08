@@ -2542,6 +2542,21 @@ components:
         subscribers:
           type: integer
           description: Subscriber count at send time
+        unsubscribes:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Number of subscriber unsubscribes attributed to this issue
+        cleaned:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Number of cleaned (bounced) subscribers attributed to this issue
+        manualRemovals:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Number of manual subscriber removals attributed to this issue
         analytics:
           $ref: "#/components/schemas/IssueAnalytics"
 
@@ -2665,6 +2680,21 @@ components:
           type: integer
           format: int64
           description: Subscriber count at send time
+        unsubscribes:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Number of subscriber unsubscribes attributed to this issue
+        cleaned:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Number of cleaned (bounced) subscribers attributed to this issue
+        manualRemovals:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Number of manual subscriber removals attributed to this issue
 
     TrendAggregates:
       type: object

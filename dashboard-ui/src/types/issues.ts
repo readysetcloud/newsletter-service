@@ -17,6 +17,9 @@ export interface IssueStats {
   bounces: number;
   complaints: number;
   subscribers: number;
+  unsubscribes?: number;
+  cleaned?: number;
+  manualRemovals?: number;
   analytics?: IssueAnalytics;
 }
 
@@ -47,6 +50,9 @@ export interface IssueMetrics {
   bounces: number;
   complaints: number;
   subscribers: number;
+  unsubscribes?: number;
+  cleaned?: number;
+  manualRemovals?: number;
 }
 
 export interface IssueTrendItem {

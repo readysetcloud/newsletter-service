@@ -3,11 +3,15 @@ import { jest, describe, it, expect, beforeEach } from '@jest/globals';
 let handler;
 let ddbSend;
 let eventBridgeSend;
+let mockGetMostRecentPublishedIssue;
+let mockIncrementIssueCounter;
 
 const loadIsolated = async () => {
   await jest.isolateModulesAsync(async () => {
     ddbSend = jest.fn();
     eventBridgeSend = jest.fn();
+    mockGetMostRecentPublishedIssue = jest.fn();
+    mockIncrementIssueCounter = jest.fn();
 
     jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
       DynamoDBClient: jest.fn(() => ({ send: ddbSend })),
@@ -65,6 +69,11 @@ const loadIsolated = async () => {
       }),
     }));
 
+    jest.unstable_mockModule('../functions/utils/issue-attribution.mjs', () => ({
+      getMostRecentPublishedIssue: mockGetMostRecentPublishedIssue,
+      incrementIssueCounter: mockIncrementIssueCounter,
+    }));
+
     ({ handler } = await import('../functions/subscribers/clean-bounced-subscribers.mjs'));
   });
 };
@@ -77,8 +86,174 @@ describe('clean-bounced-subscribers', () => {
     await loadIsolated();
   });
 
-  describe('GSI backfill', () => {
-    it('should add GSI attributes when updating cleaned count', async () => {
+  describe('attribution-based cleaned counter', () => {
+    it('should call getMostRecentPublishedIssue once and incrementIssueCounter per successful removal', async () => {
+      mockGetMostRecentPublishedIssue.mockResolvedValue({ pk: 'tenant123#42', issueNumber: 42 });
+      mockIncrementIssueCounter.mockResolvedValue(undefined);
+
+      ddbSend
+        // loadStatsRecord(currentIssue)
+        .mockResolvedValueOnce({
+          Item: {
+            pk: { S: 'tenant123#42' },
+            sk: { S: 'stats' },
+            failedAddresses: { L: [{ S: 'bounce1@example.com' }, { S: 'bounce2@example.com' }] }
+          }
+        })
+        // loadStatsRecord(previousIssue)
+        .mockResolvedValueOnce({
+          Item: {
+            pk: { S: 'tenant123#41' },
+            sk: { S: 'stats' },
+            failedAddresses: { L: [{ S: 'bounce1@example.com' }, { S: 'bounce2@example.com' }] }
+          }
+        })
+        // DeleteItemCommand for bounce1 (successful)
+        .mockResolvedValueOnce({ Attributes: { email: { S: 'bounce1@example.com' } } })
+        // DeleteItemCommand for bounce2 (successful)
+        .mockResolvedValueOnce({ Attributes: { email: { S: 'bounce2@example.com' } } })
+        // updateSubscriberCount query
+        .mockResolvedValueOnce({ Count: 10 })
+        // updateSubscriberCount update
+        .mockResolvedValueOnce({})
+        // eventBridge send
+        ;
+      eventBridgeSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          currentIssue: 'tenant123#42',
+          previousIssue: 'tenant123#41',
+          tenantId: { id: 'tenant123' }
+        }
+      };
+
+      await handler(event);
+
+      // Attribution lookup called once
+      expect(mockGetMostRecentPublishedIssue).toHaveBeenCalledTimes(1);
+      expect(mockGetMostRecentPublishedIssue).toHaveBeenCalledWith('tenant123');
+
+      // incrementIssueCounter called once per successful removal
+      expect(mockIncrementIssueCounter).toHaveBeenCalledTimes(2);
+      expect(mockIncrementIssueCounter).toHaveBeenCalledWith('tenant123#42', 'cleaned');
+    });
+
+    it('should not increment counter when no published issue found', async () => {
+      mockGetMostRecentPublishedIssue.mockResolvedValue(null);
+
+      ddbSend
+        .mockResolvedValueOnce({
+          Item: {
+            pk: { S: 'tenant123#42' },
+            sk: { S: 'stats' },
+            failedAddresses: { L: [{ S: 'bounce1@example.com' }] }
+          }
+        })
+        .mockResolvedValueOnce({
+          Item: {
+            pk: { S: 'tenant123#41' },
+            sk: { S: 'stats' },
+            failedAddresses: { L: [{ S: 'bounce1@example.com' }] }
+          }
+        })
+        .mockResolvedValueOnce({ Attributes: { email: { S: 'bounce1@example.com' } } })
+        .mockResolvedValueOnce({ Count: 10 })
+        .mockResolvedValueOnce({});
+      eventBridgeSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          currentIssue: 'tenant123#42',
+          previousIssue: 'tenant123#41',
+          tenantId: { id: 'tenant123' }
+        }
+      };
+
+      await handler(event);
+
+      expect(mockGetMostRecentPublishedIssue).toHaveBeenCalledTimes(1);
+      expect(mockIncrementIssueCounter).not.toHaveBeenCalled();
+    });
+
+    it('should not fail cleanup when incrementIssueCounter throws', async () => {
+      mockGetMostRecentPublishedIssue.mockResolvedValue({ pk: 'tenant123#42', issueNumber: 42 });
+      mockIncrementIssueCounter.mockRejectedValue(new Error('DynamoDB error'));
+
+      ddbSend
+        .mockResolvedValueOnce({
+          Item: {
+            pk: { S: 'tenant123#42' },
+            sk: { S: 'stats' },
+            failedAddresses: { L: [{ S: 'bounce1@example.com' }] }
+          }
+        })
+        .mockResolvedValueOnce({
+          Item: {
+            pk: { S: 'tenant123#41' },
+            sk: { S: 'stats' },
+            failedAddresses: { L: [{ S: 'bounce1@example.com' }] }
+          }
+        })
+        .mockResolvedValueOnce({ Attributes: { email: { S: 'bounce1@example.com' } } })
+        .mockResolvedValueOnce({ Count: 10 })
+        .mockResolvedValueOnce({});
+      eventBridgeSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          currentIssue: 'tenant123#42',
+          previousIssue: 'tenant123#41',
+          tenantId: { id: 'tenant123' }
+        }
+      };
+
+      // Should not throw despite incrementIssueCounter failing
+      await expect(handler(event)).resolves.not.toThrow();
+
+      expect(mockIncrementIssueCounter).toHaveBeenCalledTimes(1);
+    });
+
+    it('should not fail cleanup when getMostRecentPublishedIssue throws', async () => {
+      mockGetMostRecentPublishedIssue.mockRejectedValue(new Error('Query failed'));
+
+      ddbSend
+        .mockResolvedValueOnce({
+          Item: {
+            pk: { S: 'tenant123#42' },
+            sk: { S: 'stats' },
+            failedAddresses: { L: [{ S: 'bounce1@example.com' }] }
+          }
+        })
+        .mockResolvedValueOnce({
+          Item: {
+            pk: { S: 'tenant123#41' },
+            sk: { S: 'stats' },
+            failedAddresses: { L: [{ S: 'bounce1@example.com' }] }
+          }
+        })
+        .mockResolvedValueOnce({ Attributes: { email: { S: 'bounce1@example.com' } } })
+        .mockResolvedValueOnce({ Count: 10 })
+        .mockResolvedValueOnce({});
+      eventBridgeSend.mockResolvedValueOnce({});
+
+      const event = {
+        detail: {
+          currentIssue: 'tenant123#42',
+          previousIssue: 'tenant123#41',
+          tenantId: { id: 'tenant123' }
+        }
+      };
+
+      await expect(handler(event)).resolves.not.toThrow();
+
+      expect(mockIncrementIssueCounter).not.toHaveBeenCalled();
+    });
+
+    it('should not count already-absent subscribers and not increment for them', async () => {
+      mockGetMostRecentPublishedIssue.mockResolvedValue({ pk: 'tenant123#42', issueNumber: 42 });
+      mockIncrementIssueCounter.mockResolvedValue(undefined);
+
       ddbSend
         .mockResolvedValueOnce({
           Item: {
@@ -94,12 +269,13 @@ describe('clean-bounced-subscribers', () => {
             failedAddresses: { L: [{ S: 'bounce1@example.com' }, { S: 'bounce2@example.com' }] }
           }
         })
+        // bounce1 already absent (no Attributes returned)
         .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({ Count: 0 })
-        .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({})
+        // bounce2 successfully deleted
+        .mockResolvedValueOnce({ Attributes: { email: { S: 'bounce2@example.com' } } })
+        .mockResolvedValueOnce({ Count: 10 })
         .mockResolvedValueOnce({});
+      eventBridgeSend.mockResolvedValueOnce({});
 
       const event = {
         detail: {
@@ -111,59 +287,17 @@ describe('clean-bounced-subscribers', () => {
 
       await handler(event);
 
-      const updateCalls = ddbSend.mock.calls.filter(call => call[0].__type === 'UpdateItem');
-      const cleanedUpdate = updateCalls.find(call =>
-        call[0].UpdateExpression && call[0].UpdateExpression.includes('cleaned')
-      );
-
-      expect(cleanedUpdate).toBeDefined();
-      expect(cleanedUpdate[0].UpdateExpression).toContain('GSI1PK = if_not_exists(GSI1PK, :gsi1pk)');
-      expect(cleanedUpdate[0].UpdateExpression).toContain('GSI1SK = if_not_exists(GSI1SK, :gsi1sk)');
-      expect(cleanedUpdate[0].ExpressionAttributeValues[':gsi1pk'].S).toBe('tenant123#issue');
-      expect(cleanedUpdate[0].ExpressionAttributeValues[':gsi1sk'].S).toBe('00042');
+      // Only 1 increment for the actually-removed subscriber
+      expect(mockIncrementIssueCounter).toHaveBeenCalledTimes(1);
+      expect(mockIncrementIssueCounter).toHaveBeenCalledWith('tenant123#42', 'cleaned');
     });
 
-    it('should pad issue numbers correctly', async () => {
-      ddbSend
-        .mockResolvedValueOnce({
-          Item: {
-            pk: { S: 'tenant456#7' },
-            sk: { S: 'stats' },
-            failedAddresses: { L: [{ S: 'bounce@example.com' }] }
-          }
-        })
-        .mockResolvedValueOnce({
-          Item: {
-            pk: { S: 'tenant456#6' },
-            sk: { S: 'stats' },
-            failedAddresses: { L: [{ S: 'bounce@example.com' }] }
-          }
-        })
-        .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({ Count: 0 })
-        .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({});
+    it('should proceed with cleanup even when cleaned field already exists on stats record', async () => {
+      // With the old code, having `cleaned` defined would skip cleanup (idempotency).
+      // The new code no longer checks for this — it always proceeds.
+      mockGetMostRecentPublishedIssue.mockResolvedValue({ pk: 'tenant123#42', issueNumber: 42 });
+      mockIncrementIssueCounter.mockResolvedValue(undefined);
 
-      const event = {
-        detail: {
-          currentIssue: 'tenant456#7',
-          previousIssue: 'tenant456#6',
-          tenantId: { id: 'tenant456' }
-        }
-      };
-
-      await handler(event);
-
-      const updateCalls = ddbSend.mock.calls.filter(call => call[0].__type === 'UpdateItem');
-      const cleanedUpdate = updateCalls.find(call =>
-        call[0].UpdateExpression && call[0].UpdateExpression.includes('cleaned')
-      );
-
-      expect(cleanedUpdate[0].ExpressionAttributeValues[':gsi1sk'].S).toBe('00007');
-    });
-
-    it('should skip cleanup if already completed', async () => {
       ddbSend
         .mockResolvedValueOnce({
           Item: {
@@ -179,42 +313,11 @@ describe('clean-bounced-subscribers', () => {
             sk: { S: 'stats' },
             failedAddresses: { L: [{ S: 'bounce@example.com' }] }
           }
-        });
-
-      const event = {
-        detail: {
-          currentIssue: 'tenant123#42',
-          previousIssue: 'tenant123#41',
-          tenantId: { id: 'tenant123' }
-        }
-      };
-
-      await handler(event);
-
-      const deleteCalls = ddbSend.mock.calls.filter(call => call[0].__type === 'DeleteItem');
-      expect(deleteCalls.length).toBe(0);
-    });
-
-    it('should not count already-absent subscribers as cleaned', async () => {
-      ddbSend
-        .mockResolvedValueOnce({
-          Item: {
-            pk: { S: 'tenant123#42' },
-            sk: { S: 'stats' },
-            failedAddresses: { L: [{ S: 'bounce1@example.com' }, { S: 'bounce2@example.com' }] }
-          }
         })
-        .mockResolvedValueOnce({
-          Item: {
-            pk: { S: 'tenant123#41' },
-            sk: { S: 'stats' },
-            failedAddresses: { L: [{ S: 'bounce1@example.com' }, { S: 'bounce2@example.com' }] }
-          }
-        })
-        .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({ Count: 0 })
+        .mockResolvedValueOnce({ Attributes: { email: { S: 'bounce@example.com' } } })
+        .mockResolvedValueOnce({ Count: 10 })
         .mockResolvedValueOnce({});
+      eventBridgeSend.mockResolvedValueOnce({});
 
       const event = {
         detail: {
@@ -226,15 +329,10 @@ describe('clean-bounced-subscribers', () => {
 
       await handler(event);
 
-      const cleanedUpdateCall = ddbSend.mock.calls.find(call =>
-        call[0].__type === 'UpdateItem' &&
-        call[0].UpdateExpression &&
-        call[0].UpdateExpression.includes('cleaned')
-      );
-
-      expect(cleanedUpdateCall).toBeDefined();
-      expect(cleanedUpdateCall[0].ExpressionAttributeValues[':count'].N).toBe('0');
-      expect(eventBridgeSend).not.toHaveBeenCalled();
+      // Cleanup should proceed — delete was called
+      const deleteCalls = ddbSend.mock.calls.filter(call => call[0].__type === 'DeleteItem');
+      expect(deleteCalls.length).toBe(1);
+      expect(mockIncrementIssueCounter).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -47,3 +47,6 @@ export type { QuickNavigationProps, NavigationSection } from './QuickNavigation'
 
 export { DeliverabilityHealthCard } from './DeliverabilityHealthCard';
 export type { DeliverabilityHealthCardProps } from './DeliverabilityHealthCard';
+
+export { SubscriberMetricsPanel } from './SubscriberMetricsPanel';
+export type { SubscriberMetricsPanelProps } from './SubscriberMetricsPanel';

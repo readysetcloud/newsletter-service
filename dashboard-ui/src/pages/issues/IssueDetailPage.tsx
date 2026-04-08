@@ -7,6 +7,7 @@ import { useToast } from '../../components/ui/Toast';
 import { IssueStatusBadge } from '../../components/issues/IssueStatusBadge';
 import { MarkdownPreview } from '../../components/issues/MarkdownPreview';
 import { DeleteIssueDialog } from '../../components/issues/DeleteIssueDialog';
+import { SubscriberMetricsPanel } from '../../components/issues/SubscriberMetricsPanel';
 import {
   IssueDetailSkeleton,
   InsightsHeroSkeleton,
@@ -528,6 +529,9 @@ export const IssueDetailPage: React.FC = () => {
       bounces: issue.stats.bounces,
       complaints: issue.stats.complaints,
       subscribers: issue.stats.subscribers,
+      unsubscribes: issue.stats.unsubscribes ?? 0,
+      cleaned: issue.stats.cleaned ?? 0,
+      manualRemovals: issue.stats.manualRemovals ?? 0,
     };
   }, [issue]);
 
@@ -858,6 +862,20 @@ export const IssueDetailPage: React.FC = () => {
                 </AsyncErrorBoundary>
               </FadeIn>
             </Suspense>
+          </div>
+        )}
+
+        {/* Subscriber Metrics Panel - Show for published issues only */}
+        {isPublished && issue.stats && (
+          <div className="mb-4 sm:mb-6">
+            <FadeIn variant="fade" speed="normal">
+              <SubscriberMetricsPanel
+                unsubscribes={issue.stats.unsubscribes}
+                cleaned={issue.stats.cleaned}
+                manualRemovals={issue.stats.manualRemovals}
+                subscribers={issue.stats.subscribers}
+              />
+            </FadeIn>
           </div>
         )}
 

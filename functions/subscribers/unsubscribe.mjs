@@ -51,9 +51,10 @@ export const handler = async (event) => {
       userAgent
     };
 
-    success = await unsubscribeUser(tenantId, emailAddress, 'encrypted-link', metadata);
+    const result = await unsubscribeUser(tenantId, emailAddress, 'encrypted-link', metadata);
+    success = result.success;
 
-    if (success) {
+    if (result.actuallyRemoved) {
       try {
         const recentIssue = await getMostRecentPublishedIssue(tenantId);
         if (recentIssue) {
@@ -64,7 +65,7 @@ export const handler = async (event) => {
       } catch (attrErr) {
         console.warn('Failed to increment unsubscribe counter:', { tenantId, error: attrErr.message });
       }
-    } else {
+    } else if (!result.success) {
       await notifyAdminOfFailure(tenantId, emailAddress, 'encrypted-link', metadata);
     }
   } catch (err) {

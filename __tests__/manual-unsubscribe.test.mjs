@@ -49,7 +49,7 @@ describe('manual-unsubscribe handler', () => {
   });
 
   test('valid email submission returns success JSON', async () => {
-    unsubscribeUser.mockResolvedValue(true);
+    unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: true });
 
     const event = {
       pathParameters: { tenant: 'test-tenant' },
@@ -126,8 +126,8 @@ describe('manual-unsubscribe handler', () => {
     expect(unsubscribeUser).not.toHaveBeenCalled();
   });
 
-  test('already-unsubscribed email returns success', async () => {
-    unsubscribeUser.mockResolvedValue(true);
+  test('already-unsubscribed email returns success but does not increment counter', async () => {
+    unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: false });
 
     const event = {
       pathParameters: { tenant: 'test-tenant' },
@@ -157,10 +157,12 @@ describe('manual-unsubscribe handler', () => {
         userAgent: 'Mozilla/5.0'
       })
     );
+    expect(getMostRecentPublishedIssue).not.toHaveBeenCalled();
+    expect(incrementIssueCounter).not.toHaveBeenCalled();
   });
 
   test('unsubscribeUser failure returns success for privacy', async () => {
-    unsubscribeUser.mockResolvedValue(false);
+    unsubscribeUser.mockResolvedValue({ success: false, actuallyRemoved: false });
 
     const event = {
       pathParameters: { tenant: 'test-tenant' },
@@ -208,7 +210,7 @@ describe('manual-unsubscribe handler', () => {
   });
 
   test('email with special characters is validated correctly', async () => {
-    unsubscribeUser.mockResolvedValue(true);
+    unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: true });
 
     const event = {
       pathParameters: { tenant: 'test-tenant' },
@@ -264,7 +266,7 @@ describe('manual-unsubscribe handler', () => {
   });
 
   test('extracts IP from X-Forwarded-For header when available', async () => {
-    unsubscribeUser.mockResolvedValue(true);
+    unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: true });
 
     const event = {
       pathParameters: { tenant: 'test-tenant' },
@@ -290,7 +292,7 @@ describe('manual-unsubscribe handler', () => {
   });
 
   test('handles missing IP and user agent gracefully', async () => {
-    unsubscribeUser.mockResolvedValue(true);
+    unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: true });
 
     const event = {
       pathParameters: { tenant: 'test-tenant' },
@@ -312,7 +314,7 @@ describe('manual-unsubscribe handler', () => {
   });
 
   test('increments unsubscribes counter on successful unsubscribe', async () => {
-    unsubscribeUser.mockResolvedValue(true);
+    unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: true });
     getMostRecentPublishedIssue.mockResolvedValue({ pk: 'test-tenant#5', issueNumber: 5 });
 
     const event = {
@@ -329,7 +331,7 @@ describe('manual-unsubscribe handler', () => {
   });
 
   test('skips counter increment when no published issue found', async () => {
-    unsubscribeUser.mockResolvedValue(true);
+    unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: true });
     getMostRecentPublishedIssue.mockResolvedValue(null);
 
     const event = {
@@ -347,7 +349,7 @@ describe('manual-unsubscribe handler', () => {
   });
 
   test('does not increment counter when unsubscribe fails', async () => {
-    unsubscribeUser.mockResolvedValue(false);
+    unsubscribeUser.mockResolvedValue({ success: false, actuallyRemoved: false });
 
     const event = {
       pathParameters: { tenant: 'test-tenant' },
@@ -363,7 +365,7 @@ describe('manual-unsubscribe handler', () => {
   });
 
   test('attribution failure does not fail the unsubscribe operation', async () => {
-    unsubscribeUser.mockResolvedValue(true);
+    unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: true });
     getMostRecentPublishedIssue.mockRejectedValue(new Error('DynamoDB error'));
 
     const event = {

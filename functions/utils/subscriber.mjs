@@ -84,7 +84,7 @@ export const listSubscribers = async (tenantId, options = {}) => {
  * @param {string} emailAddress - Email address to unsubscribe
  * @param {string} method - Unsubscribe method ('encrypted-link', 'manual-form', 'complaint')
  * @param {object} metadata - Optional metadata (ipAddress, userAgent, etc.)
- * @returns {boolean} True if successful or already unsubscribed, false if unknown error
+ * @returns {Promise<{success: boolean, actuallyRemoved: boolean}>} success=true if no error, actuallyRemoved=true only when a subscriber record was deleted
  */
 export const unsubscribeUser = async (tenantId, emailAddress, method = 'encrypted-link', metadata = {}) => {
   try {
@@ -101,8 +101,10 @@ export const unsubscribeUser = async (tenantId, emailAddress, method = 'encrypte
       ReturnValues: 'ALL_OLD'
     }));
 
+    const actuallyRemoved = !!deleteResult.Attributes;
+
     // Only decrement count if a subscriber was actually removed
-    if (deleteResult.Attributes) {
+    if (actuallyRemoved) {
       await ddb.send(new UpdateItemCommand({
         TableName: process.env.TABLE_NAME,
         Key: marshall({
@@ -123,13 +125,14 @@ export const unsubscribeUser = async (tenantId, emailAddress, method = 'encrypte
       console.log('Unsubscribe skipped - subscriber not found:', { tenantId, emailAddress });
     }
 
-    return true;
+    return { success: true, actuallyRemoved };
 
   } catch (error) {
     // If the condition fails (count would go negative), log but still return success
+    // The subscriber was deleted but count couldn't be decremented
     if (error.name === 'ConditionalCheckFailedException') {
       console.warn('Subscriber count already at minimum:', { tenantId });
-      return true;
+      return { success: true, actuallyRemoved: true };
     }
 
     console.error('Unsubscribe failed:', {
@@ -137,7 +140,7 @@ export const unsubscribeUser = async (tenantId, emailAddress, method = 'encrypte
       email: '[REDACTED]',
       error: error.message
     });
-    return false;
+    return { success: false, actuallyRemoved: false };
   }
 };
 

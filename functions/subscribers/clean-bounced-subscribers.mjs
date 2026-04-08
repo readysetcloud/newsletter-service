@@ -2,13 +2,10 @@ import { DynamoDBClient, GetItemCommand, UpdateItemCommand, DeleteItemCommand, Q
 import { EventBridgeClient, PutEventsCommand } from "@aws-sdk/client-eventbridge";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { getTenant, sendWithRetry, throttle } from "../utils/helpers.mjs";
+import { getMostRecentPublishedIssue, incrementIssueCounter } from "../utils/issue-attribution.mjs";
 
 const ddb = new DynamoDBClient();
 const eventBridge = new EventBridgeClient();
-
-const padIssueNumber = (issueNumber) => {
-  return String(issueNumber).padStart(5, '0');
-};
 
 export const handler = async (event) => {
   try {
@@ -36,12 +33,6 @@ export const handler = async (event) => {
       return;
     }
 
-    // Check if cleanup already ran for this issue (idempotency)
-    if (currentRecord.cleaned !== undefined) {
-      console.log(`Cleanup already completed for issue ${currentIssue}, skipping`);
-      return;
-    }
-
     const currentFailedAddresses = currentRecord.failedAddresses || [];
     const lastFailedAddresses = previousRecord.failedAddresses || [];
 
@@ -59,6 +50,17 @@ export const handler = async (event) => {
 
     // Get tenant information
     const tenant = await getTenant(tenantId.id);
+
+    // Look up the most recently published issue for attribution (once, before the loop)
+    let attributionIssue = null;
+    try {
+      attributionIssue = await getMostRecentPublishedIssue(tenantId.id);
+      if (!attributionIssue) {
+        console.warn('No published issue found for tenant, cleaned counts will not be attributed');
+      }
+    } catch (err) {
+      console.warn('Failed to look up most recent published issue for attribution:', err);
+    }
 
     // Remove each persistent failure from Subscribers table using throttle to avoid rate limits
     let successfulRemovals = 0;
@@ -78,6 +80,15 @@ export const handler = async (event) => {
           successfulRemovals++;
           removedAddresses.push(emailAddress);
           console.log(`Successfully removed ${emailAddress} from Subscribers table`);
+
+          // Increment cleaned counter on the attributed issue
+          if (attributionIssue) {
+            try {
+              await incrementIssueCounter(attributionIssue.pk, 'cleaned');
+            } catch (err) {
+              console.warn(`Failed to increment cleaned counter for ${emailAddress}:`, err);
+            }
+          }
         } else {
           console.log(`Skipped ${emailAddress}; address was already absent from Subscribers table`);
         }
@@ -94,9 +105,6 @@ export const handler = async (event) => {
 
     // Update subscriber count by getting actual count from Subscribers table
     const subscriberCount = await updateSubscriberCount(tenantId.id);
-
-    // Update the current issue stats record with cleaned count (use actual successful removals)
-    await updateCleanedCount(currentIssue, successfulRemovals);
 
     // Send notification email to tenant if any subscribers were removed
     if (successfulRemovals > 0) {
@@ -175,30 +183,6 @@ const updateSubscriberCount = async (tenantId) => {
   } catch (error) {
     console.error('Error updating subscriber count:', error);
     return '???';
-  }
-};
-
-const updateCleanedCount = async (issueId, cleanedCount) => {
-  try {
-    const [tenantId, issueNumber] = issueId.split('#');
-
-    await ddb.send(new UpdateItemCommand({
-      TableName: process.env.TABLE_NAME,
-      Key: marshall({
-        pk: issueId,
-        sk: 'stats'
-      }),
-      UpdateExpression: 'SET cleaned = :count, GSI1PK = if_not_exists(GSI1PK, :gsi1pk), GSI1SK = if_not_exists(GSI1SK, :gsi1sk)',
-      ExpressionAttributeValues: marshall({
-        ':count': cleanedCount,
-        ':gsi1pk': `${tenantId}#issue`,
-        ':gsi1sk': padIssueNumber(parseInt(issueNumber))
-      })
-    }));
-
-    console.log(`Updated issue ${issueId} stats with cleaned count: ${cleanedCount}`);
-  } catch (error) {
-    console.error(`Error updating cleaned count for issue ${issueId}:`, error);
   }
 };
 

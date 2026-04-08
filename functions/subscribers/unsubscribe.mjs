@@ -5,6 +5,7 @@ import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { decrypt, getTenant } from "../utils/helpers.mjs";
 import { unsubscribeUser } from "../utils/subscriber.mjs";
+import { getMostRecentPublishedIssue, incrementIssueCounter } from "../utils/issue-attribution.mjs";
 
 const ddb = new DynamoDBClient();
 const eventBridge = new EventBridgeClient();
@@ -50,9 +51,21 @@ export const handler = async (event) => {
       userAgent
     };
 
-    success = await unsubscribeUser(tenantId, emailAddress, 'encrypted-link', metadata);
+    const result = await unsubscribeUser(tenantId, emailAddress, 'encrypted-link', metadata);
+    success = result.success;
 
-    if (!success) {
+    if (result.actuallyRemoved) {
+      try {
+        const recentIssue = await getMostRecentPublishedIssue(tenantId);
+        if (recentIssue) {
+          await incrementIssueCounter(recentIssue.pk, 'unsubscribes');
+        } else {
+          console.warn('No published issue found for unsubscribe attribution:', { tenantId });
+        }
+      } catch (attrErr) {
+        console.warn('Failed to increment unsubscribe counter:', { tenantId, error: attrErr.message });
+      }
+    } else if (!result.success) {
       await notifyAdminOfFailure(tenantId, emailAddress, 'encrypted-link', metadata);
     }
   } catch (err) {

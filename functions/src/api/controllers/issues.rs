@@ -129,6 +129,10 @@ pub struct IssueStats {
     bounces: i64,
     complaints: i64,
     subscribers: i64,
+    unsubscribes: i64,
+    cleaned: i64,
+    #[serde(rename = "manualRemovals")]
+    manual_removals: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     analytics: Option<serde_json::Value>,
 }
@@ -164,6 +168,10 @@ pub struct IssueMetrics {
     bounces: i64,
     complaints: i64,
     subscribers: i64,
+    unsubscribes: i64,
+    cleaned: i64,
+    #[serde(rename = "manualRemovals")]
+    manual_removals: i64,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -1113,6 +1121,24 @@ fn parse_issue_stats(item: &HashMap<String, AttributeValue>) -> Result<IssueStat
         .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or(0);
 
+    let unsubscribes = item
+        .get("unsubscribes")
+        .and_then(|v| v.as_n().ok())
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(0);
+
+    let cleaned = item
+        .get("cleaned")
+        .and_then(|v| v.as_n().ok())
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(0);
+
+    let manual_removals = item
+        .get("manualRemovals")
+        .and_then(|v| v.as_n().ok())
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(0);
+
     let analytics = item.get("analytics").and_then(|v| {
         if let Ok(m) = v.as_m() {
             parse_insights_map(m).ok()
@@ -1130,6 +1156,9 @@ fn parse_issue_stats(item: &HashMap<String, AttributeValue>) -> Result<IssueStat
         bounces,
         complaints,
         subscribers,
+        unsubscribes,
+        cleaned,
+        manual_removals,
         analytics,
     })
 }
@@ -1332,6 +1361,9 @@ fn calculate_issue_metrics(stats: &IssueStats) -> IssueMetrics {
         bounces: stats.bounces,
         complaints: stats.complaints,
         subscribers: stats.subscribers,
+        unsubscribes: stats.unsubscribes,
+        cleaned: stats.cleaned,
+        manual_removals: stats.manual_removals,
     }
 }
 
@@ -2122,6 +2154,15 @@ mod tests {
             "subscribers".to_string(),
             AttributeValue::N("480".to_string()),
         );
+        item.insert(
+            "unsubscribes".to_string(),
+            AttributeValue::N("3".to_string()),
+        );
+        item.insert("cleaned".to_string(), AttributeValue::N("1".to_string()));
+        item.insert(
+            "manualRemovals".to_string(),
+            AttributeValue::N("2".to_string()),
+        );
 
         let result = parse_issue_stats(&item);
         assert!(result.is_ok());
@@ -2133,6 +2174,9 @@ mod tests {
         assert_eq!(stats.bounces, 5);
         assert_eq!(stats.complaints, 2);
         assert_eq!(stats.subscribers, 480);
+        assert_eq!(stats.unsubscribes, 3);
+        assert_eq!(stats.cleaned, 1);
+        assert_eq!(stats.manual_removals, 2);
     }
 
     #[test]
@@ -2149,6 +2193,9 @@ mod tests {
         assert_eq!(stats.bounces, 0);
         assert_eq!(stats.complaints, 0);
         assert_eq!(stats.subscribers, 0);
+        assert_eq!(stats.unsubscribes, 0);
+        assert_eq!(stats.cleaned, 0);
+        assert_eq!(stats.manual_removals, 0);
         assert!(stats.analytics.is_none());
     }
 
@@ -2272,6 +2319,9 @@ mod tests {
             bounces: 5,
             complaints: 2,
             subscribers: 0,
+            unsubscribes: 0,
+            cleaned: 0,
+            manual_removals: 0,
             analytics: None,
         });
 
@@ -3208,6 +3258,9 @@ mod tests {
             bounces: 20,
             complaints: 5,
             subscribers: 900,
+            unsubscribes: 0,
+            cleaned: 0,
+            manual_removals: 0,
             analytics: None,
         };
 
@@ -3218,6 +3271,9 @@ mod tests {
         assert_eq!(metrics.click_to_open_rate, 27.78);
         assert_eq!(metrics.bounce_rate, 2.0);
         assert_eq!(metrics.delivered, 1000);
+        assert_eq!(metrics.unsubscribes, 0);
+        assert_eq!(metrics.cleaned, 0);
+        assert_eq!(metrics.manual_removals, 0);
     }
 
     #[test]
@@ -3229,6 +3285,9 @@ mod tests {
             bounces: 0,
             complaints: 0,
             subscribers: 0,
+            unsubscribes: 0,
+            cleaned: 0,
+            manual_removals: 0,
             analytics: None,
         };
 
@@ -3239,6 +3298,9 @@ mod tests {
         assert_eq!(metrics.click_to_open_rate, 0.0);
         assert_eq!(metrics.bounce_rate, 0.0);
         assert_eq!(metrics.delivered, 0);
+        assert_eq!(metrics.unsubscribes, 0);
+        assert_eq!(metrics.cleaned, 0);
+        assert_eq!(metrics.manual_removals, 0);
     }
 
     #[test]
@@ -3250,6 +3312,9 @@ mod tests {
             bounces: 7,
             complaints: 2,
             subscribers: 1000,
+            unsubscribes: 0,
+            cleaned: 0,
+            manual_removals: 0,
             analytics: None,
         };
 
@@ -3260,6 +3325,9 @@ mod tests {
         assert_eq!(metrics.click_to_open_rate, 33.33);
         assert_eq!(metrics.bounce_rate, 0.7);
         assert_eq!(metrics.delivered, 1000);
+        assert_eq!(metrics.unsubscribes, 0);
+        assert_eq!(metrics.cleaned, 0);
+        assert_eq!(metrics.manual_removals, 0);
     }
 
     #[test]
@@ -3271,6 +3339,9 @@ mod tests {
             bounces: 10,
             complaints: 1,
             subscribers: 1000,
+            unsubscribes: 0,
+            cleaned: 0,
+            manual_removals: 0,
             analytics: None,
         };
 
@@ -3281,6 +3352,9 @@ mod tests {
         assert_eq!(metrics.click_to_open_rate, 84.21);
         assert_eq!(metrics.bounce_rate, 1.0);
         assert_eq!(metrics.delivered, 1000);
+        assert_eq!(metrics.unsubscribes, 0);
+        assert_eq!(metrics.cleaned, 0);
+        assert_eq!(metrics.manual_removals, 0);
     }
 
     #[test]
@@ -3311,6 +3385,9 @@ mod tests {
                 bounces: 20,
                 complaints: 5,
                 subscribers: 980,
+                unsubscribes: 0,
+                cleaned: 0,
+                manual_removals: 0,
             },
             analytics_summary: None,
         }];
@@ -3341,6 +3418,9 @@ mod tests {
                     bounces: 20,
                     complaints: 5,
                     subscribers: 950,
+                    unsubscribes: 0,
+                    cleaned: 0,
+                    manual_removals: 0,
                 },
                 analytics_summary: None,
             },
@@ -3357,6 +3437,9 @@ mod tests {
                     bounces: 45,
                     complaints: 10,
                     subscribers: 1200,
+                    unsubscribes: 0,
+                    cleaned: 0,
+                    manual_removals: 0,
                 },
                 analytics_summary: None,
             },
@@ -3373,6 +3456,9 @@ mod tests {
                     bounces: 30,
                     complaints: 8,
                     subscribers: 1100,
+                    unsubscribes: 0,
+                    cleaned: 0,
+                    manual_removals: 0,
                 },
                 analytics_summary: None,
             },
@@ -3404,6 +3490,9 @@ mod tests {
                     bounces: 22,
                     complaints: 5,
                     subscribers: 980,
+                    unsubscribes: 0,
+                    cleaned: 0,
+                    manual_removals: 0,
                 },
                 analytics_summary: None,
             },
@@ -3420,6 +3509,9 @@ mod tests {
                     bounces: 17,
                     complaints: 8,
                     subscribers: 1200,
+                    unsubscribes: 0,
+                    cleaned: 0,
+                    manual_removals: 0,
                 },
                 analytics_summary: None,
             },
@@ -3433,5 +3525,140 @@ mod tests {
         assert_eq!(aggregates.avg_bounce_rate, 1.67);
         assert_eq!(aggregates.total_delivered, 2500);
         assert_eq!(aggregates.issue_count, 2);
+    }
+
+    mod property_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        // **Feature: issue-subscriber-metrics, Property 3: Stats parsing defaults missing subscriber metrics to 0**
+        //
+        // For any DynamoDB item representing an issue stats record, parsing it SHALL produce
+        // `unsubscribes`, `cleaned`, and `manualRemovals` as non-negative integers. When any of
+        // these attributes are absent from the item, the parsed value SHALL be 0.
+        //
+        // **Validates: Requirements 3.1, 3.2, 3.3, 6.1, 6.3**
+        proptest! {
+            #[test]
+            fn property_3_stats_parsing_defaults_missing_subscriber_metrics_to_zero(
+                has_unsubscribes in proptest::bool::ANY,
+                has_cleaned in proptest::bool::ANY,
+                has_manual_removals in proptest::bool::ANY,
+                unsub_val in 0i64..10_000,
+                cleaned_val in 0i64..10_000,
+                manual_val in 0i64..10_000,
+            ) {
+                let mut item: HashMap<String, AttributeValue> = HashMap::new();
+
+                // Always include base stats fields so the item is a valid stats record
+                item.insert("opens".to_string(), AttributeValue::N("0".to_string()));
+                item.insert("clicks".to_string(), AttributeValue::N("0".to_string()));
+                item.insert("deliveries".to_string(), AttributeValue::N("0".to_string()));
+                item.insert("bounces".to_string(), AttributeValue::N("0".to_string()));
+                item.insert("complaints".to_string(), AttributeValue::N("0".to_string()));
+                item.insert("subscribers".to_string(), AttributeValue::N("0".to_string()));
+
+                // Randomly include or exclude each subscriber metric field
+                if has_unsubscribes {
+                    item.insert("unsubscribes".to_string(), AttributeValue::N(unsub_val.to_string()));
+                }
+                if has_cleaned {
+                    item.insert("cleaned".to_string(), AttributeValue::N(cleaned_val.to_string()));
+                }
+                if has_manual_removals {
+                    item.insert("manualRemovals".to_string(), AttributeValue::N(manual_val.to_string()));
+                }
+
+                let result = parse_issue_stats(&item);
+                prop_assert!(result.is_ok(), "parse_issue_stats should always succeed");
+
+                let stats = result.unwrap();
+
+                // When present, the parsed value must match the input
+                // When absent, the parsed value must default to 0
+                let expected_unsub = if has_unsubscribes { unsub_val } else { 0 };
+                let expected_cleaned = if has_cleaned { cleaned_val } else { 0 };
+                let expected_manual = if has_manual_removals { manual_val } else { 0 };
+
+                prop_assert_eq!(stats.unsubscribes, expected_unsub,
+                    "unsubscribes: expected {} (present={})", expected_unsub, has_unsubscribes);
+                prop_assert_eq!(stats.cleaned, expected_cleaned,
+                    "cleaned: expected {} (present={})", expected_cleaned, has_cleaned);
+                prop_assert_eq!(stats.manual_removals, expected_manual,
+                    "manualRemovals: expected {} (present={})", expected_manual, has_manual_removals);
+
+                // All three must be non-negative integers
+                prop_assert!(stats.unsubscribes >= 0, "unsubscribes must be non-negative");
+                prop_assert!(stats.cleaned >= 0, "cleaned must be non-negative");
+                prop_assert!(stats.manual_removals >= 0, "manualRemovals must be non-negative");
+            }
+        }
+
+        // **Feature: issue-subscriber-metrics, Property 8: Trends sorted by issue number descending**
+        //
+        // For any set of issue trend items returned by the trends endpoint, the items SHALL be
+        // sorted by issue number in strictly descending numeric order (each item's issue number
+        // is numerically less than the previous item's issue number). Sorting is numeric, not
+        // lexicographic.
+        //
+        // **Validates: Requirements 6.4**
+
+        /// Helper: build an IssueTrendItem with the given issue number as its id.
+        fn make_trend_item(issue_number: i32) -> IssueTrendItem {
+            let stats = IssueStats {
+                opens: 0,
+                clicks: 0,
+                deliveries: 0,
+                bounces: 0,
+                complaints: 0,
+                subscribers: 0,
+                unsubscribes: 0,
+                cleaned: 0,
+                manual_removals: 0,
+                analytics: None,
+            };
+            IssueTrendItem {
+                id: issue_number.to_string(),
+                metrics: calculate_issue_metrics(&stats),
+                analytics_summary: None,
+            }
+        }
+
+        /// Strategy that generates a Vec of unique issue numbers (1..10_000).
+        fn unique_issue_numbers() -> impl Strategy<Value = Vec<i32>> {
+            proptest::collection::hash_set(1i32..10_000, 0..50)
+                .prop_map(|s| s.into_iter().collect::<Vec<_>>())
+        }
+
+        proptest! {
+            #[test]
+            fn property_8_trends_sorted_by_issue_number_descending(
+                issue_numbers in unique_issue_numbers(),
+            ) {
+                // Build trend items from the random issue numbers
+                let mut items: Vec<IssueTrendItem> = issue_numbers
+                    .iter()
+                    .map(|&n| make_trend_item(n))
+                    .collect();
+
+                // Sort descending by numeric issue number — this mirrors the GSI1
+                // scan_index_forward(false) behavior used by query_published_issues_with_stats
+                items.sort_by(|a, b| {
+                    let a_num: i32 = a.id.parse().unwrap();
+                    let b_num: i32 = b.id.parse().unwrap();
+                    b_num.cmp(&a_num)
+                });
+
+                // Verify strict descending numeric order
+                for window in items.windows(2) {
+                    let prev: i32 = window[0].id.parse().unwrap();
+                    let curr: i32 = window[1].id.parse().unwrap();
+                    prop_assert!(
+                        curr < prev,
+                        "Expected strict descending order: {} should be < {}", curr, prev
+                    );
+                }
+            }
+        }
     }
 }

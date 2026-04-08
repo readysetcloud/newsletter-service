@@ -1,6 +1,7 @@
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { unsubscribeUser } from "../utils/subscriber.mjs";
 import { getTenant } from "../utils/helpers.mjs";
+import { getMostRecentPublishedIssue, incrementIssueCounter } from "../utils/issue-attribution.mjs";
 
 const eventBridge = new EventBridgeClient();
 
@@ -62,9 +63,20 @@ export const handler = async (event) => {
       userAgent
     };
 
-    const success = await unsubscribeUser(tenantId, emailAddress, 'manual-form', metadata);
+    const result = await unsubscribeUser(tenantId, emailAddress, 'manual-form', metadata);
 
-    if (!success) {
+    if (result.actuallyRemoved) {
+      try {
+        const recentIssue = await getMostRecentPublishedIssue(tenantId);
+        if (recentIssue) {
+          await incrementIssueCounter(recentIssue.pk, 'unsubscribes');
+        } else {
+          console.warn('No published issue found for unsubscribe attribution:', { tenantId });
+        }
+      } catch (attrErr) {
+        console.warn('Failed to increment unsubscribe counter:', { tenantId, error: attrErr.message });
+      }
+    } else if (!result.success) {
       await notifyAdminOfFailure(tenant, emailAddress, 'manual-form', metadata);
     }
 

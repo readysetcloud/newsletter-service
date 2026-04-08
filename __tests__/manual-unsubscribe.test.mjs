@@ -3,11 +3,15 @@ import { jest, describe, test, expect, beforeEach } from '@jest/globals';
 let handler;
 let unsubscribeUser;
 let getTenant;
+let getMostRecentPublishedIssue;
+let incrementIssueCounter;
 
 async function loadIsolated() {
   await jest.isolateModulesAsync(async () => {
     unsubscribeUser = jest.fn();
     getTenant = jest.fn();
+    getMostRecentPublishedIssue = jest.fn();
+    incrementIssueCounter = jest.fn();
 
     jest.unstable_mockModule('../functions/utils/subscriber.mjs', () => ({
       unsubscribeUser,
@@ -17,10 +21,15 @@ async function loadIsolated() {
       getTenant,
     }));
 
+    jest.unstable_mockModule('../functions/utils/issue-attribution.mjs', () => ({
+      getMostRecentPublishedIssue,
+      incrementIssueCounter,
+    }));
+
     ({ handler } = await import('../functions/subscribers/manual-unsubscribe.mjs'));
   });
 
-  return { handler, unsubscribeUser, getTenant };
+  return { handler, unsubscribeUser, getTenant, getMostRecentPublishedIssue, incrementIssueCounter };
 }
 
 describe('manual-unsubscribe handler', () => {
@@ -34,10 +43,13 @@ describe('manual-unsubscribe handler', () => {
       brandName: 'Test Brand',
       createdBy: 'admin@example.com'
     });
+
+    getMostRecentPublishedIssue.mockResolvedValue({ pk: 'test-tenant#5', issueNumber: 5 });
+    incrementIssueCounter.mockResolvedValue();
   });
 
   test('valid email submission returns success JSON', async () => {
-    unsubscribeUser.mockResolvedValue(true);
+    unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: true });
 
     const event = {
       pathParameters: { tenant: 'test-tenant' },
@@ -114,8 +126,8 @@ describe('manual-unsubscribe handler', () => {
     expect(unsubscribeUser).not.toHaveBeenCalled();
   });
 
-  test('already-unsubscribed email returns success', async () => {
-    unsubscribeUser.mockResolvedValue(true);
+  test('already-unsubscribed email returns success but does not increment counter', async () => {
+    unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: false });
 
     const event = {
       pathParameters: { tenant: 'test-tenant' },
@@ -145,10 +157,12 @@ describe('manual-unsubscribe handler', () => {
         userAgent: 'Mozilla/5.0'
       })
     );
+    expect(getMostRecentPublishedIssue).not.toHaveBeenCalled();
+    expect(incrementIssueCounter).not.toHaveBeenCalled();
   });
 
   test('unsubscribeUser failure returns success for privacy', async () => {
-    unsubscribeUser.mockResolvedValue(false);
+    unsubscribeUser.mockResolvedValue({ success: false, actuallyRemoved: false });
 
     const event = {
       pathParameters: { tenant: 'test-tenant' },
@@ -196,7 +210,7 @@ describe('manual-unsubscribe handler', () => {
   });
 
   test('email with special characters is validated correctly', async () => {
-    unsubscribeUser.mockResolvedValue(true);
+    unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: true });
 
     const event = {
       pathParameters: { tenant: 'test-tenant' },
@@ -252,7 +266,7 @@ describe('manual-unsubscribe handler', () => {
   });
 
   test('extracts IP from X-Forwarded-For header when available', async () => {
-    unsubscribeUser.mockResolvedValue(true);
+    unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: true });
 
     const event = {
       pathParameters: { tenant: 'test-tenant' },
@@ -278,7 +292,7 @@ describe('manual-unsubscribe handler', () => {
   });
 
   test('handles missing IP and user agent gracefully', async () => {
-    unsubscribeUser.mockResolvedValue(true);
+    unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: true });
 
     const event = {
       pathParameters: { tenant: 'test-tenant' },
@@ -297,5 +311,74 @@ describe('manual-unsubscribe handler', () => {
         userAgent: 'unknown'
       })
     );
+  });
+
+  test('increments unsubscribes counter on successful unsubscribe', async () => {
+    unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: true });
+    getMostRecentPublishedIssue.mockResolvedValue({ pk: 'test-tenant#5', issueNumber: 5 });
+
+    const event = {
+      pathParameters: { tenant: 'test-tenant' },
+      body: JSON.stringify({ email: 'test@example.com' }),
+      requestContext: { identity: { sourceIp: '192.168.1.1' } },
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    };
+
+    await handler(event);
+
+    expect(getMostRecentPublishedIssue).toHaveBeenCalledWith('test-tenant');
+    expect(incrementIssueCounter).toHaveBeenCalledWith('test-tenant#5', 'unsubscribes');
+  });
+
+  test('skips counter increment when no published issue found', async () => {
+    unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: true });
+    getMostRecentPublishedIssue.mockResolvedValue(null);
+
+    const event = {
+      pathParameters: { tenant: 'test-tenant' },
+      body: JSON.stringify({ email: 'test@example.com' }),
+      requestContext: { identity: { sourceIp: '192.168.1.1' } },
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    };
+
+    const result = await handler(event);
+
+    expect(result.statusCode).toBe(200);
+    expect(getMostRecentPublishedIssue).toHaveBeenCalledWith('test-tenant');
+    expect(incrementIssueCounter).not.toHaveBeenCalled();
+  });
+
+  test('does not increment counter when unsubscribe fails', async () => {
+    unsubscribeUser.mockResolvedValue({ success: false, actuallyRemoved: false });
+
+    const event = {
+      pathParameters: { tenant: 'test-tenant' },
+      body: JSON.stringify({ email: 'test@example.com' }),
+      requestContext: { identity: { sourceIp: '192.168.1.1' } },
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    };
+
+    await handler(event);
+
+    expect(getMostRecentPublishedIssue).not.toHaveBeenCalled();
+    expect(incrementIssueCounter).not.toHaveBeenCalled();
+  });
+
+  test('attribution failure does not fail the unsubscribe operation', async () => {
+    unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: true });
+    getMostRecentPublishedIssue.mockRejectedValue(new Error('DynamoDB error'));
+
+    const event = {
+      pathParameters: { tenant: 'test-tenant' },
+      body: JSON.stringify({ email: 'test@example.com' }),
+      requestContext: { identity: { sourceIp: '192.168.1.1' } },
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    };
+
+    const result = await handler(event);
+
+    expect(result.statusCode).toBe(200);
+    const body = JSON.parse(result.body);
+    expect(body.message).toBe('Successfully unsubscribed');
   });
 });

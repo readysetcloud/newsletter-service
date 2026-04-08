@@ -366,10 +366,127 @@ async fn handle_delete_subscriber(
         .await
         .map_err(|e| AppError::AwsError(format!("Failed to decrement subscriber count: {}", e)))?;
 
+    // Increment manualRemovals counter on the most recently published issue (fire-and-forget)
+    match get_most_recent_published_issue(ddb_client, &newsletter_table, &tenant_id).await {
+        Ok(Some(issue_pk)) => {
+            if let Err(e) =
+                increment_issue_counter(ddb_client, &newsletter_table, &issue_pk, "manualRemovals")
+                    .await
+            {
+                tracing::warn!(
+                    error = ?e,
+                    tenant_id = %tenant_id,
+                    issue_pk = %issue_pk,
+                    "Failed to increment manualRemovals counter"
+                );
+            }
+        }
+        Ok(None) => {
+            tracing::warn!(
+                tenant_id = %tenant_id,
+                "No published issue found for manualRemovals attribution"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = ?e,
+                tenant_id = %tenant_id,
+                "Failed to look up most recent published issue for manualRemovals attribution"
+            );
+        }
+    }
+
     response::format_response(200, serde_json::json!({ "message": "Subscriber removed" }))
 }
 
 // ── Helper functions ───────────────────────────────────────────────────
+
+/// Build the GSI1PK value used for issue attribution lookups.
+fn build_issue_gsi1pk(tenant_id: &str) -> String {
+    format!("{}#issue", tenant_id)
+}
+
+/// Extract the `pk` from the first item in a page that has a `publishedAt` attribute.
+/// Returns `Some(pk)` if a published issue is found, `None` otherwise.
+fn find_published_issue_pk(
+    items: &[std::collections::HashMap<String, AttributeValue>],
+) -> Option<String> {
+    for item in items {
+        if item.contains_key("publishedAt") {
+            if let Some(pk_attr) = item.get("pk") {
+                if let Ok(pk) = pk_attr.as_s() {
+                    return Some(pk.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Query GSI1 for the most recently published issue for a tenant.
+/// Paginates in pages of 10 until a published issue (with `publishedAt`) is found
+/// or items are exhausted. Returns Some(issue_pk) or None if no published issues exist.
+async fn get_most_recent_published_issue(
+    ddb_client: &aws_sdk_dynamodb::Client,
+    table_name: &str,
+    tenant_id: &str,
+) -> Result<Option<String>, AppError> {
+    let gsi1pk = build_issue_gsi1pk(tenant_id);
+    let page_size = 10;
+    let mut exclusive_start_key = None;
+
+    loop {
+        let mut query = ddb_client
+            .query()
+            .table_name(table_name)
+            .index_name("GSI1")
+            .key_condition_expression("GSI1PK = :gsi1pk")
+            .expression_attribute_values(":gsi1pk", AttributeValue::S(gsi1pk.clone()))
+            .scan_index_forward(false)
+            .limit(page_size);
+
+        if let Some(start_key) = exclusive_start_key.take() {
+            query = query.set_exclusive_start_key(Some(start_key));
+        }
+
+        let result = query.send().await?;
+
+        if let Some(pk) = find_published_issue_pk(result.items()) {
+            return Ok(Some(pk));
+        }
+
+        match result.last_evaluated_key() {
+            Some(key) if !key.is_empty() => {
+                exclusive_start_key = Some(key.clone());
+            }
+            _ => break,
+        }
+    }
+
+    Ok(None)
+}
+
+/// Atomically increment a counter on an issue stats record using DynamoDB ADD.
+/// No read-modify-write — a single atomic operation.
+async fn increment_issue_counter(
+    ddb_client: &aws_sdk_dynamodb::Client,
+    table_name: &str,
+    issue_pk: &str,
+    counter_name: &str,
+) -> Result<(), AppError> {
+    ddb_client
+        .update_item()
+        .table_name(table_name)
+        .key("pk", AttributeValue::S(issue_pk.to_string()))
+        .key("sk", AttributeValue::S("stats".to_string()))
+        .update_expression("ADD #counter :val")
+        .expression_attribute_names("#counter", counter_name)
+        .expression_attribute_values(":val", AttributeValue::N("1".to_string()))
+        .send()
+        .await?;
+
+    Ok(())
+}
 
 fn get_subscribers_table_name() -> Result<String, AppError> {
     env::var("SUBSCRIBERS_TABLE_NAME")
@@ -1157,6 +1274,89 @@ mod tests {
         let percentage =
             |count: i64| -> f64 { ((count as f64 / total as f64) * 1000.0).round() / 10.0 };
         assert_eq!(percentage(1), 33.3);
+    }
+
+    // ── Attribution helper tests ──────────────────────────────────────
+
+    fn make_issue_item(pk: &str, published_at: Option<&str>) -> HashMap<String, AttributeValue> {
+        let mut item = HashMap::new();
+        item.insert("pk".to_string(), AttributeValue::S(pk.to_string()));
+        if let Some(pa) = published_at {
+            item.insert("publishedAt".to_string(), AttributeValue::S(pa.to_string()));
+        }
+        item
+    }
+
+    #[test]
+    fn test_build_issue_gsi1pk_format() {
+        assert_eq!(build_issue_gsi1pk("tenant-abc"), "tenant-abc#issue");
+        assert_eq!(build_issue_gsi1pk("t1"), "t1#issue");
+    }
+
+    #[test]
+    fn test_find_published_issue_pk_single_published() {
+        let items = vec![make_issue_item("tenant-1#42", Some("2024-06-01T00:00:00Z"))];
+        assert_eq!(
+            find_published_issue_pk(&items),
+            Some("tenant-1#42".to_string())
+        );
+    }
+
+    #[test]
+    fn test_find_published_issue_pk_no_items() {
+        let items: Vec<HashMap<String, AttributeValue>> = vec![];
+        assert_eq!(find_published_issue_pk(&items), None);
+    }
+
+    #[test]
+    fn test_find_published_issue_pk_only_drafts() {
+        let items = vec![
+            make_issue_item("tenant-1#3", None),
+            make_issue_item("tenant-1#2", None),
+        ];
+        assert_eq!(find_published_issue_pk(&items), None);
+    }
+
+    #[test]
+    fn test_find_published_issue_pk_drafts_then_published() {
+        // Simulates GSI1 descending: drafts at top, published further down
+        let items = vec![
+            make_issue_item("tenant-1#5", None),
+            make_issue_item("tenant-1#4", None),
+            make_issue_item("tenant-1#3", Some("2024-05-01T00:00:00Z")),
+            make_issue_item("tenant-1#2", Some("2024-04-01T00:00:00Z")),
+        ];
+        // Should return the first published item encountered (issue #3)
+        assert_eq!(
+            find_published_issue_pk(&items),
+            Some("tenant-1#3".to_string())
+        );
+    }
+
+    #[test]
+    fn test_find_published_issue_pk_published_item_missing_pk() {
+        // Edge case: item has publishedAt but no pk attribute
+        let mut item = HashMap::new();
+        item.insert(
+            "publishedAt".to_string(),
+            AttributeValue::S("2024-06-01T00:00:00Z".to_string()),
+        );
+        let items = vec![item];
+        assert_eq!(find_published_issue_pk(&items), None);
+    }
+
+    #[test]
+    fn test_find_published_issue_pk_returns_first_match() {
+        // Multiple published items — should return the first one (highest issue number
+        // since GSI1 is queried descending)
+        let items = vec![
+            make_issue_item("tenant-1#10", Some("2024-06-01T00:00:00Z")),
+            make_issue_item("tenant-1#8", Some("2024-05-01T00:00:00Z")),
+        ];
+        assert_eq!(
+            find_published_issue_pk(&items),
+            Some("tenant-1#10".to_string())
+        );
     }
 
     #[test]

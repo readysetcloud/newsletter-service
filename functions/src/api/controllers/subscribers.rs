@@ -1,6 +1,7 @@
 use aws_sdk_dynamodb::types::AttributeValue;
 use lambda_http::{Body, Error, Request, RequestExt, Response};
 use newsletter::admin::{auth, aws_clients, error::AppError, response};
+use percent_encoding::percent_decode_str;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::env;
@@ -327,7 +328,10 @@ async fn handle_delete_subscriber(
 
     let email = email.ok_or_else(|| AppError::BadRequest("Email is required".to_string()))?;
 
-    let decoded_email = email.replace("%40", "@").to_lowercase();
+    let decoded_email = percent_decode_str(&email)
+        .decode_utf8()
+        .map_err(|e| AppError::BadRequest(format!("Invalid email encoding: {}", e)))?
+        .to_lowercase();
 
     let subscribers_table = get_subscribers_table_name()?;
     let newsletter_table = get_newsletter_table_name()?;
@@ -349,7 +353,7 @@ async fn handle_delete_subscriber(
     }
 
     // Decrement subscriber count
-    let _ = ddb_client
+    ddb_client
         .update_item()
         .table_name(&newsletter_table)
         .key("pk", AttributeValue::S(tenant_id.clone()))
@@ -359,7 +363,8 @@ async fn handle_delete_subscriber(
         .expression_attribute_values(":zero", AttributeValue::N("0".to_string()))
         .condition_expression("if_not_exists(subscribers, :zero) >= :dec")
         .send()
-        .await;
+        .await
+        .map_err(|e| AppError::AwsError(format!("Failed to decrement subscriber count: {}", e)))?;
 
     response::format_response(200, serde_json::json!({ "message": "Subscriber removed" }))
 }

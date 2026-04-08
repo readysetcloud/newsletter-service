@@ -33,17 +33,42 @@ export async function checkRateLimit(tenantId, sourceIp, policy) {
       pk: { S: `ratelimit#${tenantId}#${sourceIp}` },
       sk: { S: 'counter' }
     },
-    UpdateExpression: 'ADD #count :inc SET #ttl = if_not_exists(#ttl, :ttl)',
+    UpdateExpression: 'SET #count = if_not_exists(#count, :zero) + :inc, #ttl = if_not_exists(#ttl, :ttl)',
+    ConditionExpression: 'attribute_not_exists(#ttl) OR #ttl > :now',
     ExpressionAttributeNames: {
       '#count': 'count',
       '#ttl': 'ttl'
     },
     ExpressionAttributeValues: {
       ':inc': { N: '1' },
-      ':ttl': { N: String(ttlValue) }
+      ':zero': { N: '0' },
+      ':ttl': { N: String(ttlValue) },
+      ':now': { N: String(nowSeconds) }
     },
     ReturnValues: 'ALL_NEW'
-  }));
+  })).catch(async (err) => {
+    if (err.name === 'ConditionalCheckFailedException') {
+      // TTL expired but item not yet removed — reset the window
+      return ddb.send(new UpdateItemCommand({
+        TableName: process.env.TABLE_NAME,
+        Key: {
+          pk: { S: `ratelimit#${tenantId}#${sourceIp}` },
+          sk: { S: 'counter' }
+        },
+        UpdateExpression: 'SET #count = :inc, #ttl = :ttl',
+        ExpressionAttributeNames: {
+          '#count': 'count',
+          '#ttl': 'ttl'
+        },
+        ExpressionAttributeValues: {
+          ':inc': { N: '1' },
+          ':ttl': { N: String(ttlValue) }
+        },
+        ReturnValues: 'ALL_NEW'
+      }));
+    }
+    throw err;
+  });
 
   const count = parseInt(result.Attributes.count.N, 10);
   const itemTtl = parseInt(result.Attributes.ttl.N, 10);

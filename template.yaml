@@ -58,6 +58,7 @@ Metadata:
     External: []
     Loader:
       - .hbs=text
+      - .json=json
 
 Conditions:
   DeployProductionResources: !Equals [!Ref Environment, "production"]

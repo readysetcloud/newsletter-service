@@ -320,6 +320,32 @@ const trackLinkClick = async (issueId, link, ipAddress) => {
   }));
 };
 
+const getStoredLinkPosition = async (issueId, link) => {
+  try {
+    const result = await ddb.send(new GetItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({
+        pk: issueId,
+        sk: `link#${hash(link)}`
+      }),
+      ProjectionExpression: '#position',
+      ExpressionAttributeNames: {
+        '#position': 'position'
+      }
+    }));
+
+    if (!result.Item) {
+      return null;
+    }
+
+    const linkRecord = unmarshall(result.Item);
+    return typeof linkRecord.position === 'number' ? linkRecord.position : null;
+  } catch (err) {
+    console.error('Failed to fetch link position', { issueId, link, error: err.message });
+    return null;
+  }
+};
+
 const captureClickEvent = async (issueId, subscriberEmail, clickEvent) => {
   const clickedAt = clickEvent?.timestamp ? new Date(clickEvent.timestamp) : new Date();
   const timestamp = clickedAt.toISOString();
@@ -356,6 +382,8 @@ const captureClickEvent = async (issueId, subscriberEmail, clickEvent) => {
     ? Math.floor((clickedAt - new Date(publishedAt)) / 1000)
     : null;
 
+  const linkPosition = await getStoredLinkPosition(issueId, linkUrl);
+
   const clickEventRecord = {
     pk: issueId,
     sk: `click#${timestamp}#${subscriberEmailHash}#${linkId}#${eventId}`,
@@ -363,7 +391,7 @@ const captureClickEvent = async (issueId, subscriberEmail, clickEvent) => {
     timestamp,
     subscriberEmailHash,
     linkUrl,
-    linkPosition: null,
+    linkPosition,
     trafficSource,
     device,
     country,

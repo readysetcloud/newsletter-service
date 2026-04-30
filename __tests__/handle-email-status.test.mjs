@@ -1143,6 +1143,7 @@ describe('handle-email-status', () => {
     it('should handle click events', async () => {
       ddbSend.mockResolvedValueOnce({}); // trackLinkClick UpdateItem
       ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem (publishedAt lookup)
+      ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem (link position lookup)
       ddbSend.mockResolvedValueOnce({}); // captureClickEvent PutItem
       ddbSend.mockResolvedValueOnce({}); // stats UpdateItem
 
@@ -1165,7 +1166,7 @@ describe('handle-email-status', () => {
       const result = await handler(event);
 
       expect(result).toBe(true);
-      expect(ddbSend).toHaveBeenCalledTimes(4);
+      expect(ddbSend).toHaveBeenCalledTimes(5);
     });
   });
 
@@ -1378,6 +1379,7 @@ describe('handle-email-status', () => {
 
       ddbSend.mockResolvedValueOnce({}); // trackLinkClick UpdateItem
       ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem (publishedAt)
+      ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem (link position lookup)
       ddbSend.mockResolvedValueOnce({}); // captureClickEvent PutItem
       ddbSend.mockResolvedValueOnce({}); // stats UpdateItem
 
@@ -1400,7 +1402,7 @@ describe('handle-email-status', () => {
       await handler(event);
 
       expect(mockLookupCountry).toHaveBeenCalledWith('8.8.8.8');
-      expect(ddbSend).toHaveBeenCalledTimes(4);
+      expect(ddbSend).toHaveBeenCalledTimes(5);
 
       const linkUpdateCall = ddbSend.mock.calls[0][0];
       expect(linkUpdateCall.__type).toBe('UpdateItem');
@@ -1410,6 +1412,7 @@ describe('handle-email-status', () => {
     it('should handle missing IP gracefully', async () => {
       ddbSend.mockResolvedValueOnce({}); // trackLinkClick
       ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem
+      ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem (link position lookup)
       ddbSend.mockResolvedValueOnce({}); // captureClickEvent
       ddbSend.mockResolvedValueOnce({}); // stats
 
@@ -1431,7 +1434,7 @@ describe('handle-email-status', () => {
       await handler(event);
 
       expect(mockLookupCountry).not.toHaveBeenCalled();
-      expect(ddbSend).toHaveBeenCalledTimes(4);
+      expect(ddbSend).toHaveBeenCalledTimes(5);
 
       const linkUpdateCall = ddbSend.mock.calls[0][0];
       expect(linkUpdateCall.ExpressionAttributeValues[':country'].S).toBe('unknown');
@@ -1442,6 +1445,7 @@ describe('handle-email-status', () => {
 
       ddbSend.mockResolvedValueOnce({}); // trackLinkClick
       ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem
+      ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem (link position lookup)
       ddbSend.mockResolvedValueOnce({}); // captureClickEvent
       ddbSend.mockResolvedValueOnce({}); // stats
 
@@ -1464,7 +1468,7 @@ describe('handle-email-status', () => {
       await handler(event);
 
       expect(mockLookupCountry).toHaveBeenCalledWith('10.0.0.1');
-      expect(ddbSend).toHaveBeenCalledTimes(4);
+      expect(ddbSend).toHaveBeenCalledTimes(5);
 
       const linkUpdateCall = ddbSend.mock.calls[0][0];
       expect(linkUpdateCall.ExpressionAttributeValues[':country'].S).toBe('unknown');

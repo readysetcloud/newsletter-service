@@ -30,7 +30,7 @@ export const handler = async (state) => {
 const callbackToTenant = async (fileName, content, data) => {
   try {
     const octokit = await getOctokit();
-    const markdown = frontmatter.stringify(content, data);
+    const markdown = frontmatter.stringify(removeEmailHashPlaceholder(content), data);
 
     const { data: { sha } } = await octokit.rest.repos.getContent({
       owner: process.env.OWNER,
@@ -51,4 +51,18 @@ const callbackToTenant = async (fileName, content, data) => {
     console.error('Could not update links with redirects', error.message);
     console.error(error);
   }
+};
+
+export const removeEmailHashPlaceholder = (content) => {
+  return content.replace(/([?&])s=__EMAIL_HASH__(&?)/g, (_match, separator, trailingSeparator) => {
+    if (separator === '?' && trailingSeparator) {
+      return '?';
+    }
+
+    if (separator === '&' && trailingSeparator) {
+      return '&';
+    }
+
+    return '';
+  });
 };

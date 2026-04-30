@@ -1,4 +1,7 @@
 import * as fc from 'fast-check';
+import { readFile } from 'fs/promises';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 import {
   extractRequestMetadata,
   isValidEmail,
@@ -10,8 +13,20 @@ import {
   isFastSubmission,
   resolvePolicy,
   evaluatePolicy,
-  emitBotProtectionLog
+  emitBotProtectionLog,
+  disposableDomainSet
 } from '../utils/bot-protection.mjs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+describe('disposable domain data', () => {
+  test('bundled module stays in sync with JSON data file', async () => {
+    const jsonPath = join(__dirname, '..', 'data', 'disposable-domains.json');
+    const domains = JSON.parse(await readFile(jsonPath, 'utf-8'));
+    expect([...disposableDomainSet].sort()).toEqual([...domains].sort());
+  });
+});
 
 // Feature: bot-signup-protection, Property 1: Metadata extraction always produces valid output
 describe('Property 1: Metadata extraction always produces valid output', () => {

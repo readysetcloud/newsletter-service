@@ -105,7 +105,7 @@ export const handler = async (state) => {
     await initializeLinkRecord(state.tenantId, state.issueId, url, linkPosition);
     updatedContent = updatedContent.replace(
       url,
-      `${process.env.REDIRECT_URL}?u=${encodeURI(url)}&cid=${encodeURIComponent(`${state.tenantId}_${state.issueId}`)}&s=__EMAIL_HASH__`
+      `${process.env.REDIRECT_URL}?u=${encodeURI(url)}&cid=${encodeURIComponent(`${state.tenantId}#${state.issueId}`)}&p=${encodeURIComponent(linkPosition)}&s=__EMAIL_HASH__`
     );
   }
 

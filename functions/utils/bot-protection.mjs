@@ -5,15 +5,8 @@
  * Pure functions where possible for testability.
  */
 
-import { readFileSync } from 'fs';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import domainsList from '../data/disposable-domains.json' with { type: 'json' };
 
-// Load disposable domains at module scope
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const domainsPath = join(__dirname, '..', 'data', 'disposable-domains.json');
-const domainsList = JSON.parse(readFileSync(domainsPath, 'utf-8'));
 export const disposableDomainSet = new Set(domainsList);
 
 /**

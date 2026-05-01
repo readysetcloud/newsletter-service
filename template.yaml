@@ -518,14 +518,17 @@ Resources:
             DomainName: !GetAtt FrontendBucket.RegionalDomainName
             OriginAccessControlId: !Ref CloudFrontOriginAccessControl
             S3OriginConfig: {}
-          - Id: DashboardApiOrigin
-            DomainName: !Sub "${DashboardApi}.execute-api.${AWS::Region}.amazonaws.com"
-            CustomOriginConfig:
-              HTTPPort: 443
-              HTTPSPort: 443
-              OriginProtocolPolicy: https-only
-              OriginSSLProtocols:
-                - TLSv1.2
+          - !If
+            - DeployFrontendCustomDomain
+            - Id: DashboardApiOrigin
+              DomainName: !Sub "${DashboardApi}.execute-api.${AWS::Region}.amazonaws.com"
+              CustomOriginConfig:
+                HTTPPort: 443
+                HTTPSPort: 443
+                OriginProtocolPolicy: https-only
+                OriginSSLProtocols:
+                  - TLSv1.2
+            - !Ref AWS::NoValue
         DefaultCacheBehavior:
           TargetOriginId: S3Origin
           ViewerProtocolPolicy: redirect-to-https
@@ -542,23 +545,25 @@ Resources:
           FunctionAssociations:
             - EventType: viewer-request
               FunctionARN: !GetAtt FrontendSpaRoutingFunction.FunctionMetadata.FunctionARN
-        CacheBehaviors:
-          - PathPattern: /api/*
-            TargetOriginId: DashboardApiOrigin
-            ViewerProtocolPolicy: redirect-to-https
-            AllowedMethods:
-              - DELETE
-              - GET
-              - HEAD
-              - OPTIONS
-              - PATCH
-              - POST
-              - PUT
-            CachedMethods:
-              - GET
-              - HEAD
-            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
-            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+        CacheBehaviors: !If
+          - DeployFrontendCustomDomain
+          - - PathPattern: /api/*
+              TargetOriginId: DashboardApiOrigin
+              ViewerProtocolPolicy: redirect-to-https
+              AllowedMethods:
+                - DELETE
+                - GET
+                - HEAD
+                - OPTIONS
+                - PATCH
+                - POST
+                - PUT
+              CachedMethods:
+                - GET
+                - HEAD
+              CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+              OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+          - !Ref AWS::NoValue
         PriceClass: PriceClass_100
 
   FrontendSpaRoutingFunction:

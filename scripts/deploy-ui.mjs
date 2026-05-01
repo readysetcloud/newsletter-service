@@ -302,8 +302,13 @@ function invalidateCloudFront(distributionId) {
 function configureFrontendEnv(outputs) {
   log('Configuring frontend environment...');
 
+  const cloudFrontHost = outputs.FrontendCloudFrontURL;
+  const frontendUrl = outputs.FrontendURL || '';
+  const hasCustomDomain = cloudFrontHost && frontendUrl && !frontendUrl.includes(cloudFrontHost);
+  const apiBaseUrl = hasCustomDomain ? '/api' : outputs.DashboardApiUrl;
+
   const requiredOutputs = {
-    VITE_API_BASE_URL: outputs.DashboardApiUrl,
+    VITE_API_BASE_URL: apiBaseUrl,
     VITE_USER_POOL_ID: outputs.UserPoolId,
     VITE_USER_POOL_CLIENT_ID: outputs.UserPoolClientId,
     VITE_IDENTITY_POOL_ID: outputs.IdentityPoolId,

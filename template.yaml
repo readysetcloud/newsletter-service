@@ -2727,13 +2727,29 @@ Resources:
           Properties:
             Schedule: "cron(0 7 * * ? *)"
 
+  CampaignLinkApiKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "/newsletter-service/${Environment}/campaign-link-api-key"
+      Description: |
+        The actual API key value for the campaign-link mint endpoint. Backs
+        the CampaignLinkApiKey resource so the value is generated once at
+        stack-create time and is readable by other in-account services
+        (content-tracking) via Secrets Manager.
+      GenerateSecretString:
+        PasswordLength: 40
+        ExcludePunctuation: true
+
   CampaignLinkApiKey:
     Type: AWS::ApiGateway::ApiKey
-    DependsOn: NewsletterApipublicStage
+    DependsOn:
+      - NewsletterApipublicStage
+      - CampaignLinkApiKeySecret
     Properties:
       Name: !Sub "${AWS::StackName}-campaign-link-mint"
       Description: API key for the campaign short-link mint endpoint
       Enabled: true
+      Value: !Sub "{{resolve:secretsmanager:/newsletter-service/${Environment}/campaign-link-api-key:SecretString}}"
       StageKeys:
         - RestApiId: !Ref NewsletterApi
           StageName: public
@@ -2776,6 +2792,22 @@ Resources:
         - !Sub "https://${RedirectCustomDomain}/c"
         - !Sub "https://${RedirectCFDistribution.DomainName}/c"
       Description: Base URL for campaign short links (append /{code})
+
+  NewsletterApiBaseUrlParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/newsletter-service/${Environment}/newsletter-api-base-url"
+      Type: String
+      Value: !Sub "https://${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com/public"
+      Description: NewsletterApi base URL (append /links to mint, /links/{code} to delete)
+
+  CampaignLinkApiKeySecretArnParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/newsletter-service/${Environment}/campaign-link-api-key-secret-arn"
+      Type: String
+      Value: !Ref CampaignLinkApiKeySecret
+      Description: ARN of the Secrets Manager secret holding the campaign-link API key value
 
   RedirectCFDistribution:
     Type: AWS::CloudFront::Distribution
@@ -4224,6 +4256,9 @@ Outputs:
     Description: DynamoDB table name for subscriber storage
     Value: !Ref SubscribersTable
 
-  CampaignLinkApiKeyId:
-    Description: API Gateway ApiKey id for the /links mint endpoint (retrieve value with `aws apigateway get-api-key --include-value --api-key <id>`)
-    Value: !Ref CampaignLinkApiKey
+  CampaignLinkApiKeySecretArn:
+    Description: |
+      Secrets Manager ARN holding the campaign-link API key value. In-account
+      services (e.g. content-tracking) can read this secret to make
+      authenticated calls to POST /links and DELETE /links/{code}.
+    Value: !Ref CampaignLinkApiKeySecret

@@ -2618,6 +2618,7 @@ Resources:
       Handler: mint-campaign-link.handler
       Environment:
         Variables:
+          TABLE_NAME: !Ref NewsletterTable
           KVS_ARN: !GetAtt CampaignLinkKeyValueStore.Arn
           SHORT_LINK_BASE: !If
             - HasRedirectCustomDomain
@@ -2645,6 +2646,7 @@ Resources:
             Method: POST
             Auth:
               Authorizer: NONE
+              ApiKeyRequired: true
 
   DeleteCampaignLinkFunction:
     Type: AWS::Serverless::Function
@@ -2660,6 +2662,7 @@ Resources:
       Handler: delete-campaign-link.handler
       Environment:
         Variables:
+          TABLE_NAME: !Ref NewsletterTable
           KVS_ARN: !GetAtt CampaignLinkKeyValueStore.Arn
       Policies:
         - AWSLambdaBasicExecutionRole
@@ -2683,6 +2686,7 @@ Resources:
             Method: DELETE
             Auth:
               Authorizer: NONE
+              ApiKeyRequired: true
 
   SweepExpiredLinksFunction:
     Type: AWS::Serverless::Function
@@ -2699,6 +2703,7 @@ Resources:
       Timeout: 300
       Environment:
         Variables:
+          TABLE_NAME: !Ref NewsletterTable
           KVS_ARN: !GetAtt CampaignLinkKeyValueStore.Arn
       Policies:
         - AWSLambdaBasicExecutionRole

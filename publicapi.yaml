@@ -22,7 +22,53 @@ tags:
   - name: Subscription
   - name: Tracking
   - name: Engagement
+  - name: Links
 paths:
+  /links:
+    post:
+      summary: Mint a tracked short link
+      description: |
+        Allocates a unique 6-character short code, writes it to the campaign-link
+        CloudFront KeyValueStore, and returns the wrapped short URL. The `cid` and
+        `src` fields are opaque pass-throughs that surface in the redirect log line,
+        so callers can attribute clicks downstream.
+      tags:
+        - Links
+      security:
+        - ApiKeyHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MintLinkRequest"
+      responses:
+        200:
+          description: Short link minted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MintLinkResponse"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        503:
+          description: Could not allocate a unique short code after multiple attempts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-request-validator: Validate All
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MintCampaignLinkFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
   /{tenant}/subscribers:
     parameters:
       - $ref: "#/components/parameters/Tenant"
@@ -181,6 +227,12 @@ components:
         type: string
         description: Issue id
 
+  securitySchemes:
+    ApiKeyHeader:
+      type: apiKey
+      in: header
+      name: x-api-key
+
   schemas:
     Subscriber:
       description: New subscriber details
@@ -203,6 +255,43 @@ components:
           type: integer
           minimum: 0
           description: Client-reported time between form render and submit (ms)
+
+    MintLinkRequest:
+      description: Body for POST /links
+      type: object
+      required:
+        - url
+      properties:
+        url:
+          type: string
+          description: Destination URL the short code redirects to
+          minLength: 1
+          maxLength: 2048
+          pattern: '^https?://'
+        cid:
+          type: string
+          description: Opaque correlation id (logged on every click, used by downstream consumers for attribution)
+          maxLength: 512
+        src:
+          type: string
+          description: Default traffic-source label baked into the short link (can be overridden per click via ?src=)
+          maxLength: 64
+
+    MintLinkResponse:
+      description: Response for a successful mint
+      type: object
+      required:
+        - code
+        - short_url
+      properties:
+        code:
+          type: string
+          description: The 6-character base62 short code
+          minLength: 6
+          maxLength: 6
+        short_url:
+          type: string
+          description: The wrapped short URL ready to paste
 
   responses:
     Created:

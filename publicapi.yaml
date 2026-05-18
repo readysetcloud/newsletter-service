@@ -22,7 +22,85 @@ tags:
   - name: Subscription
   - name: Tracking
   - name: Engagement
+  - name: Links
 paths:
+  /links:
+    post:
+      summary: Mint a tracked short link
+      description: |
+        Allocates a unique 6-character short code, writes it to the campaign-link
+        CloudFront KeyValueStore, and returns the wrapped short URL. The `cid` and
+        `src` fields are opaque pass-throughs that surface in the redirect log line,
+        so callers can attribute clicks downstream.
+      tags:
+        - Links
+      security:
+        - ApiKeyHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MintLinkRequest"
+      responses:
+        200:
+          description: Short link minted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MintLinkResponse"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        503:
+          description: Could not allocate a unique short code after multiple attempts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-request-validator: Validate All
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MintCampaignLinkFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
+  /links/{code}:
+    parameters:
+      - name: code
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: '^[A-Za-z0-9]{6}$'
+        description: The 6-character base62 short code
+    delete:
+      summary: Retire a short link
+      description: |
+        Removes the short code from both the CloudFront KeyValueStore and the
+        Dynamo sentinel. Subsequent visits to the short URL fall through to the
+        fallback origin. Already-deleted codes return 204 (idempotent).
+      tags:
+        - Links
+      security:
+        - ApiKeyHeader: []
+      responses:
+        204:
+          description: Code retired (or was already gone)
+        400:
+          $ref: "#/components/responses/BadRequest"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DeleteCampaignLinkFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
   /{tenant}/subscribers:
     parameters:
       - $ref: "#/components/parameters/Tenant"
@@ -181,6 +259,12 @@ components:
         type: string
         description: Issue id
 
+  securitySchemes:
+    ApiKeyHeader:
+      type: apiKey
+      in: header
+      name: x-api-key
+
   schemas:
     Subscriber:
       description: New subscriber details
@@ -203,6 +287,56 @@ components:
           type: integer
           minimum: 0
           description: Client-reported time between form render and submit (ms)
+
+    MintLinkRequest:
+      description: Body for POST /links
+      type: object
+      required:
+        - url
+      properties:
+        url:
+          type: string
+          description: Destination URL the short code redirects to
+          minLength: 1
+          maxLength: 2048
+          pattern: '^https?://'
+        cid:
+          type: string
+          description: Opaque correlation id (logged on every click, used by downstream consumers for attribution)
+          maxLength: 512
+        src:
+          type: string
+          description: Default traffic-source label baked into the short link (can be overridden per click via ?src=)
+          maxLength: 64
+        expiresInDays:
+          type: integer
+          minimum: 1
+          maximum: 1825
+          description: |
+            How long the short code remains active. Defaults to 730 (2 years).
+            After this window, the daily sweeper removes the code from both the
+            KeyValueStore and the Dynamo sentinel.
+
+    MintLinkResponse:
+      description: Response for a successful mint
+      type: object
+      required:
+        - code
+        - short_url
+        - expires_at
+      properties:
+        code:
+          type: string
+          description: The 6-character base62 short code
+          minLength: 6
+          maxLength: 6
+        short_url:
+          type: string
+          description: The wrapped short URL ready to paste
+        expires_at:
+          type: string
+          format: date-time
+          description: ISO-8601 timestamp at which the code becomes eligible for sweeper cleanup
 
   responses:
     Created:

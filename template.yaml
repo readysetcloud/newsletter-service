@@ -2590,7 +2590,6 @@ Resources:
           }
 
           const dest = entry && entry.u;
-          const cid = (entry && entry.cid) || null;
           const src = srcOverride || (entry && entry.src) || 'web';
 
           if (!dest || !/^https?:\/\//i.test(dest)) return fallback('bad_dest');
@@ -2602,7 +2601,7 @@ Resources:
 
           if (dest.length > 2048) return fallback('url_too_long');
 
-          try { console.log(JSON.stringify({ cid, u: dest, src, ip, s })); } catch(_) {}
+          try { console.log(JSON.stringify({ code, u: dest, src, ip, s })); } catch(_) {}
           return redirect(dest);
         }
       FunctionConfig:
@@ -2656,6 +2655,122 @@ Resources:
               Authorizer: NONE
               ApiKeyRequired: true
 
+  GetCampaignLinkFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - get-campaign-link.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: get-campaign-link.handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          SHORT_LINK_BASE: !If
+            - HasRedirectCustomDomain
+            - !Sub "https://${RedirectCustomDomain}/c"
+            - !Sub "https://${RedirectCFDistribution.DomainName}/c"
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Events:
+        Get:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /links/{code}
+            Method: GET
+            Auth:
+              Authorizer: NONE
+              ApiKeyRequired: true
+
+  PutCampaignLinkFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - put-campaign-link.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: put-campaign-link.handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          KVS_ARN: !GetAtt CampaignLinkKeyValueStore.Arn
+          SHORT_LINK_BASE: !If
+            - HasRedirectCustomDomain
+            - !Sub "https://${RedirectCustomDomain}/c"
+            - !Sub "https://${RedirectCFDistribution.DomainName}/c"
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - cloudfront-keyvaluestore:DescribeKeyValueStore
+                - cloudfront-keyvaluestore:PutKey
+              Resource: !GetAtt CampaignLinkKeyValueStore.Arn
+      Events:
+        Put:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /links/{code}
+            Method: PUT
+            Auth:
+              Authorizer: NONE
+              ApiKeyRequired: true
+
+  GetCampaignLinkAnalyticsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - get-campaign-link-analytics.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: get-campaign-link-analytics.handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Events:
+        Get:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /links/{code}/analytics
+            Method: GET
+            Auth:
+              Authorizer: NONE
+              ApiKeyRequired: true
+
   DeleteCampaignLinkFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2678,7 +2793,8 @@ Resources:
           Statement:
             - Effect: Allow
               Action:
-                - dynamodb:DeleteItem
+                - dynamodb:Query
+                - dynamodb:BatchWriteItem
               Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
               Action:
@@ -2695,6 +2811,47 @@ Resources:
             Auth:
               Authorizer: NONE
               ApiKeyRequired: true
+
+  ProcessCampaignClickFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - process-campaign-click.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: process-campaign-click.handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+
+  ProcessCampaignClickLogPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ProcessCampaignClickFunction
+      Principal: !Sub "logs.${AWS::Region}.amazonaws.com"
+      SourceArn: !GetAtt CampaignRedirectLogGroup.Arn
+
+  CampaignClickSubscriptionFilter:
+    Type: AWS::Logs::SubscriptionFilter
+    DependsOn: ProcessCampaignClickLogPermission
+    Properties:
+      LogGroupName: !Ref CampaignRedirectLogGroup
+      FilterPattern: '"code"'
+      DestinationArn: !GetAtt ProcessCampaignClickFunction.Arn
 
   SweepExpiredLinksFunction:
     Type: AWS::Serverless::Function
@@ -2766,14 +2923,6 @@ Resources:
       KeyId: !Ref CampaignLinkApiKey
       KeyType: API_KEY
       UsagePlanId: !Ref CampaignLinkUsagePlan
-
-  CampaignRedirectLogGroupParam:
-    Type: AWS::SSM::Parameter
-    Properties:
-      Name: !Sub "/newsletter-service/${Environment}/campaign-redirect-log-group-name"
-      Type: String
-      Value: !Ref CampaignRedirectLogGroup
-      Description: CloudWatch Logs group for the campaign short-redirect CloudFront Function
 
   CampaignShortLinkBaseParam:
     Type: AWS::SSM::Parameter

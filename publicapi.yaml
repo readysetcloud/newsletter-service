@@ -29,9 +29,9 @@ paths:
       summary: Mint a tracked short link
       description: |
         Allocates a unique 6-character short code, writes it to the campaign-link
-        CloudFront KeyValueStore, and returns the wrapped short URL. The `cid` and
-        `src` fields are opaque pass-throughs that surface in the redirect log line,
-        so callers can attribute clicks downstream.
+        CloudFront KeyValueStore, and returns the wrapped short URL. The `src`
+        field is an optional default traffic-source label baked into the link;
+        per-click `?src=` query parameters override it.
       tags:
         - Links
       security:
@@ -48,7 +48,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/MintLinkResponse"
+                $ref: "#/components/schemas/Link"
         400:
           $ref: "#/components/responses/BadRequest"
         503:
@@ -78,12 +78,87 @@ paths:
           type: string
           pattern: '^[A-Za-z0-9]{6}$'
         description: The 6-character base62 short code
+    get:
+      summary: Get a tracked link's metadata
+      tags:
+        - Links
+      security:
+        - ApiKeyHeader: []
+      responses:
+        200:
+          description: Link metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Link"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        404:
+          description: Code not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetCampaignLinkFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+    put:
+      summary: Replace a tracked link's destination
+      description: |
+        Wholesale replace of the link's destination URL and optional src.
+        Updates both the CloudFront KeyValueStore and the Dynamo metadata.
+        The short code stays the same; existing references keep working but
+        now redirect to the new destination.
+      tags:
+        - Links
+      security:
+        - ApiKeyHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutLinkRequest"
+      responses:
+        200:
+          description: Link updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Link"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        404:
+          description: Code not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-request-validator: Validate All
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PutCampaignLinkFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
     delete:
       summary: Retire a short link
       description: |
-        Removes the short code from both the CloudFront KeyValueStore and the
-        Dynamo sentinel. Subsequent visits to the short URL fall through to the
-        fallback origin. Already-deleted codes return 204 (idempotent).
+        Removes the short code from the CloudFront KeyValueStore and deletes
+        all rows under its partition (metadata, aggregate, and any click
+        events). Subsequent visits fall through to the fallback origin.
+        Already-deleted codes return 204 (idempotent).
       tags:
         - Links
       security:
@@ -98,6 +173,41 @@ paths:
       x-amazon-apigateway-integration:
         uri:
           Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DeleteCampaignLinkFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
+  /links/{code}/analytics:
+    parameters:
+      - name: code
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: '^[A-Za-z0-9]{6}$'
+    get:
+      summary: Get click analytics for a short code
+      description: |
+        Returns the running aggregate maintained by the click consumer.
+        Empty (zero clicks) returns 200 with zeroed fields, not 404, so
+        callers can poll without special-casing newly minted links.
+      tags:
+        - Links
+      security:
+        - ApiKeyHeader: []
+      responses:
+        200:
+          description: Analytics for the short code
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LinkAnalytics"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetCampaignLinkAnalyticsFunction.Arn}/invocations
         httpMethod: POST
         type: aws_proxy
 
@@ -300,10 +410,6 @@ components:
           minLength: 1
           maxLength: 2048
           pattern: '^https?://'
-        cid:
-          type: string
-          description: Opaque correlation id (logged on every click, used by downstream consumers for attribution)
-          maxLength: 512
         src:
           type: string
           description: Default traffic-source label baked into the short link (can be overridden per click via ?src=)
@@ -317,26 +423,87 @@ components:
             After this window, the daily sweeper removes the code from both the
             KeyValueStore and the Dynamo sentinel.
 
-    MintLinkResponse:
-      description: Response for a successful mint
+    PutLinkRequest:
+      description: Body for PUT /links/{code} (wholesale replace of url + src)
+      type: object
+      required:
+        - url
+      properties:
+        url:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          pattern: '^https?://'
+        src:
+          type: string
+          maxLength: 64
+          nullable: true
+
+    Link:
+      description: A tracked short link
       type: object
       required:
         - code
         - short_url
+        - url
+        - created_at
         - expires_at
       properties:
         code:
           type: string
-          description: The 6-character base62 short code
           minLength: 6
           maxLength: 6
         short_url:
           type: string
-          description: The wrapped short URL ready to paste
+        url:
+          type: string
+        src:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
         expires_at:
           type: string
           format: date-time
-          description: ISO-8601 timestamp at which the code becomes eligible for sweeper cleanup
+
+    LinkAnalytics:
+      description: Click analytics for a short code
+      type: object
+      required:
+        - code
+        - total_clicks
+        - by_day
+        - by_src
+      properties:
+        code:
+          type: string
+        total_clicks:
+          type: integer
+          minimum: 0
+        by_day:
+          type: object
+          description: Map of YYYY-MM-DD to click count
+          additionalProperties:
+            type: integer
+            minimum: 0
+        by_src:
+          type: object
+          description: Map of source label to click count
+          additionalProperties:
+            type: integer
+            minimum: 0
+        first_click_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_click_at:
+          type: string
+          format: date-time
+          nullable: true
 
   responses:
     Created:

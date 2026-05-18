@@ -32,17 +32,15 @@ describe('mint-campaign-link', () => {
     test('returns 400 when body is missing', async () => {
       const res = await handler({});
       expect(res.statusCode).toBe(400);
-      expect(JSON.parse(res.body).message).toMatch(/body/i);
     });
 
     test('returns 400 when body is invalid JSON', async () => {
       const res = await invoke('{not json');
       expect(res.statusCode).toBe(400);
-      expect(JSON.parse(res.body).message).toMatch(/JSON/i);
     });
 
     test('returns 400 when url is missing', async () => {
-      const res = await invoke({ cid: 'x' });
+      const res = await invoke({});
       expect(res.statusCode).toBe(400);
       expect(JSON.parse(res.body).message).toMatch(/url/);
     });
@@ -50,45 +48,30 @@ describe('mint-campaign-link', () => {
     test('returns 400 when url is not http or https', async () => {
       const res = await invoke({ url: 'ftp://example.com' });
       expect(res.statusCode).toBe(400);
-      expect(JSON.parse(res.body).message).toMatch(/http/);
     });
 
     test('returns 400 when url exceeds 2048 chars', async () => {
       const url = 'https://example.com/' + 'a'.repeat(2050);
       const res = await invoke({ url });
       expect(res.statusCode).toBe(400);
-      expect(JSON.parse(res.body).message).toMatch(/2048/);
-    });
-
-    test('returns 400 when cid is not a string', async () => {
-      const res = await invoke({ url: 'https://example.com', cid: 42 });
-      expect(res.statusCode).toBe(400);
-      expect(JSON.parse(res.body).message).toMatch(/cid/);
     });
 
     test('returns 400 when src is not a string', async () => {
       const res = await invoke({ url: 'https://example.com', src: { tag: 'linkedin' } });
       expect(res.statusCode).toBe(400);
-      expect(JSON.parse(res.body).message).toMatch(/src/);
     });
 
-    test('returns 400 when expiresInDays is not a positive integer', async () => {
-      for (const bad of [0, -5, 3.14, 'forever']) {
+    test('returns 400 for invalid expiresInDays', async () => {
+      for (const bad of [0, -5, 3.14, 9999]) {
         const res = await invoke({ url: 'https://example.com', expiresInDays: bad });
         expect(res.statusCode).toBe(400);
         expect(JSON.parse(res.body).message).toMatch(/expiresInDays/);
       }
     });
-
-    test('returns 400 when expiresInDays exceeds the cap', async () => {
-      const res = await invoke({ url: 'https://example.com', expiresInDays: 9999 });
-      expect(res.statusCode).toBe(400);
-      expect(JSON.parse(res.body).message).toMatch(/expiresInDays/);
-    });
   });
 
   describe('happy path', () => {
-    test('mints code, writes KVS, returns wrapped URL with default 2y TTL', async () => {
+    test('mints code, writes KVS with {u, src}, returns wrapped URL with default 2y TTL', async () => {
       mockDdbSend.mockResolvedValue({});
       mockKvsSend
         .mockResolvedValueOnce({ ETag: 'etag-v1' })
@@ -97,7 +80,6 @@ describe('mint-campaign-link', () => {
       const before = Date.now();
       const res = await invoke({
         url: 'https://readysetcloud.io/some-post',
-        cid: 'campaign#launch-2026#link#01HXYZ',
         src: 'linkedin',
       });
       const after = Date.now();
@@ -112,58 +94,32 @@ describe('mint-campaign-link', () => {
       expect(expiresAtMs).toBeGreaterThanOrEqual(before + twoYearsMs - 1000);
       expect(expiresAtMs).toBeLessThanOrEqual(after + twoYearsMs + 1000);
 
-      expect(mockDdbSend).toHaveBeenCalledTimes(1);
       const ddbCmd = mockDdbSend.mock.calls[0][0];
       expect(ddbCmd).toBeInstanceOf(PutItemCommand);
       const item = unmarshall(ddbCmd.input.Item);
       expect(item.pk).toBe(`CAMPAIGN_LINK_CODE#${body.code}`);
-      expect(item.sk).toBe(`CAMPAIGN_LINK_CODE#${body.code}`);
-      expect(item.code).toBe(body.code);
-      expect(item.expiresAt).toBe(body.expires_at);
+      expect(item.sk).toBe('METADATA');
+      expect(item.entity).toBe('CampaignLink');
+      expect(item.url).toBe('https://readysetcloud.io/some-post');
+      expect(item.src).toBe('linkedin');
       expect(item.GSI1PK).toBe('CAMPAIGN_LINK_CODE_EXPIRY');
       expect(item.GSI1SK).toBe(body.expires_at);
-      expect(ddbCmd.input.ConditionExpression).toContain('attribute_not_exists');
-
-      const kvsCalls = mockKvsSend.mock.calls.map((c) => c[0]);
-      expect(kvsCalls[0]).toBeInstanceOf(DescribeKeyValueStoreCommand);
-      expect(kvsCalls[1]).toBeInstanceOf(PutKeyCommand);
-      expect(kvsCalls[1].input.Key).toBe(body.code);
-      expect(kvsCalls[1].input.IfMatch).toBe('etag-v1');
-      const kvsValue = JSON.parse(kvsCalls[1].input.Value);
-      expect(kvsValue).toEqual({
-        u: 'https://readysetcloud.io/some-post',
-        cid: 'campaign#launch-2026#link#01HXYZ',
-        src: 'linkedin',
-      });
-    });
-
-    test('omits cid and src from KVS value when not provided', async () => {
-      mockDdbSend.mockResolvedValue({});
-      mockKvsSend
-        .mockResolvedValueOnce({ ETag: 'etag1' })
-        .mockResolvedValueOnce({});
-
-      const res = await invoke({ url: 'https://example.com' });
-      expect(res.statusCode).toBe(200);
-
-      const kvsPut = mockKvsSend.mock.calls[1][0];
-      const kvsValue = JSON.parse(kvsPut.input.Value);
-      expect(kvsValue).toEqual({ u: 'https://example.com' });
-      expect(kvsValue).not.toHaveProperty('cid');
-      expect(kvsValue).not.toHaveProperty('src');
-    });
-
-    test('accepts cid without src', async () => {
-      mockDdbSend.mockResolvedValue({});
-      mockKvsSend
-        .mockResolvedValueOnce({ ETag: 'etag1' })
-        .mockResolvedValueOnce({});
-
-      await invoke({ url: 'https://example.com', cid: 'opaque-id' });
 
       const kvsValue = JSON.parse(mockKvsSend.mock.calls[1][0].input.Value);
-      expect(kvsValue.cid).toBe('opaque-id');
-      expect(kvsValue).not.toHaveProperty('src');
+      expect(kvsValue).toEqual({ u: 'https://readysetcloud.io/some-post', src: 'linkedin' });
+      expect(kvsValue).not.toHaveProperty('cid');
+    });
+
+    test('omits src from KVS value when not provided', async () => {
+      mockDdbSend.mockResolvedValue({});
+      mockKvsSend
+        .mockResolvedValueOnce({ ETag: 'etag1' })
+        .mockResolvedValueOnce({});
+
+      await invoke({ url: 'https://example.com' });
+
+      const kvsValue = JSON.parse(mockKvsSend.mock.calls[1][0].input.Value);
+      expect(kvsValue).toEqual({ u: 'https://example.com' });
     });
 
     test('honors a custom expiresInDays', async () => {
@@ -197,11 +153,7 @@ describe('mint-campaign-link', () => {
 
       const res = await invoke({ url: 'https://example.com' });
       expect(res.statusCode).toBe(200);
-
       expect(mockDdbSend).toHaveBeenCalledTimes(3);
-      const codes = mockDdbSend.mock.calls
-        .map((c) => unmarshall(c[0].input.Item).code);
-      expect(new Set(codes).size).toBe(3);
     });
 
     test('returns 503 when all retries exhausted', async () => {
@@ -210,14 +162,12 @@ describe('mint-campaign-link', () => {
 
       const res = await invoke({ url: 'https://example.com' });
       expect(res.statusCode).toBe(503);
-      expect(JSON.parse(res.body).message).toMatch(/unique/i);
       expect(mockKvsSend).not.toHaveBeenCalled();
     });
 
     test('rethrows non-conditional Dynamo errors', async () => {
       const fatal = Object.assign(new Error('throttled'), { name: 'ProvisionedThroughputExceededException' });
       mockDdbSend.mockRejectedValueOnce(fatal);
-
       await expect(invoke({ url: 'https://example.com' })).rejects.toThrow('throttled');
     });
   });

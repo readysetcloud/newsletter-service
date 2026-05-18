@@ -29,7 +29,7 @@ export const handler = async (event) => {
     return formatResponse(400, 'Invalid JSON body');
   }
 
-  const { url, cid, src, expiresInDays } = body;
+  const { url, src, expiresInDays } = body;
 
   if (!url || typeof url !== 'string') {
     return formatResponse(400, 'url is required');
@@ -39,9 +39,6 @@ export const handler = async (event) => {
   }
   if (url.length > 2048) {
     return formatResponse(400, 'url exceeds 2048 chars');
-  }
-  if (cid !== undefined && typeof cid !== 'string') {
-    return formatResponse(400, 'cid must be a string when provided');
   }
   if (src !== undefined && typeof src !== 'string') {
     return formatResponse(400, 'src must be a string when provided');
@@ -56,13 +53,12 @@ export const handler = async (event) => {
   const now = new Date();
   const expiresAt = new Date(now.getTime() + ttlDays * 86400 * 1000).toISOString();
 
-  const code = await allocateUniqueCode(now.toISOString(), expiresAt);
+  const code = await allocateUniqueCode(now.toISOString(), expiresAt, url, src);
   if (!code) {
     return formatResponse(503, 'Could not allocate a unique code');
   }
 
   const kvsValue = { u: url };
-  if (cid) kvsValue.cid = cid;
   if (src) kvsValue.src = src;
 
   await writeKvsEntry(code, kvsValue);
@@ -74,7 +70,7 @@ export const handler = async (event) => {
   });
 };
 
-async function allocateUniqueCode(createdAt, expiresAt) {
+async function allocateUniqueCode(createdAt, expiresAt, url, src) {
   for (let attempt = 0; attempt < MAX_COLLISION_RETRIES; attempt++) {
     const code = generateCode();
     try {
@@ -82,13 +78,17 @@ async function allocateUniqueCode(createdAt, expiresAt) {
         TableName: process.env.TABLE_NAME,
         Item: marshall({
           pk: `CAMPAIGN_LINK_CODE#${code}`,
-          sk: `CAMPAIGN_LINK_CODE#${code}`,
+          sk: 'METADATA',
           GSI1PK: 'CAMPAIGN_LINK_CODE_EXPIRY',
           GSI1SK: expiresAt,
+          entity: 'CampaignLink',
           code,
+          url,
+          src: src || null,
           createdAt,
           expiresAt,
-        }),
+          updatedAt: createdAt,
+        }, { removeUndefinedValues: true }),
         ConditionExpression: 'attribute_not_exists(pk)',
       }));
       return code;

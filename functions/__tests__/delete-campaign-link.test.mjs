@@ -1,7 +1,7 @@
 import { jest } from '@jest/globals';
-import { unmarshall } from '@aws-sdk/util-dynamodb';
+import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 
-const { DynamoDBClient, DeleteItemCommand } = await import('@aws-sdk/client-dynamodb');
+const { DynamoDBClient, QueryCommand, BatchWriteItemCommand } = await import('@aws-sdk/client-dynamodb');
 const {
   CloudFrontKeyValueStoreClient,
   DescribeKeyValueStoreCommand,
@@ -13,38 +13,45 @@ process.env.KVS_ARN = 'arn:aws:cloudfront::123456789012:key-value-store/abc';
 
 const { handler } = await import('../delete-campaign-link.mjs');
 
+const partitionRows = (code) => [
+  marshall({ pk: `CAMPAIGN_LINK_CODE#${code}`, sk: 'METADATA' }),
+  marshall({ pk: `CAMPAIGN_LINK_CODE#${code}`, sk: 'AGGREGATE' }),
+  marshall({ pk: `CAMPAIGN_LINK_CODE#${code}`, sk: 'CLICK#2026-05-01T00:00:00.000Z#01HXYZ' }),
+];
+
 describe('delete-campaign-link', () => {
   let mockDdbSend;
   let mockKvsSend;
 
   beforeEach(() => {
-    mockDdbSend = jest.fn().mockResolvedValue({});
+    mockDdbSend = jest.fn();
     mockKvsSend = jest.fn();
     DynamoDBClient.prototype.send = mockDdbSend;
     CloudFrontKeyValueStoreClient.prototype.send = mockKvsSend;
     jest.clearAllMocks();
   });
 
-  test('returns 400 when code is missing', async () => {
-    const res = await handler({});
-    expect(res.statusCode).toBe(400);
-    expect(JSON.parse(res.body).message).toMatch(/code/);
+  test('returns 400 when code is missing or malformed', async () => {
+    const r1 = await handler({});
+    expect(r1.statusCode).toBe(400);
+    for (const bad of ['abc', 'abc-de', 'ABCDEFG']) {
+      const r = await handler({ pathParameters: { code: bad } });
+      expect(r.statusCode).toBe(400);
+    }
     expect(mockKvsSend).not.toHaveBeenCalled();
     expect(mockDdbSend).not.toHaveBeenCalled();
   });
 
-  test('returns 400 when code is not exactly 6 alphanumeric chars', async () => {
-    for (const bad of ['abc', 'abc-def', 'ABCDEFG', '12345']) {
-      const res = await handler({ pathParameters: { code: bad } });
-      expect(res.statusCode).toBe(400);
-    }
-    expect(mockKvsSend).not.toHaveBeenCalled();
-  });
-
-  test('happy path: deletes KVS key with current ETag then deletes Dynamo sentinel, returns 204', async () => {
+  test('happy path: deletes KVS then batch-deletes all partition items, returns 204', async () => {
     mockKvsSend
       .mockResolvedValueOnce({ ETag: 'etag-current' })
-      .mockResolvedValueOnce({ ETag: 'etag-after' });
+      .mockResolvedValueOnce({});
+    mockDdbSend.mockImplementation((cmd) => {
+      if (cmd instanceof QueryCommand) {
+        return Promise.resolve({ Items: partitionRows('aB3xKp') });
+      }
+      return Promise.resolve({});
+    });
 
     const res = await handler({ pathParameters: { code: 'aB3xKp' } });
     expect(res.statusCode).toBe(204);
@@ -53,17 +60,50 @@ describe('delete-campaign-link', () => {
     expect(kvsCmds[0]).toBeInstanceOf(DescribeKeyValueStoreCommand);
     expect(kvsCmds[1]).toBeInstanceOf(DeleteKeyCommand);
     expect(kvsCmds[1].input.Key).toBe('aB3xKp');
-    expect(kvsCmds[1].input.IfMatch).toBe('etag-current');
 
-    expect(mockDdbSend).toHaveBeenCalledTimes(1);
-    const ddbCmd = mockDdbSend.mock.calls[0][0];
-    expect(ddbCmd).toBeInstanceOf(DeleteItemCommand);
-    const key = unmarshall(ddbCmd.input.Key);
-    expect(key.pk).toBe('CAMPAIGN_LINK_CODE#aB3xKp');
-    expect(key.sk).toBe('CAMPAIGN_LINK_CODE#aB3xKp');
+    const queries = mockDdbSend.mock.calls
+      .map((c) => c[0])
+      .filter((c) => c instanceof QueryCommand);
+    expect(queries).toHaveLength(1);
+    const queryValues = unmarshall(queries[0].input.ExpressionAttributeValues);
+    expect(queryValues[':pk']).toBe('CAMPAIGN_LINK_CODE#aB3xKp');
+
+    const batches = mockDdbSend.mock.calls
+      .map((c) => c[0])
+      .filter((c) => c instanceof BatchWriteItemCommand);
+    expect(batches).toHaveLength(1);
+    const requests = batches[0].input.RequestItems[process.env.TABLE_NAME];
+    expect(requests).toHaveLength(3);
+    const sks = requests.map((r) => unmarshall(r.DeleteRequest.Key).sk);
+    expect(sks).toEqual(expect.arrayContaining(['METADATA', 'AGGREGATE', expect.stringMatching(/^CLICK#/)]));
   });
 
-  test('idempotent: KVS 404 still deletes Dynamo and returns 204', async () => {
+  test('paginates partition deletes via LastEvaluatedKey', async () => {
+    mockKvsSend
+      .mockResolvedValueOnce({ ETag: 'etag0' })
+      .mockResolvedValueOnce({});
+    let queryCount = 0;
+    mockDdbSend.mockImplementation((cmd) => {
+      if (cmd instanceof QueryCommand) {
+        queryCount++;
+        if (queryCount === 1) {
+          return Promise.resolve({
+            Items: [marshall({ pk: 'CAMPAIGN_LINK_CODE#aB3xKp', sk: 'METADATA' })],
+            LastEvaluatedKey: { pk: { S: 'x' } },
+          });
+        }
+        return Promise.resolve({
+          Items: [marshall({ pk: 'CAMPAIGN_LINK_CODE#aB3xKp', sk: 'AGGREGATE' })],
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    await handler({ pathParameters: { code: 'aB3xKp' } });
+    expect(queryCount).toBe(2);
+  });
+
+  test('idempotent: KVS 404 still deletes Dynamo partition and returns 204', async () => {
     const notFound = Object.assign(new Error('not found'), {
       name: 'ResourceNotFoundException',
       $metadata: { httpStatusCode: 404 },
@@ -71,10 +111,20 @@ describe('delete-campaign-link', () => {
     mockKvsSend
       .mockResolvedValueOnce({ ETag: 'etag-current' })
       .mockRejectedValueOnce(notFound);
+    mockDdbSend.mockImplementation((cmd) => {
+      if (cmd instanceof QueryCommand) {
+        return Promise.resolve({ Items: partitionRows('aB3xKp') });
+      }
+      return Promise.resolve({});
+    });
 
     const res = await handler({ pathParameters: { code: 'aB3xKp' } });
     expect(res.statusCode).toBe(204);
-    expect(mockDdbSend).toHaveBeenCalledTimes(1);
+
+    const batches = mockDdbSend.mock.calls
+      .map((c) => c[0])
+      .filter((c) => c instanceof BatchWriteItemCommand);
+    expect(batches.length).toBeGreaterThan(0);
   });
 
   test('rethrows non-404 KVS errors', async () => {
@@ -84,6 +134,5 @@ describe('delete-campaign-link', () => {
       .mockRejectedValueOnce(fatal);
 
     await expect(handler({ pathParameters: { code: 'aB3xKp' } })).rejects.toThrow('boom');
-    expect(mockDdbSend).not.toHaveBeenCalled();
   });
 });

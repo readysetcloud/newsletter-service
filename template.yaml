@@ -2522,6 +2522,88 @@ Resources:
         Comment: Generic redirect url
       Name: generic-redirect
 
+  CampaignLinkKeyValueStore:
+    Type: AWS::CloudFront::KeyValueStore
+    Properties:
+      Name: campaign-short-links
+      Comment: Maps 6-char base62 short codes to campaign link destinations
+
+  CampaignRedirectFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      AutoPublish: true
+      FunctionCode: !Sub |
+        import cf from 'cloudfront';
+
+        const kvsId = '${CampaignLinkKeyValueStore.Id}';
+        const kvsHandle = cf.kvs(kvsId);
+
+        async function handler(event) {
+          const req = event.request || {};
+          const qs = req.querystring || {};
+          const headers = req.headers || {};
+
+          const FALLBACK_URL = '${Origin}';
+
+          function get(n){ return qs[n] && qs[n].value; }
+          const srcOverride = get('src');
+          const s = get('s') || null;
+          const ip = (event.viewer && event.viewer.ip) || null;
+
+          function redirect(to){
+            return {
+              statusCode: 302,
+              statusDescription: 'Found',
+              headers: {
+                location: { value: to },
+                'cache-control': { value: 'no-store' },
+                'referrer-policy': { value: 'no-referrer-when-downgrade' },
+                'x-content-type-options': { value: 'nosniff' }
+              }
+            };
+          }
+
+          function fallback(reason){
+            const q = '?reason=' + encodeURIComponent(reason);
+            const to = FALLBACK_URL + (FALLBACK_URL.indexOf('?') === -1 ? q : '&' + q.slice(1));
+            return redirect(to);
+          }
+
+          const pieces = (req.uri || '').split('/');
+          const code = pieces[pieces.length - 1];
+          if (!code || !/^[A-Za-z0-9]{4,12}$/.test(code)) return fallback('bad_code');
+
+          let entry;
+          try {
+            const raw = await kvsHandle.get(code);
+            entry = JSON.parse(raw);
+          } catch (err) {
+            return fallback('code_not_found');
+          }
+
+          const dest = entry && entry.u;
+          const cid = (entry && entry.cid) || null;
+          const src = srcOverride || (entry && entry.src) || 'web';
+
+          if (!dest || !/^https?:\/\//i.test(dest)) return fallback('bad_dest');
+
+          const hostHdr = (headers.host && headers.host[0] && headers.host[0].value) || '';
+          let destHost = '';
+          try { destHost = dest.split('/')[2].toLowerCase(); } catch(e) { return fallback('bad_url'); }
+          if (hostHdr && destHost === hostHdr.toLowerCase()) return fallback('loop_to_tracker');
+
+          if (dest.length > 2048) return fallback('url_too_long');
+
+          try { console.log(JSON.stringify({ cid, u: dest, src, ip, s })); } catch(_) {}
+          return redirect(dest);
+        }
+      FunctionConfig:
+        KeyValueStoreAssociations:
+          - KeyValueStoreARN: !GetAtt CampaignLinkKeyValueStore.Arn
+        Runtime: cloudfront-js-2.0
+        Comment: Campaign short-code redirect
+      Name: campaign-short-redirect
+
   RedirectCFDistribution:
     Type: AWS::CloudFront::Distribution
     Properties:
@@ -2557,6 +2639,15 @@ Resources:
             FunctionAssociations:
               - EventType: viewer-request
                 FunctionARN: !GetAtt GenericRedirectFunction.FunctionMetadata.FunctionARN
+          - PathPattern: /c/*
+            TargetOriginId: dummy.origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS]
+            Compress: false
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt CampaignRedirectFunction.FunctionMetadata.FunctionARN
         DefaultRootObject: index.html
         Enabled: True
         PriceClass: PriceClass_100
@@ -2619,6 +2710,12 @@ Resources:
     Properties:
       RetentionInDays: 3
       LogGroupName: /aws/cloudfront/function/generic-redirect
+
+  CampaignRedirectLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 3
+      LogGroupName: /aws/cloudfront/function/campaign-short-redirect
 
   UpdateLinksWithTrackingDataFunction:
     Type: AWS::Serverless::Function
@@ -3953,3 +4050,30 @@ Outputs:
   SubscribersTableName:
     Description: DynamoDB table name for subscriber storage
     Value: !Ref SubscribersTable
+
+  CampaignLinkKvsArn:
+    Description: ARN of the CloudFront KVS holding campaign short-code mappings
+    Value: !GetAtt CampaignLinkKeyValueStore.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-CampaignLinkKvsArn"
+
+  CampaignLinkKvsId:
+    Description: ID of the CloudFront KVS holding campaign short-code mappings
+    Value: !GetAtt CampaignLinkKeyValueStore.Id
+    Export:
+      Name: !Sub "${AWS::StackName}-CampaignLinkKvsId"
+
+  CampaignRedirectLogGroupName:
+    Description: CloudWatch Logs group for the campaign short-redirect CloudFront Function
+    Value: !Ref CampaignRedirectLogGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-CampaignRedirectLogGroupName"
+
+  CampaignShortLinkBase:
+    Description: Base URL for campaign short links (append /{code})
+    Value: !If
+      - HasRedirectCustomDomain
+      - !Sub "https://${RedirectCustomDomain}/c"
+      - !Sub "https://${RedirectCFDistribution.DomainName}/c"
+    Export:
+      Name: !Sub "${AWS::StackName}-CampaignShortLinkBase"

@@ -14,6 +14,8 @@ const kvs = new CloudFrontKeyValueStoreClient();
 const CODE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 const CODE_LENGTH = 6;
 const MAX_COLLISION_RETRIES = 5;
+const DEFAULT_EXPIRES_IN_DAYS = 730;
+const MAX_EXPIRES_IN_DAYS = 1825;
 
 export const handler = async (event) => {
   if (!event.body) {
@@ -27,7 +29,7 @@ export const handler = async (event) => {
     return formatResponse(400, 'Invalid JSON body');
   }
 
-  const { url, cid, src } = body;
+  const { url, cid, src, expiresInDays } = body;
 
   if (!url || typeof url !== 'string') {
     return formatResponse(400, 'url is required');
@@ -44,8 +46,17 @@ export const handler = async (event) => {
   if (src !== undefined && typeof src !== 'string') {
     return formatResponse(400, 'src must be a string when provided');
   }
+  if (expiresInDays !== undefined) {
+    if (!Number.isInteger(expiresInDays) || expiresInDays < 1 || expiresInDays > MAX_EXPIRES_IN_DAYS) {
+      return formatResponse(400, `expiresInDays must be an integer between 1 and ${MAX_EXPIRES_IN_DAYS}`);
+    }
+  }
 
-  const code = await allocateUniqueCode();
+  const ttlDays = expiresInDays ?? DEFAULT_EXPIRES_IN_DAYS;
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + ttlDays * 86400 * 1000).toISOString();
+
+  const code = await allocateUniqueCode(now.toISOString(), expiresAt);
   if (!code) {
     return formatResponse(503, 'Could not allocate a unique code');
   }
@@ -59,10 +70,11 @@ export const handler = async (event) => {
   return formatResponse(200, {
     code,
     short_url: `${process.env.SHORT_LINK_BASE}/${code}`,
+    expires_at: expiresAt,
   });
 };
 
-async function allocateUniqueCode() {
+async function allocateUniqueCode(createdAt, expiresAt) {
   for (let attempt = 0; attempt < MAX_COLLISION_RETRIES; attempt++) {
     const code = generateCode();
     try {
@@ -71,8 +83,11 @@ async function allocateUniqueCode() {
         Item: marshall({
           pk: `CAMPAIGN_LINK_CODE#${code}`,
           sk: `CAMPAIGN_LINK_CODE#${code}`,
+          GSI1PK: 'CAMPAIGN_LINK_CODE_EXPIRY',
+          GSI1SK: expiresAt,
           code,
-          createdAt: new Date().toISOString(),
+          createdAt,
+          expiresAt,
         }),
         ConditionExpression: 'attribute_not_exists(pk)',
       }));

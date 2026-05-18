@@ -69,6 +69,38 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
+  /links/{code}:
+    parameters:
+      - name: code
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: '^[A-Za-z0-9]{6}$'
+        description: The 6-character base62 short code
+    delete:
+      summary: Retire a short link
+      description: |
+        Removes the short code from both the CloudFront KeyValueStore and the
+        Dynamo sentinel. Subsequent visits to the short URL fall through to the
+        fallback origin. Already-deleted codes return 204 (idempotent).
+      tags:
+        - Links
+      security:
+        - ApiKeyHeader: []
+      responses:
+        204:
+          description: Code retired (or was already gone)
+        400:
+          $ref: "#/components/responses/BadRequest"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DeleteCampaignLinkFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
   /{tenant}/subscribers:
     parameters:
       - $ref: "#/components/parameters/Tenant"
@@ -276,6 +308,14 @@ components:
           type: string
           description: Default traffic-source label baked into the short link (can be overridden per click via ?src=)
           maxLength: 64
+        expiresInDays:
+          type: integer
+          minimum: 1
+          maximum: 1825
+          description: |
+            How long the short code remains active. Defaults to 730 (2 years).
+            After this window, the daily sweeper removes the code from both the
+            KeyValueStore and the Dynamo sentinel.
 
     MintLinkResponse:
       description: Response for a successful mint
@@ -283,6 +323,7 @@ components:
       required:
         - code
         - short_url
+        - expires_at
       properties:
         code:
           type: string
@@ -292,6 +333,10 @@ components:
         short_url:
           type: string
           description: The wrapped short URL ready to paste
+        expires_at:
+          type: string
+          format: date-time
+          description: ISO-8601 timestamp at which the code becomes eligible for sweeper cleanup
 
   responses:
     Created:

@@ -2646,6 +2646,82 @@ Resources:
             Auth:
               Authorizer: NONE
 
+  DeleteCampaignLinkFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - delete-campaign-link.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: delete-campaign-link.handler
+      Environment:
+        Variables:
+          KVS_ARN: !GetAtt CampaignLinkKeyValueStore.Arn
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:DeleteItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - cloudfront-keyvaluestore:DescribeKeyValueStore
+                - cloudfront-keyvaluestore:DeleteKey
+              Resource: !GetAtt CampaignLinkKeyValueStore.Arn
+      Events:
+        Delete:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /links/{code}
+            Method: DELETE
+            Auth:
+              Authorizer: NONE
+
+  SweepExpiredLinksFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - sweep-expired-links.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: sweep-expired-links.handler
+      Timeout: 300
+      Environment:
+        Variables:
+          KVS_ARN: !GetAtt CampaignLinkKeyValueStore.Arn
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:DeleteItem
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
+            - Effect: Allow
+              Action:
+                - cloudfront-keyvaluestore:DescribeKeyValueStore
+                - cloudfront-keyvaluestore:DeleteKey
+              Resource: !GetAtt CampaignLinkKeyValueStore.Arn
+      Events:
+        DailySweep:
+          Type: Schedule
+          Properties:
+            Schedule: "cron(0 7 * * ? *)"
+
   CampaignLinkApiKey:
     Type: AWS::ApiGateway::ApiKey
     DependsOn: NewsletterApipublicStage

@@ -71,25 +71,46 @@ describe('mint-campaign-link', () => {
       expect(res.statusCode).toBe(400);
       expect(JSON.parse(res.body).message).toMatch(/src/);
     });
+
+    test('returns 400 when expiresInDays is not a positive integer', async () => {
+      for (const bad of [0, -5, 3.14, 'forever']) {
+        const res = await invoke({ url: 'https://example.com', expiresInDays: bad });
+        expect(res.statusCode).toBe(400);
+        expect(JSON.parse(res.body).message).toMatch(/expiresInDays/);
+      }
+    });
+
+    test('returns 400 when expiresInDays exceeds the cap', async () => {
+      const res = await invoke({ url: 'https://example.com', expiresInDays: 9999 });
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).message).toMatch(/expiresInDays/);
+    });
   });
 
   describe('happy path', () => {
-    test('mints code, writes KVS, returns wrapped URL', async () => {
+    test('mints code, writes KVS, returns wrapped URL with default 2y TTL', async () => {
       mockDdbSend.mockResolvedValue({});
       mockKvsSend
         .mockResolvedValueOnce({ ETag: 'etag-v1' })
         .mockResolvedValueOnce({});
 
+      const before = Date.now();
       const res = await invoke({
         url: 'https://readysetcloud.io/some-post',
         cid: 'campaign#launch-2026#link#01HXYZ',
         src: 'linkedin',
       });
+      const after = Date.now();
 
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
       expect(body.code).toMatch(/^[A-Za-z0-9]{6}$/);
       expect(body.short_url).toBe(`https://rdyset.click/c/${body.code}`);
+
+      const expiresAtMs = Date.parse(body.expires_at);
+      const twoYearsMs = 730 * 86400 * 1000;
+      expect(expiresAtMs).toBeGreaterThanOrEqual(before + twoYearsMs - 1000);
+      expect(expiresAtMs).toBeLessThanOrEqual(after + twoYearsMs + 1000);
 
       expect(mockDdbSend).toHaveBeenCalledTimes(1);
       const ddbCmd = mockDdbSend.mock.calls[0][0];
@@ -98,6 +119,9 @@ describe('mint-campaign-link', () => {
       expect(item.pk).toBe(`CAMPAIGN_LINK_CODE#${body.code}`);
       expect(item.sk).toBe(`CAMPAIGN_LINK_CODE#${body.code}`);
       expect(item.code).toBe(body.code);
+      expect(item.expiresAt).toBe(body.expires_at);
+      expect(item.GSI1PK).toBe('CAMPAIGN_LINK_CODE_EXPIRY');
+      expect(item.GSI1SK).toBe(body.expires_at);
       expect(ddbCmd.input.ConditionExpression).toContain('attribute_not_exists');
 
       const kvsCalls = mockKvsSend.mock.calls.map((c) => c[0]);
@@ -140,6 +164,23 @@ describe('mint-campaign-link', () => {
       const kvsValue = JSON.parse(mockKvsSend.mock.calls[1][0].input.Value);
       expect(kvsValue.cid).toBe('opaque-id');
       expect(kvsValue).not.toHaveProperty('src');
+    });
+
+    test('honors a custom expiresInDays', async () => {
+      mockDdbSend.mockResolvedValue({});
+      mockKvsSend
+        .mockResolvedValueOnce({ ETag: 'etag1' })
+        .mockResolvedValueOnce({});
+
+      const before = Date.now();
+      const res = await invoke({ url: 'https://example.com', expiresInDays: 30 });
+      const after = Date.now();
+
+      const body = JSON.parse(res.body);
+      const expiresAtMs = Date.parse(body.expires_at);
+      const thirtyDaysMs = 30 * 86400 * 1000;
+      expect(expiresAtMs).toBeGreaterThanOrEqual(before + thirtyDaysMs - 1000);
+      expect(expiresAtMs).toBeLessThanOrEqual(after + thirtyDaysMs + 1000);
     });
   });
 

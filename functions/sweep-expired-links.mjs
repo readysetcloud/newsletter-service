@@ -1,4 +1,4 @@
-import { DynamoDBClient, QueryCommand, DeleteItemCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, QueryCommand, BatchWriteItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import {
   CloudFrontKeyValueStoreClient,
@@ -40,17 +40,11 @@ export const handler = async () => {
 
       try {
         etag = await deleteKvsKey(code, etag);
-        await ddb.send(new DeleteItemCommand({
-          TableName: process.env.TABLE_NAME,
-          Key: marshall({ pk: row.pk, sk: row.sk }),
-        }));
+        await deletePartition(`CAMPAIGN_LINK_CODE#${code}`);
         deleted++;
       } catch (err) {
         if (err.name === 'ResourceNotFoundException' || err.$metadata?.httpStatusCode === 404) {
-          await ddb.send(new DeleteItemCommand({
-            TableName: process.env.TABLE_NAME,
-            Key: marshall({ pk: row.pk, sk: row.sk }),
-          }));
+          await deletePartition(`CAMPAIGN_LINK_CODE#${code}`);
           kvsMissing++;
         } else {
           failed++;
@@ -91,4 +85,31 @@ async function deleteKvsKey(code, currentEtag) {
     }
     throw err;
   }
+}
+
+async function deletePartition(pk) {
+  let lastEvaluatedKey;
+  do {
+    const result = await ddb.send(new QueryCommand({
+      TableName: process.env.TABLE_NAME,
+      KeyConditionExpression: '#pk = :pk',
+      ExpressionAttributeNames: { '#pk': 'pk' },
+      ExpressionAttributeValues: marshall({ ':pk': pk }),
+      ProjectionExpression: '#pk, sk',
+      ExclusiveStartKey: lastEvaluatedKey,
+    }));
+
+    const items = result.Items || [];
+    for (let i = 0; i < items.length; i += 25) {
+      const batch = items.slice(i, i + 25).map((it) => {
+        const row = unmarshall(it);
+        return { DeleteRequest: { Key: marshall({ pk: row.pk, sk: row.sk }) } };
+      });
+      if (batch.length === 0) continue;
+      await ddb.send(new BatchWriteItemCommand({
+        RequestItems: { [process.env.TABLE_NAME]: batch },
+      }));
+    }
+    lastEvaluatedKey = result.LastEvaluatedKey;
+  } while (lastEvaluatedKey);
 }

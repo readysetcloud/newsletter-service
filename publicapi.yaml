@@ -373,7 +373,12 @@ components:
     ApiKeyHeader:
       type: apiKey
       in: header
-      name: x-api-key
+      name: Authorization
+      description: |
+        Tenant-scoped API key value. Mint one via the dashboard's
+        POST /api-keys endpoint, then send it raw (no `Bearer ` prefix)
+        in the `Authorization` header. The Lambda authorizer validates
+        the key against the tenant API keys table.
 
   schemas:
     Subscriber:

@@ -34,14 +34,6 @@ Parameters:
     Type: String
     Default: ""
     Description: Verified SES email address for custom verification emails (must be pre-verified in SES)
-  CampaignLinkApiKeyValue:
-    Type: String
-    NoEcho: true
-    MinLength: 20
-    Description: |
-      API key value for the campaign-link mint endpoint. Provide at deploy time
-      (CLI --parameter-overrides or samconfig.local.toml). In-account consumers
-      that need to call POST /links must be given the same value.
   FrontendCustomDomain:
     Type: String
     Default: ""
@@ -272,6 +264,14 @@ Resources:
     Properties:
       TracingEnabled: true
       StageName: public
+      Auth:
+        Authorizers:
+          LambdaAuthorizer:
+            FunctionPayloadType: REQUEST
+            FunctionArn: !GetAtt LambdaAuthorizerFunction.Arn
+            Identity:
+              Headers:
+                - Authorization
       MethodSettings:
         - MetricsEnabled: True
           ResourcePath: "/*"
@@ -2652,8 +2652,7 @@ Resources:
             Path: /links
             Method: POST
             Auth:
-              Authorizer: NONE
-              ApiKeyRequired: true
+              Authorizer: LambdaAuthorizer
 
   GetCampaignLinkFunction:
     Type: AWS::Serverless::Function
@@ -2690,8 +2689,7 @@ Resources:
             Path: /links/{code}
             Method: GET
             Auth:
-              Authorizer: NONE
-              ApiKeyRequired: true
+              Authorizer: LambdaAuthorizer
 
   PutCampaignLinkFunction:
     Type: AWS::Serverless::Function
@@ -2734,8 +2732,7 @@ Resources:
             Path: /links/{code}
             Method: PUT
             Auth:
-              Authorizer: NONE
-              ApiKeyRequired: true
+              Authorizer: LambdaAuthorizer
 
   GetCampaignLinkAnalyticsFunction:
     Type: AWS::Serverless::Function
@@ -2768,8 +2765,7 @@ Resources:
             Path: /links/{code}/analytics
             Method: GET
             Auth:
-              Authorizer: NONE
-              ApiKeyRequired: true
+              Authorizer: LambdaAuthorizer
 
   DeleteCampaignLinkFunction:
     Type: AWS::Serverless::Function
@@ -2809,8 +2805,7 @@ Resources:
             Path: /links/{code}
             Method: DELETE
             Auth:
-              Authorizer: NONE
-              ApiKeyRequired: true
+              Authorizer: LambdaAuthorizer
 
   ProcessCampaignClickFunction:
     Type: AWS::Serverless::Function
@@ -2891,38 +2886,6 @@ Resources:
           Type: Schedule
           Properties:
             Schedule: "cron(0 7 * * ? *)"
-
-  CampaignLinkApiKey:
-    Type: AWS::ApiGateway::ApiKey
-    DependsOn: NewsletterApipublicStage
-    Properties:
-      Name: !Sub "${AWS::StackName}-campaign-link-mint"
-      Description: API key for the campaign short-link mint endpoint
-      Enabled: true
-      Value: !Ref CampaignLinkApiKeyValue
-      StageKeys:
-        - RestApiId: !Ref NewsletterApi
-          StageName: public
-
-  CampaignLinkUsagePlan:
-    Type: AWS::ApiGateway::UsagePlan
-    DependsOn: NewsletterApipublicStage
-    Properties:
-      UsagePlanName: !Sub "${AWS::StackName}-campaign-link-mint"
-      Description: Usage plan for the campaign short-link mint endpoint
-      ApiStages:
-        - ApiId: !Ref NewsletterApi
-          Stage: public
-      Throttle:
-        BurstLimit: 10
-        RateLimit: 5
-
-  CampaignLinkUsagePlanKey:
-    Type: AWS::ApiGateway::UsagePlanKey
-    Properties:
-      KeyId: !Ref CampaignLinkApiKey
-      KeyType: API_KEY
-      UsagePlanId: !Ref CampaignLinkUsagePlan
 
   CampaignShortLinkBaseParam:
     Type: AWS::SSM::Parameter

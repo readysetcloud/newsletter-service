@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: Force backend + frontend deploy regardless of detected changes
+        required: false
+        type: boolean
+        default: true
 
 concurrency:
   group: newsletter-service-prod
@@ -36,6 +43,17 @@ jobs:
         run: |
           set -euo pipefail
 
+          # workflow_dispatch: honor the force_deploy input directly.
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            force="${{ inputs.force_deploy }}"
+            echo "backend_changed=${force}" >> "$GITHUB_OUTPUT"
+            echo "frontend_changed=${force}" >> "$GITHUB_OUTPUT"
+            echo "js_changed=${force}" >> "$GITHUB_OUTPUT"
+            echo "rust_changed=${force}" >> "$GITHUB_OUTPUT"
+            echo "deploy_needed=${force}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           BASE_SHA="${{ github.event.before }}"
           HEAD_SHA="${{ github.sha }}"
 
@@ -46,6 +64,26 @@ jobs:
           if [[ -z "${BASE_SHA}" ]]; then
             echo "backend_changed=true" >> "$GITHUB_OUTPUT"
             echo "frontend_changed=true" >> "$GITHUB_OUTPUT"
+            echo "deploy_needed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Use `git log --name-only` over the BASE..HEAD range instead of
+          # `git diff BASE HEAD`. The diff form returned empty on the runner
+          # for at least one merge commit (e7a1379..c4168e3 in PR #235) even
+          # though it correctly reported the changed file locally. The log
+          # form lists files touched by every commit in the range, which is
+          # robust to merge-commit edge cases.
+          changed_files="$(git log --name-only --pretty=format: "${BASE_SHA}..${HEAD_SHA}" 2>/dev/null | sort -u | grep -v '^$' || true)"
+
+          # If we still got nothing despite a non-empty range, fail open and
+          # deploy. Skipping a real change is worse than re-deploying a no-op.
+          if [[ -z "${changed_files}" && "${BASE_SHA}" != "${HEAD_SHA}" ]]; then
+            echo "WARNING: no files detected between ${BASE_SHA}..${HEAD_SHA}; forcing deploy" >&2
+            echo "backend_changed=true" >> "$GITHUB_OUTPUT"
+            echo "frontend_changed=true" >> "$GITHUB_OUTPUT"
+            echo "js_changed=true" >> "$GITHUB_OUTPUT"
+            echo "rust_changed=true" >> "$GITHUB_OUTPUT"
             echo "deploy_needed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -82,7 +120,7 @@ jobs:
                 rust_changed=true
                 ;;
             esac
-          done < <(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")
+          done <<< "${changed_files}"
 
           if [[ "${backend_changed}" == "true" || "${frontend_changed}" == "true" ]]; then
             deploy_needed=true

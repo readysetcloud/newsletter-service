@@ -4282,6 +4282,34 @@ Resources:
                 Action: lambda:InvokeFunction
                 Resource: !GetAtt AggregateIssueAnalyticsFunction.Arn
 
+  # Cross-service contract: consumers (e.g. content-tracking) resolve these
+  # SSM paths at deploy time via AWS::SSM::Parameter::Value<String> rather
+  # than depending on CloudFormation Exports or hardcoded URLs.
+  NewsletterApiBaseUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !If
+        - DeployProductionResources
+        - /newsletter-service/production/newsletter-api-base-url
+        - /newsletter-service/staging/newsletter-api-base-url
+      Type: String
+      Value: !Sub https://${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com/public
+      Description: Base URL of newsletter-service's public API for cross-service consumers
+
+  CampaignShortLinkBaseParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !If
+        - DeployProductionResources
+        - /newsletter-service/production/campaign-short-link-base
+        - /newsletter-service/staging/campaign-short-link-base
+      Type: String
+      Value: !If
+        - HasRedirectCustomDomain
+        - !Sub https://${RedirectCustomDomain}/c
+        - !Sub https://${RedirectCFDistribution.DomainName}/c
+      Description: Base URL for campaign short links. The /c/{shortId} route is built separately; this parameter exposes the URL prefix that content-tracking embeds in mint responses.
+
 Outputs:
   NewsletterApiUrl:
     Description: "API Gateway endpoint URL for Newsletter service"

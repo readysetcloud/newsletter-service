@@ -70,6 +70,11 @@ Conditions:
   DeployCustomDomain: !And
     - !Condition HasDomainName
     - !Condition HasHostedZoneId
+  # Gates the dedicated NewsletterApi custom domain (api.newsletter.<DomainName>).
+  # Production only by design; staging continues to expose the execute-api URL.
+  DeployNewsletterApiCustomDomain: !And
+    - !Condition DeployProductionResources
+    - !Condition DeployCustomDomain
   HasRedirectCustomDomain: !Not [!Equals [!Ref RedirectCustomDomain, ""]]
   HasVerifiedFromEmail: !Not [!Equals [!Ref VerifiedFromEmail, ""]]
   HasFrontendCustomDomain: !Not [!Equals [!Ref FrontendCustomDomain, ""]]
@@ -4282,6 +4287,49 @@ Resources:
                 Action: lambda:InvokeFunction
                 Resource: !GetAtt AggregateIssueAnalyticsFunction.Arn
 
+  # Dedicated custom domain for NewsletterApi, prod only. Sits alongside the
+  # UI at newsletter.<DomainName>; consumers like content-tracking call
+  # https://api.newsletter.<DomainName> instead of the execute-api URL.
+  NewsletterApiCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Condition: DeployNewsletterApiCustomDomain
+    Properties:
+      DomainName: !Sub api.newsletter.${DomainName}
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Sub api.newsletter.${DomainName}
+          HostedZoneId: !Ref HostedZoneId
+
+  NewsletterApiDomain:
+    Type: AWS::ApiGateway::DomainName
+    Condition: DeployNewsletterApiCustomDomain
+    Properties:
+      DomainName: !Sub api.newsletter.${DomainName}
+      RegionalCertificateArn: !Ref NewsletterApiCertificate
+      EndpointConfiguration:
+        Types: [REGIONAL]
+      SecurityPolicy: TLS_1_2
+
+  NewsletterApiBasePathMapping:
+    Type: AWS::ApiGateway::BasePathMapping
+    Condition: DeployNewsletterApiCustomDomain
+    DependsOn: NewsletterApipublicStage
+    Properties:
+      DomainName: !Ref NewsletterApiDomain
+      RestApiId: !Ref NewsletterApi
+      Stage: public
+
+  NewsletterApiDnsRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: DeployNewsletterApiCustomDomain
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub api.newsletter.${DomainName}
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt NewsletterApiDomain.RegionalDomainName
+        HostedZoneId: !GetAtt NewsletterApiDomain.RegionalHostedZoneId
+
   # Cross-service contract: consumers (e.g. content-tracking) resolve these
   # SSM paths at deploy time via AWS::SSM::Parameter::Value<String> rather
   # than depending on CloudFormation Exports or hardcoded URLs.
@@ -4293,7 +4341,10 @@ Resources:
         - /newsletter-service/production/newsletter-api-base-url
         - /newsletter-service/staging/newsletter-api-base-url
       Type: String
-      Value: !Sub https://${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com/public
+      Value: !If
+        - DeployNewsletterApiCustomDomain
+        - !Sub https://api.newsletter.${DomainName}
+        - !Sub https://${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com/public
       Description: Base URL of newsletter-service's public API for cross-service consumers
 
   CampaignShortLinkBaseParameter:

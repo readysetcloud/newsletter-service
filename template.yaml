@@ -70,6 +70,11 @@ Conditions:
   DeployCustomDomain: !And
     - !Condition HasDomainName
     - !Condition HasHostedZoneId
+  # Gates the dedicated NewsletterApi custom domain (api.newsletter.<DomainName>).
+  # Production only by design; staging continues to expose the execute-api URL.
+  DeployNewsletterApiCustomDomain: !And
+    - !Condition DeployProductionResources
+    - !Condition DeployCustomDomain
   HasRedirectCustomDomain: !Not [!Equals [!Ref RedirectCustomDomain, ""]]
   HasVerifiedFromEmail: !Not [!Equals [!Ref VerifiedFromEmail, ""]]
   HasFrontendCustomDomain: !Not [!Equals [!Ref FrontendCustomDomain, ""]]
@@ -2890,7 +2895,12 @@ Resources:
   CampaignShortLinkBaseParam:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: !Sub "/newsletter-service/${Environment}/campaign-short-link-base"
+      # Cross-service contract: consumers (e.g. content-tracking) lookup the
+      # non-prod URL under /staging/ regardless of whether the source stack
+      # was deployed with Environment=sandbox or Environment=stage.
+      Name: !Sub
+        - /newsletter-service/${SsmEnv}/campaign-short-link-base
+        - SsmEnv: !If [DeployProductionResources, production, staging]
       Type: String
       Value: !If
         - HasRedirectCustomDomain
@@ -2901,10 +2911,15 @@ Resources:
   NewsletterApiBaseUrlParam:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: !Sub "/newsletter-service/${Environment}/newsletter-api-base-url"
+      Name: !Sub
+        - /newsletter-service/${SsmEnv}/newsletter-api-base-url
+        - SsmEnv: !If [DeployProductionResources, production, staging]
       Type: String
-      Value: !Sub "https://${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com/public"
-      Description: NewsletterApi base URL (append /links to mint, /links/{code} to delete)
+      Value: !If
+        - DeployNewsletterApiCustomDomain
+        - !Sub https://api.newsletter.${DomainName}
+        - !Sub "https://${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com/public"
+      Description: NewsletterApi base URL for cross-service consumers (append /links to mint, /links/{code} to delete)
 
   RedirectCFDistribution:
     Type: AWS::CloudFront::Distribution
@@ -4282,33 +4297,48 @@ Resources:
                 Action: lambda:InvokeFunction
                 Resource: !GetAtt AggregateIssueAnalyticsFunction.Arn
 
-  # Cross-service contract: consumers (e.g. content-tracking) resolve these
-  # SSM paths at deploy time via AWS::SSM::Parameter::Value<String> rather
-  # than depending on CloudFormation Exports or hardcoded URLs.
-  NewsletterApiBaseUrlParameter:
-    Type: AWS::SSM::Parameter
+  # Dedicated custom domain for NewsletterApi, prod only. Sits alongside the
+  # UI at newsletter.<DomainName>; consumers like content-tracking call
+  # https://api.newsletter.<DomainName> instead of the execute-api URL.
+  NewsletterApiCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Condition: DeployNewsletterApiCustomDomain
     Properties:
-      Name: !If
-        - DeployProductionResources
-        - /newsletter-service/production/newsletter-api-base-url
-        - /newsletter-service/staging/newsletter-api-base-url
-      Type: String
-      Value: !Sub https://${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com/public
-      Description: Base URL of newsletter-service's public API for cross-service consumers
+      DomainName: !Sub api.newsletter.${DomainName}
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Sub api.newsletter.${DomainName}
+          HostedZoneId: !Ref HostedZoneId
 
-  CampaignShortLinkBaseParameter:
-    Type: AWS::SSM::Parameter
+  NewsletterApiDomain:
+    Type: AWS::ApiGateway::DomainName
+    Condition: DeployNewsletterApiCustomDomain
     Properties:
-      Name: !If
-        - DeployProductionResources
-        - /newsletter-service/production/campaign-short-link-base
-        - /newsletter-service/staging/campaign-short-link-base
-      Type: String
-      Value: !If
-        - HasRedirectCustomDomain
-        - !Sub https://${RedirectCustomDomain}/c
-        - !Sub https://${RedirectCFDistribution.DomainName}/c
-      Description: Base URL for campaign short links. The /c/{shortId} route is built separately; this parameter exposes the URL prefix that content-tracking embeds in mint responses.
+      DomainName: !Sub api.newsletter.${DomainName}
+      RegionalCertificateArn: !Ref NewsletterApiCertificate
+      EndpointConfiguration:
+        Types: [REGIONAL]
+      SecurityPolicy: TLS_1_2
+
+  NewsletterApiBasePathMapping:
+    Type: AWS::ApiGateway::BasePathMapping
+    Condition: DeployNewsletterApiCustomDomain
+    DependsOn: NewsletterApipublicStage
+    Properties:
+      DomainName: !Ref NewsletterApiDomain
+      RestApiId: !Ref NewsletterApi
+      Stage: public
+
+  NewsletterApiDnsRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: DeployNewsletterApiCustomDomain
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub api.newsletter.${DomainName}
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt NewsletterApiDomain.RegionalDomainName
+        HostedZoneId: !GetAtt NewsletterApiDomain.RegionalHostedZoneId
 
 Outputs:
   NewsletterApiUrl:

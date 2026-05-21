@@ -2,6 +2,12 @@ name: Deploy to Stage via Pull Request
 
 on:
   workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: Force backend + frontend stage deploy regardless of detected changes
+        required: false
+        type: boolean
+        default: true
   pull_request:
     branches:
       - main
@@ -37,6 +43,17 @@ jobs:
         run: |
           set -euo pipefail
 
+          # workflow_dispatch: honor the force_deploy input directly.
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            force="${{ inputs.force_deploy }}"
+            echo "backend_changed=${force}" >> "$GITHUB_OUTPUT"
+            echo "frontend_changed=${force}" >> "$GITHUB_OUTPUT"
+            echo "js_changed=${force}" >> "$GITHUB_OUTPUT"
+            echo "rust_changed=${force}" >> "$GITHUB_OUTPUT"
+            echo "deploy_needed=${force}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             BASE_SHA="${{ github.event.pull_request.base.sha }}"
             HEAD_SHA="${{ github.event.pull_request.head.sha }}"
@@ -48,6 +65,29 @@ jobs:
           if [[ -z "${BASE_SHA}" ]]; then
             echo "backend_changed=true" >> "$GITHUB_OUTPUT"
             echo "frontend_changed=true" >> "$GITHUB_OUTPUT"
+            echo "deploy_needed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Use `git log --name-only` over BASE..HEAD instead of `git diff
+          # BASE HEAD`. The diff form has been observed to return empty on
+          # the runner for valid SHA pairs (PR #240 hit this: diff between
+          # 67329ca..74ddef3 returned empty even though template.yaml was
+          # changed). The log form enumerates files touched by every commit
+          # in the range and is robust to whatever runner-side quirk causes
+          # the diff form to misbehave. Mirrors the fix applied to
+          # deploy.yaml in PR #237.
+          changed_files="$(git log --name-only --pretty=format: "${BASE_SHA}..${HEAD_SHA}" 2>/dev/null | sort -u | grep -v '^$' || true)"
+
+          # Backstop: if detection returned nothing despite a non-empty
+          # range, force deploy_needed=true. Re-deploying a no-op is
+          # cheaper than silently skipping a real change.
+          if [[ -z "${changed_files}" && "${BASE_SHA}" != "${HEAD_SHA}" ]]; then
+            echo "WARNING: no files detected between ${BASE_SHA}..${HEAD_SHA}; forcing deploy" >&2
+            echo "backend_changed=true" >> "$GITHUB_OUTPUT"
+            echo "frontend_changed=true" >> "$GITHUB_OUTPUT"
+            echo "js_changed=true" >> "$GITHUB_OUTPUT"
+            echo "rust_changed=true" >> "$GITHUB_OUTPUT"
             echo "deploy_needed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -84,7 +124,7 @@ jobs:
                 rust_changed=true
                 ;;
             esac
-          done < <(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")
+          done <<< "${changed_files}"
 
           if [[ "${backend_changed}" == "true" || "${frontend_changed}" == "true" ]]; then
             deploy_needed=true

@@ -2908,18 +2908,18 @@ Resources:
   #       - !Sub "https://${RedirectCFDistribution.DomainName}/c"
   #     Description: Base URL for campaign short links (append /{code})
 
-  NewsletterApiBaseUrlParam:
-    Type: AWS::SSM::Parameter
-    Properties:
-      Name: !Sub
-        - /newsletter-service/${SsmEnv}/newsletter-api-base-url
-        - SsmEnv: !If [DeployProductionResources, production, staging]
-      Type: String
-      Value: !If
-        - DeployNewsletterApiCustomDomain
-        - !Sub https://api.newsletter.${DomainName}
-        - !Sub "https://${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com/public"
-      Description: NewsletterApi base URL for cross-service consumers (append /links to mint, /links/{code} to delete)
+  # NewsletterApiBaseUrlParam:
+  #   Type: AWS::SSM::Parameter
+  #   Properties:
+  #     Name: !Sub
+  #       - /newsletter-service/${SsmEnv}/newsletter-api-base-url
+  #       - SsmEnv: !If [DeployProductionResources, production, staging]
+  #     Type: String
+  #     Value: !If
+  #       - DeployNewsletterApiCustomDomain
+  #       - !Sub https://api.newsletter.${DomainName}
+  #       - !Sub "https://${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com/public"
+  #     Description: NewsletterApi base URL for cross-service consumers (append /links to mint, /links/{code} to delete)
 
   RedirectCFDistribution:
     Type: AWS::CloudFront::Distribution

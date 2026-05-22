@@ -2892,21 +2892,21 @@ Resources:
           Properties:
             Schedule: "cron(0 7 * * ? *)"
 
-  CampaignShortLinkBaseParam:
-    Type: AWS::SSM::Parameter
-    Properties:
-      # Cross-service contract: consumers (e.g. content-tracking) lookup the
-      # non-prod URL under /staging/ regardless of whether the source stack
-      # was deployed with Environment=sandbox or Environment=stage.
-      Name: !Sub
-        - /newsletter-service/${SsmEnv}/campaign-short-link-base
-        - SsmEnv: !If [DeployProductionResources, production, staging]
-      Type: String
-      Value: !If
-        - HasRedirectCustomDomain
-        - !Sub "https://${RedirectCustomDomain}/c"
-        - !Sub "https://${RedirectCFDistribution.DomainName}/c"
-      Description: Base URL for campaign short links (append /{code})
+  # CampaignShortLinkBaseParam:
+  #   Type: AWS::SSM::Parameter
+  #   Properties:
+  #     # Cross-service contract: consumers (e.g. content-tracking) lookup the
+  #     # non-prod URL under /staging/ regardless of whether the source stack
+  #     # was deployed with Environment=sandbox or Environment=stage.
+  #     Name: !Sub
+  #       - /newsletter-service/${SsmEnv}/campaign-short-link-base
+  #       - SsmEnv: !If [DeployProductionResources, production, staging]
+  #     Type: String
+  #     Value: !If
+  #       - HasRedirectCustomDomain
+  #       - !Sub "https://${RedirectCustomDomain}/c"
+  #       - !Sub "https://${RedirectCFDistribution.DomainName}/c"
+  #     Description: Base URL for campaign short links (append /{code})
 
   NewsletterApiBaseUrlParam:
     Type: AWS::SSM::Parameter

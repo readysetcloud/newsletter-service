@@ -11,8 +11,23 @@ on:
         required: false
         type: boolean
         default: true
+      run_backend_gate:
+        required: false
+        type: boolean
+        default: true
 
 jobs:
+  backend-change-gate:
+    name: Backend Change Gate
+    if: inputs.run_backend_gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Confirm backend-only validation path
+        run: |
+          echo "Backend changes detected; keeping the deploy dependency active."
+
   eslint:
     name: Lint JS
     if: inputs.run_js

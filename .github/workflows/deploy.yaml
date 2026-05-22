@@ -142,6 +142,7 @@ jobs:
     with:
       run_js: ${{ needs.changes.outputs.js_changed == 'true' }}
       run_rust: ${{ needs.changes.outputs.rust_changed == 'true' }}
+      run_backend_gate: ${{ needs.changes.outputs.backend_changed == 'true' }}
 
   deploy-backend:
     name: Deploy Backend

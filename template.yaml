@@ -2625,6 +2625,7 @@ Resources:
         EntryPoints:
           - mint-campaign-link.mjs
     Properties:
+      FunctionName: MintCampaignLink
       Runtime: nodejs24.x
       CodeUri: functions
       Handler: mint-campaign-link.handler

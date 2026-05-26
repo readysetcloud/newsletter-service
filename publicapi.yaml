@@ -43,12 +43,12 @@ paths:
             schema:
               $ref: "#/components/schemas/MintLinkRequest"
       responses:
-        200:
+        201:
           description: Short link minted
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Link"
+                $ref: "#/components/schemas/MintLinkResponse"
         400:
           $ref: "#/components/responses/BadRequest"
         503:
@@ -208,6 +208,43 @@ paths:
       x-amazon-apigateway-integration:
         uri:
           Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetCampaignLinkAnalyticsFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
+  /campaigns/{campaignId}/links/analytics:
+    parameters:
+      - name: campaignId
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+        description: Campaign identifier supplied when minting links
+    get:
+      summary: Get tracked links and analytics for a campaign
+      description: |
+        Returns all short links minted with the supplied `campaignId`, each with
+        the same running aggregate returned by `/links/{code}/analytics`.
+        Links with no clicks are included with zeroed analytics.
+      tags:
+        - Links
+      security:
+        - ApiKeyHeader: []
+      responses:
+        200:
+          description: Campaign links and analytics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CampaignLinksAnalytics"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetCampaignLinksAnalyticsFunction.Arn}/invocations
         httpMethod: POST
         type: aws_proxy
 
@@ -419,6 +456,10 @@ components:
           type: string
           description: Default traffic-source label baked into the short link (can be overridden per click via ?src=)
           maxLength: 64
+        campaignId:
+          type: string
+          description: Optional campaign identifier used to fetch all links and analytics for a campaign
+          maxLength: 128
         expiresInDays:
           type: integer
           minimum: 1
@@ -444,6 +485,24 @@ components:
           maxLength: 64
           nullable: true
 
+    MintLinkResponse:
+      description: Response for POST /links
+      type: object
+      required:
+        - code
+        - short_url
+        - expires_at
+      properties:
+        code:
+          type: string
+          minLength: 6
+          maxLength: 6
+        short_url:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+
     Link:
       description: A tracked short link
       type: object
@@ -463,6 +522,9 @@ components:
         url:
           type: string
         src:
+          type: string
+          nullable: true
+        campaign_id:
           type: string
           nullable: true
         created_at:
@@ -509,6 +571,59 @@ components:
           type: string
           format: date-time
           nullable: true
+
+    CampaignLinksAnalytics:
+      description: Tracked links and click analytics for a campaign
+      type: object
+      required:
+        - campaign_id
+        - total_links
+        - total_clicks
+        - links
+      properties:
+        campaign_id:
+          type: string
+        total_links:
+          type: integer
+          minimum: 0
+        total_clicks:
+          type: integer
+          minimum: 0
+        links:
+          type: array
+          items:
+            type: object
+            required:
+              - code
+              - short_url
+              - url
+              - created_at
+              - expires_at
+              - analytics
+            properties:
+              code:
+                type: string
+              short_url:
+                type: string
+              url:
+                type: string
+              src:
+                type: string
+                nullable: true
+              campaign_id:
+                type: string
+                nullable: true
+              created_at:
+                type: string
+                format: date-time
+              updated_at:
+                type: string
+                format: date-time
+              expires_at:
+                type: string
+                format: date-time
+              analytics:
+                $ref: "#/components/schemas/LinkAnalytics"
 
   responses:
     Created:

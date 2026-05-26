@@ -27,6 +27,7 @@ export const handler = async (event) => {
     short_url: `${process.env.SHORT_LINK_BASE}/${row.code}`,
     url: row.url,
     src: row.src ?? null,
+    campaign_id: row.campaignId ?? null,
     created_at: row.createdAt,
     updated_at: row.updatedAt,
     expires_at: row.expiresAt,

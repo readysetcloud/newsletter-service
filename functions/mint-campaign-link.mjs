@@ -29,7 +29,7 @@ export const handler = async (event) => {
     return formatResponse(400, 'Invalid JSON body');
   }
 
-  const { url, src, expiresInDays } = body;
+  const { url, src, expiresInDays, campaignId } = body;
 
   if (!url || typeof url !== 'string') {
     return formatResponse(400, 'url is required');
@@ -43,6 +43,15 @@ export const handler = async (event) => {
   if (src !== undefined && typeof src !== 'string') {
     return formatResponse(400, 'src must be a string when provided');
   }
+  if (campaignId !== undefined && typeof campaignId !== 'string') {
+    return formatResponse(400, 'campaignId must be a string when provided');
+  }
+  if (campaignId !== undefined && campaignId.trim().length === 0) {
+    return formatResponse(400, 'campaignId cannot be empty when provided');
+  }
+  if (campaignId !== undefined && campaignId.length > 128) {
+    return formatResponse(400, 'campaignId exceeds 128 chars');
+  }
   if (expiresInDays !== undefined) {
     if (!Number.isInteger(expiresInDays) || expiresInDays < 1 || expiresInDays > MAX_EXPIRES_IN_DAYS) {
       return formatResponse(400, `expiresInDays must be an integer between 1 and ${MAX_EXPIRES_IN_DAYS}`);
@@ -53,7 +62,7 @@ export const handler = async (event) => {
   const now = new Date();
   const expiresAt = new Date(now.getTime() + ttlDays * 86400 * 1000).toISOString();
 
-  const code = await allocateUniqueCode(now.toISOString(), expiresAt, url, src);
+  const code = await allocateUniqueCode(now.toISOString(), expiresAt, url, src, campaignId);
   if (!code) {
     return formatResponse(503, 'Could not allocate a unique code');
   }
@@ -63,32 +72,40 @@ export const handler = async (event) => {
 
   await writeKvsEntry(code, kvsValue);
 
-  return formatResponse(200, {
+  return formatResponse(201, {
     code,
     short_url: `${process.env.SHORT_LINK_BASE}/${code}`,
     expires_at: expiresAt,
   });
 };
 
-async function allocateUniqueCode(createdAt, expiresAt, url, src) {
+async function allocateUniqueCode(createdAt, expiresAt, url, src, campaignId) {
   for (let attempt = 0; attempt < MAX_COLLISION_RETRIES; attempt++) {
     const code = generateCode();
+    const item = {
+      pk: `CAMPAIGN_LINK_CODE#${code}`,
+      sk: 'METADATA',
+      GSI1PK: 'CAMPAIGN_LINK_CODE_EXPIRY',
+      GSI1SK: expiresAt,
+      entity: 'CampaignLink',
+      code,
+      url,
+      src: src || null,
+      campaignId: campaignId ?? null,
+      createdAt,
+      expiresAt,
+      updatedAt: createdAt,
+    };
+
+    if (campaignId) {
+      item.GSI2PK = `CAMPAIGN_LINK_CAMPAIGN#${campaignId}`;
+      item.GSI2SK = `LINK#${createdAt}#${code}`;
+    }
+
     try {
       await ddb.send(new PutItemCommand({
         TableName: process.env.TABLE_NAME,
-        Item: marshall({
-          pk: `CAMPAIGN_LINK_CODE#${code}`,
-          sk: 'METADATA',
-          GSI1PK: 'CAMPAIGN_LINK_CODE_EXPIRY',
-          GSI1SK: expiresAt,
-          entity: 'CampaignLink',
-          code,
-          url,
-          src: src || null,
-          createdAt,
-          expiresAt,
-          updatedAt: createdAt,
-        }, { removeUndefinedValues: true }),
+        Item: marshall(item, { removeUndefinedValues: true }),
         ConditionExpression: 'attribute_not_exists(pk)',
       }));
       return code;

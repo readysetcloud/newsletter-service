@@ -84,10 +84,15 @@ describe('mint-campaign-link', () => {
       });
       const after = Date.now();
 
-      expect(res.statusCode).toBe(200);
+      expect(res.statusCode).toBe(201);
       const body = JSON.parse(res.body);
       expect(body.code).toMatch(/^[A-Za-z0-9]{6}$/);
       expect(body.short_url).toBe(`https://rdyset.click/c/${body.code}`);
+      expect(body).toEqual({
+        code: body.code,
+        short_url: `https://rdyset.click/c/${body.code}`,
+        expires_at: body.expires_at,
+      });
 
       const expiresAtMs = Date.parse(body.expires_at);
       const twoYearsMs = 730 * 86400 * 1000;
@@ -138,6 +143,27 @@ describe('mint-campaign-link', () => {
       expect(expiresAtMs).toBeGreaterThanOrEqual(before + thirtyDaysMs - 1000);
       expect(expiresAtMs).toBeLessThanOrEqual(after + thirtyDaysMs + 1000);
     });
+
+    test('stores campaignId on the link metadata and indexes it by campaign', async () => {
+      mockDdbSend.mockResolvedValue({});
+      mockKvsSend
+        .mockResolvedValueOnce({ ETag: 'etag1' })
+        .mockResolvedValueOnce({});
+
+      const res = await invoke({
+        url: 'https://example.com',
+        campaignId: 'issue-2026-05-26',
+      });
+
+      expect(res.statusCode).toBe(201);
+      const body = JSON.parse(res.body);
+      expect(body).not.toHaveProperty('campaign_id');
+
+      const item = unmarshall(mockDdbSend.mock.calls[0][0].input.Item);
+      expect(item.campaignId).toBe('issue-2026-05-26');
+      expect(item.GSI2PK).toBe('CAMPAIGN_LINK_CAMPAIGN#issue-2026-05-26');
+      expect(item.GSI2SK).toBe(`LINK#${item.createdAt}#${body.code}`);
+    });
   });
 
   describe('short-code allocation', () => {
@@ -152,7 +178,7 @@ describe('mint-campaign-link', () => {
         .mockResolvedValueOnce({});
 
       const res = await invoke({ url: 'https://example.com' });
-      expect(res.statusCode).toBe(200);
+      expect(res.statusCode).toBe(201);
       expect(mockDdbSend).toHaveBeenCalledTimes(3);
     });
 

@@ -2625,6 +2625,7 @@ Resources:
         EntryPoints:
           - mint-campaign-link.mjs
     Properties:
+      FunctionName: MintCampaignLink
       Runtime: nodejs24.x
       CodeUri: functions
       Handler: mint-campaign-link.handler
@@ -2693,8 +2694,6 @@ Resources:
             RestApiId: !Ref NewsletterApi
             Path: /links/{code}
             Method: GET
-            Auth:
-              Authorizer: LambdaAuthorizer
 
   PutCampaignLinkFunction:
     Type: AWS::Serverless::Function
@@ -2736,8 +2735,6 @@ Resources:
             RestApiId: !Ref NewsletterApi
             Path: /links/{code}
             Method: PUT
-            Auth:
-              Authorizer: LambdaAuthorizer
 
   GetCampaignLinkAnalyticsFunction:
     Type: AWS::Serverless::Function
@@ -2771,6 +2768,44 @@ Resources:
             Method: GET
             Auth:
               Authorizer: LambdaAuthorizer
+
+  GetCampaignLinksAnalyticsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - get-campaign-links-analytics.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: get-campaign-links-analytics.handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          SHORT_LINK_BASE: !If
+            - HasRedirectCustomDomain
+            - !Sub "https://${RedirectCustomDomain}/c"
+            - !Sub "https://${RedirectCFDistribution.DomainName}/c"
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:BatchGetItem
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI2"
+      Events:
+        Get:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /campaigns/{campaignId}/links/analytics
+            Method: GET
 
   DeleteCampaignLinkFunction:
     Type: AWS::Serverless::Function

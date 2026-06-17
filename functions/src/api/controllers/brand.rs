@@ -9,6 +9,7 @@ use lambda_http::http::Method;
 use lambda_http::{Body, Error, Request, RequestExt, Response};
 use newsletter::admin::{aws_clients, format_response, get_user_context};
 use rand::RngCore;
+use regex::Regex;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -862,10 +863,11 @@ async fn generate_upload_url(
         "image/png",
         "image/gif",
         "image/webp",
+        "image/svg+xml",
     ];
     if !allowed_types.contains(&content_type.as_str()) {
         return Err(UploadBrandPhotoError::BadRequest(
-            "Only image files are allowed (JPEG, PNG, GIF, WebP)".to_string(),
+            "Only image files are allowed (JPEG, PNG, GIF, WebP, SVG)".to_string(),
         ));
     }
 
@@ -878,6 +880,7 @@ async fn generate_upload_url(
         ("image/png", vec!["png"]),
         ("image/gif", vec!["gif"]),
         ("image/webp", vec!["webp"]),
+        ("image/svg+xml", vec!["svg"]),
     ]);
 
     let valid_for_type = valid_extensions
@@ -982,6 +985,13 @@ async fn confirm_upload(
         )));
     }
 
+    // SVG logos can embed executable content (scripts, event handlers, foreignObject).
+    // The file was uploaded straight to S3 via a presigned URL, so this is the first
+    // point the server can inspect the bytes — sanitize before it is ever served.
+    if key.to_lowercase().ends_with(".svg") {
+        sanitize_svg_object(s3_client, &bucket_name, key, tenant_id).await?;
+    }
+
     let public_url = format!("https://{}.s3.amazonaws.com/{}", bucket_name, key);
     let updated_at = Utc::now().to_rfc3339();
 
@@ -1013,6 +1023,93 @@ async fn confirm_upload(
         }),
     )
     .map_err(|err| UploadBrandPhotoError::Internal(err.to_string()))
+}
+
+/// Downloads an SVG object from S3, strips script-execution vectors, and re-uploads
+/// the cleaned version in place. No-ops if sanitization didn't change anything.
+async fn sanitize_svg_object(
+    s3_client: &aws_sdk_s3::Client,
+    bucket_name: &str,
+    key: &str,
+    tenant_id: &str,
+) -> Result<(), UploadBrandPhotoError> {
+    let object = s3_client
+        .get_object()
+        .bucket(bucket_name)
+        .key(key)
+        .send()
+        .await
+        .map_err(|err| UploadBrandPhotoError::Internal(format!("S3 get failed: {}", err)))?;
+
+    let data = object
+        .body
+        .collect()
+        .await
+        .map_err(|err| UploadBrandPhotoError::Internal(format!("S3 read failed: {}", err)))?
+        .into_bytes();
+
+    let original = String::from_utf8_lossy(&data);
+    let sanitized = sanitize_svg(&original);
+
+    // Nothing dangerous found — leave the uploaded object untouched.
+    if sanitized.as_str() == original.as_ref() {
+        return Ok(());
+    }
+
+    // Re-upload the cleaned SVG, restoring the public-read ACL and content type that
+    // the presigned PUT used.
+    s3_client
+        .put_object()
+        .bucket(bucket_name)
+        .key(key)
+        .body(aws_sdk_s3::primitives::ByteStream::from(
+            sanitized.into_bytes(),
+        ))
+        .content_type("image/svg+xml")
+        .acl(ObjectCannedAcl::PublicRead)
+        .metadata("tenantId", tenant_id)
+        .metadata("sanitized", "true")
+        .send()
+        .await
+        .map_err(|err| {
+            UploadBrandPhotoError::Internal(format!("S3 sanitized re-upload failed: {}", err))
+        })?;
+
+    Ok(())
+}
+
+/// Strips script-execution vectors from SVG markup before it is served publicly.
+///
+/// A brand logo has no legitimate need for scripts, event handlers, `<foreignObject>`,
+/// `javascript:` URIs, or DOCTYPE/ENTITY declarations, so we remove them outright. This
+/// is intentionally aggressive (and regex-based rather than a full XML parse): it is
+/// defense-in-depth on top of serving logos via `<img>`, which does not execute SVG
+/// script. It is not a general-purpose SVG sanitizer.
+fn sanitize_svg(input: &str) -> String {
+    // (pattern, replacement) applied in order. All case-insensitive + dotall.
+    let substitutions: &[(&str, &str)] = &[
+        // DOCTYPE (incl. internal subset) and standalone ENTITY decls — XXE / entity expansion.
+        (r"(?is)<!DOCTYPE[^>\[]*(?:\[[^\]]*\])?\s*>", ""),
+        (r"(?is)<!ENTITY.*?>", ""),
+        // <script> / <foreignObject> elements (balanced form, then any stray opening tag).
+        (r"(?is)<script\b.*?</script\s*>", ""),
+        (r"(?is)<script\b[^>]*/?>", ""),
+        (r"(?is)<foreignObject\b.*?</foreignObject\s*>", ""),
+        (r"(?is)<foreignObject\b[^>]*/?>", ""),
+        // Inline event-handler attributes: on...="..." | '...' | bareword.
+        (r#"(?is)\son[a-z0-9_\-]+\s*=\s*"[^"]*""#, ""),
+        (r#"(?is)\son[a-z0-9_\-]+\s*=\s*'[^']*'"#, ""),
+        (r"(?is)\son[a-z0-9_\-]+\s*=\s*[^\s>]+", ""),
+        // javascript: URIs in any attribute value (href, xlink:href, src, ...).
+        (r#"(?is)(=\s*["']?)\s*javascript:[^"'>\s]*"#, "${1}#"),
+    ];
+
+    let mut output = input.to_string();
+    for (pattern, replacement) in substitutions {
+        let re = Regex::new(pattern).expect("valid SVG sanitizer regex");
+        output = re.replace_all(&output, *replacement).into_owned();
+    }
+    output
 }
 
 fn sanitize_filename(file_name: &str) -> String {
@@ -1158,6 +1255,43 @@ mod tests {
         let url = "https://bucket.s3.amazonaws.com/brand-logos/tenant/logo.png?versionId=1";
         let key = extract_s3_key(url).expect("key");
         assert_eq!(key, "brand-logos/tenant/logo.png");
+    }
+
+    #[test]
+    fn sanitize_svg_strips_scripts_and_handlers() {
+        let dirty = r#"<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)">
+            <script>alert('x')</script>
+            <a href="javascript:alert(2)"><rect width="10" height="10"/></a>
+            <foreignObject><body onclick="evil()">hi</body></foreignObject>
+            <circle cx="5" cy="5" r="5" onmouseover='steal()'/>
+        </svg>"#;
+        let clean = sanitize_svg(dirty).to_lowercase();
+
+        assert!(!clean.contains("<script"));
+        assert!(!clean.contains("</script"));
+        assert!(!clean.contains("foreignobject"));
+        assert!(!clean.contains("onload"));
+        assert!(!clean.contains("onclick"));
+        assert!(!clean.contains("onmouseover"));
+        assert!(!clean.contains("javascript:"));
+        // Legitimate shape markup is preserved.
+        assert!(clean.contains("<circle"));
+        assert!(clean.contains("<rect"));
+    }
+
+    #[test]
+    fn sanitize_svg_strips_doctype_and_entities() {
+        let dirty = r#"<?xml version="1.0"?><!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><svg>&xxe;</svg>"#;
+        let clean = sanitize_svg(dirty).to_lowercase();
+
+        assert!(!clean.contains("<!doctype"));
+        assert!(!clean.contains("<!entity"));
+    }
+
+    #[test]
+    fn sanitize_svg_preserves_clean_logo() {
+        let clean_input = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 3h18v18H3z" fill="#000"/></svg>"##;
+        assert_eq!(sanitize_svg(clean_input), clean_input);
     }
 
     #[test]

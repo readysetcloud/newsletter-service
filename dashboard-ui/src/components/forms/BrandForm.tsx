@@ -87,6 +87,11 @@ const BrandFormInner: React.FC<BrandFormProps> = ({
   // Enhanced validation state
   const { isFormValid } = useFormValidationState(form);
 
+  // Editing an existing brand vs. creating one (onboarding / first-time setup).
+  // When creating, the logo is optional and submit should be gated purely on
+  // form validity. The "must have changes" guard only makes sense when editing.
+  const isEditMode = !!initialData?.brandId;
+
   // Watch specific form values for preview updates
   const brandId = useWatch({ control, name: 'brandId' });
   const brandName = useWatch({ control, name: 'brandName' });
@@ -215,7 +220,7 @@ const BrandFormInner: React.FC<BrandFormProps> = ({
         {/* Brand ID */}
         <BrandIdInput
           value={brandId || ''}
-          onChange={(value) => setValue('brandId', value, { shouldValidate: true })}
+          onChange={(value) => setValue('brandId', value, { shouldValidate: true, shouldDirty: true })}
           brandName={brandName || ''}
           error={errors.brandId?.message}
           disabled={!!initialData?.brandId} // Disable if brand already exists
@@ -286,7 +291,7 @@ const BrandFormInner: React.FC<BrandFormProps> = ({
         )}
         <Button
           type="submit"
-          disabled={(!isDirty && !logoFile && !hasLogoChanged) || !isFormValid || isSubmitting}
+          disabled={(isEditMode && !isDirty && !logoFile && !hasLogoChanged) || !isFormValid || isSubmitting}
           isLoading={isSubmitting}
         >
           {isSubmitting ? 'Saving...' : submitButtonText}

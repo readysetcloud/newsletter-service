@@ -330,6 +330,7 @@ paths:
                       "image/png",
                       "image/gif",
                       "image/webp",
+                      "image/svg+xml",
                     ]
                   description: MIME type of the image file
               additionalProperties: false

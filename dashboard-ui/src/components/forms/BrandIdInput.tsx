@@ -140,13 +140,19 @@ export const BrandIdInput: React.FC<BrandIdInputProps> = ({
     return 'idle';
   };
 
-  const getValidationMessage = () => {
+  // Real errors only — these drive the red/error styling.
+  const getErrorMessage = () => {
     if (disabled) return undefined; // No validation messages when disabled
     if (error) return error;
-    if (isChecking) return 'Checking availability...';
-    if (availabilityStatus === 'available') return 'Brand ID is available!';
     if (availabilityStatus === 'taken') return 'This brand ID is already taken';
     if (availabilityStatus === 'invalid') return 'Brand ID format is invalid';
+    return undefined;
+  };
+
+  // Success message — rendered green, never through the error prop.
+  const getSuccessMessage = () => {
+    if (disabled || error) return undefined;
+    if (availabilityStatus === 'available') return 'Brand ID is available!';
     return undefined;
   };
 
@@ -165,8 +171,9 @@ export const BrandIdInput: React.FC<BrandIdInputProps> = ({
         value={value}
         onChange={handleInputChange}
         onBlur={handleInputBlur}
-        error={getValidationMessage()}
-        helperText={getHelperText()}
+        error={getErrorMessage()}
+        success={getSuccessMessage()}
+        helperText={isChecking ? 'Checking availability...' : getHelperText()}
         validationState={getValidationState()}
         showValidationIcon={true}
         disabled={disabled}

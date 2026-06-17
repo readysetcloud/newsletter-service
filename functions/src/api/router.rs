@@ -52,7 +52,7 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
         // Senders endpoints
         (&Method::GET, "/senders") => senders::list_senders(event).await,
         (&Method::POST, "/senders") => senders::create_sender(event).await,
-        (&Method::PUT, path) if path.starts_with("/senders/") && path.ends_with("/status") => {
+        (&Method::GET, path) if path.starts_with("/senders/") && path.ends_with("/status") => {
             let sender_id = extract_sender_id(path);
             senders::get_sender_status(event, sender_id).await
         }
@@ -670,7 +670,7 @@ mod tests {
 
     #[test]
     fn test_method_validation_senders_endpoints() {
-        // Senders: GET list, POST create, PUT update, PUT status, DELETE
+        // Senders: GET list, POST create, PUT update, GET status, DELETE
         assert!(is_valid_api_path("/senders"));
         assert!(is_valid_api_path("/senders/sender-123"));
         assert!(is_valid_api_path("/senders/sender-123/status"));

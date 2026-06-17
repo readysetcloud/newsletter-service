@@ -3863,13 +3863,24 @@ Resources:
             - HasVerifiedFromEmail
             - !Ref VerifiedFromEmail
             - !Sub "noreply@${DomainName}"
+          # Where SES sends the browser after the verification link is clicked.
+          # Without these, SES falls back to its default (the AWS SES product page).
+          VERIFY_SUCCESS_URL: !If
+            - DeployFrontendCustomDomain
+            - !Sub "https://${FrontendCustomDomain}/verify-sender?status=success"
+            - !Sub "https://${FrontendDistribution.DomainName}/verify-sender?status=success"
+          VERIFY_FAILURE_URL: !If
+            - DeployFrontendCustomDomain
+            - !Sub "https://${FrontendCustomDomain}/verify-sender?status=failed"
+            - !Sub "https://${FrontendDistribution.DomainName}/verify-sender?status=failed"
 
   BootstrapVerificationTemplate:
     Type: AWS::CloudFormation::CustomResource
     Properties:
       ServiceToken: !GetAtt BootstrapVerificationTemplateFunction.Arn
-      # Force update on every deployment by including a timestamp-like value
-      Version: !Sub "${AWS::StackName}-${Environment}"
+      # Bump this value to force the custom resource to re-run and re-apply the
+      # SES template (content + success/failure redirect URLs) on deploy.
+      Version: !Sub "${AWS::StackName}-${Environment}-v2"
 
   CheckSenderStatusAutomaticallyFunction:
     Type: AWS::Serverless::Function

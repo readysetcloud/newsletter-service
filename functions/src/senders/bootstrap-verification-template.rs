@@ -214,7 +214,10 @@ async fn create_template(
         .failure_redirection_url(failure_url)
         .send()
         .await
-        .map_err(|e| format!("Failed to create template: {}", e))?;
+        // Debug formatting surfaces the underlying SES service message
+        // (e.g. "Disallowed tags / attributes"); Display alone just says
+        // "service error".
+        .map_err(|e| format!("Failed to create template: {:?}", e))?;
 
     Ok(())
 }
@@ -238,27 +241,29 @@ async fn update_template(
         .failure_redirection_url(failure_url)
         .send()
         .await
-        .map_err(|e| format!("Failed to update template: {}", e))?;
+        // Debug formatting surfaces the underlying SES service message
+        // (e.g. "Disallowed tags / attributes"); Display alone just says
+        // "service error".
+        .map_err(|e| format!("Failed to update template: {:?}", e))?;
 
     Ok(())
 }
 
 fn generate_template_content() -> String {
-    // Note: Amazon SES automatically appends the verification link and a
-    // standard "If you didn't request this" disclaimer beneath this content,
-    // so the template itself focuses on branding and clear instructions.
+    // Notes on SES custom verification email templates:
+    // - SES automatically appends the verification link and a standard
+    //   "If you didn't request this" disclaimer beneath this content, so the
+    //   template focuses on branding and clear instructions.
+    // - SES rejects certain tags/attributes. Confirmed disallowed and avoided
+    //   here: <meta>, <title> (and therefore <head>); and the attributes
+    //   role, cellpadding, cellspacing, align. All styling must be inline CSS.
     r#"<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Verify your sender email</title>
-  </head>
   <body style="margin:0; padding:0; background-color:#f4f5f7; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; color:#1f2933;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f5f7; padding:32px 0;">
+    <table style="width:100%; border-collapse:collapse; background-color:#f4f5f7;">
       <tr>
-        <td align="center">
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px; background-color:#ffffff; border-radius:12px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.08);">
+        <td style="padding:32px 16px; text-align:center;">
+          <table style="width:100%; max-width:560px; margin:0 auto; border-collapse:collapse; background-color:#ffffff; border-radius:12px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.08); text-align:left;">
             <tr>
               <td style="background-color:#4f46e5; padding:24px 32px;">
                 <span style="color:#ffffff; font-size:18px; font-weight:600; letter-spacing:0.2px;">Newsletter Service</span>

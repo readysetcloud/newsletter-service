@@ -244,20 +244,53 @@ async fn update_template(
 }
 
 fn generate_template_content() -> String {
+    // Note: Amazon SES automatically appends the verification link and a
+    // standard "If you didn't request this" disclaimer beneath this content,
+    // so the template itself focuses on branding and clear instructions.
     r#"<!DOCTYPE html>
-<html>
-  <body>
-    <h1>Newsletter Service</h1>
-
-    <h2>Verify Your Sender Email</h2>
-    <p>Hello!</p>
-
-    <p>You're adding a new sender address to your account. To finish setup and start sending from this address, please confirm ownership by clicking the verification link below.</p>
-
-    <p><strong>After clicking the verification link, please return to your dashboard to confirm your email is verified and ready to use.</strong></p>
-
-    <hr />
-    <p><small>This verification ensures you own this email address and can send newsletters from it.</small></p>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Verify your sender email</title>
+  </head>
+  <body style="margin:0; padding:0; background-color:#f4f5f7; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; color:#1f2933;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f5f7; padding:32px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px; background-color:#ffffff; border-radius:12px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.08);">
+            <tr>
+              <td style="background-color:#4f46e5; padding:24px 32px;">
+                <span style="color:#ffffff; font-size:18px; font-weight:600; letter-spacing:0.2px;">Newsletter Service</span>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:32px;">
+                <h1 style="margin:0 0 16px; font-size:22px; font-weight:600; color:#111827;">Verify your sender email</h1>
+                <p style="margin:0 0 16px; font-size:15px; line-height:1.6; color:#374151;">Hi there,</p>
+                <p style="margin:0 0 16px; font-size:15px; line-height:1.6; color:#374151;">
+                  You're adding a new sender address to your account. To finish setup and start sending newsletters from this address, confirm that you own it by clicking the verification link below.
+                </p>
+                <p style="margin:0 0 16px; font-size:15px; line-height:1.6; color:#374151;">
+                  After verifying, head back to your dashboard &mdash; your sender will show as <strong>verified</strong> and ready to use.
+                </p>
+                <p style="margin:0; font-size:13px; line-height:1.6; color:#6b7280;">
+                  This step confirms you own the address and helps keep your newsletters out of spam folders.
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:0 32px 32px;">
+                <hr style="border:none; border-top:1px solid #e5e7eb; margin:0 0 16px;" />
+                <p style="margin:0; font-size:12px; line-height:1.6; color:#9ca3af;">
+                  You're receiving this email because someone added this address as a sender in Newsletter Service.
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
   </body>
 </html>"#.trim().to_string()
 }
@@ -281,7 +314,7 @@ mod tests {
         let content = generate_template_content();
         assert!(content.contains("<!DOCTYPE html>"));
         assert!(content.contains("Newsletter Service"));
-        assert!(content.contains("Verify Your Sender Email"));
+        assert!(content.contains("Verify your sender email"));
         assert!(content.contains("verification link"));
     }
 
@@ -289,9 +322,11 @@ mod tests {
     fn test_template_content_structure() {
         let content = generate_template_content();
         assert!(content.starts_with("<!DOCTYPE html>"));
-        assert!(content.contains("<h1>"));
-        assert!(content.contains("<h2>"));
-        assert!(content.contains("<p>"));
+        // Tags carry inline styles, so match on the opening tag prefix.
+        assert!(content.contains("<html"));
+        assert!(content.contains("<body"));
+        assert!(content.contains("<h1"));
+        assert!(content.contains("<p"));
         assert!(content.contains("</html>"));
     }
 
@@ -300,12 +335,12 @@ mod tests {
         let content = generate_template_content();
         // Verify key messaging elements
         assert!(content.contains("adding a new sender address"));
-        assert!(content.contains("confirm ownership"));
-        assert!(content.contains("return to your dashboard"));
-        // Verify HTML structure is valid
-        assert_eq!(content.matches("<html>").count(), 1);
+        assert!(content.contains("confirm that you own"));
+        assert!(content.contains("dashboard"));
+        // Verify HTML structure is valid (single, balanced html/body wrappers)
+        assert_eq!(content.matches("<html").count(), 1);
         assert_eq!(content.matches("</html>").count(), 1);
-        assert_eq!(content.matches("<body>").count(), 1);
+        assert_eq!(content.matches("<body").count(), 1);
         assert_eq!(content.matches("</body>").count(), 1);
     }
 

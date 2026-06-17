@@ -13,7 +13,6 @@ import { BrandPhotoUpload } from './BrandPhotoUpload';
 import { BrandIdInput } from './BrandIdInput';
 import { brandSchema, BrandFormData, industryOptions } from '../../schemas/brandSchema';
 import { BrandInfo } from '../../types';
-import { useFormValidationState } from '../../hooks/useRealTimeValidation';
 import { getUserFriendlyErrorMessage } from '../../utils/errorHandling';
 
 type BrandFormInput = z.input<typeof brandSchema>;
@@ -84,12 +83,12 @@ const BrandFormInner: React.FC<BrandFormProps> = ({
     getValues
   } = form;
 
-  // Enhanced validation state
-  const { isFormValid } = useFormValidationState(form);
-
   // Editing an existing brand vs. creating one (onboarding / first-time setup).
-  // When creating, the logo is optional and submit should be gated purely on
-  // form validity. The "must have changes" guard only makes sense when editing.
+  // In edit mode we keep a "must have changes" guard so an unchanged form can't be
+  // re-saved. We intentionally do NOT gate the button on form validity: a disabled
+  // button gives the user no idea what's wrong. Instead the button stays clickable
+  // and react-hook-form's handleSubmit surfaces a focused error next to whichever
+  // field is invalid (and blocks the actual submit).
   const isEditMode = !!initialData?.brandId;
 
   // Watch specific form values for preview updates
@@ -291,7 +290,7 @@ const BrandFormInner: React.FC<BrandFormProps> = ({
         )}
         <Button
           type="submit"
-          disabled={(isEditMode && !isDirty && !logoFile && !hasLogoChanged) || !isFormValid || isSubmitting}
+          disabled={isSubmitting || (isEditMode && !isDirty && !logoFile && !hasLogoChanged)}
           isLoading={isSubmitting}
         >
           {isSubmitting ? 'Saving...' : submitButtonText}

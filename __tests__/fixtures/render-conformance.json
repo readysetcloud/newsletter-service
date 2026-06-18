@@ -1,0 +1,75 @@
+[
+  {
+    "name": "variable interpolation (incl. nested path)",
+    "template": "<h1>{{ title }}</h1><p>by {{ author.name }}</p>",
+    "data": { "title": "Hello", "author": { "name": "Ada" } },
+    "snippets": [],
+    "expected": "<h1>Hello</h1><p>by Ada</p>"
+  },
+  {
+    "name": "missing variable renders empty",
+    "template": "<p>{{ present }}{{ missing }}</p>",
+    "data": { "present": "x" },
+    "snippets": [],
+    "expected": "<p>x</p>"
+  },
+  {
+    "name": "no HTML escaping (authored HTML and & pass through)",
+    "template": "{{ body }}",
+    "data": { "body": "<b>bold</b> & <i>it</i>" },
+    "snippets": [],
+    "expected": "<b>bold</b> & <i>it</i>"
+  },
+  {
+    "name": "each block over array",
+    "template": "<ul>{{#each items}}<li>{{ this }}</li>{{/each}}</ul>",
+    "data": { "items": ["a", "b", "c"] },
+    "snippets": [],
+    "expected": "<ul><li>a</li><li>b</li><li>c</li></ul>"
+  },
+  {
+    "name": "if/else block - truthy branch",
+    "template": "{{#if showCta}}<a>Buy</a>{{else}}<span>No CTA</span>{{/if}}",
+    "data": { "showCta": true },
+    "snippets": [],
+    "expected": "<a>Buy</a>"
+  },
+  {
+    "name": "if/else block - falsy branch",
+    "template": "{{#if showCta}}<a>Buy</a>{{else}}<span>No CTA</span>{{/if}}",
+    "data": { "showCta": false },
+    "snippets": [],
+    "expected": "<span>No CTA</span>"
+  },
+  {
+    "name": "registered snippet partial",
+    "template": "<div>{{> footer }}</div>",
+    "data": { "company": "Acme" },
+    "snippets": [{ "name": "footer", "content": "<footer>{{ company }}</footer>" }],
+    "expected": "<div><footer>Acme</footer></div>"
+  },
+  {
+    "name": "missing partial renders empty (no error)",
+    "template": "<p>Hi</p>{{> doesNotExist }}<p>Bye</p>",
+    "data": {},
+    "snippets": [],
+    "expected": "<p>Hi</p><p>Bye</p>"
+  },
+  {
+    "name": "missing partial referenced inside a snippet body renders empty",
+    "template": "{{> layout }}",
+    "data": {},
+    "snippets": [{ "name": "layout", "content": "<section>{{> innerMissing }}</section>" }],
+    "expected": "<section></section>"
+  },
+  {
+    "name": "realistic combo: snippet + each + interpolation",
+    "template": "{{> header }}<main>{{#each posts}}<article>{{ title }}</article>{{/each}}</main>",
+    "data": {
+      "newsletterName": "Weekly",
+      "posts": [{ "title": "P1" }, { "title": "P2" }]
+    },
+    "snippets": [{ "name": "header", "content": "<header>{{ newsletterName }}</header>" }],
+    "expected": "<header>Weekly</header><main><article>P1</article><article>P2</article></main>"
+  }
+]

@@ -1,4 +1,4 @@
-use crate::controllers::template_render;
+use crate::controllers::{snippets, template_render};
 use aws_sdk_dynamodb::types::AttributeValue;
 use lambda_http::{Body, Error, Request, Response};
 use newsletter::admin::{auth, aws_clients, error::AppError, response};
@@ -608,7 +608,11 @@ async fn render_preview(
     content: &str,
     data: &Value,
 ) -> Result<Response<Body>, AppError> {
-    let snippets = template_render::query_snippets_by_tenant(tenant_id).await?;
+    let snippets: Vec<template_render::Snippet> = snippets::query_snippets_by_tenant(tenant_id)
+        .await?
+        .into_iter()
+        .map(Into::into)
+        .collect();
     let html = template_render::render_template(content, data, &snippets)?;
     response::format_response(200, PreviewResponse { html })
 }

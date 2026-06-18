@@ -1,9 +1,9 @@
 import Handlebars from 'handlebars';
-import template from '../templates/newsletter.hbs';
+import defaultTemplate from '../templates/newsletter.hbs';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
-import { DynamoDBClient, PutItemCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, PutItemCommand, GetItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { getTenant } from './utils/helpers.mjs';
-import { marshall } from '@aws-sdk/util-dynamodb';
+import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { publishIssueEvent, EVENT_TYPES } from './utils/event-publisher.mjs';
 
 const eventBridge = new EventBridgeClient();
@@ -11,12 +11,12 @@ const ddb = new DynamoDBClient();
 
 export const handler = async (state) => {
   try {
-    const template = getTemplate(state.data);
+    const html = await renderTemplate(state.data, state.tenantId, state.templateId);
 
     if (state.isPreview) {
       await sendEmail({
         subject: `[Preview] ${state.subject}`,
-        html: template,
+        html,
         to: { email: state.email },
         sendAt: state.sendAtDate,
         tenantId: state.tenantId
@@ -27,7 +27,7 @@ export const handler = async (state) => {
       await setupIssueStats(tenant, state.data.metadata.number, state.subject, publishedAt);
       await sendEmail({
         subject: state.subject,
-        html: template,
+        html,
         to: { list: tenant.list },
         sendAt: state.sendAtDate,
         referenceNumber: `${tenant.pk}_${state.data.metadata.number}`,
@@ -56,11 +56,117 @@ export const handler = async (state) => {
   }
 };
 
-const getTemplate = (data) => {
-  const htmlTemplate = Handlebars.compile(template);
-  const result = htmlTemplate(data);
+/**
+ * Renders the issue data into HTML.
+ *
+ * When a templateId is supplied, the tenant's selected template is loaded from
+ * DynamoDB along with the tenant's snippets (registered as Handlebars partials).
+ * Any partial referenced by the template that is missing is registered as an
+ * empty string so a missing snippet never fails the send.
+ *
+ * When no templateId is supplied, the static default newsletter template is used.
+ *
+ * @param {Object} data - Issue data to render against.
+ * @param {string} [tenantId] - Tenant identifier (required when templateId is set).
+ * @param {string} [templateId] - Optional selected template identifier.
+ * @returns {Promise<string>} Rendered HTML.
+ */
+const renderTemplate = async (data, tenantId, templateId) => {
+  if (!templateId) {
+    return Handlebars.compile(defaultTemplate)(data);
+  }
 
-  return result;
+  const templateContent = await getTemplateContent(tenantId, templateId);
+  if (!templateContent) {
+    console.warn(`Template '${templateId}' not found for tenant '${tenantId}', falling back to default template`);
+    return Handlebars.compile(defaultTemplate)(data);
+  }
+
+  const hbs = Handlebars.create();
+  const snippets = await getSnippets(tenantId);
+  // Register each snippet as a partial. Compile with noEscape so partials match
+  // the no-escape rendering used everywhere else (see compile call below and the
+  // Rust preview renderer in template_render.rs), keeping preview == delivery.
+  for (const snippet of snippets) {
+    if (snippet.name) {
+      hbs.registerPartial(snippet.name, hbs.compile(snippet.content ?? '', { noEscape: true }));
+    }
+  }
+
+  // Register any partial referenced by the template OR by a snippet body that is
+  // not itself a known snippet as an empty partial, so a missing partial renders
+  // empty instead of throwing during rendering.
+  registerMissingPartialsAsEmpty(hbs, templateContent);
+  for (const snippet of snippets) {
+    if (snippet.content) {
+      registerMissingPartialsAsEmpty(hbs, snippet.content);
+    }
+  }
+
+  // noEscape mirrors the preview renderer (handlebars::no_escape) so authored
+  // HTML fields render identically in preview and in the delivered email.
+  return hbs.compile(templateContent, { noEscape: true })(data);
+};
+
+/**
+ * Scans the template source for partial references (`{{> name }}`) and registers
+ * any that are not already registered as an empty-string partial. This guarantees
+ * a missing snippet renders as empty rather than throwing during compilation.
+ *
+ * @param {Object} hbs - Handlebars instance.
+ * @param {string} source - Template source to scan.
+ */
+const registerMissingPartialsAsEmpty = (hbs, source) => {
+  const partialRegex = /\{\{\s*>\s*([\w./-]+)/g;
+  let match;
+  while ((match = partialRegex.exec(source)) !== null) {
+    const name = match[1];
+    if (!hbs.partials[name]) {
+      console.warn(`Partial '${name}' not found, registering as empty`);
+      hbs.registerPartial(name, '');
+    }
+  }
+};
+
+/**
+ * Loads a template's Handlebars content for a tenant.
+ * @param {string} tenantId - Tenant identifier.
+ * @param {string} templateId - Template identifier.
+ * @returns {Promise<string|null>} Template content, or null if not found.
+ */
+const getTemplateContent = async (tenantId, templateId) => {
+  const result = await ddb.send(new GetItemCommand({
+    TableName: process.env.TABLE_NAME,
+    Key: marshall({
+      pk: tenantId,
+      sk: `template#${templateId}`
+    })
+  }));
+
+  if (!result.Item) {
+    return null;
+  }
+
+  const template = unmarshall(result.Item);
+  return template.content ?? null;
+};
+
+/**
+ * Loads all snippets for a tenant via GSI1.
+ * @param {string} tenantId - Tenant identifier.
+ * @returns {Promise<Array<{name: string, content: string}>>} List of snippets.
+ */
+const getSnippets = async (tenantId) => {
+  const result = await ddb.send(new QueryCommand({
+    TableName: process.env.TABLE_NAME,
+    IndexName: 'GSI1',
+    KeyConditionExpression: 'GSI1PK = :gsi1pk',
+    ExpressionAttributeValues: marshall({
+      ':gsi1pk': `snippet#${tenantId}`
+    })
+  }));
+
+  return (result.Items ?? []).map(item => unmarshall(item));
 };
 
 /**

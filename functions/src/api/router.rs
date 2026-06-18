@@ -763,7 +763,9 @@ mod tests {
     fn test_method_validation_domain_endpoints() {
         // Domain: POST verify-domain, GET domain-verification/{domain}
         assert!(is_valid_api_path("/senders/verify-domain"));
-        assert!(is_valid_api_path("/senders/domain-verification/example.com"));
+        assert!(is_valid_api_path(
+            "/senders/domain-verification/example.com"
+        ));
     }
 
     #[test]

@@ -8,3 +8,4 @@ pub mod segments;
 pub mod senders;
 pub mod sponsors;
 pub mod subscribers;
+pub mod templates;

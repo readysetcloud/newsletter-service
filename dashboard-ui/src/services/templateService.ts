@@ -5,6 +5,8 @@ import type {
   ListTemplatesResponse,
   CreateTemplateRequest,
   UpdateTemplateRequest,
+  PreviewTemplateRequest,
+  PreviewTemplateResponse,
 } from '@/types/api';
 
 /**
@@ -80,6 +82,44 @@ export class TemplateService {
       return { success: false, error: 'Template ID is required', errorCode: 'MISSING_TEMPLATE_ID' };
     }
     return apiClient.delete<void>(`/templates/${templateId}`);
+  }
+
+  /**
+   * Server-side preview of unsaved editor content. Renders the supplied
+   * Handlebars `content` against `sampleData`, merging the tenant's snippets.
+   * The backend returns a 400 with a helpful message on invalid Handlebars.
+   */
+  async previewTemplate(
+    request: PreviewTemplateRequest,
+  ): Promise<ApiResponse<PreviewTemplateResponse>> {
+    if (!request.content || !request.content.trim()) {
+      return {
+        success: false,
+        error: 'Template content is required',
+        errorCode: 'VALIDATION_ERROR',
+      };
+    }
+    return apiClient.post<PreviewTemplateResponse>('/templates/preview', {
+      content: request.content,
+      ...(request.sampleData !== undefined && { sampleData: request.sampleData }),
+    });
+  }
+
+  /**
+   * Server-side preview of a saved template by ID. Renders the stored content,
+   * optionally overriding the sample data.
+   */
+  async previewSavedTemplate(
+    templateId: string,
+    sampleData?: Record<string, unknown>,
+  ): Promise<ApiResponse<PreviewTemplateResponse>> {
+    if (!templateId) {
+      return { success: false, error: 'Template ID is required', errorCode: 'MISSING_TEMPLATE_ID' };
+    }
+    return apiClient.post<PreviewTemplateResponse>(
+      `/templates/${templateId}/preview`,
+      sampleData !== undefined ? { sampleData } : {},
+    );
   }
 
   /**

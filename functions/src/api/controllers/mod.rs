@@ -8,4 +8,5 @@ pub mod segments;
 pub mod senders;
 pub mod sponsors;
 pub mod subscribers;
+pub mod template_render;
 pub mod templates;

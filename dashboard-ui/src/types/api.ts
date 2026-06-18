@@ -263,6 +263,33 @@ export interface UpdateTemplateRequest {
   sampleData?: Record<string, unknown>;
 }
 
+// Snippet Types (issue #265 owns the full module; these are the read-only
+// shapes the template builder needs to list and insert snippets).
+export interface SnippetSummary {
+  snippetId: string;
+  name: string;
+  description?: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ListSnippetsResponse {
+  snippets: SnippetSummary[];
+  total: number;
+}
+
+export interface PreviewTemplateRequest {
+  /** Raw Handlebars content to render (for unsaved editor previews). */
+  content?: string;
+  /** Sample data to merge against. Falls back to the template's stored sample data. */
+  sampleData?: Record<string, unknown>;
+}
+
+export interface PreviewTemplateResponse {
+  html: string;
+}
+
 export interface SendTestEmailResponse {
   messageId: string;
   recipientEmail: string;

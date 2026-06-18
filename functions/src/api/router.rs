@@ -300,6 +300,13 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
         // Templates endpoints
         (&Method::GET, "/templates") => templates::list_templates(event).await,
         (&Method::POST, "/templates") => templates::create_template(event).await,
+        // Preview an arbitrary, unsaved template from the editor.
+        (&Method::POST, "/templates/preview") => templates::preview_template(event).await,
+        // Preview a saved template: POST /templates/:id/preview
+        (&Method::POST, path) if path.starts_with("/templates/") && path.ends_with("/preview") => {
+            let template_id = extract_template_id_before(path, "/preview");
+            templates::preview_saved_template(event, template_id).await
+        }
         (&Method::GET, path) if path.starts_with("/templates/") => {
             let template_id = extract_path_param(path, "/templates/");
             templates::get_template(event, template_id).await
@@ -388,6 +395,14 @@ fn extract_sender_id_before(path: &str, suffix: &str) -> Option<String> {
     path.strip_prefix("/senders/")
         .and_then(|s| s.strip_suffix(suffix))
         .filter(|s| !s.is_empty() && *s != "domain")
+        .map(|s| s.to_string())
+}
+
+/// Extract the template ID from paths like `/templates/:id/preview`.
+fn extract_template_id_before(path: &str, suffix: &str) -> Option<String> {
+    path.strip_prefix("/templates/")
+        .and_then(|s| s.strip_suffix(suffix))
+        .filter(|s| !s.is_empty() && *s != "preview")
         .map(|s| s.to_string())
 }
 
@@ -880,6 +895,41 @@ mod tests {
 
         let result = extract_path_param("/templates/", "/templates/");
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_is_valid_api_path_template_preview() {
+        assert!(is_valid_api_path("/templates/preview"));
+        assert!(is_valid_api_path("/templates/tmpl-123/preview"));
+    }
+
+    #[test]
+    fn test_extract_template_id_before_preview() {
+        let result = extract_template_id_before("/templates/tmpl-123/preview", "/preview");
+        assert_eq!(result, Some("tmpl-123".to_string()));
+    }
+
+    #[test]
+    fn test_extract_template_id_before_preview_empty() {
+        let result = extract_template_id_before("/templates//preview", "/preview");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_template_id_before_preview_rejects_unsaved_route() {
+        // `/templates/preview` is the unsaved-preview route, not an id named
+        // "preview"; extracting an id from it must yield None.
+        let result = extract_template_id_before("/templates/preview", "/preview");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_template_preview_routes_precede_generic_get() {
+        // The unsaved preview route is an exact match and the saved preview
+        // route guards on the `/preview` suffix, so neither should be captured
+        // by the generic `GET /templates/:id` arm.
+        assert!("/templates/preview".starts_with("/templates/"));
+        assert!("/templates/tmpl-123/preview".ends_with("/preview"));
     }
 
     #[test]

@@ -153,6 +153,22 @@ export const LazyTemplateFormPage = lazy(() =>
     })
 );
 
+export const LazySnippetsListPage = lazy(() =>
+  import('@/pages/snippets').then(module => ({ default: module.SnippetsListPage }))
+    .catch(error => {
+      console.error('Failed to load SnippetsListPage:', error);
+      throw error;
+    })
+);
+
+export const LazySnippetFormPage = lazy(() =>
+  import('@/pages/snippets').then(module => ({ default: module.SnippetFormPage }))
+    .catch(error => {
+      console.error('Failed to load SnippetFormPage:', error);
+      throw error;
+    })
+);
+
 // Preload critical routes
 export const preloadCriticalRoutes = () => {
   // Preload dashboard since it's the default route
@@ -208,6 +224,9 @@ export const preloadRoute = (routeName: string) => {
       break;
     case 'templates':
       import('@/pages/templates');
+      break;
+    case 'snippets':
+      import('@/pages/snippets');
       break;
     case 'login':
       import('@/pages/auth/LoginPage');

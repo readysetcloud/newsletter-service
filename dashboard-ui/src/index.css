@@ -485,3 +485,20 @@
     font-size: clamp(1.25rem, 4vw, 1.5rem);
   }
 }
+
+/* Handlebars syntax highlighting for the template builder code editor. */
+.hbs-var {
+  color: #2563eb; /* blue-600 */
+}
+.hbs-block {
+  color: #9333ea; /* purple-600 */
+  font-weight: 600;
+}
+.hbs-partial {
+  color: #0d9488; /* teal-600 */
+  font-weight: 600;
+}
+.hbs-comment {
+  color: #6b7280; /* gray-500 */
+  font-style: italic;
+}

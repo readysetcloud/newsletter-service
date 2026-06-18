@@ -126,6 +126,78 @@ describe('TemplateService', () => {
     });
   });
 
+  describe('previewTemplate', () => {
+    it('posts content and sample data to the preview endpoint', async () => {
+      mockApiClient.post.mockResolvedValue({ success: true, data: { html: '<h1>Hi</h1>' } });
+
+      const result = await templateService.previewTemplate({
+        content: '<h1>{{ title }}</h1>',
+        sampleData: { title: 'Hi' },
+      });
+
+      expect(mockApiClient.post).toHaveBeenCalledWith('/templates/preview', {
+        content: '<h1>{{ title }}</h1>',
+        sampleData: { title: 'Hi' },
+      });
+      expect(result.success).toBe(true);
+      expect(result.data?.html).toBe('<h1>Hi</h1>');
+    });
+
+    it('omits sampleData when not provided', async () => {
+      mockApiClient.post.mockResolvedValue({ success: true, data: { html: 'x' } });
+
+      await templateService.previewTemplate({ content: 'x' });
+
+      expect(mockApiClient.post).toHaveBeenCalledWith('/templates/preview', { content: 'x' });
+    });
+
+    it('rejects empty content before calling the API', async () => {
+      const result = await templateService.previewTemplate({ content: '   ' });
+      expect(result.success).toBe(false);
+      expect(result.errorCode).toBe('VALIDATION_ERROR');
+      expect(mockApiClient.post).not.toHaveBeenCalled();
+    });
+
+    it('surfaces a backend 400 as an error result', async () => {
+      mockApiClient.post.mockResolvedValue({
+        success: false,
+        error: 'Template content is not valid Handlebars',
+      });
+
+      const result = await templateService.previewTemplate({ content: '{{#if x}}' });
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Handlebars');
+    });
+  });
+
+  describe('previewSavedTemplate', () => {
+    it('posts to the saved-template preview endpoint', async () => {
+      mockApiClient.post.mockResolvedValue({ success: true, data: { html: '<p>ok</p>' } });
+
+      const result = await templateService.previewSavedTemplate('tmpl-123', { title: 'Hi' });
+
+      expect(mockApiClient.post).toHaveBeenCalledWith('/templates/tmpl-123/preview', {
+        sampleData: { title: 'Hi' },
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('sends an empty body when no sample data override is given', async () => {
+      mockApiClient.post.mockResolvedValue({ success: true, data: { html: '' } });
+
+      await templateService.previewSavedTemplate('tmpl-123');
+
+      expect(mockApiClient.post).toHaveBeenCalledWith('/templates/tmpl-123/preview', {});
+    });
+
+    it('returns an error when ID is missing', async () => {
+      const result = await templateService.previewSavedTemplate('');
+      expect(result.success).toBe(false);
+      expect(result.errorCode).toBe('MISSING_TEMPLATE_ID');
+      expect(mockApiClient.post).not.toHaveBeenCalled();
+    });
+  });
+
   describe('deleteTemplate', () => {
     it('calls delete with the template ID', async () => {
       mockApiClient.delete.mockResolvedValue({ success: true });

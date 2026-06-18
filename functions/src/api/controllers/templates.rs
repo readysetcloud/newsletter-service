@@ -66,7 +66,11 @@ struct TemplateRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
     pub content: String,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "sampleData")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "sampleData"
+    )]
     pub sample_data: Option<String>,
     pub version: u64,
     #[serde(rename = "createdAt")]
@@ -177,7 +181,9 @@ fn validate_name(name: &str) -> Result<String, AppError> {
     let trimmed = name.trim();
 
     if trimmed.is_empty() {
-        return Err(AppError::BadRequest("Template name is required".to_string()));
+        return Err(AppError::BadRequest(
+            "Template name is required".to_string(),
+        ));
     }
 
     if trimmed.chars().count() > NAME_MAX_LEN {
@@ -274,7 +280,8 @@ async fn handle_list_templates(event: Request) -> Result<Response<Body>, AppErro
     let tenant_id = require_tenant(&event)?;
     let templates = query_templates_by_tenant(&tenant_id).await?;
 
-    let summaries: Vec<TemplateSummary> = templates.into_iter().map(TemplateSummary::from).collect();
+    let summaries: Vec<TemplateSummary> =
+        templates.into_iter().map(TemplateSummary::from).collect();
 
     response::format_response(
         200,
@@ -592,10 +599,14 @@ async fn put_template(record: &TemplateRecord, ensure_new: bool) -> Result<(), A
     let item = serde_dynamo::to_item(record)
         .map_err(|e| AppError::InternalError(format!("Failed to serialize template: {}", e)))?;
 
-    let mut request = client.put_item().table_name(table_name).set_item(Some(item));
+    let mut request = client
+        .put_item()
+        .table_name(table_name)
+        .set_item(Some(item));
 
     if ensure_new {
-        request = request.condition_expression("attribute_not_exists(pk) AND attribute_not_exists(sk)");
+        request =
+            request.condition_expression("attribute_not_exists(pk) AND attribute_not_exists(sk)");
     } else {
         request = request.condition_expression("attribute_exists(pk) AND attribute_exists(sk)");
     }

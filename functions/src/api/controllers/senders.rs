@@ -973,12 +973,15 @@ async fn send_test_email_via_ses(
 
     let message = Message::builder()
         .subject(subject)
-        .body(SesBody::builder().html(html_content).text(text_content).build())
+        .body(
+            SesBody::builder()
+                .html(html_content)
+                .text(text_content)
+                .build(),
+        )
         .build();
 
-    let destination = Destination::builder()
-        .to_addresses(recipient_email)
-        .build();
+    let destination = Destination::builder().to_addresses(recipient_email).build();
 
     let mut send_command = ses
         .send_email()
@@ -992,9 +995,10 @@ async fn send_test_email_via_ses(
         }
     }
 
-    let result = send_command.send().await.map_err(|e| {
-        AppError::AwsError(format!("SES send test email failed: {}", e))
-    })?;
+    let result = send_command
+        .send()
+        .await
+        .map_err(|e| AppError::AwsError(format!("SES send test email failed: {}", e)))?;
 
     Ok(result.message_id().unwrap_or_default().to_string())
 }

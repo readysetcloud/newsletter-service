@@ -23,6 +23,8 @@ import {
   LazySubscribersPage,
   LazySponsorDirectoryPage,
   LazySponsorDetailPage,
+  LazyTemplatesListPage,
+  LazyTemplateFormPage,
   preloadCriticalRoutes
 } from '@/utils/lazyImports';
 import { AppShell } from '@/components/layout/AppShell';
@@ -349,6 +351,55 @@ function App() {
                             <AppShell>
                               <PageLoader>
                                 <LazyIssueFormPage />
+                              </PageLoader>
+                            </AppShell>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+
+                  <Route
+                    path="/templates"
+                    element={
+                      <RouteErrorBoundary routeName="Templates">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <AppShell>
+                              <PageLoader>
+                                <LazyTemplatesListPage />
+                              </PageLoader>
+                            </AppShell>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/templates/new"
+                    element={
+                      <RouteErrorBoundary routeName="Create Template">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <AppShell>
+                              <PageLoader>
+                                <LazyTemplateFormPage />
+                              </PageLoader>
+                            </AppShell>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/templates/:id/edit"
+                    element={
+                      <RouteErrorBoundary routeName="Edit Template">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <AppShell>
+                              <PageLoader>
+                                <LazyTemplateFormPage />
                               </PageLoader>
                             </AppShell>
                           </OnboardingGuard>

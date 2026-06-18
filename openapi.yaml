@@ -1130,6 +1130,123 @@ paths:
         "500":
           $ref: "#/components/responses/UnknownError"
 
+  /templates:
+    get:
+      summary: List templates
+      description: Returns all Handlebars templates for the authenticated tenant (summaries without content).
+      tags:
+        - Templates
+      responses:
+        "200":
+          description: A list of templates
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  templates:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TemplateSummary"
+                  total:
+                    type: integer
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+    post:
+      summary: Create a template
+      tags:
+        - Templates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTemplateRequest"
+      responses:
+        "201":
+          description: Template created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Template"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: A template with the same name already exists
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /templates/{templateId}:
+    parameters:
+      - name: templateId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The template ID
+    get:
+      summary: Get a template
+      description: Returns a single template including its content and sample data.
+      tags:
+        - Templates
+      responses:
+        "200":
+          description: The template
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Template"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+    put:
+      summary: Update a template
+      tags:
+        - Templates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTemplateRequest"
+      responses:
+        "200":
+          description: Template updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Template"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: A template with the same name already exists
+        "500":
+          $ref: "#/components/responses/UnknownError"
+    delete:
+      summary: Delete a template
+      tags:
+        - Templates
+      responses:
+        "200":
+          description: Template deleted
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
   /issues:
     get:
       summary: List all issues
@@ -2368,6 +2485,83 @@ components:
         domain:
           type: string
           description: Domain name to verify
+
+    TemplateSummary:
+      type: object
+      properties:
+        templateId:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        version:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    Template:
+      allOf:
+        - $ref: "#/components/schemas/TemplateSummary"
+        - type: object
+          properties:
+            content:
+              type: string
+              description: The Handlebars template source
+            sampleData:
+              type: object
+              additionalProperties: true
+              nullable: true
+              description: Default data used to preview the template
+
+    CreateTemplateRequest:
+      type: object
+      required:
+        - name
+        - content
+      properties:
+        name:
+          type: string
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 500
+        category:
+          type: string
+          maxLength: 50
+        content:
+          type: string
+          description: The Handlebars template source
+        sampleData:
+          type: object
+          additionalProperties: true
+          description: Default data used to preview the template
+
+    UpdateTemplateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 500
+        category:
+          type: string
+          maxLength: 50
+        content:
+          type: string
+        sampleData:
+          type: object
+          additionalProperties: true
 
     ListIssuesResponse:
       type: object

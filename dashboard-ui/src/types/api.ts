@@ -226,6 +226,43 @@ export interface SendTestEmailRequest {
   recipientEmail: string;
 }
 
+// Template Types
+export interface TemplateSummary {
+  templateId: string;
+  name: string;
+  description?: string;
+  category?: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Template extends TemplateSummary {
+  content: string;
+  sampleData?: Record<string, unknown>;
+}
+
+export interface ListTemplatesResponse {
+  templates: TemplateSummary[];
+  total: number;
+}
+
+export interface CreateTemplateRequest {
+  name: string;
+  description?: string;
+  category?: string;
+  content: string;
+  sampleData?: Record<string, unknown>;
+}
+
+export interface UpdateTemplateRequest {
+  name?: string;
+  description?: string;
+  category?: string;
+  content?: string;
+  sampleData?: Record<string, unknown>;
+}
+
 export interface SendTestEmailResponse {
   messageId: string;
   recipientEmail: string;

@@ -3,6 +3,7 @@ use serde_json::json;
 
 use crate::controllers::{
     api_keys, brand, domain, issues, pricing, profile, segments, senders, sponsors, subscribers,
+    templates,
 };
 
 pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
@@ -296,6 +297,22 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
             }
         }
 
+        // Templates endpoints
+        (&Method::GET, "/templates") => templates::list_templates(event).await,
+        (&Method::POST, "/templates") => templates::create_template(event).await,
+        (&Method::GET, path) if path.starts_with("/templates/") => {
+            let template_id = extract_path_param(path, "/templates/");
+            templates::get_template(event, template_id).await
+        }
+        (&Method::PUT, path) if path.starts_with("/templates/") => {
+            let template_id = extract_path_param(path, "/templates/");
+            templates::update_template(event, template_id).await
+        }
+        (&Method::DELETE, path) if path.starts_with("/templates/") => {
+            let template_id = extract_path_param(path, "/templates/");
+            templates::delete_template(event, template_id).await
+        }
+
         // Method not allowed for valid paths
         (_, path) if is_valid_api_path(path) => Ok(format_method_not_allowed()),
 
@@ -349,6 +366,9 @@ fn is_valid_api_path(path: &str) -> bool {
         // Sponsors paths
         || path == "/sponsors"
         || path.starts_with("/sponsors/")
+        // Templates paths
+        || path == "/templates"
+        || path.starts_with("/templates/")
 }
 
 fn extract_path_param(path: &str, prefix: &str) -> Option<String> {
@@ -845,6 +865,21 @@ mod tests {
         ));
         assert!(is_valid_api_path("/sponsors/sp-123/outreach"));
         assert!(is_valid_api_path("/sponsors/sp-123/outreach/jobs/job-789"));
+    }
+
+    #[test]
+    fn test_is_valid_api_path_templates() {
+        assert!(is_valid_api_path("/templates"));
+        assert!(is_valid_api_path("/templates/abc-123"));
+    }
+
+    #[test]
+    fn test_extract_template_id_from_path() {
+        let result = extract_path_param("/templates/tmpl-123", "/templates/");
+        assert_eq!(result, Some("tmpl-123".to_string()));
+
+        let result = extract_path_param("/templates/", "/templates/");
+        assert_eq!(result, None);
     }
 
     #[test]

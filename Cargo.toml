@@ -22,6 +22,7 @@ aws-smithy-types = { workspace = true }
 aws_lambda_events = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
+handlebars = { workspace = true }
 hex = { workspace = true }
 jsonwebtoken = { workspace = true }
 lambda_http = { workspace = true }
@@ -130,3 +131,4 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 aws_lambda_events = "0.15"
 jsonwebtoken = "9"
 serial_test = "3"
+handlebars = "6"

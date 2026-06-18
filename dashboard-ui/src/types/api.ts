@@ -294,6 +294,17 @@ export interface ListSnippetsResponse {
   total: number;
 }
 
+export interface PreviewTemplateRequest {
+  /** Raw Handlebars content to render (for unsaved editor previews). */
+  content?: string;
+  /** Sample data to merge against. Falls back to the template's stored sample data. */
+  sampleData?: Record<string, unknown>;
+}
+
+export interface PreviewTemplateResponse {
+  html: string;
+}
+
 export interface CreateSnippetRequest {
   name: string;
   description?: string;

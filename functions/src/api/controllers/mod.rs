@@ -9,4 +9,5 @@ pub mod senders;
 pub mod snippets;
 pub mod sponsors;
 pub mod subscribers;
+pub mod template_render;
 pub mod templates;

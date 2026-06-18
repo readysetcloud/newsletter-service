@@ -1,3 +1,4 @@
+use crate::controllers::template_render;
 use aws_sdk_dynamodb::types::AttributeValue;
 use lambda_http::{Body, Error, Request, Response};
 use newsletter::admin::{auth, aws_clients, error::AppError, response};
@@ -173,6 +174,32 @@ struct UpdateTemplateRequest {
     content: Option<String>,
     #[serde(rename = "sampleData")]
     sample_data: Option<Value>,
+}
+
+/// Request body for previewing an arbitrary, unsaved template from the editor.
+#[derive(Deserialize)]
+struct PreviewRequest {
+    content: Option<String>,
+    /// Editor-provided sample data to merge against. Accepts either
+    /// `sampleData` or `data` for convenience.
+    #[serde(rename = "sampleData")]
+    sample_data: Option<Value>,
+    data: Option<Value>,
+}
+
+/// Request body for previewing a saved template. The stored content is used;
+/// callers may override the sample data with `data`/`sampleData`.
+#[derive(Default, Deserialize)]
+struct PreviewSavedRequest {
+    #[serde(default, rename = "sampleData")]
+    sample_data: Option<Value>,
+    #[serde(default)]
+    data: Option<Value>,
+}
+
+#[derive(Serialize)]
+struct PreviewResponse {
+    html: String,
 }
 
 // ── Validation ─────────────────────────────────────────────────────────
@@ -489,6 +516,101 @@ async fn handle_delete_template(
         })?;
 
     response::format_response(200, json!({ "message": "Template deleted" }))
+}
+
+// ── Preview ────────────────────────────────────────────────────────────
+
+/// `POST /templates/preview` — render arbitrary, unsaved editor content.
+pub async fn preview_template(event: Request) -> Result<Response<Body>, Error> {
+    match handle_preview_template(event).await {
+        Ok(response) => Ok(response),
+        Err(e) => Ok(response::format_error_response(&e)),
+    }
+}
+
+async fn handle_preview_template(event: Request) -> Result<Response<Body>, AppError> {
+    let tenant_id = require_tenant(&event)?;
+
+    let body: PreviewRequest = serde_json::from_slice(event.body())
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
+
+    let content = body.content.unwrap_or_default();
+    if content.trim().is_empty() {
+        return Err(AppError::BadRequest(
+            "Template content is required".to_string(),
+        ));
+    }
+    if content.len() > CONTENT_MAX_LEN {
+        return Err(AppError::BadRequest(format!(
+            "Template content must be {}KB or less",
+            CONTENT_MAX_LEN / 1024
+        )));
+    }
+
+    // Prefer explicit data, fall back to sampleData, else an empty object.
+    let data = body.data.or(body.sample_data).unwrap_or_else(|| json!({}));
+
+    render_preview(&tenant_id, &content, &data).await
+}
+
+/// `POST /templates/{templateId}/preview` — render a saved template, using its
+/// stored sample data unless the caller overrides it.
+pub async fn preview_saved_template(
+    event: Request,
+    template_id: Option<String>,
+) -> Result<Response<Body>, Error> {
+    match handle_preview_saved_template(event, template_id).await {
+        Ok(response) => Ok(response),
+        Err(e) => Ok(response::format_error_response(&e)),
+    }
+}
+
+async fn handle_preview_saved_template(
+    event: Request,
+    template_id: Option<String>,
+) -> Result<Response<Body>, AppError> {
+    let tenant_id = require_tenant(&event)?;
+    let template_id =
+        template_id.ok_or_else(|| AppError::BadRequest("Template ID is required".to_string()))?;
+
+    // Body is optional; default to no overrides when absent or empty.
+    let body: PreviewSavedRequest = if event.body().is_empty() {
+        PreviewSavedRequest::default()
+    } else {
+        serde_json::from_slice(event.body())
+            .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?
+    };
+
+    let record = get_template_record(&tenant_id, &template_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Template not found".to_string()))?;
+
+    // Override data wins; otherwise fall back to the template's stored
+    // sample data; otherwise an empty object.
+    let stored_sample = record
+        .sample_data
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<Value>(s).ok());
+
+    let data = body
+        .data
+        .or(body.sample_data)
+        .or(stored_sample)
+        .unwrap_or_else(|| json!({}));
+
+    render_preview(&tenant_id, &record.content, &data).await
+}
+
+/// Shared preview rendering: load the tenant's snippets, render with the
+/// missing-partial→empty rule, and wrap the HTML in a JSON response.
+async fn render_preview(
+    tenant_id: &str,
+    content: &str,
+    data: &Value,
+) -> Result<Response<Body>, AppError> {
+    let snippets = template_render::query_snippets_by_tenant(tenant_id).await?;
+    let html = template_render::render_template(content, data, &snippets)?;
+    response::format_response(200, PreviewResponse { html })
 }
 
 // ── Persistence helpers ────────────────────────────────────────────────

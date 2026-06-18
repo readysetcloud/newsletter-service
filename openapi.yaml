@@ -1247,6 +1247,76 @@ paths:
         "500":
           $ref: "#/components/responses/UnknownError"
 
+  /templates/preview:
+    post:
+      summary: Preview unsaved template content
+      description: >
+        Renders arbitrary, unsaved Handlebars content server-side so the editor
+        can show a live preview that matches the send path. The tenant's
+        snippets are loaded and registered as Handlebars partials; any
+        referenced partial that is not a known snippet renders as an empty
+        string. Invalid Handlebars returns a 400 with a helpful message.
+      tags:
+        - Templates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PreviewTemplateRequest"
+      responses:
+        "200":
+          description: Rendered preview HTML
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewTemplateResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /templates/{templateId}/preview:
+    parameters:
+      - name: templateId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The template ID
+    post:
+      summary: Preview a saved template
+      description: >
+        Renders the stored content of a saved template server-side. By default
+        the template's stored sample data is used; callers may override it via
+        the request body. Snippets are registered as partials and missing
+        partials render as empty strings, matching the send path.
+      tags:
+        - Templates
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PreviewSavedTemplateRequest"
+      responses:
+        "200":
+          description: Rendered preview HTML
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewTemplateResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
   /snippets:
     get:
       summary: List snippets
@@ -2679,6 +2749,38 @@ components:
         sampleData:
           type: object
           additionalProperties: true
+
+    PreviewTemplateRequest:
+      type: object
+      required:
+        - content
+      properties:
+        content:
+          type: string
+          description: Raw Handlebars content to render.
+        sampleData:
+          type: object
+          additionalProperties: true
+          description: Data merged into the template. Defaults to an empty object.
+
+    PreviewSavedTemplateRequest:
+      type: object
+      properties:
+        sampleData:
+          type: object
+          additionalProperties: true
+          description: >
+            Optional override for the data merged into the template. When
+            omitted, the template's stored sample data is used.
+
+    PreviewTemplateResponse:
+      type: object
+      required:
+        - html
+      properties:
+        html:
+          type: string
+          description: The rendered HTML.
 
     SnippetParameter:
       type: object

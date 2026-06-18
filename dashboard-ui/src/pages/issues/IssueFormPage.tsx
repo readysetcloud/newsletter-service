@@ -8,13 +8,19 @@ import { useToast } from '@/components/ui/Toast';
 import { ConfirmationDialog } from '@/components/ui/ConfirmationDialog';
 import { MarkdownPreview } from '@/components/issues/MarkdownPreview';
 import { issuesService } from '@/services/issuesService';
+import { templateService } from '@/services/templateService';
 import type { Issue, CreateIssueRequest, UpdateIssueRequest } from '@/types/issues';
+import type { TemplateSummary } from '@/types/api';
+
+// Sentinel value used for the "Default template" option (no templateId persisted).
+const DEFAULT_TEMPLATE_VALUE = '';
 
 interface FormData {
   subject: string;
   content: string;
   issueNumber?: string;
   scheduledAt?: string;
+  templateId?: string;
 }
 
 interface FormErrors {
@@ -35,7 +41,10 @@ export const IssueFormPage: React.FC = () => {
     content: '',
     issueNumber: '',
     scheduledAt: '',
+    templateId: DEFAULT_TEMPLATE_VALUE,
   });
+
+  const [templates, setTemplates] = useState<TemplateSummary[]>([]);
 
   const [errors, setErrors] = useState<FormErrors>({});
   const [isDirty, setIsDirty] = useState(false);
@@ -58,6 +67,7 @@ export const IssueFormPage: React.FC = () => {
           content: issue.content,
           issueNumber: issue.issueNumber ? String(issue.issueNumber) : '',
           scheduledAt: issue.scheduledAt ? toDatetimeLocal(issue.scheduledAt) : '',
+          templateId: issue.templateId ?? DEFAULT_TEMPLATE_VALUE,
         });
 
         // Disable form for published/scheduled issues
@@ -94,6 +104,26 @@ export const IssueFormPage: React.FC = () => {
     }
   }, [isEditMode, id, loadIssue]);
 
+  // Load available templates for the template picker
+  useEffect(() => {
+    let cancelled = false;
+    const loadTemplates = async () => {
+      try {
+        const response = await templateService.listTemplates();
+        if (!cancelled && response.success && response.data) {
+          setTemplates(response.data.templates);
+        }
+      } catch (error) {
+        // Non-fatal: the picker simply falls back to the default template.
+        console.error('Failed to load templates:', error);
+      }
+    };
+    loadTemplates();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Convert ISO datetime to datetime-local format
   const toDatetimeLocal = (isoString: string): string => {
     if (!isoString) return '';
@@ -114,8 +144,8 @@ export const IssueFormPage: React.FC = () => {
     }));
     setIsDirty(true);
 
-    // Clear error for this field
-    if (errors[field]) {
+    // Clear error for this field (only validated fields have error entries)
+    if (field in errors && errors[field as keyof FormErrors]) {
       setErrors((prev) => ({
         ...prev,
         [field]: undefined,
@@ -204,6 +234,10 @@ export const IssueFormPage: React.FC = () => {
           updateData.scheduledAt = new Date(formData.scheduledAt).toISOString();
         }
 
+        if (formData.templateId) {
+          updateData.templateId = formData.templateId;
+        }
+
         const response = await issuesService.updateIssue(id, updateData);
 
         if (response.success) {
@@ -255,6 +289,10 @@ export const IssueFormPage: React.FC = () => {
 
         if (formData.scheduledAt) {
           createData.scheduledAt = new Date(formData.scheduledAt).toISOString();
+        }
+
+        if (formData.templateId) {
+          createData.templateId = formData.templateId;
         }
 
         const response = await issuesService.createIssue(createData);
@@ -449,6 +487,30 @@ export const IssueFormPage: React.FC = () => {
               )}
               <p className="mt-1 text-xs text-muted-foreground">
                 Leave empty to save as draft. Set a future date/time to schedule automatic publication. Time is in your local timezone.
+              </p>
+            </div>
+
+            {/* Template Picker */}
+            <div>
+              <label htmlFor="templateId" className="block text-sm font-medium text-foreground mb-2">
+                Template (Optional)
+              </label>
+              <select
+                id="templateId"
+                value={formData.templateId ?? DEFAULT_TEMPLATE_VALUE}
+                onChange={(e) => handleInputChange('templateId', e.target.value)}
+                disabled={isFormDisabled}
+                className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <option value={DEFAULT_TEMPLATE_VALUE}>Default template</option>
+                {templates.map((template) => (
+                  <option key={template.templateId} value={template.templateId}>
+                    {template.name}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Choose a template to render this issue. Leave as &ldquo;Default template&rdquo; to use the built-in newsletter layout.
               </p>
             </div>
 

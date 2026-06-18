@@ -2638,6 +2638,9 @@ components:
         metadata:
           type: object
           description: Optional metadata for the issue
+        templateId:
+          type: string
+          description: Optional identifier of the template to render this issue with. When omitted, the default template is used.
 
     CreateIssueResponse:
       type: object
@@ -2721,6 +2724,9 @@ components:
         metadata:
           type: object
           description: Optional metadata for the issue
+        templateId:
+          type: string
+          description: Identifier of the template used to render this issue (omitted when the default template is used)
         stats:
           $ref: "#/components/schemas/IssueStats"
         insights:
@@ -2752,6 +2758,9 @@ components:
         metadata:
           type: object
           description: Optional metadata for the issue
+        templateId:
+          type: string
+          description: Optional identifier of the template to render this issue with. When omitted, the default template is used.
         status:
           type: string
           enum:

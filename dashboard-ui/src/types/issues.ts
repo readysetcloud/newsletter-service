@@ -27,6 +27,7 @@ export interface Issue extends IssueListItem {
   content: string;
   updatedAt: string;
   metadata?: Record<string, unknown>;
+  templateId?: string;
   stats?: IssueStats;
   insights?: string[];
   insightsV2?: InsightV2[];
@@ -112,6 +113,7 @@ export interface CreateIssueRequest {
   issueNumber?: number;
   scheduledAt?: string;
   metadata?: Record<string, unknown>;
+  templateId?: string;
 }
 
 export interface UpdateIssueRequest {
@@ -120,6 +122,7 @@ export interface UpdateIssueRequest {
   scheduledAt?: string;
   metadata?: Record<string, unknown>;
   status?: 'published';
+  templateId?: string;
 }
 
 export interface ListIssuesParams {

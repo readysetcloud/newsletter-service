@@ -55,6 +55,8 @@ pub struct CreateIssueRequest {
     action: Option<CreateIssueAction>,
     #[serde(skip_serializing_if = "Option::is_none")]
     metadata: Option<serde_json::Value>,
+    #[serde(rename = "templateId", skip_serializing_if = "Option::is_none")]
+    template_id: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Copy, Clone, PartialEq, Eq)]
@@ -91,6 +93,8 @@ pub struct UpdateIssueRequest {
     metadata: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<String>,
+    #[serde(rename = "templateId", skip_serializing_if = "Option::is_none")]
+    template_id: Option<String>,
 }
 
 // Response type for get single issue endpoint
@@ -112,6 +116,8 @@ pub struct GetIssueResponse {
     scheduled_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     metadata: Option<serde_json::Value>,
+    #[serde(rename = "templateId", skip_serializing_if = "Option::is_none")]
+    template_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stats: Option<IssueStats>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -268,6 +274,7 @@ pub struct IssueRecord {
     pub published_at: Option<String>,
     pub scheduled_at: Option<String>,
     pub metadata: Option<serde_json::Value>,
+    pub template_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -460,6 +467,7 @@ async fn handle_resend_issue(
         issue.issue_number,
         &issue.content,
         None,
+        issue.template_id.as_deref(),
     )
     .await?;
 
@@ -500,6 +508,10 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
 
     validate_create_request(&body)?;
+
+    if let Some(template_id) = body.template_id.as_deref() {
+        validate_template_exists(&tenant_id, template_id).await?;
+    }
 
     let action = body.action.unwrap_or(CreateIssueAction::Draft);
     let idempotency_key = get_idempotency_key(&event);
@@ -570,6 +582,7 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
             issue_number,
             &body.content,
             normalized_scheduled_at.as_deref(),
+            body.template_id.as_deref(),
         )
         .await?;
     }
@@ -597,6 +610,10 @@ async fn handle_update_issue(
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
 
     validate_update_request(&body)?;
+
+    if let Some(template_id) = body.template_id.as_deref() {
+        validate_template_exists(&tenant_id, template_id).await?;
+    }
 
     let existing = get_issue_by_id(&tenant_id, &issue_id).await?;
 
@@ -740,6 +757,7 @@ fn validate_update_request(body: &UpdateIssueRequest) -> Result<(), AppError> {
         && body.scheduled_at.is_none()
         && body.metadata.is_none()
         && body.status.is_none()
+        && body.template_id.is_none()
     {
         return Err(AppError::BadRequest(
             "At least one field must be provided for update".to_string(),
@@ -1040,6 +1058,11 @@ fn parse_issue_record(item: &HashMap<String, AttributeValue>) -> Result<IssueRec
         }
     });
 
+    let template_id = item
+        .get("templateId")
+        .and_then(|v| v.as_s().ok())
+        .map(|s| s.to_string());
+
     Ok(IssueRecord {
         pk,
         sk,
@@ -1054,6 +1077,7 @@ fn parse_issue_record(item: &HashMap<String, AttributeValue>) -> Result<IssueRec
         published_at,
         scheduled_at,
         metadata,
+        template_id,
     })
 }
 
@@ -1458,6 +1482,7 @@ fn compute_idempotency_hash(
         },
         "scheduledAt": scheduled_at,
         "metadata": body.metadata.clone(),
+        "templateId": body.template_id.clone(),
     });
 
     let mut hasher = Sha256::new();
@@ -1482,6 +1507,32 @@ async fn issue_exists(tenant_id: &str, issue_number: i32) -> Result<bool, AppErr
         .await?;
 
     Ok(result.item().is_some())
+}
+
+async fn validate_template_exists(tenant_id: &str, template_id: &str) -> Result<(), AppError> {
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+    let table_name = std::env::var("TABLE_NAME")
+        .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
+
+    let pk = tenant_id.to_string();
+    let sk = format!("template#{}", template_id);
+
+    let result = ddb_client
+        .get_item()
+        .table_name(&table_name)
+        .key("pk", AttributeValue::S(pk))
+        .key("sk", AttributeValue::S(sk))
+        .send()
+        .await?;
+
+    if result.item().is_none() {
+        return Err(AppError::BadRequest(format!(
+            "Template '{}' not found",
+            template_id
+        )));
+    }
+
+    Ok(())
 }
 
 async fn get_idempotency_record(
@@ -1601,6 +1652,7 @@ async fn start_issue_schedule(
     issue_number: i32,
     content: &str,
     scheduled_at: Option<&str>,
+    template_id: Option<&str>,
 ) -> Result<(), AppError> {
     let sfn_client = aws_clients::get_sfn_client().await;
     let state_machine_arn = std::env::var("STATE_MACHINE_ARN")
@@ -1614,7 +1666,10 @@ async fn start_issue_schedule(
             "id": tenant_id,
             "email": tenant_email
         },
-        "isPreview": false
+        "isPreview": false,
+        // Always present (null when no template selected) so the state machine
+        // can reference it unconditionally.
+        "templateId": template_id
     });
 
     if let Some(scheduled_at) = scheduled_at {
@@ -1714,6 +1769,13 @@ async fn create_issue_record(
         }
     }
 
+    if let Some(template_id) = &body.template_id {
+        item.insert(
+            "templateId".to_string(),
+            AttributeValue::S(template_id.clone()),
+        );
+    }
+
     ddb_client
         .put_item()
         .table_name(&table_name)
@@ -1784,6 +1846,14 @@ async fn update_issue_record(
             expression_attribute_values
                 .insert(":metadata".to_string(), AttributeValue::S(metadata_str));
         }
+    }
+
+    if let Some(template_id) = &body.template_id {
+        update_expression_parts.push("templateId = :template_id".to_string());
+        expression_attribute_values.insert(
+            ":template_id".to_string(),
+            AttributeValue::S(template_id.clone()),
+        );
     }
 
     if let Some(status) = &body.status {
@@ -2027,6 +2097,7 @@ fn build_issue_response(
         published_at: issue.published_at,
         scheduled_at: issue.scheduled_at,
         metadata: issue.metadata,
+        template_id: issue.template_id,
         stats,
         insights: insights.as_ref().and_then(|data| data.insights.clone()),
         insights_v2: insights.and_then(|data| data.insights_v2),
@@ -2080,6 +2151,10 @@ mod tests {
             "publishedAt".to_string(),
             AttributeValue::S("2024-01-15T11:00:00Z".to_string()),
         );
+        item.insert(
+            "templateId".to_string(),
+            AttributeValue::S("tmpl-123".to_string()),
+        );
 
         let result = parse_issue_record(&item);
         assert!(result.is_ok());
@@ -2090,6 +2165,48 @@ mod tests {
         assert_eq!(issue.status, "published");
         assert_eq!(issue.content, "# Test Content");
         assert_eq!(issue.published_at, Some("2024-01-15T11:00:00Z".to_string()));
+        assert_eq!(issue.template_id, Some("tmpl-123".to_string()));
+    }
+
+    #[test]
+    fn test_parse_issue_record_without_template_id() {
+        let mut item = HashMap::new();
+        item.insert(
+            "pk".to_string(),
+            AttributeValue::S("tenant-789#7".to_string()),
+        );
+        item.insert(
+            "sk".to_string(),
+            AttributeValue::S("newsletter".to_string()),
+        );
+        item.insert(
+            "GSI1PK".to_string(),
+            AttributeValue::S("tenant-789#newsletter".to_string()),
+        );
+        item.insert(
+            "GSI1SK".to_string(),
+            AttributeValue::S("2024-01-15T10:30:00Z".to_string()),
+        );
+        item.insert(
+            "subject".to_string(),
+            AttributeValue::S("No Template Issue".to_string()),
+        );
+        item.insert("status".to_string(), AttributeValue::S("draft".to_string()));
+        item.insert(
+            "content".to_string(),
+            AttributeValue::S("content".to_string()),
+        );
+        item.insert(
+            "createdAt".to_string(),
+            AttributeValue::S("2024-01-15T10:00:00Z".to_string()),
+        );
+        item.insert(
+            "updatedAt".to_string(),
+            AttributeValue::S("2024-01-15T10:30:00Z".to_string()),
+        );
+
+        let issue = parse_issue_record(&item).unwrap();
+        assert_eq!(issue.template_id, None);
     }
 
     #[test]
@@ -2310,6 +2427,7 @@ mod tests {
             published_at: Some("2024-01-15T11:00:00Z".to_string()),
             scheduled_at: None,
             metadata: None,
+            template_id: None,
         };
 
         let stats = Some(IssueStats {
@@ -2351,6 +2469,7 @@ mod tests {
             published_at: None,
             scheduled_at: None,
             metadata: None,
+            template_id: None,
         };
 
         let response = build_issue_response(issue, None, None);
@@ -2371,6 +2490,7 @@ mod tests {
             scheduled_at: None,
             action: None,
             metadata: None,
+            template_id: None,
         };
 
         let result = validate_create_request(&request);
@@ -2386,6 +2506,7 @@ mod tests {
             scheduled_at: None,
             action: None,
             metadata: None,
+            template_id: None,
         };
 
         let result = validate_create_request(&request);
@@ -2402,6 +2523,7 @@ mod tests {
             scheduled_at: None,
             action: None,
             metadata: None,
+            template_id: None,
         };
 
         let result = validate_create_request(&request);
@@ -2418,6 +2540,7 @@ mod tests {
             scheduled_at: None,
             action: None,
             metadata: None,
+            template_id: None,
         };
 
         let result = validate_create_request(&request);
@@ -2433,6 +2556,7 @@ mod tests {
             scheduled_at: None,
             metadata: None,
             status: None,
+            template_id: None,
         };
 
         let result = validate_update_request(&request);
@@ -2447,6 +2571,7 @@ mod tests {
             scheduled_at: None,
             metadata: None,
             status: None,
+            template_id: None,
         };
 
         let result = validate_update_request(&request);
@@ -2461,6 +2586,7 @@ mod tests {
             scheduled_at: None,
             metadata: None,
             status: None,
+            template_id: None,
         };
 
         let result = validate_update_request(&request);
@@ -2476,6 +2602,7 @@ mod tests {
             scheduled_at: None,
             metadata: None,
             status: None,
+            template_id: None,
         };
 
         let result = validate_update_request(&request);
@@ -2491,6 +2618,7 @@ mod tests {
             scheduled_at: None,
             metadata: None,
             status: None,
+            template_id: None,
         };
 
         let result = validate_update_request(&request);
@@ -2506,6 +2634,7 @@ mod tests {
             scheduled_at: None,
             metadata: None,
             status: None,
+            template_id: None,
         };
 
         let result = validate_update_request(&request);
@@ -2529,6 +2658,7 @@ mod tests {
             published_at: None,
             scheduled_at: None,
             metadata: None,
+            template_id: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -2551,6 +2681,7 @@ mod tests {
             published_at: Some("2024-01-15T11:00:00Z".to_string()),
             scheduled_at: None,
             metadata: None,
+            template_id: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -2574,6 +2705,7 @@ mod tests {
             published_at: None,
             scheduled_at: Some("2024-01-16T10:00:00Z".to_string()),
             metadata: None,
+            template_id: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -2597,6 +2729,7 @@ mod tests {
             published_at: None,
             scheduled_at: None,
             metadata: None,
+            template_id: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -2619,6 +2752,7 @@ mod tests {
             published_at: Some("2024-01-15T11:00:00Z".to_string()),
             scheduled_at: None,
             metadata: None,
+            template_id: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -2642,6 +2776,7 @@ mod tests {
             published_at: None,
             scheduled_at: Some("2024-01-16T10:00:00Z".to_string()),
             metadata: None,
+            template_id: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -2665,6 +2800,7 @@ mod tests {
             published_at: None,
             scheduled_at: None,
             metadata: None,
+            template_id: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -2698,6 +2834,7 @@ mod tests {
                 published_at: if status == "published" { Some(updated_at.clone()) } else { None },
                 scheduled_at: if status == "scheduled" { Some(updated_at.clone()) } else { None },
                 metadata: None,
+                template_id: None,
             };
 
             let stats = if has_stats && status == "published" {
@@ -2909,6 +3046,7 @@ mod tests {
                 scheduled_at: None,
                 action: None,
                 metadata: None,
+                template_id: None,
             };
 
             let now = chrono::Utc::now().to_rfc3339();
@@ -2974,6 +3112,7 @@ mod tests {
                 scheduled_at: None,
                 action: None,
                 metadata: None,
+                template_id: None,
             };
 
             let result = validate_create_request(&request);
@@ -2992,6 +3131,7 @@ mod tests {
                 scheduled_at: None,
                 action: None,
                 metadata: None,
+                template_id: None,
             };
 
             let result = validate_create_request(&request);
@@ -3010,6 +3150,7 @@ mod tests {
                 scheduled_at: None,
                 action: None,
                 metadata: None,
+                template_id: None,
             };
 
             let result = validate_create_request(&request);
@@ -3033,6 +3174,7 @@ mod tests {
                 content: Some(new_content.clone()),
                 scheduled_at: None,
                 metadata: None,
+                template_id: None,
             };
 
             let result = validate_update_request(&request);
@@ -3092,6 +3234,7 @@ mod tests {
                 published_at: if status == "published" { Some("2024-01-15T11:00:00Z".to_string()) } else { None },
                 scheduled_at: if status == "scheduled" { Some("2024-01-16T10:00:00Z".to_string()) } else { None },
                 metadata: None,
+                template_id: None,
             };
 
             let result = check_update_allowed(&issue);
@@ -3121,6 +3264,7 @@ mod tests {
                 published_at: None,
                 scheduled_at: None,
                 metadata: None,
+                template_id: None,
             };
 
             let result = check_update_allowed(&issue);
@@ -3151,6 +3295,7 @@ mod tests {
                 published_at: if status == "published" { Some("2024-01-15T11:00:00Z".to_string()) } else { None },
                 scheduled_at: if status == "scheduled" { Some("2024-01-16T10:00:00Z".to_string()) } else { None },
                 metadata: None,
+                template_id: None,
             };
 
             let result = check_delete_allowed(&issue);
@@ -3201,6 +3346,7 @@ mod tests {
             stats: None,
             insights: None,
             insights_v2: None,
+            template_id: None,
         };
 
         let result = publish_event(tenant_id, event_type, &data).await;
@@ -3225,6 +3371,7 @@ mod tests {
             published_at: None,
             scheduled_at: None,
             metadata: None,
+            template_id: None,
         };
 
         let result = publish_event(tenant_id, event_type, &data).await;

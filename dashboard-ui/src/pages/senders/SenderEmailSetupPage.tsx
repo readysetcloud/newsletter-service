@@ -145,6 +145,21 @@ export function SenderEmailSetupPage() {
       operationInProgress: { type: null }
     }));
 
+    // For domain senders, surface the DNS-records guide immediately. The guide
+    // loads the actual records itself from GET /senders/domain-verification/{domain}.
+    if (sender.verificationType === 'domain' && sender.domain) {
+      setState(prev => ({
+        ...prev,
+        showDomainGuide: true,
+        domainVerification: {
+          domain: sender.domain!,
+          verificationStatus: 'pending',
+          dnsRecords: [],
+          instructions: []
+        }
+      }));
+    }
+
     // Add to polling statuses for UI feedback
     setState(prev => ({
       ...prev,
@@ -317,7 +332,7 @@ export function SenderEmailSetupPage() {
                   />
                 ) : (
                   /* Show balanced tier info when user can still add senders */
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  <div className={`grid grid-cols-1 gap-6 ${state.tierLimits.tier !== 'pro-tier' ? 'lg:grid-cols-2' : ''}`}>
                     {/* Current Plan Info */}
                     <div className="bg-primary-50 border border-primary-200 rounded-lg p-4">
                       <div className="flex items-center space-x-3 mb-3">
@@ -373,7 +388,8 @@ export function SenderEmailSetupPage() {
                       </div>
                     </div>
 
-                    {/* Upgrade Preview */}
+                    {/* Upgrade Preview - hidden on the top (Pro) tier, which has nothing to upgrade to */}
+                    {state.tierLimits.tier !== 'pro-tier' && (
                     <div className="bg-gradient-to-r from-primary-50 to-background border border-primary-200 rounded-lg p-4">
                       <div className="flex items-center space-x-3 mb-3">
                         <div className="w-10 h-10 bg-primary-100 rounded-full flex items-center justify-center">
@@ -415,6 +431,7 @@ export function SenderEmailSetupPage() {
                         View Upgrade Options
                       </button>
                     </div>
+                    )}
                   </div>
                 )}
               </div>

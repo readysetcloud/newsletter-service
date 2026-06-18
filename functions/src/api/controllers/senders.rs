@@ -39,6 +39,8 @@ struct CreateSenderResponse {
     created_at: String,
     #[serde(rename = "updatedAt")]
     updated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "dnsRecords")]
+    dns_records: Option<Vec<DnsRecord>>,
     message: String,
 }
 
@@ -327,7 +329,7 @@ async fn handle_create_sender(event: Request) -> Result<Response<Body>, AppError
         None
     };
 
-    let mut sender_record = SenderRecord {
+    let sender_record = SenderRecord {
         pk: tenant_id.clone(),
         sk: KeyPatterns::sender(&sender_id),
         gsi1pk: KeyPatterns::sender_gsi1pk(&tenant_id),
@@ -350,10 +352,19 @@ async fn handle_create_sender(event: Request) -> Result<Response<Body>, AppError
         last_sent_at: None,
     };
 
+    let mut dns_records_response: Option<Vec<DnsRecord>> = None;
     if body.verification_type == "domain" {
-        match initiate_email_verification(&body.email, &body.verification_type, &tenant_id).await {
-            Ok(identity_arn) => {
-                sender_record.ses_identity_arn = Some(identity_arn);
+        let domain_name = domain.clone().ok_or_else(|| {
+            AppError::InternalError("Domain missing for domain sender".to_string())
+        })?;
+        match create_domain_identity_and_records(&domain_name, &tenant_id).await {
+            Ok(dns_records) => {
+                // Persist a domain verification record so the dashboard guide
+                // (GET /senders/domain-verification/{domain}) can immediately
+                // surface the DNS records the user needs to add.
+                save_domain_verification_record(&tenant_id, &domain_name, &dns_records, &now)
+                    .await?;
+                dns_records_response = Some(dns_records);
             }
             Err(e) => {
                 tracing::error!("SES domain verification initiation failed: {:?}", e);
@@ -417,6 +428,7 @@ async fn handle_create_sender(event: Request) -> Result<Response<Body>, AppError
             domain,
             created_at: now.clone(),
             updated_at: now,
+            dns_records: dns_records_response,
             message: message.to_string(),
         },
     )
@@ -530,6 +542,108 @@ async fn initiate_email_verification(
         .identity_type()
         .map(|t| t.as_str().to_string())
         .unwrap_or_default())
+}
+
+/// Creates the SES domain identity and returns the DKIM DNS records the user
+/// must add. Mirrors the standalone `/senders/verify-domain` flow so that
+/// adding a domain sender is a single step that yields the records directly.
+async fn create_domain_identity_and_records(
+    domain: &str,
+    tenant_id: &str,
+) -> Result<Vec<DnsRecord>, AppError> {
+    let ses = aws_clients::get_ses_client().await;
+    let config_set = std::env::var("SES_CONFIGURATION_SET").ok();
+
+    let mut create_command = ses.create_email_identity().email_identity(domain);
+    if let Some(config) = config_set {
+        create_command = create_command.configuration_set_name(config);
+    }
+
+    create_command
+        .send()
+        .await
+        .map_err(|e| AppError::AwsError(format!("SES create domain identity failed: {}", e)))?;
+
+    let resource_arn_prefix = std::env::var("RESOURCE_ARN_PREFIX")
+        .unwrap_or_else(|_| "arn:aws:ses:us-east-1:123456789012:identity/".to_string());
+    let resource_arn = format!("{}{}", resource_arn_prefix, domain);
+
+    if let Err(e) = ses
+        .create_tenant_resource_association()
+        .tenant_name(tenant_id)
+        .resource_arn(&resource_arn)
+        .send()
+        .await
+    {
+        tracing::warn!(
+            error = ?e,
+            domain = %domain,
+            tenant_id = %tenant_id,
+            "Failed to create tenant resource association (non-fatal)"
+        );
+    }
+
+    let identity_info = ses
+        .get_email_identity()
+        .email_identity(domain)
+        .send()
+        .await
+        .map_err(|e| AppError::AwsError(format!("SES get email identity failed: {}", e)))?;
+
+    let mut dns_records = Vec::new();
+    if let Some(dkim_attributes) = identity_info.dkim_attributes() {
+        for (i, token) in dkim_attributes.tokens().iter().enumerate() {
+            dns_records.push(DnsRecord {
+                name: format!("{}._domainkey.{}", token, domain),
+                record_type: "CNAME".to_string(),
+                value: format!("{}.dkim.amazonses.com", token),
+                description: format!("DKIM token {} for email authentication", i + 1),
+            });
+        }
+    }
+
+    Ok(dns_records)
+}
+
+/// Persists (or refreshes) the domain verification record so the dashboard's
+/// `GET /senders/domain-verification/{domain}` can return the DNS records and
+/// track status. Uses an unconditional put so re-adding a domain refreshes it.
+async fn save_domain_verification_record(
+    tenant_id: &str,
+    domain: &str,
+    dns_records: &[DnsRecord],
+    now: &str,
+) -> Result<(), AppError> {
+    let ddb = aws_clients::get_dynamodb_client().await;
+    let table_name = std::env::var("TABLE_NAME")
+        .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
+
+    let domain_record = DomainVerificationRecord {
+        pk: tenant_id.to_string(),
+        sk: KeyPatterns::domain(domain),
+        domain: domain.to_string(),
+        tenant_id: tenant_id.to_string(),
+        verification_status: VerificationStatus::Pending,
+        dns_records: dns_records.to_vec(),
+        ses_identity_arn: None,
+        created_at: now.to_string(),
+        updated_at: now.to_string(),
+        verified_at: None,
+    };
+
+    let item: std::collections::HashMap<String, AttributeValue> =
+        serde_dynamo::to_item(&domain_record).map_err(|e| {
+            AppError::InternalError(format!("Failed to serialize domain record: {}", e))
+        })?;
+
+    ddb.put_item()
+        .table_name(table_name)
+        .set_item(Some(item))
+        .send()
+        .await
+        .map_err(|e| AppError::AwsError(format!("DynamoDB put failed: {}", e)))?;
+
+    Ok(())
 }
 
 async fn send_custom_verification_email(email: &str, tenant_id: &str) -> Result<(), AppError> {

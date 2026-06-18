@@ -2375,6 +2375,13 @@ components:
           type: string
           format: date-time
           description: When the verification expires (24 hours after initiation)
+        dnsRecords:
+          type: array
+          description: >-
+            DNS records to add for domain verification. Only present in the
+            response when creating a sender with domain verification.
+          items:
+            $ref: "#/components/schemas/DnsRecord"
 
     TierLimits:
       type: object

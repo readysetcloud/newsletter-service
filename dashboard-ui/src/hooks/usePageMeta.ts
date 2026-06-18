@@ -14,6 +14,7 @@ export const ROUTE_META: Record<string, { title: string; parent?: { label: strin
   '/': { title: 'Dashboard' },
   '/issues': { title: 'Issues' },
   '/templates': { title: 'Templates' },
+  '/snippets': { title: 'Snippets' },
   '/subscribers': { title: 'Subscribers' },
   '/brand': { title: 'Brand' },
   '/sponsors': { title: 'Sponsors' },
@@ -90,6 +91,28 @@ export function usePageMeta(dynamicTitle?: string): PageMeta {
       breadcrumb: [
         { label: 'Templates', href: '/templates' },
         { label: 'Edit Template' },
+      ],
+    };
+  }
+
+  // Dynamic route: /snippets/new
+  if (pathname === '/snippets/new') {
+    return {
+      title: 'New Snippet',
+      breadcrumb: [
+        { label: 'Snippets', href: '/snippets' },
+        { label: 'New Snippet' },
+      ],
+    };
+  }
+
+  // Dynamic route: /snippets/:id/edit
+  if (params.id && pathname === `/snippets/${params.id}/edit`) {
+    return {
+      title: 'Edit Snippet',
+      breadcrumb: [
+        { label: 'Snippets', href: '/snippets' },
+        { label: 'Edit Snippet' },
       ],
     };
   }

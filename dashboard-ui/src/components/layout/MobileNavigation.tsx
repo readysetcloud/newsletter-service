@@ -15,7 +15,7 @@ import {
   Bars3Icon,
   XMarkIcon
 } from '@heroicons/react/24/outline';
-import { FileText, LayoutTemplate } from 'lucide-react';
+import { FileText, LayoutTemplate, Puzzle } from 'lucide-react';
 import { cn } from '../../utils/cn';
 
 export const MobileNavigation: React.FC = () => {
@@ -29,6 +29,7 @@ export const MobileNavigation: React.FC = () => {
   const baseNavigation = [
     { name: 'Issues', href: '/issues', icon: FileText, preloadKey: 'issues' },
     { name: 'Templates', href: '/templates', icon: LayoutTemplate, preloadKey: 'templates' },
+    { name: 'Snippets', href: '/snippets', icon: Puzzle, preloadKey: 'snippets' },
     { name: 'Brand', href: '/brand', icon: BuildingOfficeIcon, preloadKey: 'brand' },
     { name: 'Profile', href: '/profile', icon: UserIcon, preloadKey: 'profile' },
     { name: 'Sender Emails', href: '/senders', icon: EnvelopeIcon, preloadKey: 'senders' },

@@ -2,8 +2,8 @@ use lambda_http::{http::Method, Body, Error, Request, Response};
 use serde_json::json;
 
 use crate::controllers::{
-    api_keys, brand, domain, issues, pricing, profile, segments, senders, sponsors, subscribers,
-    templates,
+    api_keys, brand, domain, issues, pricing, profile, segments, senders, snippets, sponsors,
+    subscribers, templates,
 };
 
 pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
@@ -313,6 +313,22 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
             templates::delete_template(event, template_id).await
         }
 
+        // Snippets endpoints
+        (&Method::GET, "/snippets") => snippets::list_snippets(event).await,
+        (&Method::POST, "/snippets") => snippets::create_snippet(event).await,
+        (&Method::GET, path) if path.starts_with("/snippets/") => {
+            let snippet_id = extract_path_param(path, "/snippets/");
+            snippets::get_snippet(event, snippet_id).await
+        }
+        (&Method::PUT, path) if path.starts_with("/snippets/") => {
+            let snippet_id = extract_path_param(path, "/snippets/");
+            snippets::update_snippet(event, snippet_id).await
+        }
+        (&Method::DELETE, path) if path.starts_with("/snippets/") => {
+            let snippet_id = extract_path_param(path, "/snippets/");
+            snippets::delete_snippet(event, snippet_id).await
+        }
+
         // Method not allowed for valid paths
         (_, path) if is_valid_api_path(path) => Ok(format_method_not_allowed()),
 
@@ -369,6 +385,9 @@ fn is_valid_api_path(path: &str) -> bool {
         // Templates paths
         || path == "/templates"
         || path.starts_with("/templates/")
+        // Snippets paths
+        || path == "/snippets"
+        || path.starts_with("/snippets/")
 }
 
 fn extract_path_param(path: &str, prefix: &str) -> Option<String> {
@@ -879,6 +898,21 @@ mod tests {
         assert_eq!(result, Some("tmpl-123".to_string()));
 
         let result = extract_path_param("/templates/", "/templates/");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_is_valid_api_path_snippets() {
+        assert!(is_valid_api_path("/snippets"));
+        assert!(is_valid_api_path("/snippets/abc-123"));
+    }
+
+    #[test]
+    fn test_extract_snippet_id_from_path() {
+        let result = extract_path_param("/snippets/snip-123", "/snippets/");
+        assert_eq!(result, Some("snip-123".to_string()));
+
+        let result = extract_path_param("/snippets/", "/snippets/");
         assert_eq!(result, None);
     }
 

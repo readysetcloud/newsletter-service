@@ -13,6 +13,8 @@ export interface PageMeta {
 export const ROUTE_META: Record<string, { title: string; parent?: { label: string; href: string } }> = {
   '/': { title: 'Dashboard' },
   '/issues': { title: 'Issues' },
+  '/templates': { title: 'Templates' },
+  '/snippets': { title: 'Snippets' },
   '/subscribers': { title: 'Subscribers' },
   '/brand': { title: 'Brand' },
   '/sponsors': { title: 'Sponsors' },
@@ -67,6 +69,50 @@ export function usePageMeta(dynamicTitle?: string): PageMeta {
       breadcrumb: [
         { label: 'Issues', href: '/issues' },
         { label: title },
+      ],
+    };
+  }
+
+  // Dynamic route: /templates/new
+  if (pathname === '/templates/new') {
+    return {
+      title: 'New Template',
+      breadcrumb: [
+        { label: 'Templates', href: '/templates' },
+        { label: 'New Template' },
+      ],
+    };
+  }
+
+  // Dynamic route: /templates/:id/edit
+  if (params.id && pathname === `/templates/${params.id}/edit`) {
+    return {
+      title: 'Edit Template',
+      breadcrumb: [
+        { label: 'Templates', href: '/templates' },
+        { label: 'Edit Template' },
+      ],
+    };
+  }
+
+  // Dynamic route: /snippets/new
+  if (pathname === '/snippets/new') {
+    return {
+      title: 'New Snippet',
+      breadcrumb: [
+        { label: 'Snippets', href: '/snippets' },
+        { label: 'New Snippet' },
+      ],
+    };
+  }
+
+  // Dynamic route: /snippets/:id/edit
+  if (params.id && pathname === `/snippets/${params.id}/edit`) {
+    return {
+      title: 'Edit Snippet',
+      breadcrumb: [
+        { label: 'Snippets', href: '/snippets' },
+        { label: 'Edit Snippet' },
       ],
     };
   }

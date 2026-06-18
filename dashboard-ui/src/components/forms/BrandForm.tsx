@@ -13,7 +13,6 @@ import { BrandPhotoUpload } from './BrandPhotoUpload';
 import { BrandIdInput } from './BrandIdInput';
 import { brandSchema, BrandFormData, industryOptions } from '../../schemas/brandSchema';
 import { BrandInfo } from '../../types';
-import { useFormValidationState } from '../../hooks/useRealTimeValidation';
 import { getUserFriendlyErrorMessage } from '../../utils/errorHandling';
 
 type BrandFormInput = z.input<typeof brandSchema>;
@@ -84,8 +83,13 @@ const BrandFormInner: React.FC<BrandFormProps> = ({
     getValues
   } = form;
 
-  // Enhanced validation state
-  const { isFormValid } = useFormValidationState(form);
+  // Editing an existing brand vs. creating one (onboarding / first-time setup).
+  // In edit mode we keep a "must have changes" guard so an unchanged form can't be
+  // re-saved. We intentionally do NOT gate the button on form validity: a disabled
+  // button gives the user no idea what's wrong. Instead the button stays clickable
+  // and react-hook-form's handleSubmit surfaces a focused error next to whichever
+  // field is invalid (and blocks the actual submit).
+  const isEditMode = !!initialData?.brandId;
 
   // Watch specific form values for preview updates
   const brandId = useWatch({ control, name: 'brandId' });
@@ -215,7 +219,7 @@ const BrandFormInner: React.FC<BrandFormProps> = ({
         {/* Brand ID */}
         <BrandIdInput
           value={brandId || ''}
-          onChange={(value) => setValue('brandId', value, { shouldValidate: true })}
+          onChange={(value) => setValue('brandId', value, { shouldValidate: true, shouldDirty: true })}
           brandName={brandName || ''}
           error={errors.brandId?.message}
           disabled={!!initialData?.brandId} // Disable if brand already exists
@@ -286,7 +290,7 @@ const BrandFormInner: React.FC<BrandFormProps> = ({
         )}
         <Button
           type="submit"
-          disabled={(!isDirty && !logoFile && !hasLogoChanged) || !isFormValid || isSubmitting}
+          disabled={isSubmitting || (isEditMode && !isDirty && !logoFile && !hasLogoChanged)}
           isLoading={isSubmitting}
         >
           {isSubmitting ? 'Saving...' : submitButtonText}

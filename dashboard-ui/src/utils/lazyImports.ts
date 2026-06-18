@@ -137,6 +137,38 @@ export const LazySponsorDetailPage = lazy(() =>
     })
 );
 
+export const LazyTemplatesListPage = lazy(() =>
+  import('@/pages/templates').then(module => ({ default: module.TemplatesListPage }))
+    .catch(error => {
+      console.error('Failed to load TemplatesListPage:', error);
+      throw error;
+    })
+);
+
+export const LazyTemplateFormPage = lazy(() =>
+  import('@/pages/templates').then(module => ({ default: module.TemplateFormPage }))
+    .catch(error => {
+      console.error('Failed to load TemplateFormPage:', error);
+      throw error;
+    })
+);
+
+export const LazySnippetsListPage = lazy(() =>
+  import('@/pages/snippets').then(module => ({ default: module.SnippetsListPage }))
+    .catch(error => {
+      console.error('Failed to load SnippetsListPage:', error);
+      throw error;
+    })
+);
+
+export const LazySnippetFormPage = lazy(() =>
+  import('@/pages/snippets').then(module => ({ default: module.SnippetFormPage }))
+    .catch(error => {
+      console.error('Failed to load SnippetFormPage:', error);
+      throw error;
+    })
+);
+
 // Preload critical routes
 export const preloadCriticalRoutes = () => {
   // Preload dashboard since it's the default route
@@ -189,6 +221,12 @@ export const preloadRoute = (routeName: string) => {
     case 'sponsors':
       import('@/pages/sponsors/SponsorDirectoryPage');
       import('@/pages/sponsors/SponsorDetailPage');
+      break;
+    case 'templates':
+      import('@/pages/templates');
+      break;
+    case 'snippets':
+      import('@/pages/snippets');
       break;
     case 'login':
       import('@/pages/auth/LoginPage');

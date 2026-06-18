@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
+import { Modal, ModalHeader, ModalTitle, ModalDescription, ModalContent, ModalFooter } from '@/components/ui/Modal';
 import { useConfirmationDialog } from '@/components/ui/ConfirmationDialog';
 import { useToast } from '@/components/ui/Toast';
 import { ErrorDisplay } from '@/components/ui/ErrorDisplay';
@@ -16,6 +18,7 @@ import {
   EnvelopeIcon,
   GlobeAltIcon,
   ArrowPathIcon,
+  PaperAirplaneIcon,
 } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid';
 import { cn } from '@/utils/cn';
@@ -39,8 +42,51 @@ export const SenderEmailList: React.FC<SenderEmailListProps> = ({
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
   const [operationErrors, setOperationErrors] = useState<Record<string, string>>({});
+  const [testEmailSender, setTestEmailSender] = useState<SenderEmail | null>(null);
+  const [testRecipient, setTestRecipient] = useState('');
+  const [testError, setTestError] = useState<string | null>(null);
+  const [sendingTest, setSendingTest] = useState(false);
   const { showConfirmation, ConfirmationDialog } = useConfirmationDialog();
   const { addToast } = useToast();
+
+  const openTestEmailModal = (sender: SenderEmail) => {
+    setTestEmailSender(sender);
+    setTestRecipient('');
+    setTestError(null);
+  };
+
+  const closeTestEmailModal = () => {
+    if (sendingTest) return;
+    setTestEmailSender(null);
+    setTestRecipient('');
+    setTestError(null);
+  };
+
+  const handleSendTestEmail = async () => {
+    if (!testEmailSender) return;
+
+    setTestError(null);
+    setSendingTest(true);
+    try {
+      const response = await senderService.sendTestEmail(testEmailSender.senderId, testRecipient);
+
+      if (response.success) {
+        addToast({
+          title: 'Test email sent',
+          message: `A test email from ${testEmailSender.email} is on its way to ${testRecipient.trim()}`,
+          type: 'success'
+        });
+        setTestEmailSender(null);
+        setTestRecipient('');
+      } else {
+        setTestError(getUserFriendlyErrorMessage(response, 'sender'));
+      }
+    } catch (error) {
+      setTestError(getUserFriendlyErrorMessage(error, 'sender'));
+    } finally {
+      setSendingTest(false);
+    }
+  };
 
   const getStatusIcon = (status: SenderEmail['verificationStatus']) => {
     switch (status) {
@@ -392,6 +438,18 @@ export const SenderEmailList: React.FC<SenderEmailListProps> = ({
                   </Button>
                 )}
 
+                {/* Send Test Email Button - for verified senders */}
+                {sender.verificationStatus === 'verified' && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => openTestEmailModal(sender)}
+                    title="Send a test email"
+                  >
+                    <PaperAirplaneIcon className="w-4 h-4" />
+                  </Button>
+                )}
+
                 {/* Set as Default Button */}
                 {!sender.isDefault && sender.verificationStatus === 'verified' && (
                   <Button
@@ -497,6 +555,52 @@ export const SenderEmailList: React.FC<SenderEmailListProps> = ({
       ))}
 
       <ConfirmationDialog />
+
+      {/* Send Test Email Modal */}
+      <Modal isOpen={!!testEmailSender} onClose={closeTestEmailModal} size="md">
+        <ModalHeader onClose={closeTestEmailModal}>
+          <ModalTitle>Send a test email</ModalTitle>
+          <ModalDescription>
+            {testEmailSender
+              ? `Send a test email from ${testEmailSender.email} to confirm everything is working.`
+              : ''}
+          </ModalDescription>
+        </ModalHeader>
+        <ModalContent>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              handleSendTestEmail();
+            }}
+          >
+            <Input
+              type="email"
+              label="Recipient email address"
+              placeholder="you@example.com"
+              value={testRecipient}
+              onChange={(event) => {
+                setTestRecipient(event.target.value);
+                if (testError) setTestError(null);
+              }}
+              error={testError ?? undefined}
+              leftIcon={<EnvelopeIcon />}
+              disabled={sendingTest}
+            />
+          </form>
+        </ModalContent>
+        <ModalFooter>
+          <Button variant="outline" onClick={closeTestEmailModal} disabled={sendingTest}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleSendTestEmail}
+            isLoading={sendingTest}
+            disabled={sendingTest || !testRecipient.trim()}
+          >
+            Send test email
+          </Button>
+        </ModalFooter>
+      </Modal>
     </div>
   );
 };

@@ -330,6 +330,7 @@ paths:
                       "image/png",
                       "image/gif",
                       "image/webp",
+                      "image/svg+xml",
                     ]
                   description: MIME type of the image file
               additionalProperties: false
@@ -1027,6 +1028,55 @@ paths:
         "500":
           $ref: "#/components/responses/UnknownError"
 
+  /senders/{senderId}/test:
+    parameters:
+      - name: senderId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The sender ID
+    post:
+      summary: Send a test email
+      description: Sends a test email from a verified sender address to a recipient of the user's choosing
+      tags:
+        - Senders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - recipientEmail
+              properties:
+                recipientEmail:
+                  type: string
+                  format: email
+                  description: The email address to send the test email to
+      responses:
+        "200":
+          description: Test email sent successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  messageId:
+                    type: string
+                  recipientEmail:
+                    type: string
+                  message:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
   /senders/verify-domain:
     post:
       summary: Initiate domain verification
@@ -1073,6 +1123,310 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DomainVerification"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /templates:
+    get:
+      summary: List templates
+      description: Returns all Handlebars templates for the authenticated tenant (summaries without content).
+      tags:
+        - Templates
+      responses:
+        "200":
+          description: A list of templates
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  templates:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TemplateSummary"
+                  total:
+                    type: integer
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+    post:
+      summary: Create a template
+      tags:
+        - Templates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTemplateRequest"
+      responses:
+        "201":
+          description: Template created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Template"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: A template with the same name already exists
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /templates/{templateId}:
+    parameters:
+      - name: templateId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The template ID
+    get:
+      summary: Get a template
+      description: Returns a single template including its content and sample data.
+      tags:
+        - Templates
+      responses:
+        "200":
+          description: The template
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Template"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+    put:
+      summary: Update a template
+      tags:
+        - Templates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTemplateRequest"
+      responses:
+        "200":
+          description: Template updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Template"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: A template with the same name already exists
+        "500":
+          $ref: "#/components/responses/UnknownError"
+    delete:
+      summary: Delete a template
+      tags:
+        - Templates
+      responses:
+        "200":
+          description: Template deleted
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /templates/preview:
+    post:
+      summary: Preview unsaved template content
+      description: >
+        Renders arbitrary, unsaved Handlebars content server-side so the editor
+        can show a live preview that matches the send path. The tenant's
+        snippets are loaded and registered as Handlebars partials; any
+        referenced partial that is not a known snippet renders as an empty
+        string. Invalid Handlebars returns a 400 with a helpful message.
+      tags:
+        - Templates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PreviewTemplateRequest"
+      responses:
+        "200":
+          description: Rendered preview HTML
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewTemplateResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /templates/{templateId}/preview:
+    parameters:
+      - name: templateId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The template ID
+    post:
+      summary: Preview a saved template
+      description: >
+        Renders the stored content of a saved template server-side. By default
+        the template's stored sample data is used; callers may override it via
+        the request body. Snippets are registered as partials and missing
+        partials render as empty strings, matching the send path.
+      tags:
+        - Templates
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PreviewSavedTemplateRequest"
+      responses:
+        "200":
+          description: Rendered preview HTML
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewTemplateResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /snippets:
+    get:
+      summary: List snippets
+      description: Returns all reusable Handlebars snippets (partials) for the authenticated tenant (summaries without content).
+      tags:
+        - Snippets
+      responses:
+        "200":
+          description: A list of snippets
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  snippets:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SnippetSummary"
+                  total:
+                    type: integer
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+    post:
+      summary: Create a snippet
+      tags:
+        - Snippets
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSnippetRequest"
+      responses:
+        "201":
+          description: Snippet created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snippet"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: A snippet with the same name already exists
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /snippets/{snippetId}:
+    parameters:
+      - name: snippetId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The snippet ID
+    get:
+      summary: Get a snippet
+      description: Returns a single snippet including its content and parameters.
+      tags:
+        - Snippets
+      responses:
+        "200":
+          description: The snippet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snippet"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+    put:
+      summary: Update a snippet
+      tags:
+        - Snippets
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSnippetRequest"
+      responses:
+        "200":
+          description: Snippet updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snippet"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: A snippet with the same name already exists
+        "500":
+          $ref: "#/components/responses/UnknownError"
+    delete:
+      summary: Delete a snippet
+      tags:
+        - Snippets
+      responses:
+        "200":
+          description: Snippet deleted
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -2318,6 +2672,218 @@ components:
         domain:
           type: string
           description: Domain name to verify
+
+    TemplateSummary:
+      type: object
+      properties:
+        templateId:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        version:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    Template:
+      allOf:
+        - $ref: "#/components/schemas/TemplateSummary"
+        - type: object
+          properties:
+            content:
+              type: string
+              description: The Handlebars template source
+            sampleData:
+              type: object
+              additionalProperties: true
+              nullable: true
+              description: Default data used to preview the template
+
+    CreateTemplateRequest:
+      type: object
+      required:
+        - name
+        - content
+      properties:
+        name:
+          type: string
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 500
+        category:
+          type: string
+          maxLength: 50
+        content:
+          type: string
+          description: The Handlebars template source
+        sampleData:
+          type: object
+          additionalProperties: true
+          description: Default data used to preview the template
+
+    UpdateTemplateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 500
+        category:
+          type: string
+          maxLength: 50
+        content:
+          type: string
+        sampleData:
+          type: object
+          additionalProperties: true
+
+    PreviewTemplateRequest:
+      type: object
+      required:
+        - content
+      properties:
+        content:
+          type: string
+          description: Raw Handlebars content to render.
+        sampleData:
+          type: object
+          additionalProperties: true
+          description: Data merged into the template. Defaults to an empty object.
+
+    PreviewSavedTemplateRequest:
+      type: object
+      properties:
+        sampleData:
+          type: object
+          additionalProperties: true
+          description: >
+            Optional override for the data merged into the template. When
+            omitted, the template's stored sample data is used.
+
+    PreviewTemplateResponse:
+      type: object
+      required:
+        - html
+      properties:
+        html:
+          type: string
+          description: The rendered HTML.
+
+    SnippetParameter:
+      type: object
+      required:
+        - name
+        - type
+        - required
+      properties:
+        name:
+          type: string
+          maxLength: 100
+        type:
+          type: string
+          enum:
+            - string
+            - number
+            - boolean
+            - select
+            - textarea
+            - url
+        required:
+          type: boolean
+        defaultValue:
+          nullable: true
+          description: Default value for the parameter (any JSON type)
+        description:
+          type: string
+          maxLength: 500
+        options:
+          type: array
+          items:
+            type: string
+          description: Allowed values, required when type is "select"
+
+    SnippetSummary:
+      type: object
+      properties:
+        snippetId:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        version:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    Snippet:
+      allOf:
+        - $ref: "#/components/schemas/SnippetSummary"
+        - type: object
+          properties:
+            content:
+              type: string
+              description: The Handlebars partial source
+            parameters:
+              type: array
+              nullable: true
+              items:
+                $ref: "#/components/schemas/SnippetParameter"
+
+    CreateSnippetRequest:
+      type: object
+      required:
+        - name
+        - content
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          description: Partial identifier; must start with a letter and contain only letters, numbers, underscores, and hyphens
+        description:
+          type: string
+          maxLength: 500
+        content:
+          type: string
+          description: The Handlebars partial source
+        parameters:
+          type: array
+          items:
+            $ref: "#/components/schemas/SnippetParameter"
+
+    UpdateSnippetRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 500
+        content:
+          type: string
+        parameters:
+          type: array
+          items:
+            $ref: "#/components/schemas/SnippetParameter"
 
     ListIssuesResponse:
       type: object

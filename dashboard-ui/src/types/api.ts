@@ -222,6 +222,109 @@ export interface VerifyDomainRequest {
   domain: string;
 }
 
+export interface SendTestEmailRequest {
+  recipientEmail: string;
+}
+
+// Template Types
+export interface TemplateSummary {
+  templateId: string;
+  name: string;
+  description?: string;
+  category?: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Template extends TemplateSummary {
+  content: string;
+  sampleData?: Record<string, unknown>;
+}
+
+export interface ListTemplatesResponse {
+  templates: TemplateSummary[];
+  total: number;
+}
+
+export interface CreateTemplateRequest {
+  name: string;
+  description?: string;
+  category?: string;
+  content: string;
+  sampleData?: Record<string, unknown>;
+}
+
+export interface UpdateTemplateRequest {
+  name?: string;
+  description?: string;
+  category?: string;
+  content?: string;
+  sampleData?: Record<string, unknown>;
+}
+
+// Snippet Types
+export type SnippetParameterType = 'string' | 'number' | 'boolean' | 'select' | 'textarea' | 'url';
+
+export interface SnippetParameter {
+  name: string;
+  type: SnippetParameterType;
+  required: boolean;
+  defaultValue?: unknown;
+  description?: string;
+  options?: string[];
+}
+
+export interface SnippetSummary {
+  snippetId: string;
+  name: string;
+  description?: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Snippet extends SnippetSummary {
+  content: string;
+  parameters?: SnippetParameter[];
+}
+
+export interface ListSnippetsResponse {
+  snippets: SnippetSummary[];
+  total: number;
+}
+
+export interface PreviewTemplateRequest {
+  /** Raw Handlebars content to render (for unsaved editor previews). */
+  content?: string;
+  /** Sample data to merge against. Falls back to the template's stored sample data. */
+  sampleData?: Record<string, unknown>;
+}
+
+export interface PreviewTemplateResponse {
+  html: string;
+}
+
+export interface CreateSnippetRequest {
+  name: string;
+  description?: string;
+  content: string;
+  parameters?: SnippetParameter[];
+}
+
+export interface UpdateSnippetRequest {
+  name?: string;
+  description?: string;
+  content?: string;
+  parameters?: SnippetParameter[];
+}
+
+export interface SendTestEmailResponse {
+  messageId: string;
+  recipientEmail: string;
+  message: string;
+}
+
 export interface GetSendersResponse {
   senders: SenderEmail[];
   tierLimits: TierLimits;

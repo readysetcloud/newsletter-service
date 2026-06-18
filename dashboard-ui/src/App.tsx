@@ -23,6 +23,10 @@ import {
   LazySubscribersPage,
   LazySponsorDirectoryPage,
   LazySponsorDetailPage,
+  LazyTemplatesListPage,
+  LazyTemplateFormPage,
+  LazySnippetsListPage,
+  LazySnippetFormPage,
   preloadCriticalRoutes
 } from '@/utils/lazyImports';
 import { AppShell } from '@/components/layout/AppShell';
@@ -349,6 +353,104 @@ function App() {
                             <AppShell>
                               <PageLoader>
                                 <LazyIssueFormPage />
+                              </PageLoader>
+                            </AppShell>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+
+                  <Route
+                    path="/templates"
+                    element={
+                      <RouteErrorBoundary routeName="Templates">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <AppShell>
+                              <PageLoader>
+                                <LazyTemplatesListPage />
+                              </PageLoader>
+                            </AppShell>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/templates/new"
+                    element={
+                      <RouteErrorBoundary routeName="Create Template">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <AppShell>
+                              <PageLoader>
+                                <LazyTemplateFormPage />
+                              </PageLoader>
+                            </AppShell>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/templates/:id/edit"
+                    element={
+                      <RouteErrorBoundary routeName="Edit Template">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <AppShell>
+                              <PageLoader>
+                                <LazyTemplateFormPage />
+                              </PageLoader>
+                            </AppShell>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+
+                  <Route
+                    path="/snippets"
+                    element={
+                      <RouteErrorBoundary routeName="Snippets">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <AppShell>
+                              <PageLoader>
+                                <LazySnippetsListPage />
+                              </PageLoader>
+                            </AppShell>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/snippets/new"
+                    element={
+                      <RouteErrorBoundary routeName="Create Snippet">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <AppShell>
+                              <PageLoader>
+                                <LazySnippetFormPage />
+                              </PageLoader>
+                            </AppShell>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/snippets/:id/edit"
+                    element={
+                      <RouteErrorBoundary routeName="Edit Snippet">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <AppShell>
+                              <PageLoader>
+                                <LazySnippetFormPage />
                               </PageLoader>
                             </AppShell>
                           </OnboardingGuard>

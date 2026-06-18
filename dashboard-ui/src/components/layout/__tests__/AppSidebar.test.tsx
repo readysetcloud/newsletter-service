@@ -31,17 +31,19 @@ describe('AppSidebar', () => {
   // ---- Requirement 2.2: Renders exactly 5 nav items with icons ----
 
   describe('nav items', () => {
-    it('renders exactly 6 navigation links', () => {
+    it('renders exactly 8 navigation links', () => {
       renderSidebar();
       const nav = screen.getByRole('navigation', { name: 'Main navigation' });
       const links = nav.querySelectorAll('a');
-      expect(links).toHaveLength(6);
+      expect(links).toHaveLength(8);
     });
 
     it('renders the correct nav item labels', () => {
       renderSidebar();
       expect(screen.getByText('Dashboard')).toBeInTheDocument();
       expect(screen.getByText('Issues')).toBeInTheDocument();
+      expect(screen.getByText('Templates')).toBeInTheDocument();
+      expect(screen.getByText('Snippets')).toBeInTheDocument();
       expect(screen.getByText('Subscribers')).toBeInTheDocument();
       expect(screen.getByText('Sponsors')).toBeInTheDocument();
       expect(screen.getByText('Brand')).toBeInTheDocument();
@@ -52,7 +54,7 @@ describe('AppSidebar', () => {
       renderSidebar();
       const nav = screen.getByRole('navigation', { name: 'Main navigation' });
       const icons = nav.querySelectorAll('svg[aria-hidden="true"]');
-      expect(icons).toHaveLength(6);
+      expect(icons).toHaveLength(8);
     });
   });
 

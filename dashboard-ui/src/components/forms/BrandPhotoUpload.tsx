@@ -120,7 +120,7 @@ export const BrandPhotoUpload: React.FC<BrandPhotoUploadProps> = ({
                 </button>
               </p>
               <p className="text-xs text-muted-foreground mt-1">
-                PNG, JPG, GIF up to 5MB
+                PNG, JPG, GIF, WebP, SVG up to 5MB
               </p>
             </div>
           </div>

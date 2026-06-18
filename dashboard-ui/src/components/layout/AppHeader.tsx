@@ -16,7 +16,7 @@ import {
   SunIcon,
   UserGroupIcon
 } from '@heroicons/react/24/outline';
-import { FileText } from 'lucide-react';
+import { FileText, LayoutTemplate, Puzzle } from 'lucide-react';
 import { useTheme } from '@/hooks/useTheme';
 import { BRAND } from '@/constants/brand';
 
@@ -27,6 +27,8 @@ export const AppHeader: React.FC = () => {
 
   const baseNavigation = [
     { name: 'Issues', href: '/issues', icon: FileText, preloadKey: 'issues' },
+    { name: 'Templates', href: '/templates', icon: LayoutTemplate, preloadKey: 'templates' },
+    { name: 'Snippets', href: '/snippets', icon: Puzzle, preloadKey: 'snippets' },
     { name: 'Segments', href: '/segments', icon: UserGroupIcon, preloadKey: 'segments' },
     { name: 'Brand', href: '/brand', icon: BuildingOfficeIcon, preloadKey: 'brand' },
     { name: 'Profile', href: '/profile', icon: UserIcon, preloadKey: 'profile' },

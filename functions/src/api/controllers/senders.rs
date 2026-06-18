@@ -131,6 +131,21 @@ struct UpdateSenderResponse {
     failure_reason: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct SendTestEmailRequest {
+    #[serde(rename = "recipientEmail")]
+    recipient_email: String,
+}
+
+#[derive(Serialize)]
+struct SendTestEmailResponse {
+    #[serde(rename = "messageId")]
+    message_id: String,
+    #[serde(rename = "recipientEmail")]
+    recipient_email: String,
+    message: String,
+}
+
 #[derive(Debug, Serialize)]
 struct GetSenderStatusResponse {
     #[serde(rename = "senderId")]
@@ -843,6 +858,149 @@ async fn update_sender_in_db(
         .map_err(|e| AppError::InternalError(format!("Failed to deserialize sender: {}", e)))?;
 
     Ok(updated_sender)
+}
+
+pub async fn send_test_email(
+    event: Request,
+    sender_id: Option<String>,
+) -> Result<Response<Body>, Error> {
+    match handle_send_test_email(event, sender_id).await {
+        Ok(response) => Ok(response),
+        Err(e) => Ok(response::format_error_response(&e)),
+    }
+}
+
+async fn handle_send_test_email(
+    event: Request,
+    sender_id: Option<String>,
+) -> Result<Response<Body>, AppError> {
+    let user_context = auth::get_user_context(&event)?;
+    let tenant_id = user_context
+        .tenant_id
+        .ok_or_else(|| AppError::Unauthorized("Tenant access required".to_string()))?;
+
+    let sender_id =
+        sender_id.ok_or_else(|| AppError::BadRequest("Sender ID is required".to_string()))?;
+
+    let body: SendTestEmailRequest = serde_json::from_slice(event.body())
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
+
+    let recipient_email = body.recipient_email.trim().to_string();
+    validation::validate_email(&recipient_email)?;
+
+    let sender = get_sender_by_id(&tenant_id, &sender_id).await?;
+
+    if sender.verification_status != VerificationStatus::Verified {
+        return Err(AppError::BadRequest(
+            "Sender email must be verified before sending a test email".to_string(),
+        ));
+    }
+
+    let message_id = send_test_email_via_ses(&sender, &recipient_email).await?;
+
+    tracing::info!(
+        tenant_id = %tenant_id,
+        sender_id = %sender.sender_id,
+        recipient = %recipient_email,
+        message_id = %message_id,
+        "Test email sent"
+    );
+
+    response::format_response(
+        200,
+        SendTestEmailResponse {
+            message_id,
+            recipient_email,
+            message: "Test email sent successfully".to_string(),
+        },
+    )
+}
+
+async fn send_test_email_via_ses(
+    sender: &SenderRecord,
+    recipient_email: &str,
+) -> Result<String, AppError> {
+    use aws_sdk_sesv2::types::{Body as SesBody, Content, Destination, EmailContent, Message};
+
+    let ses = aws_clients::get_ses_client().await;
+
+    let from_address = match &sender.name {
+        Some(name) if !name.trim().is_empty() => format!("{} <{}>", name.trim(), sender.email),
+        _ => sender.email.clone(),
+    };
+
+    let sender_label = sender.name.clone().unwrap_or_else(|| sender.email.clone());
+
+    let html_body = format!(
+        "<html><body style=\"font-family: Arial, sans-serif; color: #1f2937;\">\
+         <h2>It works! 🎉</h2>\
+         <p>This is a test email sent from your verified sender address \
+         <strong>{email}</strong>.</p>\
+         <p>If you received this message, your sender is configured correctly and \
+         ready to send newsletters.</p>\
+         <hr style=\"border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;\" />\
+         <p style=\"font-size: 12px; color: #6b7280;\">Sent by {label} via your newsletter service.</p>\
+         </body></html>",
+        email = sender.email,
+        label = sender_label
+    );
+
+    let text_body = format!(
+        "It works!\n\nThis is a test email sent from your verified sender address {email}.\n\n\
+         If you received this message, your sender is configured correctly and ready to send newsletters.\n\n\
+         Sent by {label} via your newsletter service.",
+        email = sender.email,
+        label = sender_label
+    );
+
+    let subject = Content::builder()
+        .data("Test email from your newsletter sender")
+        .charset("UTF-8")
+        .build()
+        .map_err(|e| AppError::InternalError(format!("Failed to build subject: {}", e)))?;
+
+    let html_content = Content::builder()
+        .data(html_body)
+        .charset("UTF-8")
+        .build()
+        .map_err(|e| AppError::InternalError(format!("Failed to build HTML body: {}", e)))?;
+
+    let text_content = Content::builder()
+        .data(text_body)
+        .charset("UTF-8")
+        .build()
+        .map_err(|e| AppError::InternalError(format!("Failed to build text body: {}", e)))?;
+
+    let message = Message::builder()
+        .subject(subject)
+        .body(
+            SesBody::builder()
+                .html(html_content)
+                .text(text_content)
+                .build(),
+        )
+        .build();
+
+    let destination = Destination::builder().to_addresses(recipient_email).build();
+
+    let mut send_command = ses
+        .send_email()
+        .from_email_address(from_address)
+        .destination(destination)
+        .content(EmailContent::builder().simple(message).build());
+
+    if let Ok(config_set) = std::env::var("SES_CONFIGURATION_SET") {
+        if !config_set.is_empty() {
+            send_command = send_command.configuration_set_name(config_set);
+        }
+    }
+
+    let result = send_command
+        .send()
+        .await
+        .map_err(|e| AppError::AwsError(format!("SES send test email failed: {}", e)))?;
+
+    Ok(result.message_id().unwrap_or_default().to_string())
 }
 
 pub async fn delete_sender(

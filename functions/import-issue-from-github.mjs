@@ -21,6 +21,9 @@ export const handler = async (event) => {
         email: tenant.email
       },
       isPreview: process.env.IS_PREVIEW === true || process.env.IS_PREVIEW === 'true',
+      // Always present (null when no template selected) so the state machine can
+      // reference it unconditionally; GitHub-imported issues use the default template.
+      templateId: null,
       ...email && { email }
     };
     await processNewIssue(issueData);

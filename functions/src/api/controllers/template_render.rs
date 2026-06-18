@@ -8,23 +8,15 @@
 //! renders as an EMPTY string instead of failing — both for snippets that do
 //! not exist yet and for arbitrary unknown partials.
 //!
-//! NOTE (de-dup at merge): issue #265 owns the full snippets module. The
-//! `Snippet` read helper here (`query_snippets_by_tenant`) is a small,
-//! intentionally duplicated GSI1 read so this branch can render previews
-//! before #265 lands. When the branches merge, this read should be replaced
-//! with the canonical snippets read.
+//! Snippets are loaded through the canonical reader in the [`snippets`]
+//! controller ([`super::snippets::query_snippets_by_tenant`]); this module only
+//! maps those records into the minimal [`Snippet`] shape the renderer needs.
 
-use aws_sdk_dynamodb::types::AttributeValue;
-use newsletter::admin::{aws_clients, error::AppError};
+use newsletter::admin::error::AppError;
 use regex::Regex;
-use serde::Deserialize;
-use serde_dynamo::from_item;
 use serde_json::Value;
 use std::collections::HashSet;
-use std::env;
 use std::sync::OnceLock;
-
-const SNIPPET_GSI1PK_PREFIX: &str = "snippet#";
 
 static PARTIAL_REF: OnceLock<Regex> = OnceLock::new();
 
@@ -37,51 +29,21 @@ fn partial_ref_regex() -> &'static Regex {
     })
 }
 
-/// Minimal snippet record read from DynamoDB. Mirrors the snippet data model
-/// from issue #265 (only the fields preview rendering needs).
-#[derive(Debug, Clone, Deserialize)]
+/// Minimal snippet shape the renderer needs: a partial `name` and its Handlebars
+/// `content`. Produced from the canonical [`super::snippets::SnippetRecord`].
+#[derive(Debug, Clone)]
 pub struct Snippet {
     pub name: String,
     pub content: String,
 }
 
-fn table_name() -> Result<String, AppError> {
-    env::var("TABLE_NAME")
-        .map_err(|_| AppError::InternalError("TABLE_NAME not configured".to_string()))
-}
-
-fn snippet_gsi1pk(tenant_id: &str) -> String {
-    format!("{}{}", SNIPPET_GSI1PK_PREFIX, tenant_id)
-}
-
-/// Load all snippets for a tenant by querying GSI1 on `snippet#{tenantId}`.
-///
-/// Duplicated, minimal read — see module note about de-duplication with #265.
-pub async fn query_snippets_by_tenant(tenant_id: &str) -> Result<Vec<Snippet>, AppError> {
-    let client = aws_clients::get_dynamodb_client().await;
-    let table_name = table_name()?;
-
-    let result = client
-        .query()
-        .table_name(table_name)
-        .index_name("GSI1")
-        .key_condition_expression("GSI1PK = :gsi1pk")
-        .expression_attribute_values(":gsi1pk", AttributeValue::S(snippet_gsi1pk(tenant_id)))
-        .send()
-        .await
-        .map_err(|e| AppError::AwsError(format!("Failed to query snippets: {}", e)))?;
-
-    let snippets = result
-        .items()
-        .iter()
-        .filter_map(|item| {
-            from_item::<_, Snippet>(item.clone())
-                .map_err(|e| tracing::warn!("Failed to deserialize snippet: {}", e))
-                .ok()
-        })
-        .collect();
-
-    Ok(snippets)
+impl From<super::snippets::SnippetRecord> for Snippet {
+    fn from(record: super::snippets::SnippetRecord) -> Self {
+        Snippet {
+            name: record.name,
+            content: record.content,
+        }
+    }
 }
 
 /// Collect the set of partial names referenced by a template source.
@@ -235,5 +197,57 @@ mod tests {
         let snippets = vec![snip("broken", "{{#if x}}unclosed")];
         let err = render_template("{{> broken }}", &json!({}), &snippets).unwrap_err();
         assert_eq!(err.status_code(), 400);
+    }
+
+    // ── Cross-renderer conformance ──────────────────────────────────────
+    //
+    // These fixtures are shared with the JS send path
+    // (`__tests__/render-conformance.test.mjs`). Both renderers assert against
+    // the SAME expected HTML, so if the Rust preview and JS send diverge on any
+    // shared fixture, one side's test fails — guaranteeing preview == delivered.
+
+    #[derive(serde::Deserialize)]
+    struct ConformanceSnippet {
+        name: String,
+        content: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ConformanceCase {
+        name: String,
+        template: String,
+        data: Value,
+        #[serde(default)]
+        snippets: Vec<ConformanceSnippet>,
+        expected: String,
+    }
+
+    #[test]
+    fn render_conformance_fixtures() {
+        let raw = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/__tests__/fixtures/render-conformance.json"
+        ));
+        let cases: Vec<ConformanceCase> =
+            serde_json::from_str(raw).expect("render-conformance.json should be valid JSON");
+        assert!(!cases.is_empty(), "conformance fixtures must not be empty");
+
+        for case in cases {
+            let snippets: Vec<Snippet> = case
+                .snippets
+                .into_iter()
+                .map(|s| Snippet {
+                    name: s.name,
+                    content: s.content,
+                })
+                .collect();
+            let out = render_template(&case.template, &case.data, &snippets)
+                .unwrap_or_else(|e| panic!("case \"{}\" failed to render: {:?}", case.name, e));
+            assert_eq!(
+                out, case.expected,
+                "case \"{}\" diverged from the shared expected HTML",
+                case.name
+            );
+        }
     }
 }

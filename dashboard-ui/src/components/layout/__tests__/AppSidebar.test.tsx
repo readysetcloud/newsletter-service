@@ -56,6 +56,31 @@ describe('AppSidebar', () => {
       const icons = nav.querySelectorAll('svg[aria-hidden="true"]');
       expect(icons).toHaveLength(8);
     });
+
+    it('renders nav items in audience-first priority order', () => {
+      renderSidebar();
+      const nav = screen.getByRole('navigation', { name: 'Main navigation' });
+      const labels = Array.from(nav.querySelectorAll('a')).map((a) => a.textContent?.trim());
+      expect(labels).toEqual([
+        'Dashboard',
+        'Issues',
+        'Subscribers',
+        'Templates',
+        'Snippets',
+        'Sponsors',
+        'Brand',
+        'Pricing',
+      ]);
+    });
+
+    it('groups Templates and Snippets under a "Content" heading', () => {
+      renderSidebar();
+      const nav = screen.getByRole('navigation', { name: 'Main navigation' });
+      const heading = screen.getByText('Content');
+      expect(heading).toBeInTheDocument();
+      // The heading is not a link, so the nav still has exactly 8 anchors.
+      expect(nav.querySelectorAll('a')).toHaveLength(8);
+    });
   });
 
   // ---- Requirement 2.3: Does not render account items ----

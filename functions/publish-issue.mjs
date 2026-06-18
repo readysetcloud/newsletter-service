@@ -5,6 +5,7 @@ import { DynamoDBClient, PutItemCommand, GetItemCommand, QueryCommand } from '@a
 import { getTenant } from './utils/helpers.mjs';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { publishIssueEvent, EVENT_TYPES } from './utils/event-publisher.mjs';
+import { renderWithSnippets } from './utils/render-template.mjs';
 
 const eventBridge = new EventBridgeClient();
 const ddb = new DynamoDBClient();
@@ -82,50 +83,11 @@ const renderTemplate = async (data, tenantId, templateId) => {
     return Handlebars.compile(defaultTemplate)(data);
   }
 
-  const hbs = Handlebars.create();
   const snippets = await getSnippets(tenantId);
-  // Register each snippet as a partial. Compile with noEscape so partials match
-  // the no-escape rendering used everywhere else (see compile call below and the
-  // Rust preview renderer in template_render.rs), keeping preview == delivery.
-  for (const snippet of snippets) {
-    if (snippet.name) {
-      hbs.registerPartial(snippet.name, hbs.compile(snippet.content ?? '', { noEscape: true }));
-    }
-  }
-
-  // Register any partial referenced by the template OR by a snippet body that is
-  // not itself a known snippet as an empty partial, so a missing partial renders
-  // empty instead of throwing during rendering.
-  registerMissingPartialsAsEmpty(hbs, templateContent);
-  for (const snippet of snippets) {
-    if (snippet.content) {
-      registerMissingPartialsAsEmpty(hbs, snippet.content);
-    }
-  }
-
-  // noEscape mirrors the preview renderer (handlebars::no_escape) so authored
-  // HTML fields render identically in preview and in the delivered email.
-  return hbs.compile(templateContent, { noEscape: true })(data);
-};
-
-/**
- * Scans the template source for partial references (`{{> name }}`) and registers
- * any that are not already registered as an empty-string partial. This guarantees
- * a missing snippet renders as empty rather than throwing during compilation.
- *
- * @param {Object} hbs - Handlebars instance.
- * @param {string} source - Template source to scan.
- */
-const registerMissingPartialsAsEmpty = (hbs, source) => {
-  const partialRegex = /\{\{\s*>\s*([\w./-]+)/g;
-  let match;
-  while ((match = partialRegex.exec(source)) !== null) {
-    const name = match[1];
-    if (!hbs.partials[name]) {
-      console.warn(`Partial '${name}' not found, registering as empty`);
-      hbs.registerPartial(name, '');
-    }
-  }
+  // Delegate to the shared renderer so the send path and the conformance test
+  // exercise identical logic (snippets as partials, missing partial -> empty,
+  // noEscape to mirror the Rust preview renderer in template_render.rs).
+  return renderWithSnippets(templateContent, data, snippets);
 };
 
 /**

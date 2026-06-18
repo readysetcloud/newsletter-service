@@ -84,15 +84,28 @@ const renderTemplate = async (data, tenantId, templateId) => {
 
   const hbs = Handlebars.create();
   const snippets = await getSnippets(tenantId);
+  // Register each snippet as a partial. Compile with noEscape so partials match
+  // the no-escape rendering used everywhere else (see compile call below and the
+  // Rust preview renderer in template_render.rs), keeping preview == delivery.
   for (const snippet of snippets) {
     if (snippet.name) {
-      hbs.registerPartial(snippet.name, snippet.content ?? '');
+      hbs.registerPartial(snippet.name, hbs.compile(snippet.content ?? '', { noEscape: true }));
     }
   }
 
+  // Register any partial referenced by the template OR by a snippet body that is
+  // not itself a known snippet as an empty partial, so a missing partial renders
+  // empty instead of throwing during rendering.
   registerMissingPartialsAsEmpty(hbs, templateContent);
+  for (const snippet of snippets) {
+    if (snippet.content) {
+      registerMissingPartialsAsEmpty(hbs, snippet.content);
+    }
+  }
 
-  return hbs.compile(templateContent)(data);
+  // noEscape mirrors the preview renderer (handlebars::no_escape) so authored
+  // HTML fields render identically in preview and in the delivered email.
+  return hbs.compile(templateContent, { noEscape: true })(data);
 };
 
 /**

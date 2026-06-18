@@ -176,6 +176,69 @@ describe('publish-issue', () => {
     });
   });
 
+  describe('missing partial referenced inside a snippet body', () => {
+    it('registers the nested missing partial as empty and still succeeds', async () => {
+      // Top-level template references the `header` snippet, whose body in turn
+      // references a partial that does not exist. The scan must cover snippet
+      // bodies (not just the template) so the send does not throw.
+      const templateContent = 'A{{> header }}B';
+
+      ddbSend.mockImplementation(async (cmd) => {
+        if (cmd.__type === 'GetItem' && cmd.Key.sk.S === 'template#tmpl-3') {
+          return { Item: marshall({ pk: 'tenant-1', sk: 'template#tmpl-3', content: templateContent }) };
+        }
+        if (cmd.__type === 'Query') {
+          return { Items: [marshall({ name: 'header', content: 'H[{{> missingFooter }}]' })] };
+        }
+        return {};
+      });
+
+      const result = await handler({
+        data: sampleData,
+        subject: 'Subject',
+        tenantId: 'tenant-1',
+        templateId: 'tmpl-3',
+        isPreview: true,
+        email: 'preview@example.com',
+        sendAtDate: 'now'
+      });
+
+      expect(result).toEqual({ success: true });
+      expect(getSentHtml()).toBe('AH[]B');
+    });
+  });
+
+  describe('no-escape rendering (parity with preview)', () => {
+    it('renders HTML fields raw in both template and snippet output', async () => {
+      // The preview renderer registers handlebars::no_escape; the send must match
+      // so authored HTML is not escaped (and previews equal delivered emails).
+      const templateContent = 'T:{{html}}|{{> raw }}';
+
+      ddbSend.mockImplementation(async (cmd) => {
+        if (cmd.__type === 'GetItem' && cmd.Key.sk.S === 'template#tmpl-4') {
+          return { Item: marshall({ pk: 'tenant-1', sk: 'template#tmpl-4', content: templateContent }) };
+        }
+        if (cmd.__type === 'Query') {
+          return { Items: [marshall({ name: 'raw', content: 'S:{{html}}' })] };
+        }
+        return {};
+      });
+
+      const result = await handler({
+        data: { ...sampleData, html: '<p>hi & bye</p>' },
+        subject: 'Subject',
+        tenantId: 'tenant-1',
+        templateId: 'tmpl-4',
+        isPreview: true,
+        email: 'preview@example.com',
+        sendAtDate: 'now'
+      });
+
+      expect(result).toEqual({ success: true });
+      expect(getSentHtml()).toBe('T:<p>hi & bye</p>|S:<p>hi & bye</p>');
+    });
+  });
+
   describe('template not found', () => {
     it('falls back to the default template when the templateId does not exist', async () => {
       ddbSend.mockImplementation(async (cmd) => {

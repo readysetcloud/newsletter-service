@@ -504,8 +504,20 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
         ));
     }
 
-    let body: CreateIssueRequest = serde_json::from_slice(event.body())
+    let mut body: CreateIssueRequest = serde_json::from_slice(event.body())
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
+
+    // Treat an empty/whitespace templateId as "no template selected" so the
+    // default template is used and nothing is persisted (or threaded to the
+    // state machine).
+    if body
+        .template_id
+        .as_deref()
+        .map(|t| t.trim().is_empty())
+        .unwrap_or(false)
+    {
+        body.template_id = None;
+    }
 
     validate_create_request(&body)?;
 
@@ -611,8 +623,12 @@ async fn handle_update_issue(
 
     validate_update_request(&body)?;
 
+    // A non-empty templateId must reference an existing template; an empty
+    // templateId is a request to clear the selection (handled in the update).
     if let Some(template_id) = body.template_id.as_deref() {
-        validate_template_exists(&tenant_id, template_id).await?;
+        if !template_id.trim().is_empty() {
+            validate_template_exists(&tenant_id, template_id).await?;
+        }
     }
 
     let existing = get_issue_by_id(&tenant_id, &issue_id).await?;
@@ -1813,6 +1829,7 @@ async fn update_issue_record(
     let now = chrono::Utc::now().to_rfc3339();
 
     let mut update_expression_parts = vec!["SET updatedAt = :updated_at".to_string()];
+    let mut remove_expression_parts: Vec<String> = Vec::new();
     let mut expression_attribute_values = HashMap::new();
     let mut expression_attribute_names = HashMap::new();
 
@@ -1849,11 +1866,16 @@ async fn update_issue_record(
     }
 
     if let Some(template_id) = &body.template_id {
-        update_expression_parts.push("templateId = :template_id".to_string());
-        expression_attribute_values.insert(
-            ":template_id".to_string(),
-            AttributeValue::S(template_id.clone()),
-        );
+        if template_id.trim().is_empty() {
+            // Empty value clears the selection, reverting to the default template.
+            remove_expression_parts.push("templateId".to_string());
+        } else {
+            update_expression_parts.push("templateId = :template_id".to_string());
+            expression_attribute_values.insert(
+                ":template_id".to_string(),
+                AttributeValue::S(template_id.clone()),
+            );
+        }
     }
 
     if let Some(status) = &body.status {
@@ -1869,7 +1891,11 @@ async fn update_issue_record(
         }
     }
 
-    let update_expression = update_expression_parts.join(", ");
+    let mut update_expression = update_expression_parts.join(", ");
+    if !remove_expression_parts.is_empty() {
+        update_expression.push_str(" REMOVE ");
+        update_expression.push_str(&remove_expression_parts.join(", "));
+    }
 
     let mut update_builder = ddb_client
         .update_item()

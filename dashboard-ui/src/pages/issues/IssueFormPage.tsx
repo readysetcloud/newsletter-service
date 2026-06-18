@@ -234,9 +234,9 @@ export const IssueFormPage: React.FC = () => {
           updateData.scheduledAt = new Date(formData.scheduledAt).toISOString();
         }
 
-        if (formData.templateId) {
-          updateData.templateId = formData.templateId;
-        }
+        // Always send templateId so selecting "Default template" (empty value)
+        // clears a previously-saved template instead of leaving it in place.
+        updateData.templateId = formData.templateId ?? DEFAULT_TEMPLATE_VALUE;
 
         const response = await issuesService.updateIssue(id, updateData);
 

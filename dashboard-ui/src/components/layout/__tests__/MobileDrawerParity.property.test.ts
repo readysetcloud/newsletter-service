@@ -60,12 +60,14 @@ describe('Mobile Drawer Parity - Property-Based Tests', () => {
           const drawerNavNames = NAV_ITEMS.map((item) => item.name);
           const sidebarNavNames = NAV_ITEMS.map((item) => item.name);
           expect(drawerNavNames).toEqual(sidebarNavNames);
+          // Audience-first priority order; Templates/Snippets sit adjacent under
+          // the shared "Content" group.
           expect(drawerNavNames).toEqual([
             'Dashboard',
             'Issues',
+            'Subscribers',
             'Templates',
             'Snippets',
-            'Subscribers',
             'Sponsors',
             'Brand',
             'Pricing',

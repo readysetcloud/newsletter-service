@@ -54,7 +54,7 @@ fn normalize_name(name: &str) -> String {
 // ── Data types ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct SnippetParameter {
+pub(crate) struct SnippetParameter {
     pub name: String,
     #[serde(rename = "type")]
     pub param_type: String,
@@ -72,7 +72,7 @@ struct SnippetParameter {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct SnippetRecord {
+pub(crate) struct SnippetRecord {
     pub pk: String,
     pub sk: String,
     #[serde(rename = "GSI1PK")]
@@ -529,7 +529,12 @@ fn table_name() -> Result<String, AppError> {
         .map_err(|_| AppError::InternalError("TABLE_NAME not configured".to_string()))
 }
 
-async fn query_snippets_by_tenant(tenant_id: &str) -> Result<Vec<SnippetRecord>, AppError> {
+/// Canonical snippet-by-tenant read shared by the snippets CRUD handlers and
+/// the template preview/send renderer ([`super::template_render`]). Queries GSI1
+/// on `snippet#{tenantId}` and returns every snippet record for the tenant.
+pub(crate) async fn query_snippets_by_tenant(
+    tenant_id: &str,
+) -> Result<Vec<SnippetRecord>, AppError> {
     let client = aws_clients::get_dynamodb_client().await;
     let table_name = table_name()?;
 

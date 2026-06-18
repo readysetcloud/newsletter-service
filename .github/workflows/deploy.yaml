@@ -34,7 +34,7 @@ jobs:
       rust_changed: ${{ steps.detect.outputs.rust_changed }}
       deploy_needed: ${{ steps.detect.outputs.deploy_needed }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Detect backend and frontend changes
@@ -152,7 +152,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain with Cargo Lambda
         uses: moonrepo/setup-rust@v1
         with:
@@ -195,7 +195,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v6
         with:

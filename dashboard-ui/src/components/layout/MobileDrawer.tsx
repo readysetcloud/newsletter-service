@@ -1,9 +1,9 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { Fragment, useEffect, useRef, useCallback } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/hooks/useTheme';
 import { keyboardUtils, responsiveA11y } from '@/utils/accessibility';
-import { NAV_ITEMS } from './sidebarNav';
+import { getNavSections } from './sidebarNav';
 import { ACCOUNT_ITEMS } from './accountNav';
 import { BRAND } from '@/constants/brand';
 import { cn } from '@/utils/cn';
@@ -148,33 +148,44 @@ export function MobileDrawer({ isOpen, onClose }: MobileDrawerProps) {
                 Navigation
               </h3>
               <ul className="space-y-1">
-                {NAV_ITEMS.map((item) => {
-                  const Icon = item.icon;
-                  const active = item.matchPaths.some((matchPath) => {
-                    if (matchPath === '/') return location.pathname === '/';
-                    return location.pathname.startsWith(matchPath);
-                  });
+                {getNavSections().map((section) => (
+                  <Fragment key={section.label ?? section.items[0].href}>
+                    {section.label && (
+                      <li role="presentation" className="pt-2 first:pt-0">
+                        <h4 className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">
+                          {section.label}
+                        </h4>
+                      </li>
+                    )}
+                    {section.items.map((item) => {
+                      const Icon = item.icon;
+                      const active = item.matchPaths.some((matchPath) => {
+                        if (matchPath === '/') return location.pathname === '/';
+                        return location.pathname.startsWith(matchPath);
+                      });
 
-                  return (
-                    <li key={item.href}>
-                      <Link
-                        to={item.href}
-                        onClick={handleLinkClick}
-                        className={cn(
-                          'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
-                          responsiveA11y.focusRing.className,
-                          active
-                            ? 'bg-primary-100 text-primary-700 border-l-4 border-primary-700'
-                            : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                        )}
-                        aria-current={active ? 'page' : undefined}
-                      >
-                        <Icon className="h-5 w-5 shrink-0" aria-hidden="true" />
-                        {item.name}
-                      </Link>
-                    </li>
-                  );
-                })}
+                      return (
+                        <li key={item.href}>
+                          <Link
+                            to={item.href}
+                            onClick={handleLinkClick}
+                            className={cn(
+                              'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                              responsiveA11y.focusRing.className,
+                              active
+                                ? 'bg-primary-100 text-primary-700 border-l-4 border-primary-700'
+                                : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                            )}
+                            aria-current={active ? 'page' : undefined}
+                          >
+                            <Icon className="h-5 w-5 shrink-0" aria-hidden="true" />
+                            {item.name}
+                          </Link>
+                        </li>
+                      );
+                    })}
+                  </Fragment>
+                ))}
               </ul>
             </div>
 

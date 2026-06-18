@@ -71,8 +71,8 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
         }
 
         // Domain verification endpoints
-        (&Method::POST, "/senders/domain") => domain::verify_domain(event).await,
-        (&Method::GET, path) if path.starts_with("/senders/domain/") => {
+        (&Method::POST, "/senders/verify-domain") => domain::verify_domain(event).await,
+        (&Method::GET, path) if path.starts_with("/senders/domain-verification/") => {
             let domain_param = extract_domain(path);
             domain::get_domain_verification(event, domain_param).await
         }
@@ -364,8 +364,8 @@ fn is_valid_api_path(path: &str) -> bool {
         // Senders paths
         || path == "/senders"
         || path.starts_with("/senders/")
-        || path == "/senders/domain"
-        || path.starts_with("/senders/domain/")
+        || path == "/senders/verify-domain"
+        || path.starts_with("/senders/domain-verification/")
         // Issues paths
         || path == "/issues"
         || path == "/issues/trends"
@@ -426,7 +426,7 @@ fn extract_template_id_before(path: &str, suffix: &str) -> Option<String> {
 }
 
 fn extract_domain(path: &str) -> Option<String> {
-    path.strip_prefix("/senders/domain/")
+    path.strip_prefix("/senders/domain-verification/")
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
 }
@@ -563,19 +563,19 @@ mod tests {
 
     #[test]
     fn test_extract_domain_valid() {
-        let result = extract_domain("/senders/domain/example.com");
+        let result = extract_domain("/senders/domain-verification/example.com");
         assert_eq!(result, Some("example.com".to_string()));
     }
 
     #[test]
     fn test_extract_domain_with_subdomain() {
-        let result = extract_domain("/senders/domain/mail.example.com");
+        let result = extract_domain("/senders/domain-verification/mail.example.com");
         assert_eq!(result, Some("mail.example.com".to_string()));
     }
 
     #[test]
     fn test_extract_domain_empty() {
-        let result = extract_domain("/senders/domain/");
+        let result = extract_domain("/senders/domain-verification/");
         assert_eq!(result, None);
     }
 
@@ -761,9 +761,11 @@ mod tests {
 
     #[test]
     fn test_method_validation_domain_endpoints() {
-        // Domain: POST verify, GET status
-        assert!(is_valid_api_path("/senders/domain"));
-        assert!(is_valid_api_path("/senders/domain/example.com"));
+        // Domain: POST verify-domain, GET domain-verification/{domain}
+        assert!(is_valid_api_path("/senders/verify-domain"));
+        assert!(is_valid_api_path(
+            "/senders/domain-verification/example.com"
+        ));
     }
 
     #[test]

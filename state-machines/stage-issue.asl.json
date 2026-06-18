@@ -322,7 +322,8 @@
                   "subject.$": "$.subject",
                   "email.$": "$$.Execution.Input.tenant.email",
                   "isPreview": true,
-                  "tenantId.$": "$.Execution.Input.tenant.id"
+                  "tenantId.$": "$.Execution.Input.tenant.id",
+                  "templateId.$": "$$.Execution.Input.templateId"
                 }
               },
               "Retry": [
@@ -349,7 +350,8 @@
                   "data.$": "$.data",
                   "sendAtDate.$": "$sendAtDate",
                   "subject.$": "$.subject",
-                  "tenantId.$": "$$.Execution.Input.tenant.id"
+                  "tenantId.$": "$$.Execution.Input.tenant.id",
+                  "templateId.$": "$$.Execution.Input.templateId"
                 },
                 "FunctionName": "${PublishIssue}"
               },

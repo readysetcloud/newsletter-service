@@ -263,8 +263,18 @@ export interface UpdateTemplateRequest {
   sampleData?: Record<string, unknown>;
 }
 
-// Snippet Types (issue #265 owns the full module; these are the read-only
-// shapes the template builder needs to list and insert snippets).
+// Snippet Types
+export type SnippetParameterType = 'string' | 'number' | 'boolean' | 'select' | 'textarea' | 'url';
+
+export interface SnippetParameter {
+  name: string;
+  type: SnippetParameterType;
+  required: boolean;
+  defaultValue?: unknown;
+  description?: string;
+  options?: string[];
+}
+
 export interface SnippetSummary {
   snippetId: string;
   name: string;
@@ -272,6 +282,11 @@ export interface SnippetSummary {
   version: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface Snippet extends SnippetSummary {
+  content: string;
+  parameters?: SnippetParameter[];
 }
 
 export interface ListSnippetsResponse {
@@ -288,6 +303,20 @@ export interface PreviewTemplateRequest {
 
 export interface PreviewTemplateResponse {
   html: string;
+}
+
+export interface CreateSnippetRequest {
+  name: string;
+  description?: string;
+  content: string;
+  parameters?: SnippetParameter[];
+}
+
+export interface UpdateSnippetRequest {
+  name?: string;
+  description?: string;
+  content?: string;
+  parameters?: SnippetParameter[];
 }
 
 export interface SendTestEmailResponse {

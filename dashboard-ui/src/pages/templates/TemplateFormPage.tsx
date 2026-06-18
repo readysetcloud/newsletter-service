@@ -91,12 +91,13 @@ export function TemplateFormPage() {
   // Load snippets once; degrade gracefully if the endpoint is unavailable.
   useEffect(() => {
     let cancelled = false;
-    snippetService.listSnippets().then((list) => {
+    void (async () => {
+      const response = await snippetService.listSnippets();
       if (!cancelled) {
-        setSnippets(list);
+        setSnippets(response.success ? (response.data?.snippets ?? []) : []);
         setSnippetsLoading(false);
       }
-    });
+    })();
     return () => {
       cancelled = true;
     };

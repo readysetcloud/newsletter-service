@@ -1,27 +1,114 @@
 import { apiClient } from './api';
-import type { ApiResponse, ListSnippetsResponse, SnippetSummary } from '@/types/api';
+import type {
+  ApiResponse,
+  Snippet,
+  ListSnippetsResponse,
+  CreateSnippetRequest,
+  UpdateSnippetRequest,
+} from '@/types/api';
 
 /**
- * Read-only snippet access for the template builder.
- *
- * Snippets (the `{{> name }}` partials) are owned by issue #265, which is being
- * built on a parallel branch. Until that lands, `GET /snippets` may 404 or be
- * absent at runtime; callers should degrade gracefully (empty list) rather than
- * surface an error. `listSnippets` never rejects: a failed request resolves to
- * an empty list so autocomplete and the snippet browser simply show nothing.
+ * Snippet names are referenced inside templates as `{{> name }}`, so they must
+ * be a valid Handlebars partial identifier (mirrors backend validation):
+ * start with a letter and contain only letters, numbers, underscores, and
+ * hyphens. No spaces are allowed.
+ */
+const SNIPPET_NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
+const NAME_MAX_LENGTH = 100;
+
+/**
+ * Snippet Service - CRUD operations for reusable Handlebars snippets (partials).
  */
 export class SnippetService {
   /**
-   * List the tenant's snippets. Returns an empty list if the endpoint is
-   * unavailable (e.g. 404 before issue #265 ships).
+   * List all snippets for the authenticated tenant (summaries, no content).
    */
-  async listSnippets(): Promise<SnippetSummary[]> {
-    const response: ApiResponse<ListSnippetsResponse> =
-      await apiClient.get<ListSnippetsResponse>('/snippets');
-    if (response.success && response.data?.snippets) {
-      return response.data.snippets;
+  async listSnippets(): Promise<ApiResponse<ListSnippetsResponse>> {
+    return apiClient.get<ListSnippetsResponse>('/snippets');
+  }
+
+  /**
+   * Get a single snippet including its content and parameters.
+   */
+  async getSnippet(snippetId: string): Promise<ApiResponse<Snippet>> {
+    if (!snippetId) {
+      return { success: false, error: 'Snippet ID is required', errorCode: 'MISSING_SNIPPET_ID' };
     }
-    return [];
+    return apiClient.get<Snippet>(`/snippets/${snippetId}`);
+  }
+
+  /**
+   * Create a new snippet.
+   */
+  async createSnippet(data: CreateSnippetRequest): Promise<ApiResponse<Snippet>> {
+    const validationError = this.validateSnippet(data.name, data.content);
+    if (validationError) {
+      return { success: false, error: validationError, errorCode: 'VALIDATION_ERROR' };
+    }
+    return apiClient.post<Snippet>('/snippets', this.normalize(data));
+  }
+
+  /**
+   * Update an existing snippet.
+   */
+  async updateSnippet(snippetId: string, data: UpdateSnippetRequest): Promise<ApiResponse<Snippet>> {
+    if (!snippetId) {
+      return { success: false, error: 'Snippet ID is required', errorCode: 'MISSING_SNIPPET_ID' };
+    }
+
+    const validationError = this.validateSnippet(data.name, data.content);
+    if (validationError) {
+      return { success: false, error: validationError, errorCode: 'VALIDATION_ERROR' };
+    }
+
+    return apiClient.put<Snippet>(`/snippets/${snippetId}`, this.normalize(data));
+  }
+
+  /**
+   * Delete a snippet.
+   */
+  async deleteSnippet(snippetId: string): Promise<ApiResponse<void>> {
+    if (!snippetId) {
+      return { success: false, error: 'Snippet ID is required', errorCode: 'MISSING_SNIPPET_ID' };
+    }
+    return apiClient.delete<void>(`/snippets/${snippetId}`);
+  }
+
+  /**
+   * Validate a snippet name and content. Returns an error message or null.
+   * `name` and `content` may be undefined on partial updates, in which case
+   * the corresponding check is skipped.
+   */
+  validateSnippet(name?: string, content?: string): string | null {
+    if (name !== undefined) {
+      const trimmed = name.trim();
+      if (!trimmed) {
+        return 'Snippet name is required';
+      }
+      if (trimmed.length > NAME_MAX_LENGTH) {
+        return `Snippet name must be ${NAME_MAX_LENGTH} characters or less`;
+      }
+      if (!SNIPPET_NAME_PATTERN.test(trimmed)) {
+        return 'Snippet name must start with a letter and contain only letters, numbers, underscores, and hyphens (no spaces)';
+      }
+    }
+
+    if (content !== undefined && !content.trim()) {
+      return 'Snippet content is required';
+    }
+
+    return null;
+  }
+
+  /**
+   * Trim string fields so what we send matches what the backend stores.
+   */
+  private normalize<T extends UpdateSnippetRequest>(data: T): T {
+    return {
+      ...data,
+      ...(data.name !== undefined && { name: data.name.trim() }),
+      ...(data.description !== undefined && { description: data.description.trim() }),
+    };
   }
 }
 

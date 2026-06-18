@@ -149,6 +149,46 @@ describe('SenderService', () => {
     });
   });
 
+  describe('sendTestEmail', () => {
+    it('calls API client with sender ID and trimmed recipient', async () => {
+      mockApiClient.post.mockResolvedValue({
+        success: true,
+        data: { messageId: 'msg-1', recipientEmail: 'to@example.com', message: 'Test email sent successfully' }
+      });
+
+      const result = await senderService.sendTestEmail('sender-123', '  to@example.com  ');
+
+      expect(mockApiClient.post).toHaveBeenCalledWith('/senders/sender-123/test', {
+        recipientEmail: 'to@example.com'
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('returns error when sender ID is missing', async () => {
+      const result = await senderService.sendTestEmail('', 'to@example.com');
+
+      expect(result.success).toBe(false);
+      expect(result.errorCode).toBe('MISSING_SENDER_ID');
+      expect(mockApiClient.post).not.toHaveBeenCalled();
+    });
+
+    it('returns error when recipient is empty', async () => {
+      const result = await senderService.sendTestEmail('sender-123', '   ');
+
+      expect(result.success).toBe(false);
+      expect(result.errorCode).toBe('MISSING_RECIPIENT');
+      expect(mockApiClient.post).not.toHaveBeenCalled();
+    });
+
+    it('returns error for invalid recipient email', async () => {
+      const result = await senderService.sendTestEmail('sender-123', 'not-an-email');
+
+      expect(result.success).toBe(false);
+      expect(result.errorCode).toBe('INVALID_EMAIL');
+      expect(mockApiClient.post).not.toHaveBeenCalled();
+    });
+  });
+
   describe('verifyDomain', () => {
     it('calls API client with domain data', async () => {
       const domainData = { domain: 'example.com' };

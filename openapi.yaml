@@ -1028,6 +1028,55 @@ paths:
         "500":
           $ref: "#/components/responses/UnknownError"
 
+  /senders/{senderId}/test:
+    parameters:
+      - name: senderId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The sender ID
+    post:
+      summary: Send a test email
+      description: Sends a test email from a verified sender address to a recipient of the user's choosing
+      tags:
+        - Senders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - recipientEmail
+              properties:
+                recipientEmail:
+                  type: string
+                  format: email
+                  description: The email address to send the test email to
+      responses:
+        "200":
+          description: Test email sent successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  messageId:
+                    type: string
+                  recipientEmail:
+                    type: string
+                  message:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
   /senders/verify-domain:
     post:
       summary: Initiate domain verification

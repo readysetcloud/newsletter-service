@@ -9,6 +9,7 @@ import type {
   UpdateSenderRequest,
   VerifyDomainRequest,
   GetSendersResponse,
+  SendTestEmailResponse,
 } from '@/types/api';
 
 /**
@@ -64,6 +65,42 @@ export class SenderService {
    */
   async getSenderStatus(senderId: string): Promise<ApiResponse<SenderEmail>> {
     return apiClient.get<SenderEmail>(`/senders/${senderId}/status`);
+  }
+
+  /**
+   * Send a test email from a verified sender to an address of the user's choosing
+   * @param senderId - The sender ID to send the test email from
+   * @param recipientEmail - The email address to send the test email to
+   */
+  async sendTestEmail(senderId: string, recipientEmail: string): Promise<ApiResponse<SendTestEmailResponse>> {
+    if (!senderId) {
+      return {
+        success: false,
+        error: 'Sender ID is required',
+        errorCode: 'MISSING_SENDER_ID'
+      };
+    }
+
+    const trimmedRecipient = recipientEmail.trim();
+    if (!trimmedRecipient) {
+      return {
+        success: false,
+        error: 'Recipient email address is required',
+        errorCode: 'MISSING_RECIPIENT'
+      };
+    }
+
+    if (!this.validateEmail(trimmedRecipient)) {
+      return {
+        success: false,
+        error: 'Please enter a valid email address',
+        errorCode: 'INVALID_EMAIL'
+      };
+    }
+
+    return apiClient.post<SendTestEmailResponse>(`/senders/${senderId}/test`, {
+      recipientEmail: trimmedRecipient
+    });
   }
 
   /**

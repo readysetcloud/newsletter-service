@@ -52,6 +52,10 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
         // Senders endpoints
         (&Method::GET, "/senders") => senders::list_senders(event).await,
         (&Method::POST, "/senders") => senders::create_sender(event).await,
+        (&Method::POST, path) if path.starts_with("/senders/") && path.ends_with("/test") => {
+            let sender_id = extract_sender_id_before(path, "/test");
+            senders::send_test_email(event, sender_id).await
+        }
         (&Method::GET, path) if path.starts_with("/senders/") && path.ends_with("/status") => {
             let sender_id = extract_sender_id(path);
             senders::get_sender_status(event, sender_id).await
@@ -360,6 +364,13 @@ fn extract_sender_id(path: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+fn extract_sender_id_before(path: &str, suffix: &str) -> Option<String> {
+    path.strip_prefix("/senders/")
+        .and_then(|s| s.strip_suffix(suffix))
+        .filter(|s| !s.is_empty() && *s != "domain")
+        .map(|s| s.to_string())
+}
+
 fn extract_domain(path: &str) -> Option<String> {
     path.strip_prefix("/senders/domain/")
         .filter(|s| !s.is_empty())
@@ -475,6 +486,24 @@ mod tests {
     #[test]
     fn test_extract_sender_id_domain_path() {
         let result = extract_sender_id("/senders/domain");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_sender_id_before_test_suffix() {
+        let result = extract_sender_id_before("/senders/abc-123/test", "/test");
+        assert_eq!(result, Some("abc-123".to_string()));
+    }
+
+    #[test]
+    fn test_extract_sender_id_before_test_empty() {
+        let result = extract_sender_id_before("/senders//test", "/test");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_sender_id_before_test_rejects_domain() {
+        let result = extract_sender_id_before("/senders/domain/test", "/test");
         assert_eq!(result, None);
     }
 

@@ -222,6 +222,16 @@ export interface VerifyDomainRequest {
   domain: string;
 }
 
+export interface SendTestEmailRequest {
+  recipientEmail: string;
+}
+
+export interface SendTestEmailResponse {
+  messageId: string;
+  recipientEmail: string;
+  message: string;
+}
+
 export interface GetSendersResponse {
   senders: SenderEmail[];
   tierLimits: TierLimits;

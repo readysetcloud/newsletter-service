@@ -3,7 +3,7 @@ import { NAV_ITEMS, getNavSections, isNavItemActive } from '../sidebarNav';
 
 describe('sidebarNav', () => {
   describe('NAV_ITEMS order and grouping', () => {
-    it('is in audience-first priority order', () => {
+    it('is in priority order with Brand standalone at the end', () => {
       expect(NAV_ITEMS.map((i) => i.name)).toEqual([
         'Dashboard',
         'Issues',
@@ -11,15 +11,24 @@ describe('sidebarNav', () => {
         'Templates',
         'Snippets',
         'Sponsors',
-        'Brand',
         'Pricing',
+        'Brand',
       ]);
     });
 
-    it('tags Templates and Snippets (and only those) with the "Content" group', () => {
-      const grouped = NAV_ITEMS.filter((i) => i.group === 'Content').map((i) => i.name);
-      expect(grouped).toEqual(['Templates', 'Snippets']);
-      expect(NAV_ITEMS.filter((i) => i.group !== undefined && i.group !== 'Content')).toEqual([]);
+    it('assigns each grouped item to the expected section', () => {
+      const groupOf = (name: string) => NAV_ITEMS.find((i) => i.name === name)?.group;
+      expect(groupOf('Issues')).toBe('Publish');
+      expect(groupOf('Subscribers')).toBe('Publish');
+      expect(groupOf('Templates')).toBe('Content');
+      expect(groupOf('Snippets')).toBe('Content');
+      expect(groupOf('Sponsors')).toBe('Monetization');
+      expect(groupOf('Pricing')).toBe('Monetization');
+    });
+
+    it('leaves Dashboard and Brand ungrouped', () => {
+      const ungrouped = NAV_ITEMS.filter((i) => i.group === undefined).map((i) => i.name);
+      expect(ungrouped).toEqual(['Dashboard', 'Brand']);
     });
   });
 
@@ -28,16 +37,17 @@ describe('sidebarNav', () => {
       const sections = getNavSections();
       expect(sections.map((s) => s.label)).toEqual([
         null, // Dashboard
-        null, // Issues
-        null, // Subscribers
+        'Publish', // Issues + Subscribers
         'Content', // Templates + Snippets
-        null, // Sponsors
+        'Monetization', // Sponsors + Pricing
         null, // Brand
-        null, // Pricing
       ]);
 
-      const content = sections.find((s) => s.label === 'Content');
-      expect(content?.items.map((i) => i.name)).toEqual(['Templates', 'Snippets']);
+      const labelled = (label: string) =>
+        sections.find((s) => s.label === label)?.items.map((i) => i.name);
+      expect(labelled('Publish')).toEqual(['Issues', 'Subscribers']);
+      expect(labelled('Content')).toEqual(['Templates', 'Snippets']);
+      expect(labelled('Monetization')).toEqual(['Sponsors', 'Pricing']);
 
       // The flattened section items exactly reproduce NAV_ITEMS in order.
       expect(sections.flatMap((s) => s.items).map((i) => i.name)).toEqual(

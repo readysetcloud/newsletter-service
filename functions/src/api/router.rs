@@ -36,7 +36,10 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
         (&Method::GET, "/brand/check") => brand::check_brand_id(event).await,
         (&Method::GET, "/brand/validate") => brand::check_brand_id(event).await,
         (&Method::PUT, "/brand") => brand::update_brand(event).await,
-        (&Method::POST, "/brand/photo") => brand::upload_photo(event).await,
+        // Logo upload: POST presigns the S3 URL, PUT confirms + sanitizes the
+        // uploaded object. `upload_photo` dispatches on the method internally.
+        (&Method::POST, "/brand/logo") => brand::upload_photo(event).await,
+        (&Method::PUT, "/brand/logo") => brand::upload_photo(event).await,
 
         // API Keys endpoints
         (&Method::GET, "/api-keys") => api_keys::list_keys(event).await,
@@ -357,7 +360,7 @@ fn is_valid_api_path(path: &str) -> bool {
         || path == "/brand"
         || path == "/brand/check"
         || path == "/brand/validate"
-        || path == "/brand/photo"
+        || path == "/brand/logo"
         // API keys paths
         || path == "/api-keys"
         || path.starts_with("/api-keys/")
@@ -590,13 +593,22 @@ mod tests {
         assert!(is_valid_api_path("/brand"));
         assert!(is_valid_api_path("/brand/check"));
         assert!(is_valid_api_path("/brand/validate"));
-        assert!(is_valid_api_path("/brand/photo"));
+        assert!(is_valid_api_path("/brand/logo"));
     }
 
     #[test]
     fn test_is_valid_api_path_api_keys() {
         assert!(is_valid_api_path("/api-keys"));
         assert!(is_valid_api_path("/api-keys/key-123"));
+    }
+
+    #[test]
+    fn test_brand_logo_path_replaces_legacy_photo_path() {
+        // The dashboard and openapi.yaml both call /brand/logo (POST to presign,
+        // PUT to confirm). The old /brand/photo path is gone — guard against a
+        // regression that would 404 every logo upload again.
+        assert!(is_valid_api_path("/brand/logo"));
+        assert!(!is_valid_api_path("/brand/photo"));
     }
 
     #[test]
@@ -639,7 +651,7 @@ mod tests {
         assert!(is_valid_api_path("/brand"));
         assert!(is_valid_api_path("/brand/check"));
         assert!(is_valid_api_path("/brand/validate"));
-        assert!(is_valid_api_path("/brand/photo"));
+        assert!(is_valid_api_path("/brand/logo"));
     }
 
     #[test]
@@ -737,11 +749,11 @@ mod tests {
 
     #[test]
     fn test_method_validation_brand_endpoints() {
-        // Brand endpoints: GET for check/validate, PUT for update, POST for photo
+        // Brand endpoints: GET for check/validate, PUT for update, POST/PUT for logo
         assert!(is_valid_api_path("/brand/check"));
         assert!(is_valid_api_path("/brand/validate"));
         assert!(is_valid_api_path("/brand"));
-        assert!(is_valid_api_path("/brand/photo"));
+        assert!(is_valid_api_path("/brand/logo"));
     }
 
     #[test]

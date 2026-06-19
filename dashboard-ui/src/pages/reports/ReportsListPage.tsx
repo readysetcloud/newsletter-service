@@ -7,7 +7,7 @@ import { Card, CardContent } from '@/components/ui/Card';
 import { reportsService } from '@/services/reportsService';
 import type { ReportSummaryItem } from '@/types/reports';
 
-const formatPercent = (value: number): string => `${(value * 100).toFixed(1)}%`;
+const formatPercent = (value: number): string => `${value.toFixed(1)}%`;
 
 const formatNumber = (value: number): string => value.toLocaleString('en-US');
 

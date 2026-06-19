@@ -22,7 +22,7 @@ import { cn } from '@/utils/cn';
 import { reportsService } from '@/services/reportsService';
 import type { MonthlyReport, ReportInsightSeverity } from '@/types/reports';
 
-const formatPercent = (value: number): string => `${(value * 100).toFixed(1)}%`;
+const formatPercent = (value: number): string => `${value.toFixed(1)}%`;
 const formatNumber = (value: number): string => value.toLocaleString('en-US');
 const formatSignedNumber = (value: number): string =>
   `${value > 0 ? '+' : ''}${value.toLocaleString('en-US')}`;

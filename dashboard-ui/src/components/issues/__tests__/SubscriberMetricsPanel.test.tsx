@@ -4,7 +4,7 @@ import { SubscriberMetricsPanel } from '../SubscriberMetricsPanel';
 
 describe('SubscriberMetricsPanel', () => {
   const getMetricsRegion = () =>
-    screen.getByRole('region', { name: 'Subscriber loss metrics' });
+    screen.getByRole('region', { name: 'Subscriber activity metrics' });
 
   describe('Rendering with all zeros (Req 4.5)', () => {
     it('should display all three counts as 0 rather than hiding the panel', () => {
@@ -36,6 +36,16 @@ describe('SubscriberMetricsPanel', () => {
       expect(within(region).getByText('2')).toBeInTheDocument();
       // Total loss = 5 + 3 + 2 = 10
       expect(within(region).getByText('10')).toBeInTheDocument();
+    });
+
+    it('should display new subscribers gained for the issue', () => {
+      render(
+        <SubscriberMetricsPanel subscribes={42} unsubscribes={5} cleaned={3} manualRemovals={2} />
+      );
+
+      const region = getMetricsRegion();
+      expect(within(region).getAllByText('New Subscribers').length).toBeGreaterThan(0);
+      expect(within(region).getByText('42')).toBeInTheDocument();
     });
 
     it('should display formatted numbers for large values', () => {
@@ -176,7 +186,7 @@ describe('SubscriberMetricsPanel', () => {
       );
 
       expect(
-        screen.getByRole('region', { name: 'Subscriber loss metrics' })
+        screen.getByRole('region', { name: 'Subscriber activity metrics' })
       ).toBeInTheDocument();
     });
   });

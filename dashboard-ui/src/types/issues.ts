@@ -1,5 +1,12 @@
 export type IssueStatus = 'draft' | 'scheduled' | 'in progress' | 'published' | 'failed';
 
+/**
+ * How an issue's `content` should be authored and interpreted.
+ * - `markdown`: content is markdown (rendered to HTML on publish).
+ * - `json`: content is a JSON data object rendered against a selected template.
+ */
+export type IssueContentType = 'markdown' | 'json';
+
 export interface IssueListItem {
   id: string;
   issueNumber: number;
@@ -17,6 +24,7 @@ export interface IssueStats {
   bounces: number;
   complaints: number;
   subscribers: number;
+  subscribes?: number;
   unsubscribes?: number;
   cleaned?: number;
   manualRemovals?: number;
@@ -28,6 +36,7 @@ export interface Issue extends IssueListItem {
   updatedAt: string;
   metadata?: Record<string, unknown>;
   templateId?: string;
+  contentType?: IssueContentType;
   stats?: IssueStats;
   insights?: string[];
   insightsV2?: InsightV2[];
@@ -51,6 +60,7 @@ export interface IssueMetrics {
   bounces: number;
   complaints: number;
   subscribers: number;
+  subscribes?: number;
   unsubscribes?: number;
   cleaned?: number;
   manualRemovals?: number;
@@ -114,6 +124,7 @@ export interface CreateIssueRequest {
   scheduledAt?: string;
   metadata?: Record<string, unknown>;
   templateId?: string;
+  contentType?: IssueContentType;
 }
 
 export interface UpdateIssueRequest {
@@ -123,6 +134,7 @@ export interface UpdateIssueRequest {
   metadata?: Record<string, unknown>;
   status?: 'published';
   templateId?: string;
+  contentType?: IssueContentType;
 }
 
 export interface ListIssuesParams {

@@ -20,6 +20,7 @@ import {
 } from '../utils/bot-protection.mjs';
 import { checkRateLimit } from '../utils/rate-limiter.mjs';
 import { createLogger } from '../utils/structured-logger.mjs';
+import { getMostRecentPublishedIssue, incrementIssueCounter } from '../utils/issue-attribution.mjs';
 
 const ddb = new DynamoDBClient();
 
@@ -176,6 +177,16 @@ export const handler = async (event) => {
 
       await updateSubscriberCount(tenantId);
       await createSubscriberEventRecord(tenantId, normalizedEmail, addedAt, timestamp);
+
+      // Attribute the new subscriber to the most recently sent issue
+      try {
+        const recentIssue = await getMostRecentPublishedIssue(tenantId);
+        if (recentIssue) {
+          await incrementIssueCounter(recentIssue.pk, 'subscribes');
+        }
+      } catch (attrErr) {
+        console.warn('Failed to increment subscribe counter:', { tenantId, error: attrErr.message });
+      }
 
       await publishSubscriberEvent(
         tenantId,

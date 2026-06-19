@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Pencil, Trash, RefreshCw, AlertCircle, TrendingUp, Users, Shield, FileText, CheckCircle } from 'lucide-react';
+import { ArrowLeft, Pencil, Trash, RefreshCw, AlertCircle, TrendingUp, Users, Shield, FileText, CheckCircle, Flame } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { useToast } from '../../components/ui/Toast';
@@ -58,6 +58,7 @@ const TrafficSourceChart = lazy(() => import('../../components/issues/TrafficSou
 const TimingMetricsChart = lazy(() => import('../../components/issues/TimingMetricsChart').then(m => ({ default: m.TimingMetricsChart })));
 const GeoMap = lazy(() => import('../../components/analytics/GeoMap').then(m => ({ default: m.GeoMap })));
 const LinkSelector = lazy(() => import('../../components/analytics/LinkSelector').then(m => ({ default: m.LinkSelector })));
+const ContentHeatmap = lazy(() => import('../../components/issues/ContentHeatmap').then(m => ({ default: m.ContentHeatmap })));
 
 // Section configuration for the new single-page layout
 interface SectionConfig {
@@ -115,6 +116,7 @@ export const IssueDetailPage: React.FC = () => {
   const [selectedLinkId, setSelectedLinkId] = useState<string | null>(null);
   const [isAnalyticsRebuilding, setIsAnalyticsRebuilding] = useState(false);
   const [isMarkingPublished, setIsMarkingPublished] = useState(false);
+  const [contentView, setContentView] = useState<'preview' | 'heatmap'>('preview');
 
   // New state for single-page layout
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
@@ -510,6 +512,13 @@ export const IssueDetailPage: React.FC = () => {
   const isPublished = useMemo(() => issue?.status === 'published', [issue?.status]);
   const canMarkAsPublished = useMemo(() => issue?.status === 'in progress' || issue?.status === 'failed', [issue?.status]);
 
+  // The content heatmap overlays click data on the rendered markdown, so it only
+  // applies to markdown issues that have per-link analytics.
+  const canShowHeatmap = useMemo(
+    () => issue?.contentType !== 'json' && !!analytics?.links && analytics.links.length > 0,
+    [issue?.contentType, analytics]
+  );
+
   const complaintRate = useMemo(() => {
     if (!issue?.stats) return 0;
     return calculateComplaintRate(issue.stats.complaints, issue.stats.deliveries);
@@ -529,6 +538,7 @@ export const IssueDetailPage: React.FC = () => {
       bounces: issue.stats.bounces,
       complaints: issue.stats.complaints,
       subscribers: issue.stats.subscribers,
+      subscribes: issue.stats.subscribes ?? 0,
       unsubscribes: issue.stats.unsubscribes ?? 0,
       cleaned: issue.stats.cleaned ?? 0,
       manualRemovals: issue.stats.manualRemovals ?? 0,
@@ -870,6 +880,7 @@ export const IssueDetailPage: React.FC = () => {
           <div className="mb-4 sm:mb-6">
             <FadeIn variant="fade" speed="normal">
               <SubscriberMetricsPanel
+                subscribes={issue.stats.subscribes}
                 unsubscribes={issue.stats.unsubscribes}
                 cleaned={issue.stats.cleaned}
                 manualRemovals={issue.stats.manualRemovals}
@@ -1115,15 +1126,68 @@ export const IssueDetailPage: React.FC = () => {
         {/* Content Preview Section - Moved to bottom */}
         <Card className="mb-6">
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileText className="w-5 h-5" aria-hidden="true" />
-              Content
-            </CardTitle>
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <CardTitle className="flex items-center gap-2">
+                <FileText className="w-5 h-5" aria-hidden="true" />
+                Content
+              </CardTitle>
+              {canShowHeatmap && (
+                <div
+                  className="inline-flex rounded-lg border border-border bg-muted/30 p-0.5 self-start"
+                  role="group"
+                  aria-label="Content view mode"
+                >
+                  <button
+                    type="button"
+                    onClick={() => setContentView('preview')}
+                    aria-pressed={contentView === 'preview'}
+                    className={`px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition-colors min-h-[36px] ${
+                      contentView === 'preview'
+                        ? 'bg-background text-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    Preview
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setContentView('heatmap')}
+                    aria-pressed={contentView === 'heatmap'}
+                    className={`inline-flex items-center gap-1 px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition-colors min-h-[36px] ${
+                      contentView === 'heatmap'
+                        ? 'bg-background text-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    <Flame className="w-3.5 h-3.5" aria-hidden="true" />
+                    Heatmap
+                  </button>
+                </div>
+              )}
+            </div>
           </CardHeader>
           <CardContent>
-            <article aria-label="Issue content preview">
-              <MarkdownPreview content={issue.content} />
-            </article>
+            {canShowHeatmap && contentView === 'heatmap' ? (
+              <Suspense fallback={<ChartSkeleton />}>
+                <AsyncErrorBoundary onRetry={loadIssue}>
+                  <ContentHeatmap
+                    content={issue.content}
+                    links={analytics?.links || []}
+                    totalClicks={issue.stats?.clicks || 0}
+                  />
+                </AsyncErrorBoundary>
+              </Suspense>
+            ) : (
+              <article aria-label="Issue content preview">
+                {issue.contentType === 'json' ? (
+                  <pre className="overflow-x-auto rounded-lg border border-border bg-muted/40 p-4 text-sm font-mono text-foreground whitespace-pre-wrap break-words">
+                    {issue.content}
+                  </pre>
+                ) : (
+                  <MarkdownPreview content={issue.content} />
+                )}
+              </article>
+            )}
           </CardContent>
         </Card>
 

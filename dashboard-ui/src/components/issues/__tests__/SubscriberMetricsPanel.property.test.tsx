@@ -31,7 +31,7 @@ describe('SubscriberMetricsPanel - Property-Based Tests', () => {
             />
           );
 
-          const region = screen.getByRole('region', { name: 'Subscriber loss metrics' });
+          const region = screen.getByRole('region', { name: 'Subscriber activity metrics' });
           // The Total Loss card is the last grid child; its formatted value must match
           // the arithmetic sum of the three individual counts.
           const totalLossText = within(region).getAllByText(formattedTotal);
@@ -76,7 +76,7 @@ describe('SubscriberMetricsPanel - Property-Based Tests', () => {
             />
           );
 
-          const region = screen.getByRole('region', { name: 'Subscriber loss metrics' });
+          const region = screen.getByRole('region', { name: 'Subscriber activity metrics' });
           const percentageElement = within(region).getByText(expectedText);
           expect(percentageElement).toBeTruthy();
 
@@ -103,7 +103,7 @@ describe('SubscriberMetricsPanel - Property-Based Tests', () => {
             />
           );
 
-          const region = screen.getByRole('region', { name: 'Subscriber loss metrics' });
+          const region = screen.getByRole('region', { name: 'Subscriber activity metrics' });
           const percentageMatches = within(region).queryAllByText(/% of subscribers/);
           expect(percentageMatches).toHaveLength(0);
 

@@ -69,12 +69,12 @@ export const handler = async (event) => {
       try {
         const recentIssue = await getMostRecentPublishedIssue(tenantId);
         if (recentIssue) {
-          await incrementIssueCounter(recentIssue.pk, 'unsubscribes');
+          await incrementIssueCounter(recentIssue.pk, 'manualRemovals');
         } else {
-          console.warn('No published issue found for unsubscribe attribution:', { tenantId });
+          console.warn('No published issue found for manual removal attribution:', { tenantId });
         }
       } catch (attrErr) {
-        console.warn('Failed to increment unsubscribe counter:', { tenantId, error: attrErr.message });
+        console.warn('Failed to increment manual removal counter:', { tenantId, error: attrErr.message });
       }
     } else if (!result.success) {
       await notifyAdminOfFailure(tenant, emailAddress, 'manual-form', metadata);

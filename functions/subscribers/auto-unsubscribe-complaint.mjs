@@ -1,6 +1,7 @@
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { getTenant } from '../utils/helpers.mjs';
 import { unsubscribeUser } from '../utils/subscriber.mjs';
+import { getMostRecentPublishedIssue, incrementIssueCounter } from '../utils/issue-attribution.mjs';
 
 const eventBridge = new EventBridgeClient();
 
@@ -48,11 +49,21 @@ const processComplaintUnsubscribe = async (emailAddress, detail) => {
     userAgent: detail.complaint?.userAgent || 'ses-complaint'
   };
 
-  const success = await unsubscribeUser(tenantId, emailAddress, 'complaint', metadata);
+  const result = await unsubscribeUser(tenantId, emailAddress, 'complaint', metadata);
 
-  if (success) {
+  if (result.actuallyRemoved) {
+    try {
+      const recentIssue = await getMostRecentPublishedIssue(tenantId);
+      if (recentIssue) {
+        await incrementIssueCounter(recentIssue.pk, 'unsubscribes');
+      } else {
+        console.warn('No published issue found for unsubscribe attribution:', { tenantId });
+      }
+    } catch (attrErr) {
+      console.warn('Failed to increment unsubscribe counter:', { tenantId, error: attrErr.message });
+    }
     console.log(`Auto-unsubscribed ${emailAddress} from ${tenantId} due to complaint`);
-  } else {
+  } else if (!result.success) {
     console.error(`Failed to auto-unsubscribe ${emailAddress} from ${tenantId}`);
     await notifyAdminOfFailure(tenantId, emailAddress, 'complaint', metadata, tenant);
   }

@@ -1,15 +1,16 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Eye, EyeOff } from 'lucide-react';
+import { Eye, EyeOff, FileText, FileJson } from 'lucide-react';
 import { Input } from '@/components/ui/Input';
-import { TextArea } from '@/components/ui/TextArea';
 import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/Toast';
 import { ConfirmationDialog } from '@/components/ui/ConfirmationDialog';
 import { MarkdownPreview } from '@/components/issues/MarkdownPreview';
+import { MarkdownWysiwygEditor } from '@/components/issues/MarkdownWysiwygEditor';
+import { TemplateJsonEditor } from '@/components/issues/TemplateJsonEditor';
 import { issuesService } from '@/services/issuesService';
 import { templateService } from '@/services/templateService';
-import type { Issue, CreateIssueRequest, UpdateIssueRequest } from '@/types/issues';
+import type { Issue, CreateIssueRequest, UpdateIssueRequest, IssueContentType } from '@/types/issues';
 import type { TemplateSummary } from '@/types/api';
 
 // Sentinel value used for the "Default template" option (no templateId persisted).
@@ -21,6 +22,7 @@ interface FormData {
   issueNumber?: string;
   scheduledAt?: string;
   templateId?: string;
+  contentType: IssueContentType;
 }
 
 interface FormErrors {
@@ -28,7 +30,31 @@ interface FormErrors {
   content?: string;
   issueNumber?: string;
   scheduledAt?: string;
+  templateId?: string;
 }
+
+/**
+ * Validates issue content for the given authoring mode. Markdown only needs to
+ * be non-empty; JSON must additionally parse to an object so the publish
+ * pipeline can render it against the selected template.
+ */
+const validateContent = (value: string, contentType: IssueContentType): string | undefined => {
+  if (!value.trim()) {
+    return contentType === 'json' ? 'Template data is required' : 'Content is required';
+  }
+  if (contentType === 'json') {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return 'Template data must be valid JSON';
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return 'Template data must be a JSON object';
+    }
+  }
+  return undefined;
+};
 
 export const IssueFormPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -42,6 +68,7 @@ export const IssueFormPage: React.FC = () => {
     issueNumber: '',
     scheduledAt: '',
     templateId: DEFAULT_TEMPLATE_VALUE,
+    contentType: 'markdown',
   });
 
   const [templates, setTemplates] = useState<TemplateSummary[]>([]);
@@ -50,6 +77,7 @@ export const IssueFormPage: React.FC = () => {
   const [isDirty, setIsDirty] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLoadingSample, setIsLoadingSample] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [showCancelDialog, setShowCancelDialog] = useState(false);
   const [existingIssue, setExistingIssue] = useState<Issue | null>(null);
@@ -68,6 +96,7 @@ export const IssueFormPage: React.FC = () => {
           issueNumber: issue.issueNumber ? String(issue.issueNumber) : '',
           scheduledAt: issue.scheduledAt ? toDatetimeLocal(issue.scheduledAt) : '',
           templateId: issue.templateId ?? DEFAULT_TEMPLATE_VALUE,
+          contentType: issue.contentType === 'json' ? 'json' : 'markdown',
         });
 
         // Disable form for published/scheduled issues
@@ -165,12 +194,6 @@ export const IssueFormPage: React.FC = () => {
         }
         break;
 
-      case 'content':
-        if (!value.trim()) {
-          return 'Content is required';
-        }
-        break;
-
       case 'issueNumber':
         if (value && value.trim()) {
           const parsed = Number(value);
@@ -203,14 +226,64 @@ export const IssueFormPage: React.FC = () => {
     const newErrors: FormErrors = {};
 
     newErrors.subject = validateField('subject', formData.subject);
-    newErrors.content = validateField('content', formData.content);
+    newErrors.content = validateContent(formData.content, formData.contentType);
     newErrors.issueNumber = validateField('issueNumber', formData.issueNumber || '');
     newErrors.scheduledAt = validateField('scheduledAt', formData.scheduledAt || '');
 
+    // JSON mode renders against a template, so a template selection is required.
+    if (formData.contentType === 'json' && !formData.templateId) {
+      newErrors.templateId = 'Select a template to render the JSON data';
+    }
+
     setErrors(newErrors);
 
-    return !newErrors.subject && !newErrors.content && !newErrors.issueNumber && !newErrors.scheduledAt;
+    return (
+      !newErrors.subject &&
+      !newErrors.content &&
+      !newErrors.issueNumber &&
+      !newErrors.scheduledAt &&
+      !newErrors.templateId
+    );
   }, [formData, validateField]);
+
+  // Switch authoring mode (markdown <-> json), clearing content-specific errors.
+  const handleModeChange = useCallback((mode: IssueContentType) => {
+    setFormData((prev) => (prev.contentType === mode ? prev : { ...prev, contentType: mode }));
+    setShowPreview(false);
+    setErrors((prev) => ({ ...prev, content: undefined, templateId: undefined }));
+    setIsDirty(true);
+  }, []);
+
+  // Load the selected template's stored sample data into the JSON editor.
+  const handleLoadSampleData = useCallback(async () => {
+    if (!formData.templateId) {
+      return;
+    }
+    setIsLoadingSample(true);
+    try {
+      const response = await templateService.getTemplate(formData.templateId);
+      if (response.success && response.data) {
+        const sample = response.data.sampleData ?? {};
+        setFormData((prev) => ({ ...prev, content: JSON.stringify(sample, null, 2) }));
+        setErrors((prev) => ({ ...prev, content: undefined }));
+        setIsDirty(true);
+      } else {
+        addToast({
+          type: 'error',
+          title: 'Could Not Load Sample Data',
+          message: response.error || 'Failed to load template sample data.',
+        });
+      }
+    } catch (error) {
+      addToast({
+        type: 'error',
+        title: 'Could Not Load Sample Data',
+        message: error instanceof Error ? error.message : 'Failed to load template sample data.',
+      });
+    } finally {
+      setIsLoadingSample(false);
+    }
+  }, [formData.templateId, addToast]);
 
   // Handle form submission
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
@@ -228,6 +301,7 @@ export const IssueFormPage: React.FC = () => {
         const updateData: UpdateIssueRequest = {
           subject: formData.subject,
           content: formData.content,
+          contentType: formData.contentType,
         };
 
         if (formData.scheduledAt) {
@@ -281,6 +355,7 @@ export const IssueFormPage: React.FC = () => {
         const createData: CreateIssueRequest = {
           subject: formData.subject,
           content: formData.content,
+          contentType: formData.contentType,
         };
 
         if (formData.issueNumber && formData.issueNumber.trim()) {
@@ -490,89 +565,172 @@ export const IssueFormPage: React.FC = () => {
               </p>
             </div>
 
+            {/* Authoring Mode Toggle */}
+            <div>
+              <span className="block text-sm font-medium text-foreground mb-2">Authoring Mode</span>
+              <div
+                role="radiogroup"
+                aria-label="Authoring mode"
+                className="grid grid-cols-1 sm:grid-cols-2 gap-3"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={formData.contentType === 'markdown'}
+                  onClick={() => handleModeChange('markdown')}
+                  disabled={isFormDisabled}
+                  className={`flex items-start gap-3 rounded-lg border p-3 text-left transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed ${
+                    formData.contentType === 'markdown'
+                      ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+                      : 'border-border bg-background hover:border-primary-300'
+                  }`}
+                >
+                  <FileText className="w-5 h-5 mt-0.5 text-primary-600 dark:text-primary-400 shrink-0" />
+                  <span>
+                    <span className="block text-sm font-medium text-foreground">Markdown editor</span>
+                    <span className="block text-xs text-muted-foreground">
+                      Write content visually; it&rsquo;s converted to HTML on publish.
+                    </span>
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={formData.contentType === 'json'}
+                  onClick={() => handleModeChange('json')}
+                  disabled={isFormDisabled}
+                  className={`flex items-start gap-3 rounded-lg border p-3 text-left transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed ${
+                    formData.contentType === 'json'
+                      ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+                      : 'border-border bg-background hover:border-primary-300'
+                  }`}
+                >
+                  <FileJson className="w-5 h-5 mt-0.5 text-primary-600 dark:text-primary-400 shrink-0" />
+                  <span>
+                    <span className="block text-sm font-medium text-foreground">Template + JSON</span>
+                    <span className="block text-xs text-muted-foreground">
+                      Pick a template and provide the JSON data to render it.
+                    </span>
+                  </span>
+                </button>
+              </div>
+            </div>
+
             {/* Template Picker */}
             <div>
               <label htmlFor="templateId" className="block text-sm font-medium text-foreground mb-2">
-                Template (Optional)
+                {formData.contentType === 'json' ? 'Template *' : 'Template (Optional)'}
               </label>
               <select
                 id="templateId"
                 value={formData.templateId ?? DEFAULT_TEMPLATE_VALUE}
                 onChange={(e) => handleInputChange('templateId', e.target.value)}
                 disabled={isFormDisabled}
+                aria-invalid={!!errors.templateId}
                 className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <option value={DEFAULT_TEMPLATE_VALUE}>Default template</option>
+                <option value={DEFAULT_TEMPLATE_VALUE}>
+                  {formData.contentType === 'json' ? 'Select a template…' : 'Default template'}
+                </option>
                 {templates.map((template) => (
                   <option key={template.templateId} value={template.templateId}>
                     {template.name}
                   </option>
                 ))}
               </select>
+              {errors.templateId && (
+                <p className="mt-1 text-sm text-error-600 dark:text-error-400" role="alert">
+                  {errors.templateId}
+                </p>
+              )}
               <p className="mt-1 text-xs text-muted-foreground">
-                Choose a template to render this issue. Leave as &ldquo;Default template&rdquo; to use the built-in newsletter layout.
+                {formData.contentType === 'json'
+                  ? 'JSON mode renders your data against the selected template.'
+                  : 'Choose a template to render this issue. Leave as “Default template” to use the built-in newsletter layout.'}
               </p>
             </div>
 
-            {/* Content Textarea */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <label htmlFor="content-textarea" className="block text-sm font-medium text-foreground">
-                  Content *
-                </label>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setShowPreview(!showPreview)}
-                  disabled={isFormDisabled}
-                  aria-label={showPreview ? 'Hide markdown preview' : 'Show markdown preview'}
-                  aria-pressed={showPreview}
-                >
-                  {showPreview ? (
-                    <>
-                      <EyeOff className="w-4 h-4 mr-2" />
-                      <span className="hidden sm:inline">Hide Preview</span>
-                      <span className="sm:hidden">Hide</span>
-                    </>
-                  ) : (
-                    <>
-                      <Eye className="w-4 h-4 mr-2" />
-                      <span className="hidden sm:inline">Show Preview</span>
-                      <span className="sm:hidden">Preview</span>
-                    </>
-                  )}
-                </Button>
-              </div>
-
-              {showPreview ? (
-                <div className="rounded-lg border border-border bg-background p-4 sm:p-6 min-h-[300px] max-h-[600px] overflow-y-auto">
-                  {formData.content ? (
-                    <MarkdownPreview content={formData.content} />
-                  ) : (
-                    <p className="text-sm text-muted-foreground italic">
-                      No content to preview
-                    </p>
-                  )}
+            {/* Content Editor */}
+            {formData.contentType === 'json' ? (
+              <TemplateJsonEditor
+                value={formData.content}
+                onChange={(value) => handleInputChange('content', value)}
+                onBlur={() => {
+                  const error = validateContent(formData.content, 'json');
+                  if (error) {
+                    setErrors((prev) => ({ ...prev, content: error }));
+                  }
+                }}
+                error={errors.content}
+                disabled={isFormDisabled}
+                onLoadSampleData={handleLoadSampleData}
+                isLoadingSample={isLoadingSample}
+                hasTemplate={!!formData.templateId}
+              />
+            ) : (
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label htmlFor="content-editor" className="block text-sm font-medium text-foreground">
+                    Content *
+                  </label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowPreview(!showPreview)}
+                    disabled={isFormDisabled}
+                    aria-label={showPreview ? 'Hide markdown preview' : 'Show markdown preview'}
+                    aria-pressed={showPreview}
+                  >
+                    {showPreview ? (
+                      <>
+                        <EyeOff className="w-4 h-4 mr-2" />
+                        <span className="hidden sm:inline">Hide Preview</span>
+                        <span className="sm:hidden">Hide</span>
+                      </>
+                    ) : (
+                      <>
+                        <Eye className="w-4 h-4 mr-2" />
+                        <span className="hidden sm:inline">Show Preview</span>
+                        <span className="sm:hidden">Preview</span>
+                      </>
+                    )}
+                  </Button>
                 </div>
-              ) : (
-                <TextArea
-                  id="content-textarea"
-                  placeholder="Write your newsletter content in markdown..."
-                  value={formData.content}
-                  onChange={(e) => handleInputChange('content', e.target.value)}
-                  onBlur={() => {
-                    const error = validateField('content', formData.content);
-                    if (error) {
-                      setErrors((prev) => ({ ...prev, content: error }));
-                    }
-                  }}
-                  error={errors.content}
-                  rows={15}
-                  disabled={isFormDisabled}
-                />
-              )}
-            </div>
+
+                {showPreview ? (
+                  <div className="rounded-lg border border-border bg-background p-4 sm:p-6 min-h-[300px] max-h-[600px] overflow-y-auto">
+                    {formData.content ? (
+                      <MarkdownPreview content={formData.content} />
+                    ) : (
+                      <p className="text-sm text-muted-foreground italic">
+                        No content to preview
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <MarkdownWysiwygEditor
+                    id="content-editor"
+                    placeholder="Write your newsletter content…"
+                    value={formData.content}
+                    onChange={(value) => handleInputChange('content', value)}
+                    onBlur={() => {
+                      const error = validateContent(formData.content, 'markdown');
+                      if (error) {
+                        setErrors((prev) => ({ ...prev, content: error }));
+                      }
+                    }}
+                    disabled={isFormDisabled}
+                  />
+                )}
+                {errors.content && (
+                  <p className="mt-1 text-sm text-error-600 dark:text-error-400" role="alert">
+                    {errors.content}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Form Actions */}

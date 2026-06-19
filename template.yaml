@@ -2124,6 +2124,24 @@ Resources:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
 
+  ParseJsonIssueFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - parse-json-issue.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: parse-json-issue.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+
   TransformAndCallbackFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2344,6 +2362,7 @@ Resources:
         DynamodbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
         LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
         ParseMdToJson: !GetAtt ParseMdToJsonFunction.Arn
+        ParseJsonIssue: !GetAtt ParseJsonIssueFunction.Arn
         PublishIssue: !GetAtt PublishIssueFunction.Arn
         DynamodbUpdateItem: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
@@ -2369,6 +2388,7 @@ Resources:
               Resource:
                 - !GetAtt PublishIssueFunction.Arn
                 - !GetAtt ParseMdToJsonFunction.Arn
+                - !GetAtt ParseJsonIssueFunction.Arn
                 - !GetAtt UpdateLinksWithTrackingDataFunction.Arn
                 - !GetAtt SetupVotingOptionsFunction.Arn
                 - !GetAtt TransformAndCallbackFunction.Arn

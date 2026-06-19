@@ -1122,7 +1122,13 @@ export const IssueDetailPage: React.FC = () => {
           </CardHeader>
           <CardContent>
             <article aria-label="Issue content preview">
-              <MarkdownPreview content={issue.content} />
+              {issue.contentType === 'json' ? (
+                <pre className="overflow-x-auto rounded-lg border border-border bg-muted/40 p-4 text-sm font-mono text-foreground whitespace-pre-wrap break-words">
+                  {issue.content}
+                </pre>
+              ) : (
+                <MarkdownPreview content={issue.content} />
+              )}
             </article>
           </CardContent>
         </Card>

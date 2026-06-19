@@ -2956,7 +2956,18 @@ components:
           description: Issue subject
         content:
           type: string
-          description: Issue content in markdown format
+          description: >-
+            Issue content. When contentType is "markdown" (default) this is
+            markdown that is converted to HTML on publish. When contentType is
+            "json" this is a JSON object (as a string) rendered against the
+            selected template.
+        contentType:
+          type: string
+          enum: [markdown, json]
+          default: markdown
+          description: >-
+            How content should be interpreted. "json" requires a templateId and
+            the content must be a JSON object.
         scheduledAt:
           type: string
           description: When to schedule the issue for publishing (RFC3339 or "now")
@@ -2969,7 +2980,7 @@ components:
           description: Optional metadata for the issue
         templateId:
           type: string
-          description: Optional identifier of the template to render this issue with. When omitted, the default template is used.
+          description: Optional identifier of the template to render this issue with. When omitted, the default template is used. Required when contentType is "json".
 
     CreateIssueResponse:
       type: object
@@ -2981,6 +2992,7 @@ components:
         - content
         - createdAt
         - updatedAt
+        - contentType
       properties:
         id:
           type: string
@@ -2997,7 +3009,11 @@ components:
           description: Issue status (always 'draft' for new issues)
         content:
           type: string
-          description: Issue content in markdown format
+          description: Issue content (markdown or JSON depending on contentType)
+        contentType:
+          type: string
+          enum: [markdown, json]
+          description: How the issue content is interpreted
         createdAt:
           type: string
           format: date-time
@@ -3056,6 +3072,10 @@ components:
         templateId:
           type: string
           description: Identifier of the template used to render this issue (omitted when the default template is used)
+        contentType:
+          type: string
+          enum: [markdown, json]
+          description: How the issue content is interpreted
         stats:
           $ref: "#/components/schemas/IssueStats"
         insights:
@@ -3079,7 +3099,13 @@ components:
           description: Issue subject
         content:
           type: string
-          description: Issue content in markdown format
+          description: Issue content (markdown or JSON depending on contentType)
+        contentType:
+          type: string
+          enum: [markdown, json]
+          description: >-
+            How content should be interpreted. When set to "json" any supplied
+            content must be a JSON object.
         scheduledAt:
           type: string
           format: date-time

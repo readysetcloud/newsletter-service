@@ -137,7 +137,7 @@
           "Next": "Wait For Future Date"
         }
       ],
-      "Default": "Setup Voting Options"
+      "Default": "Route By Content Type"
     },
     "Wait For Future Date": {
       "Type": "Wait",
@@ -158,8 +158,28 @@
           }
         ]
       },
-      "Next": "Setup Voting Options",
+      "Next": "Route By Content Type",
       "ResultPath": null
+    },
+    "Route By Content Type": {
+      "Type": "Choice",
+      "Comment": "JSON issues skip the markdown-specific steps (voting options, link tracking, GitHub callback, social copy) and render the supplied data directly against the selected template.",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$$.Execution.Input.contentType",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$$.Execution.Input.contentType",
+              "StringEquals": "json"
+            }
+          ],
+          "Next": "Parse JSON Issue"
+        }
+      ],
+      "Default": "Setup Voting Options"
     },
     "Setup Voting Options": {
       "Type": "Task",
@@ -491,6 +511,296 @@
           }
         }
       ]
+    },
+    "Parse JSON Issue": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "Parameters": {
+        "FunctionName": "${ParseJsonIssue}",
+        "Payload": {
+          "content.$": "$$.Execution.Input.content",
+          "issueId.$": "$$.Execution.Input.issueId",
+          "subject.$": "$$.Execution.Input.subject"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "OutputPath": "$.Payload",
+      "Next": "Send JSON Preview?",
+      "Assign": {
+        "sendAtDate.$": "$.Payload.sendAtDate",
+        "reportStatsDate.$": "$.Payload.reportStatsDate",
+        "listCleanupDate.$": "$.Payload.listCleanupDate",
+        "subject.$": "$.Payload.subject"
+      }
+    },
+    "Send JSON Preview?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$$.Execution.Input.isPreview",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$$.Execution.Input.isPreview",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "Publish JSON Preview"
+        }
+      ],
+      "Default": "Publish JSON"
+    },
+    "Publish JSON Preview": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "Parameters": {
+        "FunctionName": "${PublishIssue}",
+        "Payload": {
+          "data.$": "$.data",
+          "subject.$": "$.subject",
+          "email.$": "$$.Execution.Input.tenant.email",
+          "isPreview": true,
+          "tenantId.$": "$$.Execution.Input.tenant.id",
+          "templateId.$": "$$.Execution.Input.templateId"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "OutputPath": "$.Payload",
+      "End": true
+    },
+    "Publish JSON": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "Parameters": {
+        "Payload": {
+          "data.$": "$.data",
+          "sendAtDate.$": "$sendAtDate",
+          "subject.$": "$.subject",
+          "tenantId.$": "$$.Execution.Input.tenant.id",
+          "templateId.$": "$$.Execution.Input.templateId"
+        },
+        "FunctionName": "${PublishIssue}"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultPath": "$.publishResult",
+      "Next": "JSON Publish Success?"
+    },
+    "JSON Publish Success?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.publishResult.Payload.success",
+          "BooleanEquals": true,
+          "Next": "Schedule JSON Tasks"
+        }
+      ],
+      "Default": "Update Issue Record - Failure"
+    },
+    "Schedule JSON Tasks": {
+      "Type": "Parallel",
+      "ResultPath": null,
+      "Next": "Mark JSON Issue Published",
+      "Branches": [
+        {
+          "StartAt": "Schedule JSON Issue Report",
+          "States": {
+            "Schedule JSON Issue Report": {
+              "Type": "Task",
+              "Parameters": {
+                "ActionAfterCompletion": "DELETE",
+                "FlexibleTimeWindow": {
+                  "Mode": "OFF"
+                },
+                "GroupName": "newsletter",
+                "Name.$": "States.Format('ISSUE-STATS-{}', $$.Execution.Input.issueId)",
+                "ScheduleExpression.$": "States.Format('at({})', $reportStatsDate)",
+                "Target": {
+                  "Arn": "${ReportStatsStateMachine}",
+                  "RoleArn": "${ReportStatsRole}",
+                  "Input": {
+                    "tenant.$": "$$.Execution.Input.tenant",
+                    "issueId.$": "$$.Execution.Input.issueId"
+                  }
+                }
+              },
+              "Resource": "${SchedulerCreateSchedule}",
+              "ResultPath": null,
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Format JSON List Cleanup Input",
+          "States": {
+            "Format JSON List Cleanup Input": {
+              "Type": "Pass",
+              "Parameters": {
+                "tenantId.$": "$$.Execution.Input.tenant",
+                "currentIssue.$": "States.Format('{}#{}', $$.Execution.Input.tenant.id, $$.Execution.Input.issueId)",
+                "previousIssue.$": "States.Format('{}#{}', $$.Execution.Input.tenant.id, States.MathAdd($$.Execution.Input.issueId, -1))"
+              },
+              "ResultPath": "$.cleanup",
+              "Next": "Schedule JSON List Cleanup"
+            },
+            "Schedule JSON List Cleanup": {
+              "Type": "Task",
+              "End": true,
+              "Parameters": {
+                "ActionAfterCompletion": "DELETE",
+                "FlexibleTimeWindow": {
+                  "Mode": "OFF"
+                },
+                "GroupName": "newsletter",
+                "Name.$": "States.Format('{}-CLEAN-{}', $$.Execution.Input.tenant.id, $$.Execution.Input.issueId)",
+                "ScheduleExpression.$": "States.Format('at({})', $listCleanupDate)",
+                "Target": {
+                  "Arn": "arn:aws:scheduler:::aws-sdk:eventbridge:putEvents",
+                  "RoleArn": "${CleanupListRole}",
+                  "Input": {
+                    "Entries": [
+                      {
+                        "Source": "newsletter-service",
+                        "DetailType": "Clean Bounced Subscribers",
+                        "Detail.$": "States.JsonToString($.cleanup)"
+                      }
+                    ]
+                  }
+                }
+              },
+              "Resource": "${SchedulerCreateSchedule}",
+              "ResultPath": null
+            }
+          }
+        },
+        {
+          "StartAt": "Update JSON Issue Metadata",
+          "States": {
+            "Update JSON Issue Metadata": {
+              "Type": "Task",
+              "Resource": "${DynamodbUpdateItem}",
+              "Parameters": {
+                "TableName": "${TableName}",
+                "Key": {
+                  "pk": {
+                    "S.$": "States.Format('{}#{}', $$.Execution.Input.tenant.id, $$.Execution.Input.issueId)"
+                  },
+                  "sk": {
+                    "S": "newsletter"
+                  }
+                },
+                "UpdateExpression": "SET #GSIPK = :GSIPK, #GSISK = :GSISK, #subject = :subject",
+                "ExpressionAttributeNames": {
+                  "#GSIPK": "GSI1PK",
+                  "#GSISK": "GSI1SK",
+                  "#subject": "subject"
+                },
+                "ExpressionAttributeValues": {
+                  ":GSIPK": {
+                    "S.$": "States.Format('{}#newsletter', $$.Execution.Input.tenant.id)"
+                  },
+                  ":GSISK": {
+                    "S.$": "$$.State.EnteredTime"
+                  },
+                  ":subject": {
+                    "S.$": "$subject"
+                  }
+                }
+              },
+              "ResultPath": null,
+              "End": true
+            }
+          }
+        }
+      ]
+    },
+    "Mark JSON Issue Published": {
+      "Type": "Task",
+      "Resource": "${DynamodbUpdateItem}",
+      "Parameters": {
+        "TableName": "${TableName}",
+        "Key": {
+          "pk": {
+            "S.$": "States.Format('{}#{}', $$.Execution.Input.tenant.id, $$.Execution.Input.issueId)"
+          },
+          "sk": {
+            "S": "newsletter"
+          }
+        },
+        "UpdateExpression": "SET #status = :status, publishedAt = :publishedAt",
+        "ExpressionAttributeNames": {
+          "#status": "status"
+        },
+        "ExpressionAttributeValues": {
+          ":status": {
+            "S": "published"
+          },
+          ":publishedAt": {
+            "S.$": "$$.State.EnteredTime"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Next": "Notify of JSON Success"
+    },
+    "Notify of JSON Success": {
+      "Type": "Task",
+      "Resource": "${EventBridgePutEvents}",
+      "Parameters": {
+        "Entries": [
+          {
+            "Detail": {
+              "to": {
+                "email.$": "$$.Execution.Input.tenant.email"
+              },
+              "subject.$": "States.Format('[Scheduled] Newsletter Issue {}', $$.Execution.Input.issueId)",
+              "html": "<div><p>The newsletter was successfully scheduled for sending.</p></div>",
+              "tenantId.$": "$$.Execution.Input.tenant.id"
+            },
+            "DetailType": "Send Email v2",
+            "Source": "newsletter-service"
+          }
+        ]
+      },
+      "Next": "Success",
+      "ResultPath": null
     },
     "Success?": {
       "Type": "Choice",

@@ -27,20 +27,24 @@ describe('KeyMetricsSummary', () => {
   };
 
   describe('Rendering', () => {
-    it('should render all five metric cards', () => {
+    it('should render all four rate metric cards', () => {
       render(<KeyMetricsSummary metrics={mockMetrics} />);
 
-      expect(screen.getAllByText('Deliveries').length).toBeGreaterThan(0);
       expect(screen.getAllByText('Open Rate').length).toBeGreaterThan(0);
       expect(screen.getAllByText('Click Rate').length).toBeGreaterThan(0);
       expect(screen.getAllByText('Bounce Rate').length).toBeGreaterThan(0);
       expect(screen.getAllByText('Complaint Rate').length).toBeGreaterThan(0);
     });
 
+    it('should not render a standalone Deliveries card', () => {
+      render(<KeyMetricsSummary metrics={mockMetrics} />);
+
+      expect(screen.queryByText('Deliveries')).not.toBeInTheDocument();
+    });
+
     it('should display formatted metric values', () => {
       render(<KeyMetricsSummary metrics={mockMetrics} />);
 
-      expect(screen.getByText('1,000')).toBeInTheDocument();
       expect(screen.getByText('45.5%')).toBeInTheDocument();
       expect(screen.getByText('12.3%')).toBeInTheDocument();
       expect(screen.getByText('2.1%')).toBeInTheDocument();
@@ -118,7 +122,7 @@ describe('KeyMetricsSummary', () => {
 
       render(<KeyMetricsSummary metrics={zeroMetrics} />);
 
-      expect(screen.getByText('0')).toBeInTheDocument();
+      expect(screen.getByText('0 opens')).toBeInTheDocument();
       expect(screen.getAllByText('0.0%').length).toBeGreaterThan(0);
     });
 

@@ -155,18 +155,10 @@ export const KeyMetricsSummary: React.FC<KeyMetricsSummaryProps> = React.memo(({
 
   return (
     <div
-      className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4"
+      className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4"
       role="region"
       aria-label="Key performance metrics"
     >
-      <MetricCard
-        label="Deliveries"
-        value={formatNumber(metrics.deliveries)}
-        tooltipLabel="Deliveries"
-        tooltipDescription="Total number of emails successfully delivered to recipients."
-        colorClass="text-foreground"
-      />
-
       <MetricCard
         label="Open Rate"
         value={formatPercentageValue(metrics.openRate, 1)}

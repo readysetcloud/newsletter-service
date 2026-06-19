@@ -7,6 +7,9 @@ export type { IssueCardProps } from './IssueCard';
 export { MarkdownPreview } from './MarkdownPreview';
 export type { MarkdownPreviewProps } from './MarkdownPreview';
 
+export { ContentHeatmap } from './ContentHeatmap';
+export type { ContentHeatmapProps } from './ContentHeatmap';
+
 export { MarkdownWysiwygEditor } from './MarkdownWysiwygEditor';
 export type { MarkdownWysiwygEditorProps } from './MarkdownWysiwygEditor';
 

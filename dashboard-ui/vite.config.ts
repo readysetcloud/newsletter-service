@@ -39,6 +39,14 @@ export default defineConfig(({ command: _command, mode }) => {
       port: 3000,
       open: true,
     },
+    // Force Vite to pre-bundle the markdown editor (and its transitive
+    // @lexical/code → prismjs dependency) as a single esbuild bundle. Without
+    // this, prismjs's language component files load as separate ESM modules in
+    // dev and their bare `Prism` global is undefined, throwing
+    // "Prism is not defined" when the issue editor mounts.
+    optimizeDeps: {
+      include: ['@mdxeditor/editor'],
+    },
     build: {
       outDir: 'dist',
       sourcemap: mode === 'development',

@@ -2458,7 +2458,6 @@ Resources:
           Statement:
             - Effect: Allow
               Action:
-                - dynamodb:Scan
                 - dynamodb:Query
               Resource:
                 - !GetAtt NewsletterTable.Arn

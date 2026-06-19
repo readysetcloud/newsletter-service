@@ -16,6 +16,11 @@ export const handler = async (event) => {
       Item: marshall({
         pk: tenantId,
         sk: 'tenant',
+        // GSI1 lets the monthly report job (and any "list all tenants" access
+        // pattern) enumerate tenant records without a table Scan. Mirrors the
+        // convention set by the brand onboarding path.
+        GSI1PK: 'tenant',
+        GSI1SK: tenantId,
         ...tenant,
         list,
         subscribers: 0

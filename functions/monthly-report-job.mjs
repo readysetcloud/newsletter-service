@@ -1,4 +1,4 @@
-import { DynamoDBClient, ScanCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
 
@@ -28,18 +28,19 @@ export const getReportingWindow = (now = new Date()) => {
 };
 
 /**
- * Scan for all tenant records (sk = "tenant"), projecting the fields needed to
- * fan out a per-tenant report run.
+ * List all tenant records via GSI1 (GSI1PK = "tenant"), projecting the fields
+ * needed to fan out a per-tenant report run. Using the index avoids a table Scan.
  */
 const getAllTenants = async () => {
   const tenants = [];
   let lastKey;
 
   do {
-    const result = await ddb.send(new ScanCommand({
+    const result = await ddb.send(new QueryCommand({
       TableName: TABLE_NAME,
-      FilterExpression: 'sk = :sk',
-      ExpressionAttributeValues: marshall({ ':sk': 'tenant' }),
+      IndexName: 'GSI1',
+      KeyConditionExpression: 'GSI1PK = :gsi1pk',
+      ExpressionAttributeValues: marshall({ ':gsi1pk': 'tenant' }),
       ProjectionExpression: 'pk, email',
       ...(lastKey && { ExclusiveStartKey: lastKey })
     }));

@@ -7,6 +7,12 @@ export type { IssueCardProps } from './IssueCard';
 export { MarkdownPreview } from './MarkdownPreview';
 export type { MarkdownPreviewProps } from './MarkdownPreview';
 
+export { MarkdownWysiwygEditor } from './MarkdownWysiwygEditor';
+export type { MarkdownWysiwygEditorProps } from './MarkdownWysiwygEditor';
+
+export { TemplateJsonEditor } from './TemplateJsonEditor';
+export type { TemplateJsonEditorProps } from './TemplateJsonEditor';
+
 export { DeleteIssueDialog } from './DeleteIssueDialog';
 export type { DeleteIssueDialogProps } from './DeleteIssueDialog';
 

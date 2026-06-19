@@ -57,6 +57,11 @@ pub struct CreateIssueRequest {
     metadata: Option<serde_json::Value>,
     #[serde(rename = "templateId", skip_serializing_if = "Option::is_none")]
     template_id: Option<String>,
+    /// How `content` should be interpreted: "markdown" (default) or "json".
+    /// In "json" mode the content is the template data object (as a JSON
+    /// string) and a templateId is required.
+    #[serde(rename = "contentType", skip_serializing_if = "Option::is_none")]
+    content_type: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Copy, Clone, PartialEq, Eq)]
@@ -64,6 +69,20 @@ pub struct CreateIssueRequest {
 enum CreateIssueAction {
     Draft,
     Schedule,
+}
+
+// Default value persisted/used when no contentType is supplied.
+const CONTENT_TYPE_MARKDOWN: &str = "markdown";
+const CONTENT_TYPE_JSON: &str = "json";
+
+/// Normalizes a caller-supplied contentType into "markdown" or "json".
+/// Absent / empty / unknown values fall back to "markdown" for backwards
+/// compatibility with issues created before this field existed.
+fn normalize_content_type(value: Option<&str>) -> String {
+    match value.map(|v| v.trim().to_ascii_lowercase()) {
+        Some(ref v) if v == CONTENT_TYPE_JSON => CONTENT_TYPE_JSON.to_string(),
+        _ => CONTENT_TYPE_MARKDOWN.to_string(),
+    }
 }
 
 #[derive(Serialize)]
@@ -78,6 +97,8 @@ pub struct CreateIssueResponse {
     created_at: String,
     #[serde(rename = "updatedAt")]
     updated_at: String,
+    #[serde(rename = "contentType")]
+    content_type: String,
 }
 
 // Request/Response types for update issue endpoint
@@ -95,6 +116,8 @@ pub struct UpdateIssueRequest {
     status: Option<String>,
     #[serde(rename = "templateId", skip_serializing_if = "Option::is_none")]
     template_id: Option<String>,
+    #[serde(rename = "contentType", skip_serializing_if = "Option::is_none")]
+    content_type: Option<String>,
 }
 
 // Response type for get single issue endpoint
@@ -118,6 +141,8 @@ pub struct GetIssueResponse {
     metadata: Option<serde_json::Value>,
     #[serde(rename = "templateId", skip_serializing_if = "Option::is_none")]
     template_id: Option<String>,
+    #[serde(rename = "contentType", skip_serializing_if = "Option::is_none")]
+    content_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stats: Option<IssueStats>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -275,6 +300,7 @@ pub struct IssueRecord {
     pub scheduled_at: Option<String>,
     pub metadata: Option<serde_json::Value>,
     pub template_id: Option<String>,
+    pub content_type: Option<String>,
 }
 
 #[derive(Debug)]
@@ -468,6 +494,8 @@ async fn handle_resend_issue(
         &issue.content,
         None,
         issue.template_id.as_deref(),
+        &normalize_content_type(issue.content_type.as_deref()),
+        &issue.subject,
     )
     .await?;
 
@@ -595,6 +623,8 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
             &body.content,
             normalized_scheduled_at.as_deref(),
             body.template_id.as_deref(),
+            &normalize_content_type(body.content_type.as_deref()),
+            &body.subject,
         )
         .await?;
     }
@@ -764,6 +794,31 @@ fn validate_create_request(body: &CreateIssueRequest) -> Result<(), AppError> {
         return Err(AppError::BadRequest("Content is required".to_string()));
     }
 
+    if normalize_content_type(body.content_type.as_deref()) == CONTENT_TYPE_JSON {
+        validate_json_content(&body.content)?;
+        if body.template_id.is_none() {
+            return Err(AppError::BadRequest(
+                "A templateId is required when contentType is \"json\"".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Ensures JSON-mode content parses as a JSON object so the publish pipeline
+/// can hand it to the template renderer as the data payload.
+fn validate_json_content(content: &str) -> Result<(), AppError> {
+    let parsed: serde_json::Value = serde_json::from_str(content).map_err(|e| {
+        AppError::BadRequest(format!("content must be valid JSON for json issues: {}", e))
+    })?;
+
+    if !parsed.is_object() {
+        return Err(AppError::BadRequest(
+            "content must be a JSON object for json issues".to_string(),
+        ));
+    }
+
     Ok(())
 }
 
@@ -774,10 +829,19 @@ fn validate_update_request(body: &UpdateIssueRequest) -> Result<(), AppError> {
         && body.metadata.is_none()
         && body.status.is_none()
         && body.template_id.is_none()
+        && body.content_type.is_none()
     {
         return Err(AppError::BadRequest(
             "At least one field must be provided for update".to_string(),
         ));
+    }
+
+    // When the caller declares (or keeps) json mode and sends new content, the
+    // content must parse as a JSON object.
+    if body.content_type.as_deref().map(str::trim) == Some(CONTENT_TYPE_JSON) {
+        if let Some(content) = &body.content {
+            validate_json_content(content)?;
+        }
     }
 
     if let Some(subject) = &body.subject {
@@ -1079,6 +1143,11 @@ fn parse_issue_record(item: &HashMap<String, AttributeValue>) -> Result<IssueRec
         .and_then(|v| v.as_s().ok())
         .map(|s| s.to_string());
 
+    let content_type = item
+        .get("contentType")
+        .and_then(|v| v.as_s().ok())
+        .map(|s| s.to_string());
+
     Ok(IssueRecord {
         pk,
         sk,
@@ -1094,6 +1163,7 @@ fn parse_issue_record(item: &HashMap<String, AttributeValue>) -> Result<IssueRec
         scheduled_at,
         metadata,
         template_id,
+        content_type,
     })
 }
 
@@ -1499,6 +1569,7 @@ fn compute_idempotency_hash(
         "scheduledAt": scheduled_at,
         "metadata": body.metadata.clone(),
         "templateId": body.template_id.clone(),
+        "contentType": normalize_content_type(body.content_type.as_deref()),
     });
 
     let mut hasher = Sha256::new();
@@ -1669,6 +1740,8 @@ async fn start_issue_schedule(
     content: &str,
     scheduled_at: Option<&str>,
     template_id: Option<&str>,
+    content_type: &str,
+    subject: &str,
 ) -> Result<(), AppError> {
     let sfn_client = aws_clients::get_sfn_client().await;
     let state_machine_arn = std::env::var("STATE_MACHINE_ARN")
@@ -1685,7 +1758,12 @@ async fn start_issue_schedule(
         "isPreview": false,
         // Always present (null when no template selected) so the state machine
         // can reference it unconditionally.
-        "templateId": template_id
+        "templateId": template_id,
+        // Routes the publish pipeline between the markdown and json paths.
+        "contentType": content_type,
+        // The issue subject is used directly as the email subject in json mode
+        // (where there is no markdown frontmatter to derive it from).
+        "subject": subject
     });
 
     if let Some(scheduled_at) = scheduled_at {
@@ -1750,6 +1828,7 @@ async fn create_issue_record(
     let sk = "newsletter";
     let gsi1pk = format!("{}#newsletter", tenant_id);
     let gsi1sk = now.clone();
+    let content_type = normalize_content_type(body.content_type.as_deref());
 
     let mut item = HashMap::new();
     item.insert("pk".to_string(), AttributeValue::S(pk.clone()));
@@ -1771,6 +1850,10 @@ async fn create_issue_record(
     );
     item.insert("createdAt".to_string(), AttributeValue::S(now.clone()));
     item.insert("updatedAt".to_string(), AttributeValue::S(now.clone()));
+    item.insert(
+        "contentType".to_string(),
+        AttributeValue::S(content_type.clone()),
+    );
 
     if let Some(scheduled_at) = scheduled_at.as_ref() {
         item.insert(
@@ -1808,6 +1891,7 @@ async fn create_issue_record(
         content: body.content.clone(),
         created_at: now.clone(),
         updated_at: now,
+        content_type,
     })
 }
 
@@ -1876,6 +1960,14 @@ async fn update_issue_record(
                 AttributeValue::S(template_id.clone()),
             );
         }
+    }
+
+    if let Some(content_type) = &body.content_type {
+        update_expression_parts.push("contentType = :content_type".to_string());
+        expression_attribute_values.insert(
+            ":content_type".to_string(),
+            AttributeValue::S(normalize_content_type(Some(content_type))),
+        );
     }
 
     if let Some(status) = &body.status {
@@ -2124,6 +2216,7 @@ fn build_issue_response(
         scheduled_at: issue.scheduled_at,
         metadata: issue.metadata,
         template_id: issue.template_id,
+        content_type: Some(normalize_content_type(issue.content_type.as_deref())),
         stats,
         insights: insights.as_ref().and_then(|data| data.insights.clone()),
         insights_v2: insights.and_then(|data| data.insights_v2),
@@ -2133,6 +2226,120 @@ fn build_issue_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn create_request(content: &str, content_type: Option<&str>, template: Option<&str>) -> CreateIssueRequest {
+        CreateIssueRequest {
+            issue_number: None,
+            subject: "A subject".to_string(),
+            content: content.to_string(),
+            scheduled_at: None,
+            action: None,
+            metadata: None,
+            template_id: template.map(|t| t.to_string()),
+            content_type: content_type.map(|c| c.to_string()),
+        }
+    }
+
+    #[test]
+    fn test_normalize_content_type_defaults_to_markdown() {
+        assert_eq!(normalize_content_type(None), "markdown");
+        assert_eq!(normalize_content_type(Some("")), "markdown");
+        assert_eq!(normalize_content_type(Some("   ")), "markdown");
+        assert_eq!(normalize_content_type(Some("html")), "markdown");
+    }
+
+    #[test]
+    fn test_normalize_content_type_json() {
+        assert_eq!(normalize_content_type(Some("json")), "json");
+        assert_eq!(normalize_content_type(Some("JSON")), "json");
+        assert_eq!(normalize_content_type(Some(" Json ")), "json");
+    }
+
+    #[test]
+    fn test_validate_json_content_accepts_object() {
+        assert!(validate_json_content("{\"metadata\": {\"title\": \"x\"}}").is_ok());
+    }
+
+    #[test]
+    fn test_validate_json_content_rejects_non_object_and_invalid() {
+        assert!(validate_json_content("[1, 2, 3]").is_err());
+        assert!(validate_json_content("\"a string\"").is_err());
+        assert!(validate_json_content("not json").is_err());
+    }
+
+    #[test]
+    fn test_validate_create_markdown_ignores_json_rules() {
+        // Markdown content need not be JSON and needs no template.
+        let body = create_request("# Hello", None, None);
+        assert!(validate_create_request(&body).is_ok());
+
+        let body = create_request("# Hello", Some("markdown"), None);
+        assert!(validate_create_request(&body).is_ok());
+    }
+
+    #[test]
+    fn test_validate_create_json_requires_template() {
+        let body = create_request("{\"a\": 1}", Some("json"), None);
+        let err = validate_create_request(&body).unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn test_validate_create_json_requires_valid_json() {
+        let body = create_request("not json", Some("json"), Some("tmpl-1"));
+        let err = validate_create_request(&body).unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn test_validate_create_json_happy_path() {
+        let body = create_request("{\"metadata\": {\"title\": \"x\"}}", Some("json"), Some("tmpl-1"));
+        assert!(validate_create_request(&body).is_ok());
+    }
+
+    #[test]
+    fn test_validate_update_json_content_must_be_valid() {
+        let body = UpdateIssueRequest {
+            subject: None,
+            content: Some("nope".to_string()),
+            scheduled_at: None,
+            metadata: None,
+            status: None,
+            template_id: None,
+            content_type: Some("json".to_string()),
+        };
+        assert!(validate_update_request(&body).is_err());
+    }
+
+    #[test]
+    fn test_parse_issue_record_reads_content_type() {
+        let mut item = HashMap::new();
+        item.insert("pk".to_string(), AttributeValue::S("tenant-1#5".to_string()));
+        item.insert("sk".to_string(), AttributeValue::S("newsletter".to_string()));
+        item.insert(
+            "GSI1PK".to_string(),
+            AttributeValue::S("tenant-1#newsletter".to_string()),
+        );
+        item.insert(
+            "GSI1SK".to_string(),
+            AttributeValue::S("2024-01-15T10:30:00Z".to_string()),
+        );
+        item.insert("subject".to_string(), AttributeValue::S("Subj".to_string()));
+        item.insert("status".to_string(), AttributeValue::S("draft".to_string()));
+        item.insert("content".to_string(), AttributeValue::S("{}".to_string()));
+        item.insert(
+            "createdAt".to_string(),
+            AttributeValue::S("2024-01-15T10:00:00Z".to_string()),
+        );
+        item.insert(
+            "updatedAt".to_string(),
+            AttributeValue::S("2024-01-15T10:30:00Z".to_string()),
+        );
+        item.insert("contentType".to_string(), AttributeValue::S("json".to_string()));
+
+        let issue = parse_issue_record(&item).unwrap();
+        assert_eq!(issue.content_type, Some("json".to_string()));
+    }
 
     #[test]
     fn test_parse_issue_record_complete() {
@@ -2454,6 +2661,7 @@ mod tests {
             scheduled_at: None,
             metadata: None,
             template_id: None,
+            content_type: None,
         };
 
         let stats = Some(IssueStats {
@@ -2496,6 +2704,7 @@ mod tests {
             scheduled_at: None,
             metadata: None,
             template_id: None,
+            content_type: None,
         };
 
         let response = build_issue_response(issue, None, None);
@@ -2517,6 +2726,7 @@ mod tests {
             action: None,
             metadata: None,
             template_id: None,
+            content_type: None,
         };
 
         let result = validate_create_request(&request);
@@ -2533,6 +2743,7 @@ mod tests {
             action: None,
             metadata: None,
             template_id: None,
+            content_type: None,
         };
 
         let result = validate_create_request(&request);
@@ -2550,6 +2761,7 @@ mod tests {
             action: None,
             metadata: None,
             template_id: None,
+            content_type: None,
         };
 
         let result = validate_create_request(&request);
@@ -2567,6 +2779,7 @@ mod tests {
             action: None,
             metadata: None,
             template_id: None,
+            content_type: None,
         };
 
         let result = validate_create_request(&request);
@@ -2583,6 +2796,7 @@ mod tests {
             metadata: None,
             status: None,
             template_id: None,
+            content_type: None,
         };
 
         let result = validate_update_request(&request);
@@ -2598,6 +2812,7 @@ mod tests {
             metadata: None,
             status: None,
             template_id: None,
+            content_type: None,
         };
 
         let result = validate_update_request(&request);
@@ -2613,6 +2828,7 @@ mod tests {
             metadata: None,
             status: None,
             template_id: None,
+            content_type: None,
         };
 
         let result = validate_update_request(&request);
@@ -2629,6 +2845,7 @@ mod tests {
             metadata: None,
             status: None,
             template_id: None,
+            content_type: None,
         };
 
         let result = validate_update_request(&request);
@@ -2645,6 +2862,7 @@ mod tests {
             metadata: None,
             status: None,
             template_id: None,
+            content_type: None,
         };
 
         let result = validate_update_request(&request);
@@ -2661,6 +2879,7 @@ mod tests {
             metadata: None,
             status: None,
             template_id: None,
+            content_type: None,
         };
 
         let result = validate_update_request(&request);
@@ -2685,6 +2904,7 @@ mod tests {
             scheduled_at: None,
             metadata: None,
             template_id: None,
+            content_type: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -2708,6 +2928,7 @@ mod tests {
             scheduled_at: None,
             metadata: None,
             template_id: None,
+            content_type: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -2732,6 +2953,7 @@ mod tests {
             scheduled_at: Some("2024-01-16T10:00:00Z".to_string()),
             metadata: None,
             template_id: None,
+            content_type: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -2756,6 +2978,7 @@ mod tests {
             scheduled_at: None,
             metadata: None,
             template_id: None,
+            content_type: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -2779,6 +3002,7 @@ mod tests {
             scheduled_at: None,
             metadata: None,
             template_id: None,
+            content_type: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -2803,6 +3027,7 @@ mod tests {
             scheduled_at: Some("2024-01-16T10:00:00Z".to_string()),
             metadata: None,
             template_id: None,
+            content_type: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -2827,6 +3052,7 @@ mod tests {
             scheduled_at: None,
             metadata: None,
             template_id: None,
+            content_type: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -2861,6 +3087,7 @@ mod tests {
                 scheduled_at: if status == "scheduled" { Some(updated_at.clone()) } else { None },
                 metadata: None,
                 template_id: None,
+            content_type: None,
             };
 
             let stats = if has_stats && status == "published" {
@@ -3073,6 +3300,7 @@ mod tests {
                 action: None,
                 metadata: None,
                 template_id: None,
+            content_type: None,
             };
 
             let now = chrono::Utc::now().to_rfc3339();
@@ -3139,6 +3367,7 @@ mod tests {
                 action: None,
                 metadata: None,
                 template_id: None,
+            content_type: None,
             };
 
             let result = validate_create_request(&request);
@@ -3158,6 +3387,7 @@ mod tests {
                 action: None,
                 metadata: None,
                 template_id: None,
+            content_type: None,
             };
 
             let result = validate_create_request(&request);
@@ -3177,6 +3407,7 @@ mod tests {
                 action: None,
                 metadata: None,
                 template_id: None,
+            content_type: None,
             };
 
             let result = validate_create_request(&request);
@@ -3201,6 +3432,7 @@ mod tests {
                 scheduled_at: None,
                 metadata: None,
                 template_id: None,
+            content_type: None,
             };
 
             let result = validate_update_request(&request);
@@ -3261,6 +3493,7 @@ mod tests {
                 scheduled_at: if status == "scheduled" { Some("2024-01-16T10:00:00Z".to_string()) } else { None },
                 metadata: None,
                 template_id: None,
+            content_type: None,
             };
 
             let result = check_update_allowed(&issue);
@@ -3291,6 +3524,7 @@ mod tests {
                 scheduled_at: None,
                 metadata: None,
                 template_id: None,
+            content_type: None,
             };
 
             let result = check_update_allowed(&issue);
@@ -3322,6 +3556,7 @@ mod tests {
                 scheduled_at: if status == "scheduled" { Some("2024-01-16T10:00:00Z".to_string()) } else { None },
                 metadata: None,
                 template_id: None,
+            content_type: None,
             };
 
             let result = check_delete_allowed(&issue);
@@ -3348,6 +3583,7 @@ mod tests {
             content: "# Test Content".to_string(),
             created_at: "2024-01-15T10:00:00Z".to_string(),
             updated_at: "2024-01-15T10:00:00Z".to_string(),
+            content_type: "markdown".to_string(),
         };
 
         let result = publish_event(tenant_id, event_type, &data).await;
@@ -3373,6 +3609,7 @@ mod tests {
             insights: None,
             insights_v2: None,
             template_id: None,
+            content_type: None,
         };
 
         let result = publish_event(tenant_id, event_type, &data).await;
@@ -3398,6 +3635,7 @@ mod tests {
             scheduled_at: None,
             metadata: None,
             template_id: None,
+            content_type: None,
         };
 
         let result = publish_event(tenant_id, event_type, &data).await;
@@ -3416,6 +3654,7 @@ mod tests {
             content: "Content".to_string(),
             created_at: "2024-01-15T10:00:00Z".to_string(),
             updated_at: "2024-01-15T10:00:00Z".to_string(),
+            content_type: "markdown".to_string(),
         };
 
         let result = publish_event(tenant_id, event_type, &data).await;

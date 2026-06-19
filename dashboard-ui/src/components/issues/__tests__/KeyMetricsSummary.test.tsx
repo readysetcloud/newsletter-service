@@ -8,43 +8,55 @@ describe('KeyMetricsSummary', () => {
     deliveries: 1000,
     openRate: 45.5,
     clickRate: 12.3,
+    clickToOpenRate: 27.0,
     bounceRate: 2.1,
     complaintRate: 0.05,
+    unsubscribeRate: 0.3,
   };
 
   const mockComparisons = {
     average: {
       openRate: 40.0,
       clickRate: 10.0,
+      clickToOpenRate: 25.0,
       bounceRate: 3.0,
       delivered: 900,
       opens: 360,
       clicks: 90,
       bounces: 27,
       complaints: 1,
+      unsubscribes: 4,
       subscribers: 1000,
     } as IssueMetrics,
   };
 
   describe('Rendering', () => {
-    it('should render all five metric cards', () => {
+    it('should render all six rate metric cards', () => {
       render(<KeyMetricsSummary metrics={mockMetrics} />);
 
-      expect(screen.getAllByText('Deliveries').length).toBeGreaterThan(0);
       expect(screen.getAllByText('Open Rate').length).toBeGreaterThan(0);
       expect(screen.getAllByText('Click Rate').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Click-to-Open Rate').length).toBeGreaterThan(0);
       expect(screen.getAllByText('Bounce Rate').length).toBeGreaterThan(0);
       expect(screen.getAllByText('Complaint Rate').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Unsubscribe Rate').length).toBeGreaterThan(0);
+    });
+
+    it('should not render a standalone Deliveries card', () => {
+      render(<KeyMetricsSummary metrics={mockMetrics} />);
+
+      expect(screen.queryByText('Deliveries')).not.toBeInTheDocument();
     });
 
     it('should display formatted metric values', () => {
       render(<KeyMetricsSummary metrics={mockMetrics} />);
 
-      expect(screen.getByText('1,000')).toBeInTheDocument();
       expect(screen.getByText('45.5%')).toBeInTheDocument();
       expect(screen.getByText('12.3%')).toBeInTheDocument();
+      expect(screen.getByText('27.0%')).toBeInTheDocument();
       expect(screen.getByText('2.1%')).toBeInTheDocument();
       expect(screen.getByText('0.05%')).toBeInTheDocument();
+      expect(screen.getByText('0.30%')).toBeInTheDocument();
     });
 
     it('should display absolute numbers alongside percentages', () => {
@@ -54,6 +66,7 @@ describe('KeyMetricsSummary', () => {
       expect(screen.getByText('123 clicks')).toBeInTheDocument();
       expect(screen.getByText('21 bounces')).toBeInTheDocument();
       expect(screen.getByText('1 complaints')).toBeInTheDocument();
+      expect(screen.getByText('3 unsubscribes')).toBeInTheDocument();
     });
   });
 
@@ -112,13 +125,15 @@ describe('KeyMetricsSummary', () => {
         deliveries: 0,
         openRate: 0,
         clickRate: 0,
+        clickToOpenRate: 0,
         bounceRate: 0,
         complaintRate: 0,
+        unsubscribeRate: 0,
       };
 
       render(<KeyMetricsSummary metrics={zeroMetrics} />);
 
-      expect(screen.getByText('0')).toBeInTheDocument();
+      expect(screen.getByText('0 opens')).toBeInTheDocument();
       expect(screen.getAllByText('0.0%').length).toBeGreaterThan(0);
     });
 
@@ -127,8 +142,10 @@ describe('KeyMetricsSummary', () => {
         deliveries: 1000,
         openRate: 45.5,
         clickRate: 12.3,
+        clickToOpenRate: 27.0,
         bounceRate: 2.1,
         complaintRate: 0.15,
+        unsubscribeRate: 0.3,
       };
 
       render(<KeyMetricsSummary metrics={highComplaintMetrics} />);

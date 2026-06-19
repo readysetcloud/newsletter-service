@@ -55,6 +55,7 @@ const BounceReasonsChart = lazy(() => import('../../components/issues/BounceReas
 const EngagementTypeIndicator = lazy(() => import('../../components/issues/EngagementTypeIndicator').then(m => ({ default: m.EngagementTypeIndicator })));
 const IssueComparisonCard = lazy(() => import('../../components/issues/IssueComparisonCard').then(m => ({ default: m.IssueComparisonCard })));
 const TrafficSourceChart = lazy(() => import('../../components/issues/TrafficSourceChart').then(m => ({ default: m.TrafficSourceChart })));
+const DeliveryBreakdownChart = lazy(() => import('../../components/issues/DeliveryBreakdownChart').then(m => ({ default: m.DeliveryBreakdownChart })));
 const TimingMetricsChart = lazy(() => import('../../components/issues/TimingMetricsChart').then(m => ({ default: m.TimingMetricsChart })));
 const GeoMap = lazy(() => import('../../components/analytics/GeoMap').then(m => ({ default: m.GeoMap })));
 const LinkSelector = lazy(() => import('../../components/analytics/LinkSelector').then(m => ({ default: m.LinkSelector })));
@@ -601,8 +602,10 @@ export const IssueDetailPage: React.FC = () => {
       deliveries: issue.stats.deliveries,
       openRate: issue.stats.deliveries > 0 ? (issue.stats.opens / issue.stats.deliveries) * 100 : 0,
       clickRate: issue.stats.deliveries > 0 ? (issue.stats.clicks / issue.stats.deliveries) * 100 : 0,
+      clickToOpenRate: issue.stats.opens > 0 ? (issue.stats.clicks / issue.stats.opens) * 100 : 0,
       bounceRate: issue.stats.deliveries > 0 ? (issue.stats.bounces / issue.stats.deliveries) * 100 : 0,
       complaintRate: complaintRate,
+      unsubscribeRate: issue.stats.deliveries > 0 ? ((issue.stats.unsubscribes ?? 0) / issue.stats.deliveries) * 100 : 0,
     };
   }, [issue?.stats, complaintRate]);
 
@@ -820,6 +823,22 @@ export const IssueDetailPage: React.FC = () => {
                     insights={issue.insightsV2}
                     onRefreshInsights={handleRebuildAnalytics}
                     isRefreshing={isAnalyticsRebuilding}
+                  />
+                </AsyncErrorBoundary>
+              </FadeIn>
+            </Suspense>
+          </div>
+        )}
+
+        {/* DeliveryBreakdownChart - Visual delivery overview (delivered vs bounced of total sent) */}
+        {isPublished && issue.stats && (issue.stats.deliveries + issue.stats.bounces) > 0 && (
+          <div className="mb-4 sm:mb-6">
+            <Suspense fallback={<ChartSkeleton />}>
+              <FadeIn variant="slideUp" speed="normal" delay={50}>
+                <AsyncErrorBoundary onRetry={loadIssue}>
+                  <DeliveryBreakdownChart
+                    delivered={issue.stats.deliveries}
+                    bounced={issue.stats.bounces}
                   />
                 </AsyncErrorBoundary>
               </FadeIn>

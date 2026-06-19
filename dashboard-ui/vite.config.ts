@@ -44,8 +44,22 @@ export default defineConfig(({ command: _command, mode }) => {
     // this, prismjs's language component files load as separate ESM modules in
     // dev and their bare `Prism` global is undefined, throwing
     // "Prism is not defined" when the issue editor mounts.
+    //
+    // The remaining entries are pre-bundled for dev-server performance.
     optimizeDeps: {
-      include: ['@mdxeditor/editor'],
+      include: [
+        '@mdxeditor/editor',
+        'react',
+        'react-dom',
+        'react-router-dom',
+        '@headlessui/react',
+        '@heroicons/react',
+        'lucide-react',
+        'react-hook-form',
+        'zod',
+        'clsx',
+        'tailwind-merge',
+      ],
     },
     build: {
       outDir: 'dist',
@@ -122,21 +136,6 @@ export default defineConfig(({ command: _command, mode }) => {
       chunkSizeWarningLimit: 1000,
       // Enable gzip compression analysis
       reportCompressedSize: true,
-    },
-    // Performance optimizations
-    optimizeDeps: {
-      include: [
-        'react',
-        'react-dom',
-        'react-router-dom',
-        '@headlessui/react',
-        '@heroicons/react',
-        'lucide-react',
-        'react-hook-form',
-        'zod',
-        'clsx',
-        'tailwind-merge',
-      ],
     },
     // Environment variables
     define: {

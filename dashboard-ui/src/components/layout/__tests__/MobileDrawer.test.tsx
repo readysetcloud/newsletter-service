@@ -128,13 +128,23 @@ describe('MobileDrawer', () => {
       expect(screen.getByText('Account')).toBeInTheDocument();
     });
 
-    it('renders all 5 navigation items', () => {
+    it('renders all navigation items', () => {
       renderDrawer(true);
       expect(screen.getByText('Dashboard')).toBeInTheDocument();
       expect(screen.getByText('Issues')).toBeInTheDocument();
       expect(screen.getByText('Subscribers')).toBeInTheDocument();
-      expect(screen.getByText('Brand')).toBeInTheDocument();
+      expect(screen.getByText('Templates')).toBeInTheDocument();
+      expect(screen.getByText('Snippets')).toBeInTheDocument();
       expect(screen.getByText('Sponsors')).toBeInTheDocument();
+      expect(screen.getByText('Pricing')).toBeInTheDocument();
+      expect(screen.getByText('Brand')).toBeInTheDocument();
+    });
+
+    it('renders the shared Publish, Content, and Monetization sub-headings (parity with the sidebar)', () => {
+      renderDrawer(true);
+      expect(screen.getByText('Publish')).toBeInTheDocument();
+      expect(screen.getByText('Content')).toBeInTheDocument();
+      expect(screen.getByText('Monetization')).toBeInTheDocument();
     });
 
     it('renders account items (Profile, Sender Emails, API Keys)', () => {

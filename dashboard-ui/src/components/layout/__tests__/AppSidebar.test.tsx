@@ -57,7 +57,7 @@ describe('AppSidebar', () => {
       expect(icons).toHaveLength(8);
     });
 
-    it('renders nav items in audience-first priority order', () => {
+    it('renders nav items in priority order with Brand standalone last', () => {
       renderSidebar();
       const nav = screen.getByRole('navigation', { name: 'Main navigation' });
       const labels = Array.from(nav.querySelectorAll('a')).map((a) => a.textContent?.trim());
@@ -68,17 +68,18 @@ describe('AppSidebar', () => {
         'Templates',
         'Snippets',
         'Sponsors',
-        'Brand',
         'Pricing',
+        'Brand',
       ]);
     });
 
-    it('groups Templates and Snippets under a "Content" heading', () => {
+    it('renders the Publish, Content, and Monetization section headings', () => {
       renderSidebar();
       const nav = screen.getByRole('navigation', { name: 'Main navigation' });
-      const heading = screen.getByText('Content');
-      expect(heading).toBeInTheDocument();
-      // The heading is not a link, so the nav still has exactly 8 anchors.
+      expect(screen.getByText('Publish')).toBeInTheDocument();
+      expect(screen.getByText('Content')).toBeInTheDocument();
+      expect(screen.getByText('Monetization')).toBeInTheDocument();
+      // Headings are not links, so the nav still has exactly 8 anchors.
       expect(nav.querySelectorAll('a')).toHaveLength(8);
     });
   });

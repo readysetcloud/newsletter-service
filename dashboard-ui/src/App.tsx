@@ -18,6 +18,8 @@ import {
   LazyIssuesListPage,
   LazyIssueDetailPage,
   LazyIssueFormPage,
+  LazyReportsListPage,
+  LazyReportDetailPage,
   LazySponsorshipPricingPage,
   LazySegmentDetailPage,
   LazySubscribersPage,
@@ -353,6 +355,39 @@ function App() {
                             <AppShell>
                               <PageLoader>
                                 <LazyIssueFormPage />
+                              </PageLoader>
+                            </AppShell>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+
+                  <Route
+                    path="/reports"
+                    element={
+                      <RouteErrorBoundary routeName="Reports">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <AppShell>
+                              <PageLoader>
+                                <LazyReportsListPage />
+                              </PageLoader>
+                            </AppShell>
+                          </OnboardingGuard>
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/reports/:id"
+                    element={
+                      <RouteErrorBoundary routeName="Report Details">
+                        <ProtectedRoute>
+                          <OnboardingGuard>
+                            <AppShell>
+                              <PageLoader>
+                                <LazyReportDetailPage />
                               </PageLoader>
                             </AppShell>
                           </OnboardingGuard>

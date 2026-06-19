@@ -2,8 +2,8 @@ use lambda_http::{http::Method, Body, Error, Request, Response};
 use serde_json::json;
 
 use crate::controllers::{
-    api_keys, brand, domain, issues, pricing, profile, segments, senders, snippets, sponsors,
-    subscribers, templates,
+    api_keys, brand, domain, issues, pricing, profile, reports, segments, senders, snippets,
+    sponsors, subscribers, templates,
 };
 
 pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
@@ -108,6 +108,13 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
         (&Method::DELETE, path) if path.starts_with("/issues/") => {
             let issue_id = extract_path_param(path, "/issues/");
             issues::delete_issue(event, issue_id).await
+        }
+
+        // Reports endpoints
+        (&Method::GET, "/reports") => reports::list_reports(event).await,
+        (&Method::GET, path) if path.starts_with("/reports/") => {
+            let id = extract_path_param(path, "/reports/");
+            reports::get_report(event, id).await
         }
 
         // Pricing endpoints
@@ -370,6 +377,9 @@ fn is_valid_api_path(path: &str) -> bool {
         || path == "/issues"
         || path == "/issues/trends"
         || path.starts_with("/issues/")
+        // Reports paths
+        || path == "/reports"
+        || path.starts_with("/reports/")
         // Pricing paths
         || path == "/pricing"
         || path == "/pricing/history"

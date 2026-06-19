@@ -23,6 +23,7 @@ tags:
   - name: Profile
   - name: Senders
   - name: Issues
+  - name: Reports
   - name: Pricing
   - name: Subscribers
   - name: Segments
@@ -1684,6 +1685,69 @@ paths:
         "500":
           $ref: "#/components/responses/UnknownError"
 
+  /reports:
+    get:
+      summary: List monthly reports
+      description: Retrieves the authenticated tenant's monthly reports, most recent first. Each item includes lightweight summary and subscriberGrowth blobs only.
+      tags:
+        - Reports
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 60
+            default: 12
+          description: Maximum number of reports to return (default 12, max 60)
+        - name: nextToken
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Pagination token from previous response
+      responses:
+        "200":
+          description: List of monthly reports
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListReportsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /reports/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The report month in YYYY-MM format (e.g. "2026-05")
+    get:
+      summary: Get a single monthly report
+      description: Retrieves a specific monthly report including the full report blob
+      tags:
+        - Reports
+      responses:
+        "200":
+          description: Monthly report details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MonthlyReport"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
   /pricing:
     get:
       summary: Get current pricing
@@ -2940,6 +3004,133 @@ components:
           type: string
           format: date-time
           description: When the issue is scheduled to be published (only for scheduled issues)
+
+    ListReportsResponse:
+      type: object
+      required:
+        - reports
+      properties:
+        reports:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReportSummaryItem"
+          description: List of monthly reports (most recent first)
+        nextToken:
+          type: string
+          description: Pagination token for next page (only present if more results available)
+
+    ReportSummaryItem:
+      type: object
+      required:
+        - id
+        - month
+        - monthLabel
+        - periodStart
+        - periodEnd
+        - generatedAt
+        - reportType
+      properties:
+        id:
+          type: string
+          description: Report identifier (the month in YYYY-MM format)
+        month:
+          type: string
+          description: The report month in YYYY-MM format
+        monthLabel:
+          type: string
+          description: Human-readable month label (e.g. "May 2026")
+        periodStart:
+          type: string
+          format: date-time
+          description: ISO8601 start of the reporting period
+        periodEnd:
+          type: string
+          format: date-time
+          description: ISO8601 end of the reporting period
+        generatedAt:
+          type: string
+          format: date-time
+          description: ISO8601 timestamp when the report was generated
+        reportType:
+          type: string
+          description: The report type (always "monthly")
+        summary:
+          type: object
+          additionalProperties: true
+          description: Lightweight summary metrics blob (issuesSent, totalDelivered, totalOpens, totalClicks, totalBounces, totalUnsubscribes, avgOpenRate, avgClickRate, avgClickToOpenRate, avgBounceRate)
+        subscriberGrowth:
+          type: object
+          additionalProperties: true
+          description: Subscriber growth blob (startCount, endCount, netChange, growthRate)
+
+    MonthlyReport:
+      type: object
+      required:
+        - id
+        - month
+        - monthLabel
+        - periodStart
+        - periodEnd
+        - generatedAt
+        - reportType
+        - report
+      properties:
+        id:
+          type: string
+          description: Report identifier (the month in YYYY-MM format)
+        month:
+          type: string
+          description: The report month in YYYY-MM format
+        monthLabel:
+          type: string
+          description: Human-readable month label (e.g. "May 2026")
+        periodStart:
+          type: string
+          format: date-time
+          description: ISO8601 start of the reporting period
+        periodEnd:
+          type: string
+          format: date-time
+          description: ISO8601 end of the reporting period
+        generatedAt:
+          type: string
+          format: date-time
+          description: ISO8601 timestamp when the report was generated
+        reportType:
+          type: string
+          description: The report type (always "monthly")
+        report:
+          type: object
+          additionalProperties: true
+          description: The full, opaque report blob produced by the monthly report job
+          properties:
+            summary:
+              type: object
+              additionalProperties: true
+              description: Aggregate summary metrics for the month
+            subscriberGrowth:
+              type: object
+              additionalProperties: true
+              description: Subscriber growth metrics for the month
+            topLinks:
+              type: array
+              items:
+                type: object
+              description: Most-clicked links across the month
+            issues:
+              type: array
+              items:
+                type: object
+              description: Per-issue breakdown for the month
+            bestIssue:
+              type: object
+              additionalProperties: true
+              description: The best-performing issue of the month
+            insights:
+              type: array
+              items:
+                type: object
+              description: Generated insights for the month
 
     CreateIssueRequest:
       type: object

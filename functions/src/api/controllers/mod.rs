@@ -4,6 +4,7 @@ pub mod domain;
 pub mod issues;
 pub mod pricing;
 pub mod profile;
+pub mod reports;
 pub mod segments;
 pub mod senders;
 pub mod snippets;

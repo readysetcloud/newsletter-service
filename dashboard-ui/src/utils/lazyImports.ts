@@ -89,6 +89,22 @@ export const LazyIssueFormPage = lazy(() =>
     })
 );
 
+export const LazyReportsListPage = lazy(() =>
+  import('@/pages/reports').then(module => ({ default: module.ReportsListPage }))
+    .catch(error => {
+      console.error('Failed to load ReportsListPage:', error);
+      throw error;
+    })
+);
+
+export const LazyReportDetailPage = lazy(() =>
+  import('@/pages/reports').then(module => ({ default: module.ReportDetailPage }))
+    .catch(error => {
+      console.error('Failed to load ReportDetailPage:', error);
+      throw error;
+    })
+);
+
 export const LazySponsorshipPricingPage = lazy(() =>
   import('@/pages/pricing/SponsorshipPricingPage').then(module => ({ default: module.SponsorshipPricingPage }))
     .catch(error => {
@@ -208,6 +224,9 @@ export const preloadRoute = (routeName: string) => {
       break;
     case 'issues':
       import('@/pages/issues');
+      break;
+    case 'reports':
+      import('@/pages/reports');
       break;
     case 'pricing':
       import('@/pages/pricing/SponsorshipPricingPage');

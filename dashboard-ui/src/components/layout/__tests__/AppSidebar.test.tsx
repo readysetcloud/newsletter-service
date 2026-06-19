@@ -31,17 +31,18 @@ describe('AppSidebar', () => {
   // ---- Requirement 2.2: Renders exactly 5 nav items with icons ----
 
   describe('nav items', () => {
-    it('renders exactly 8 navigation links', () => {
+    it('renders exactly 9 navigation links', () => {
       renderSidebar();
       const nav = screen.getByRole('navigation', { name: 'Main navigation' });
       const links = nav.querySelectorAll('a');
-      expect(links).toHaveLength(8);
+      expect(links).toHaveLength(9);
     });
 
     it('renders the correct nav item labels', () => {
       renderSidebar();
       expect(screen.getByText('Dashboard')).toBeInTheDocument();
       expect(screen.getByText('Issues')).toBeInTheDocument();
+      expect(screen.getByText('Reports')).toBeInTheDocument();
       expect(screen.getByText('Templates')).toBeInTheDocument();
       expect(screen.getByText('Snippets')).toBeInTheDocument();
       expect(screen.getByText('Subscribers')).toBeInTheDocument();
@@ -54,7 +55,7 @@ describe('AppSidebar', () => {
       renderSidebar();
       const nav = screen.getByRole('navigation', { name: 'Main navigation' });
       const icons = nav.querySelectorAll('svg[aria-hidden="true"]');
-      expect(icons).toHaveLength(8);
+      expect(icons).toHaveLength(9);
     });
 
     it('renders nav items in priority order with Brand standalone last', () => {
@@ -64,6 +65,7 @@ describe('AppSidebar', () => {
       expect(labels).toEqual([
         'Dashboard',
         'Issues',
+        'Reports',
         'Subscribers',
         'Templates',
         'Snippets',
@@ -79,8 +81,8 @@ describe('AppSidebar', () => {
       expect(screen.getByText('Publish')).toBeInTheDocument();
       expect(screen.getByText('Content')).toBeInTheDocument();
       expect(screen.getByText('Monetization')).toBeInTheDocument();
-      // Headings are not links, so the nav still has exactly 8 anchors.
-      expect(nav.querySelectorAll('a')).toHaveLength(8);
+      // Headings are not links, so the nav still has exactly 9 anchors.
+      expect(nav.querySelectorAll('a')).toHaveLength(9);
     });
   });
 

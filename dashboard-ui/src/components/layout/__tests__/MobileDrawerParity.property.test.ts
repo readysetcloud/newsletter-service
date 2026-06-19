@@ -65,6 +65,7 @@ describe('Mobile Drawer Parity - Property-Based Tests', () => {
           expect(drawerNavNames).toEqual([
             'Dashboard',
             'Issues',
+            'Reports',
             'Subscribers',
             'Templates',
             'Snippets',

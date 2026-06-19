@@ -1,0 +1,108 @@
+{
+  "Comment": "Generate and send a monthly performance report for a single tenant",
+  "StartAt": "Build Report Data",
+  "States": {
+    "Build Report Data": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "OutputPath": "$.Payload",
+      "Parameters": {
+        "FunctionName": "${BuildMonthlyReportData}",
+        "Payload": {
+          "tenant.$": "$.tenant",
+          "month.$": "$.month",
+          "monthLabel.$": "$.monthLabel",
+          "periodStart.$": "$.periodStart",
+          "periodEnd.$": "$.periodEnd"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Has Issues?"
+    },
+    "Has Issues?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.hasIssues",
+          "BooleanEquals": true,
+          "Next": "Generate Insights"
+        }
+      ],
+      "Default": "No Issues This Month"
+    },
+    "No Issues This Month": {
+      "Type": "Succeed"
+    },
+    "Generate Insights": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "Parameters": {
+        "FunctionName": "${GenerateMonthlyInsights}",
+        "Payload": {
+          "reportData.$": "$.reportData",
+          "month.$": "$.month",
+          "monthLabel.$": "$.monthLabel",
+          "tenantId.$": "$.tenant.id"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultPath": "$.insights",
+      "Next": "Compile And Send Report"
+    },
+    "Compile And Send Report": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "OutputPath": "$.Payload",
+      "Parameters": {
+        "FunctionName": "${CompileMonthlyReport}",
+        "Payload": {
+          "tenant.$": "$.tenant",
+          "month.$": "$.month",
+          "monthLabel.$": "$.monthLabel",
+          "periodStart.$": "$.periodStart",
+          "periodEnd.$": "$.periodEnd",
+          "reportData.$": "$.reportData",
+          "insights.$": "$.insights.Payload.insights"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "End": true
+    }
+  }
+}

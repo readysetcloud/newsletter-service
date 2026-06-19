@@ -1925,6 +1925,91 @@ Resources:
             - !Sub "https://${FrontendCustomDomain}"
             - !Sub "https://${FrontendDistribution.DomainName}"
 
+  BuildMonthlyReportDataFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - build-monthly-report-data.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: build-monthly-report-data.handler
+      Timeout: 120
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+
+  GenerateMonthlyInsightsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - generate-monthly-insights.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: generate-monthly-insights.handler
+      Timeout: 120
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - arn:aws:bedrock:*::foundation-model/amazon.nova-*
+                - !Sub arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/us.amazon.nova-*
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          MODEL_ID: us.amazon.nova-pro-v1:0
+
+  CompileMonthlyReportFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - compile-monthly-report.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: compile-monthly-report.handler
+      Timeout: 60
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          DASHBOARD_BASE_URL: !If
+            - DeployFrontendCustomDomain
+            - !Sub "https://${FrontendCustomDomain}"
+            - !Sub "https://${FrontendDistribution.DomainName}"
+
   GenerateSocialPostFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2333,6 +2418,62 @@ Resources:
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+
+  MonthlyReportStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      DefinitionUri: state-machines/monthly-report.asl.json
+      DefinitionSubstitutions:
+        LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
+        BuildMonthlyReportData: !GetAtt BuildMonthlyReportDataFunction.Arn
+        GenerateMonthlyInsights: !GetAtt GenerateMonthlyInsightsFunction.Arn
+        CompileMonthlyReport: !GetAtt CompileMonthlyReportFunction.Arn
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource:
+                - !GetAtt BuildMonthlyReportDataFunction.Arn
+                - !GetAtt GenerateMonthlyInsightsFunction.Arn
+                - !GetAtt CompileMonthlyReportFunction.Arn
+
+  MonthlyReportJobFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - monthly-report-job.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: monthly-report-job.handler
+      Timeout: 900
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
+            - Effect: Allow
+              Action: states:StartExecution
+              Resource: !Ref MonthlyReportStateMachine
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          STATE_MACHINE_ARN: !Ref MonthlyReportStateMachine
+      Events:
+        MonthlySchedule:
+          Type: Schedule
+          Properties:
+            Schedule: "cron(0 14 1 * ? *)"
 
   SendAdCopyReminderStateMachine:
     Type: AWS::Serverless::StateMachine

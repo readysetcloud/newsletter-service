@@ -7,6 +7,7 @@ describe('sidebarNav', () => {
       expect(NAV_ITEMS.map((i) => i.name)).toEqual([
         'Dashboard',
         'Issues',
+        'Reports',
         'Subscribers',
         'Templates',
         'Snippets',
@@ -19,6 +20,7 @@ describe('sidebarNav', () => {
     it('assigns each grouped item to the expected section', () => {
       const groupOf = (name: string) => NAV_ITEMS.find((i) => i.name === name)?.group;
       expect(groupOf('Issues')).toBe('Publish');
+      expect(groupOf('Reports')).toBe('Publish');
       expect(groupOf('Subscribers')).toBe('Publish');
       expect(groupOf('Templates')).toBe('Content');
       expect(groupOf('Snippets')).toBe('Content');
@@ -37,7 +39,7 @@ describe('sidebarNav', () => {
       const sections = getNavSections();
       expect(sections.map((s) => s.label)).toEqual([
         null, // Dashboard
-        'Publish', // Issues + Subscribers
+        'Publish', // Issues + Reports + Subscribers
         'Content', // Templates + Snippets
         'Monetization', // Sponsors + Pricing
         null, // Brand
@@ -45,7 +47,7 @@ describe('sidebarNav', () => {
 
       const labelled = (label: string) =>
         sections.find((s) => s.label === label)?.items.map((i) => i.name);
-      expect(labelled('Publish')).toEqual(['Issues', 'Subscribers']);
+      expect(labelled('Publish')).toEqual(['Issues', 'Reports', 'Subscribers']);
       expect(labelled('Content')).toEqual(['Templates', 'Snippets']);
       expect(labelled('Monetization')).toEqual(['Sponsors', 'Pricing']);
 

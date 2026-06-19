@@ -13,6 +13,7 @@ export interface PageMeta {
 export const ROUTE_META: Record<string, { title: string; parent?: { label: string; href: string } }> = {
   '/': { title: 'Dashboard' },
   '/issues': { title: 'Issues' },
+  '/reports': { title: 'Reports' },
   '/templates': { title: 'Templates' },
   '/snippets': { title: 'Snippets' },
   '/subscribers': { title: 'Subscribers' },
@@ -68,6 +69,18 @@ export function usePageMeta(dynamicTitle?: string): PageMeta {
       title,
       breadcrumb: [
         { label: 'Issues', href: '/issues' },
+        { label: title },
+      ],
+    };
+  }
+
+  // Dynamic route: /reports/:id
+  if (params.id && pathname === `/reports/${params.id}`) {
+    const title = `Report ${params.id}`;
+    return {
+      title,
+      breadcrumb: [
+        { label: 'Reports', href: '/reports' },
         { label: title },
       ],
     };

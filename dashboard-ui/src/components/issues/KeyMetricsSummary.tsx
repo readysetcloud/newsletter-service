@@ -9,8 +9,10 @@ export interface KeyMetricsSummaryProps {
     deliveries: number;
     openRate: number;
     clickRate: number;
+    clickToOpenRate: number;
     bounceRate: number;
     complaintRate: number;
+    unsubscribeRate: number;
   };
   comparisons?: {
     average?: IssueMetrics;
@@ -135,6 +137,21 @@ export const KeyMetricsSummary: React.FC<KeyMetricsSummaryProps> = React.memo(({
     [activeComparison, metrics.clickRate]
   );
 
+  const clickToOpenRateComparison = useMemo(() =>
+    activeComparison
+      ? calculateComparison(metrics.clickToOpenRate, activeComparison.clickToOpenRate, 'positive')
+      : undefined,
+    [activeComparison, metrics.clickToOpenRate]
+  );
+
+  const unsubscribeRateComparison = useMemo(() => {
+    if (!activeComparison || activeComparison.unsubscribes === undefined || !activeComparison.delivered) {
+      return undefined;
+    }
+    const comparisonRate = (activeComparison.unsubscribes / activeComparison.delivered) * 100;
+    return calculateComparison(metrics.unsubscribeRate, comparisonRate, 'negative');
+  }, [activeComparison, metrics.unsubscribeRate]);
+
   const bounceRateComparison = useMemo(() =>
     activeComparison
       ? calculateComparison(metrics.bounceRate, activeComparison.bounceRate, 'negative')
@@ -155,7 +172,7 @@ export const KeyMetricsSummary: React.FC<KeyMetricsSummaryProps> = React.memo(({
 
   return (
     <div
-      className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4"
+      className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4"
       role="region"
       aria-label="Key performance metrics"
     >
@@ -178,6 +195,17 @@ export const KeyMetricsSummary: React.FC<KeyMetricsSummaryProps> = React.memo(({
         comparisonLabel={comparisonLabel}
         tooltipLabel="Click Rate"
         tooltipDescription="Percentage of delivered emails where recipients clicked at least one link. Industry average is typically 2-5%."
+        colorClass="text-primary-600 dark:text-primary-400"
+      />
+
+      <MetricCard
+        label="Click-to-Open Rate"
+        value={formatPercentageValue(metrics.clickToOpenRate, 1)}
+        percentage="of opens"
+        comparison={clickToOpenRateComparison}
+        comparisonLabel={comparisonLabel}
+        tooltipLabel="Click-to-Open Rate (CTOR)"
+        tooltipDescription="Percentage of recipients who opened the email and then clicked a link. It isolates content and copy effectiveness from subject-line performance. Industry average is typically 10-15%."
         colorClass="text-primary-600 dark:text-primary-400"
       />
 
@@ -205,6 +233,17 @@ export const KeyMetricsSummary: React.FC<KeyMetricsSummaryProps> = React.memo(({
             ? 'text-error-600 dark:text-error-400'
             : 'text-error-600 dark:text-error-400'
         }
+      />
+
+      <MetricCard
+        label="Unsubscribe Rate"
+        value={formatPercentageValue(metrics.unsubscribeRate, 2)}
+        percentage={`${formatNumber(Math.round((metrics.unsubscribeRate / 100) * metrics.deliveries))} unsubscribes`}
+        comparison={unsubscribeRateComparison}
+        comparisonLabel={comparisonLabel}
+        tooltipLabel="Unsubscribe Rate"
+        tooltipDescription="Percentage of delivered recipients who opted out after this issue. Keep this below 0.5% — a healthy list typically sees 0.1-0.3%."
+        colorClass="text-warning-600 dark:text-warning-400"
       />
     </div>
   );

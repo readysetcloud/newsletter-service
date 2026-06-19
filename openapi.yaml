@@ -3150,6 +3150,11 @@ components:
         subscribers:
           type: integer
           description: Subscriber count at send time
+        subscribes:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Number of new subscribers attributed to this issue
         unsubscribes:
           type: integer
           minimum: 0
@@ -3288,6 +3293,12 @@ components:
           type: integer
           format: int64
           description: Subscriber count at send time
+        subscribes:
+          type: integer
+          format: int64
+          minimum: 0
+          default: 0
+          description: Number of new subscribers attributed to this issue
         unsubscribes:
           type: integer
           minimum: 0

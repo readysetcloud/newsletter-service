@@ -538,6 +538,7 @@ export const IssueDetailPage: React.FC = () => {
       bounces: issue.stats.bounces,
       complaints: issue.stats.complaints,
       subscribers: issue.stats.subscribers,
+      subscribes: issue.stats.subscribes ?? 0,
       unsubscribes: issue.stats.unsubscribes ?? 0,
       cleaned: issue.stats.cleaned ?? 0,
       manualRemovals: issue.stats.manualRemovals ?? 0,
@@ -879,6 +880,7 @@ export const IssueDetailPage: React.FC = () => {
           <div className="mb-4 sm:mb-6">
             <FadeIn variant="fade" speed="normal">
               <SubscriberMetricsPanel
+                subscribes={issue.stats.subscribes}
                 unsubscribes={issue.stats.unsubscribes}
                 cleaned={issue.stats.cleaned}
                 manualRemovals={issue.stats.manualRemovals}

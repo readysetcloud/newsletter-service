@@ -1064,7 +1064,10 @@ Resources:
                 - dynamodb:GetItem
                 - dynamodb:UpdateItem
                 - dynamodb:PutItem
-              Resource: !GetAtt NewsletterTable.Arn
+                - dynamodb:Query
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
             - Effect: Allow
               Action:
                 - dynamodb:PutItem
@@ -1607,6 +1610,7 @@ Resources:
               Action:
                 - dynamodb:UpdateItem
                 - dynamodb:PutItem
+                - dynamodb:GetItem
               Resource: !GetAtt NewsletterTable.Arn
         - Version: 2012-10-17
           Statement:
@@ -1654,7 +1658,10 @@ Resources:
               Action:
                 - dynamodb:GetItem
                 - dynamodb:UpdateItem
-              Resource: !GetAtt NewsletterTable.Arn
+                - dynamodb:Query
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
@@ -1761,7 +1768,10 @@ Resources:
                 - dynamodb:UpdateItem
                 - dynamodb:GetItem
                 - dynamodb:PutItem
-              Resource: !GetAtt NewsletterTable.Arn
+                - dynamodb:Query
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
@@ -1805,7 +1815,10 @@ Resources:
                 - dynamodb:UpdateItem
                 - dynamodb:GetItem
                 - dynamodb:PutItem
-              Resource: !GetAtt NewsletterTable.Arn
+                - dynamodb:Query
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
@@ -4060,7 +4073,10 @@ Resources:
                 - dynamodb:UpdateItem
                 - dynamodb:GetItem
                 - dynamodb:PutItem
-              Resource: !GetAtt NewsletterTable.Arn
+                - dynamodb:Query
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default

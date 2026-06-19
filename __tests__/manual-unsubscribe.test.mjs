@@ -313,7 +313,7 @@ describe('manual-unsubscribe handler', () => {
     );
   });
 
-  test('increments unsubscribes counter on successful unsubscribe', async () => {
+  test('increments manualRemovals counter on successful unsubscribe', async () => {
     unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: true });
     getMostRecentPublishedIssue.mockResolvedValue({ pk: 'test-tenant#5', issueNumber: 5 });
 
@@ -327,7 +327,7 @@ describe('manual-unsubscribe handler', () => {
     await handler(event);
 
     expect(getMostRecentPublishedIssue).toHaveBeenCalledWith('test-tenant');
-    expect(incrementIssueCounter).toHaveBeenCalledWith('test-tenant#5', 'unsubscribes');
+    expect(incrementIssueCounter).toHaveBeenCalledWith('test-tenant#5', 'manualRemovals');
   });
 
   test('skips counter increment when no published issue found', async () => {

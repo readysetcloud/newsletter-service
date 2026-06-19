@@ -160,6 +160,7 @@ pub struct IssueStats {
     bounces: i64,
     complaints: i64,
     subscribers: i64,
+    subscribes: i64,
     unsubscribes: i64,
     cleaned: i64,
     #[serde(rename = "manualRemovals")]
@@ -199,6 +200,7 @@ pub struct IssueMetrics {
     bounces: i64,
     complaints: i64,
     subscribers: i64,
+    subscribes: i64,
     unsubscribes: i64,
     cleaned: i64,
     #[serde(rename = "manualRemovals")]
@@ -1231,6 +1233,12 @@ fn parse_issue_stats(item: &HashMap<String, AttributeValue>) -> Result<IssueStat
         .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or(0);
 
+    let subscribes = item
+        .get("subscribes")
+        .and_then(|v| v.as_n().ok())
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(0);
+
     let unsubscribes = item
         .get("unsubscribes")
         .and_then(|v| v.as_n().ok())
@@ -1266,6 +1274,7 @@ fn parse_issue_stats(item: &HashMap<String, AttributeValue>) -> Result<IssueStat
         bounces,
         complaints,
         subscribers,
+        subscribes,
         unsubscribes,
         cleaned,
         manual_removals,
@@ -1471,6 +1480,7 @@ fn calculate_issue_metrics(stats: &IssueStats) -> IssueMetrics {
         bounces: stats.bounces,
         complaints: stats.complaints,
         subscribers: stats.subscribers,
+        subscribes: stats.subscribes,
         unsubscribes: stats.unsubscribes,
         cleaned: stats.cleaned,
         manual_removals: stats.manual_removals,
@@ -2504,6 +2514,7 @@ mod tests {
             "subscribers".to_string(),
             AttributeValue::N("480".to_string()),
         );
+        item.insert("subscribes".to_string(), AttributeValue::N("12".to_string()));
         item.insert(
             "unsubscribes".to_string(),
             AttributeValue::N("3".to_string()),
@@ -2524,6 +2535,7 @@ mod tests {
         assert_eq!(stats.bounces, 5);
         assert_eq!(stats.complaints, 2);
         assert_eq!(stats.subscribers, 480);
+        assert_eq!(stats.subscribes, 12);
         assert_eq!(stats.unsubscribes, 3);
         assert_eq!(stats.cleaned, 1);
         assert_eq!(stats.manual_removals, 2);
@@ -2543,6 +2555,7 @@ mod tests {
         assert_eq!(stats.bounces, 0);
         assert_eq!(stats.complaints, 0);
         assert_eq!(stats.subscribers, 0);
+        assert_eq!(stats.subscribes, 0);
         assert_eq!(stats.unsubscribes, 0);
         assert_eq!(stats.cleaned, 0);
         assert_eq!(stats.manual_removals, 0);
@@ -2671,6 +2684,7 @@ mod tests {
             bounces: 5,
             complaints: 2,
             subscribers: 0,
+            subscribes: 0,
             unsubscribes: 0,
             cleaned: 0,
             manual_removals: 0,
@@ -3670,6 +3684,7 @@ mod tests {
             bounces: 20,
             complaints: 5,
             subscribers: 900,
+            subscribes: 0,
             unsubscribes: 0,
             cleaned: 0,
             manual_removals: 0,
@@ -3697,6 +3712,7 @@ mod tests {
             bounces: 0,
             complaints: 0,
             subscribers: 0,
+            subscribes: 0,
             unsubscribes: 0,
             cleaned: 0,
             manual_removals: 0,
@@ -3724,6 +3740,7 @@ mod tests {
             bounces: 7,
             complaints: 2,
             subscribers: 1000,
+            subscribes: 0,
             unsubscribes: 0,
             cleaned: 0,
             manual_removals: 0,
@@ -3751,6 +3768,7 @@ mod tests {
             bounces: 10,
             complaints: 1,
             subscribers: 1000,
+            subscribes: 0,
             unsubscribes: 0,
             cleaned: 0,
             manual_removals: 0,
@@ -3797,6 +3815,7 @@ mod tests {
                 bounces: 20,
                 complaints: 5,
                 subscribers: 980,
+                subscribes: 0,
                 unsubscribes: 0,
                 cleaned: 0,
                 manual_removals: 0,
@@ -3830,6 +3849,7 @@ mod tests {
                     bounces: 20,
                     complaints: 5,
                     subscribers: 950,
+                    subscribes: 0,
                     unsubscribes: 0,
                     cleaned: 0,
                     manual_removals: 0,
@@ -3849,6 +3869,7 @@ mod tests {
                     bounces: 45,
                     complaints: 10,
                     subscribers: 1200,
+                    subscribes: 0,
                     unsubscribes: 0,
                     cleaned: 0,
                     manual_removals: 0,
@@ -3868,6 +3889,7 @@ mod tests {
                     bounces: 30,
                     complaints: 8,
                     subscribers: 1100,
+                    subscribes: 0,
                     unsubscribes: 0,
                     cleaned: 0,
                     manual_removals: 0,
@@ -3902,6 +3924,7 @@ mod tests {
                     bounces: 22,
                     complaints: 5,
                     subscribers: 980,
+                    subscribes: 0,
                     unsubscribes: 0,
                     cleaned: 0,
                     manual_removals: 0,
@@ -3921,6 +3944,7 @@ mod tests {
                     bounces: 17,
                     complaints: 8,
                     subscribers: 1200,
+                    subscribes: 0,
                     unsubscribes: 0,
                     cleaned: 0,
                     manual_removals: 0,
@@ -4024,6 +4048,7 @@ mod tests {
                 bounces: 0,
                 complaints: 0,
                 subscribers: 0,
+                subscribes: 0,
                 unsubscribes: 0,
                 cleaned: 0,
                 manual_removals: 0,

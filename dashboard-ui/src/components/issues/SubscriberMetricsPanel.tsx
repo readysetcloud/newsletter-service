@@ -1,10 +1,11 @@
 import React, { useMemo } from 'react';
-import { UserMinus, Trash2, ShieldOff, TrendingDown } from 'lucide-react';
+import { UserMinus, UserPlus, Trash2, ShieldOff, TrendingDown } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/Card';
 import { InfoTooltip } from '../ui/InfoTooltip';
 import { formatNumber } from '../../utils/issueDetailUtils';
 
 export interface SubscriberMetricsPanelProps {
+  subscribes?: number | null;
   unsubscribes?: number | null;
   cleaned?: number | null;
   manualRemovals?: number | null;
@@ -45,11 +46,13 @@ const MetricItem: React.FC<MetricItemProps> = React.memo(({
 MetricItem.displayName = 'MetricItem';
 
 export const SubscriberMetricsPanel: React.FC<SubscriberMetricsPanelProps> = React.memo(({
+  subscribes,
   unsubscribes,
   cleaned,
   manualRemovals,
   subscribers,
 }) => {
+  const safeSubscribes = subscribes ?? 0;
   const safeUnsubscribes = unsubscribes ?? 0;
   const safeCleaned = cleaned ?? 0;
   const safeManualRemovals = manualRemovals ?? 0;
@@ -69,7 +72,7 @@ export const SubscriberMetricsPanel: React.FC<SubscriberMetricsPanelProps> = Rea
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between">
-          <CardTitle>Subscriber Loss</CardTitle>
+          <CardTitle>Subscriber Activity</CardTitle>
           {lossPercentage !== null && (
             <span className="text-sm text-muted-foreground">
               {formatNumber(totalLoss)} lost of {formatNumber(safeSubscribers)} sent — {lossPercentage.toFixed(2)}%
@@ -79,10 +82,18 @@ export const SubscriberMetricsPanel: React.FC<SubscriberMetricsPanelProps> = Rea
       </CardHeader>
       <CardContent>
         <div
-          className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4"
+          className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-4"
           role="region"
-          aria-label="Subscriber loss metrics"
+          aria-label="Subscriber activity metrics"
         >
+          <MetricItem
+            icon={<UserPlus className="w-4 h-4" />}
+            label="New Subscribers"
+            value={safeSubscribes}
+            tooltipLabel="New Subscribers"
+            tooltipDescription="Subscribers who signed up after this issue was sent."
+            colorClass="text-success-600 dark:text-success-400"
+          />
           <MetricItem
             icon={<UserMinus className="w-4 h-4" />}
             label="Unsubscribes"

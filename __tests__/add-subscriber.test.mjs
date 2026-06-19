@@ -28,6 +28,12 @@ async function loadIsolated() {
       marshall: jest.fn((k) => k),
     }));
 
+    // issue attribution (no published issue → no per-issue counter writes)
+    jest.unstable_mockModule('../functions/utils/issue-attribution.mjs', () => ({
+      getMostRecentPublishedIssue: jest.fn().mockResolvedValue(null),
+      incrementIssueCounter: jest.fn(),
+    }));
+
     // helpers (formatResponse + getTenant)
     mockGetTenant = jest.fn();
     mockFormatResponse = jest.fn((statusCode, body) => ({

@@ -309,7 +309,7 @@ describe('Property 16: Outreach email excludes internal data', () => {
         if (bounceStr.length > 3 && bounceStr !== (pricing.openRate * 100).toFixed(1)) {
           expect(fullOutput).not.toContain(`${bounceStr}%`);
         }
-        if (complaintStr.length > 3) {
+        if (complaintStr.length > 3 && complaintStr !== (pricing.openRate * 100).toFixed(1)) {
           expect(fullOutput).not.toContain(`${complaintStr}%`);
         }
       }),

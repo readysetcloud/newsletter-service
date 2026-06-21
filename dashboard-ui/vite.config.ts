@@ -139,6 +139,15 @@ export default defineConfig(({ command: _command, mode }) => {
     },
     // Environment variables
     define: {
+      // prismjs (pulled in transitively via @mdxeditor → @lexical/code) exposes
+      // its core only through `global.Prism`, guarded by `typeof global`. In a
+      // browser `global` is undefined, so the core never sets a global Prism —
+      // yet prismjs's language components reference a bare global `Prism`,
+      // throwing "Prism is not defined" the moment the (eagerly loaded) chunk
+      // evaluates, which takes down the whole app. Aliasing `global` to
+      // `globalThis` lets the core publish `globalThis.Prism`, which the
+      // components then resolve.
+      global: 'globalThis',
       __APP_VERSION__: JSON.stringify(process.env.npm_package_version || '1.0.0'),
       __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
     },

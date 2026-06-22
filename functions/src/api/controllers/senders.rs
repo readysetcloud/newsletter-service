@@ -1337,7 +1337,18 @@ async fn handle_get_sender_status(
     let last_checked = chrono::Utc::now().to_rfc3339();
 
     if sender.verification_status != VerificationStatus::Verified {
-        let ses_status = check_ses_verification_status(&ses_client, &sender.email).await?;
+        // Domain senders are verified via the domain identity in SES, not a
+        // per-address identity. Checking the email would always return
+        // "not found" and leave the sender stuck on pending, so resolve the
+        // correct identity for the sender's verification type.
+        let ses_identity = match sender.verification_type {
+            VerificationType::Domain => sender
+                .domain
+                .clone()
+                .unwrap_or_else(|| sender.email.clone()),
+            VerificationType::Mailbox => sender.email.clone(),
+        };
+        let ses_status = check_ses_verification_status(&ses_client, &ses_identity).await?;
 
         if let Some(new_status) = map_ses_status_to_internal(&ses_status.verification_status) {
             if new_status != sender.verification_status {

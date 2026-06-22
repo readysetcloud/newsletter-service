@@ -306,6 +306,20 @@ async fn handle_get_domain_verification(
         }
     }
 
+    // A domain sender's verification can only ever be satisfied by the domain
+    // identity being verified — SES has no per-address identity for it. Once the
+    // domain is verified, propagate that to its senders so they don't stay stuck
+    // on "pending" while the domain shows "verified". Non-fatal: a failure here
+    // shouldn't block returning the domain status.
+    if current_status == VerificationStatus::Verified {
+        if let Err(e) = mark_domain_senders_verified(&tenant_id, &domain).await {
+            tracing::error!(
+                "Failed to propagate domain verification to senders: {}",
+                e
+            );
+        }
+    }
+
     let response_data = GetDomainVerificationResponse {
         domain: domain.to_string(),
         verification_status: current_status_str.to_string(),
@@ -408,6 +422,72 @@ async fn update_domain_verification_status(
             tracing::error!("Error updating domain verification status: {:?}", e);
             AppError::InternalError("Failed to update domain status".to_string())
         })?;
+
+    Ok(())
+}
+
+/// Marks every pending domain sender for `domain` as verified. Called once the
+/// domain identity is confirmed verified by SES. Idempotent: senders already
+/// verified are skipped so repeated polls don't issue redundant writes.
+async fn mark_domain_senders_verified(tenant_id: &str, domain: &str) -> Result<(), AppError> {
+    let ddb = aws_clients::get_dynamodb_client().await;
+    let table_name = std::env::var("TABLE_NAME")
+        .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
+
+    let result = ddb
+        .query()
+        .table_name(&table_name)
+        .index_name("GSI1")
+        .key_condition_expression("GSI1PK = :gsi1pk")
+        .expression_attribute_values(
+            ":gsi1pk",
+            AttributeValue::S(KeyPatterns::sender_gsi1pk(tenant_id)),
+        )
+        .send()
+        .await
+        .map_err(|e| AppError::AwsError(format!("Failed to query senders: {}", e)))?;
+
+    let senders: Vec<SenderRecord> = result
+        .items()
+        .iter()
+        .filter_map(|item| serde_dynamo::from_item(item.clone()).ok())
+        .collect();
+
+    for sender in senders {
+        let is_pending_domain_sender = matches!(sender.verification_type, VerificationType::Domain)
+            && sender.domain.as_deref() == Some(domain)
+            && sender.verification_status != VerificationStatus::Verified;
+
+        if !is_pending_domain_sender {
+            continue;
+        }
+
+        let now = chrono::Utc::now().to_rfc3339();
+        if let Err(e) = ddb
+            .update_item()
+            .table_name(&table_name)
+            .key("pk", AttributeValue::S(tenant_id.to_string()))
+            .key(
+                "sk",
+                AttributeValue::S(KeyPatterns::sender(&sender.sender_id)),
+            )
+            .update_expression(
+                "SET verificationStatus = :status, verifiedAt = :verifiedAt, updatedAt = :updatedAt",
+            )
+            .expression_attribute_values(":status", AttributeValue::S("verified".to_string()))
+            .expression_attribute_values(":verifiedAt", AttributeValue::S(now.clone()))
+            .expression_attribute_values(":updatedAt", AttributeValue::S(now))
+            .condition_expression("attribute_exists(pk) AND attribute_exists(sk)")
+            .send()
+            .await
+        {
+            tracing::error!(
+                "Failed to mark domain sender {} verified: {}",
+                sender.sender_id,
+                e
+            );
+        }
+    }
 
     Ok(())
 }

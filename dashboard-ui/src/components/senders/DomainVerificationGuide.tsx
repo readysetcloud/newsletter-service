@@ -438,15 +438,12 @@ export const DomainVerificationGuide: React.FC<DomainVerificationGuideProps> = (
         <h4 className="text-sm font-medium text-primary-900 mb-3">
           Setup Instructions
         </h4>
-        <div className="space-y-2 text-sm text-primary-800">
-          {verification?.instructions?.map((instruction, index) => (
-            <div key={index} className="flex items-start space-x-2">
-              <span className="flex-shrink-0 w-5 h-5 bg-primary-200 text-primary-800 rounded-full text-xs flex items-center justify-center font-medium mt-0.5">
-                {index + 1}
-              </span>
-              <p>{instruction}</p>
-            </div>
-          ))}
+        {/* The API returns instructions as a preformatted multi-line block that
+            already includes its own step numbers, bullets, and spacing. Render
+            it as-is rather than numbering every line (which made a short set of
+            steps look like 20+). */}
+        <div className="text-sm text-primary-800 whitespace-pre-wrap font-sans">
+          {verification?.instructions?.join('\n')}
         </div>
       </div>
 

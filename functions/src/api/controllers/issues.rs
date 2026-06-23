@@ -749,9 +749,28 @@ async fn handle_get_ab_history(event: Request) -> Result<Response<Body>, AppErro
     response::format_response(200, AbHistoryResponse { tests, aggregates })
 }
 
+/// Upper bound on history tests read for prompt grounding. The suggestion
+/// summary only surfaces the top few outcomes per dimension, so reading a
+/// recent window (newest-first) is sufficient and keeps DynamoDB reads — and
+/// the API Lambda's latency — bounded regardless of how much history a tenant
+/// has accumulated.
+const SUGGESTION_HISTORY_LIMIT: usize = 50;
+
 /// Reads the tenant's A/B history partition (pk = `${tenantId}#abhistory`,
 /// sk begins_with `test#`), newest issue first.
 async fn query_ab_history(tenant_id: &str) -> Result<Vec<AbHistoryTest>, AppError> {
+    query_ab_history_limited(tenant_id, None).await
+}
+
+/// Reads the tenant's A/B history partition newest-first. When `limit` is
+/// `Some(n)`, stops once at least `n` tests have been collected so callers that
+/// only need a recent window (e.g. prompt grounding) don't page the entire
+/// partition. `None` reads the full history (used by the history endpoint,
+/// which needs every test to compute aggregates).
+async fn query_ab_history_limited(
+    tenant_id: &str,
+    limit: Option<usize>,
+) -> Result<Vec<AbHistoryTest>, AppError> {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
         .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
@@ -769,6 +788,13 @@ async fn query_ab_history(tenant_id: &str) -> Result<Vec<AbHistoryTest>, AppErro
             .expression_attribute_values(":prefix", AttributeValue::S("test#".to_string()))
             .scan_index_forward(false);
 
+        // Cap items evaluated per page to what's still needed so DynamoDB stops
+        // scanning early on the final page.
+        if let Some(n) = limit {
+            let remaining = n.saturating_sub(tests.len());
+            builder = builder.limit(remaining as i32);
+        }
+
         if let Some(start) = last_key.take() {
             builder = builder.set_exclusive_start_key(Some(start));
         }
@@ -777,6 +803,12 @@ async fn query_ab_history(tenant_id: &str) -> Result<Vec<AbHistoryTest>, AppErro
         for item in result.items() {
             if let Some(test) = parse_ab_history_item(item) {
                 tests.push(test);
+            }
+        }
+
+        if let Some(n) = limit {
+            if tests.len() >= n {
+                break;
             }
         }
 
@@ -974,8 +1006,11 @@ async fn handle_suggest_ab_test(event: Request) -> Result<Response<Body>, AppErr
     }
 
     // Ground the suggestion in the tenant's prior results. History is best-effort
-    // — a failed read degrades to general best-practice suggestions.
-    let history = query_ab_history(&tenant_id).await.unwrap_or_default();
+    // — a failed read degrades to general best-practice suggestions — and bounded
+    // to a recent window so a large history can't blow the API Lambda's timeout.
+    let history = query_ab_history_limited(&tenant_id, Some(SUGGESTION_HISTORY_LIMIT))
+        .await
+        .unwrap_or_default();
     let used_history = !history.is_empty();
     let history_summary = summarize_ab_history_for_prompt(&history, &body.dimension);
 
@@ -1026,7 +1061,10 @@ fn summarize_ab_history_for_prompt(tests: &[AbHistoryTest], dimension: &str) -> 
     }
 
     let relevant: Vec<&AbHistoryTest> = tests.iter().filter(|t| t.dimension == dimension).collect();
-    let mut lines = vec![format!("Total past A/B tests: {}.", tests.len())];
+    let mut lines = vec![format!(
+        "Recent past A/B tests considered: {}.",
+        tests.len()
+    )];
 
     if dimension == AB_DIMENSION_SUBJECT {
         let significant: Vec<&&AbHistoryTest> = relevant.iter().filter(|t| t.significant).collect();

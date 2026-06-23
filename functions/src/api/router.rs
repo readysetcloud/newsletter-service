@@ -100,6 +100,15 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
                 .map(|value| value.to_string());
             issues::resend_issue(event, issue_id).await
         }
+        (&Method::POST, path)
+            if path.starts_with("/issues/") && path.ends_with("/ab-test/declare-winner") =>
+        {
+            let issue_id = path
+                .strip_prefix("/issues/")
+                .and_then(|value| value.strip_suffix("/ab-test/declare-winner"))
+                .map(|value| value.to_string());
+            issues::declare_ab_winner(event, issue_id).await
+        }
         (&Method::GET, path) if path.starts_with("/issues/") => {
             let issue_id = extract_path_param(path, "/issues/");
             issues::get_issue(event, issue_id).await

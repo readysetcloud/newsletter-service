@@ -1685,6 +1685,47 @@ paths:
         "500":
           $ref: "#/components/responses/UnknownError"
 
+  /issues/{issueId}/ab-test/declare-winner:
+    parameters:
+      - name: issueId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The issue ID
+    post:
+      summary: Declare the winning A/B test variant
+      description: >-
+        Manually records the winning variant for an issue's A/B test. Sets
+        abTest.winnerVariantId to the supplied variant and abTest.status to
+        "sent". Phase 1 is informational only — declaring a winner does not
+        trigger a second send.
+      tags:
+        - Issues
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeclareWinnerRequest"
+      responses:
+        "200":
+          description: Winning variant recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetIssueResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
   /reports:
     get:
       summary: List monthly reports
@@ -3172,6 +3213,8 @@ components:
         templateId:
           type: string
           description: Optional identifier of the template to render this issue with. When omitted, the default template is used. Required when contentType is "json".
+        abTest:
+          $ref: "#/components/schemas/AbTest"
 
     CreateIssueResponse:
       type: object
@@ -3279,6 +3322,13 @@ components:
           description: Structured insights with evidence
           items:
             $ref: "#/components/schemas/InsightV2"
+        abTest:
+          $ref: "#/components/schemas/AbTest"
+        variantStats:
+          type: array
+          description: Per-variant engagement statistics (present only for A/B test issues)
+          items:
+            $ref: "#/components/schemas/VariantStats"
 
     UpdateIssueRequest:
       type: object
@@ -3312,6 +3362,8 @@ components:
           enum:
             - published
           description: Set to 'published' to manually mark an in-progress or failed issue as published
+        abTest:
+          $ref: "#/components/schemas/AbTest"
 
     IssueStats:
       type: object
@@ -4097,3 +4149,174 @@ components:
           type: string
           nullable: true
           description: Error message (present when status is failed)
+
+    AbTestVariant:
+      type: object
+      required:
+        - variantId
+        - subject
+      properties:
+        variantId:
+          type: string
+          enum: [a, b]
+          description: Variant identifier ("a" is the control, "b" is the challenger)
+        subject:
+          type: string
+          maxLength: 200
+          description: Subject line used for this variant
+
+    AbTest:
+      type: object
+      required:
+        - dimension
+        - variants
+      properties:
+        testId:
+          type: string
+          readOnly: true
+          description: Server-generated test identifier (ULID), assigned on create
+        dimension:
+          type: string
+          enum: [subject]
+          description: The dimension being tested. Phase 1 supports "subject" only.
+        variants:
+          type: array
+          minItems: 2
+          maxItems: 2
+          description: Exactly two variants with ids "a" (control) and "b" (challenger)
+          items:
+            $ref: "#/components/schemas/AbTestVariant"
+        winMetric:
+          type: string
+          enum: [openRate, clickRate]
+          default: openRate
+          description: Metric used to determine the winner
+        confidence:
+          type: number
+          minimum: 0.80
+          maximum: 0.99
+          default: 0.95
+          description: Statistical confidence threshold (stored for Phase 2)
+        minSamplePerVariant:
+          type: integer
+          minimum: 1
+          default: 500
+          description: Minimum sample size per variant before evaluation (stored for Phase 2)
+        testFraction:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 0.5
+          default: 0.2
+          description: Fraction of the list used for testing (stored for Phase 2; not used to send in Phase 1)
+        evaluateAfterMinutes:
+          type: integer
+          minimum: 1
+          default: 240
+          description: Minutes to wait after the test-sample send before evaluating the winner
+        status:
+          type: string
+          enum: [pending, testing, evaluating, sent, inconclusive]
+          readOnly: true
+          description: Current state of the A/B test (set to "pending" on create)
+        winnerVariantId:
+          type: string
+          enum: [a, b]
+          nullable: true
+          readOnly: true
+          description: The winning variant, set when a winner is declared (null until then)
+        evaluation:
+          type: object
+          nullable: true
+          readOnly: true
+          description: Computed result of the winner evaluation (null until the test is evaluated)
+          properties:
+            winMetric:
+              type: string
+              description: Metric used to determine the winner
+            confidence:
+              type: number
+              description: Statistical confidence threshold applied during evaluation
+            minSamplePerVariant:
+              type: integer
+              description: Minimum sample size per variant required before a winner can be declared
+            variantA:
+              $ref: "#/components/schemas/VariantEvaluation"
+            variantB:
+              $ref: "#/components/schemas/VariantEvaluation"
+            zScore:
+              type: number
+              description: Two-proportion z-test statistic
+            pValue:
+              type: number
+              description: Two-tailed p-value of the z-test
+            significant:
+              type: boolean
+              description: Whether the rate difference is statistically significant at the confidence threshold
+            winnerVariantId:
+              type: string
+              enum: [a, b]
+              nullable: true
+              description: The winning variant ("a" or "b"), or null when inconclusive
+            decidedAt:
+              type: string
+              format: date-time
+              description: Timestamp when the evaluation was computed
+
+    VariantEvaluation:
+      type: object
+      description: Per-variant evaluation counters and computed rate
+      properties:
+        successes:
+          type: integer
+          description: Number of successes for the win metric (opens or clicks)
+        deliveries:
+          type: integer
+          description: Number of successful deliveries for this variant
+        rate:
+          type: number
+          description: Success rate (successes divided by deliveries)
+
+    VariantStats:
+      type: object
+      required:
+        - variantId
+        - opens
+        - clicks
+        - deliveries
+        - sends
+        - bounces
+        - complaints
+      properties:
+        variantId:
+          type: string
+          enum: [a, b]
+          description: Variant identifier these stats belong to
+        opens:
+          type: integer
+          description: Number of email opens for this variant
+        clicks:
+          type: integer
+          description: Number of link clicks for this variant
+        deliveries:
+          type: integer
+          description: Number of successful deliveries for this variant
+        sends:
+          type: integer
+          description: Number of sends for this variant
+        bounces:
+          type: integer
+          description: Number of bounced emails for this variant
+        complaints:
+          type: integer
+          description: Number of spam complaints for this variant
+
+    DeclareWinnerRequest:
+      type: object
+      required:
+        - variantId
+      properties:
+        variantId:
+          type: string
+          enum: [a, b]
+          description: The variant to declare as the winner
+      additionalProperties: false

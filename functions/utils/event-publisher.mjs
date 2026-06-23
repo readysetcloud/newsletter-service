@@ -8,6 +8,7 @@ const eventBridge = new EventBridgeClient();
 export const EVENT_TYPES = {
   ISSUE_PUBLISHED: 'ISSUE_PUBLISHED',
   ISSUE_DRAFT_SAVED: 'ISSUE_DRAFT_SAVED',
+  ISSUE_AB_COMPLETED: 'ISSUE_AB_COMPLETED',
   SUBSCRIBER_ADDED: 'Subscriber Added',
   SUBSCRIBER_REMOVED: 'Subscriber Removed',
   BRAND_UPDATED: 'Brand Updated',

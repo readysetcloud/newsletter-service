@@ -4,6 +4,7 @@ import { DynamoDBClient, QueryCommand, UpdateItemCommand } from "@aws-sdk/client
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { encrypt, sendWithRetry } from './utils/helpers.mjs';
 import { listSubscribers, getSubscriberByEmail, updateSubscriberSendMetadata } from './utils/subscriber.mjs';
+import { splitRecipients, selectHoldoutSample } from './utils/ab-variants.mjs';
 
 // Key patterns for DynamoDB (previously from ./senders/types.mjs)
 const KEY_PATTERNS = {
@@ -241,11 +242,12 @@ const filterIdempotentRecipientsPhase = async (tenantId, subscribers, issueIdent
  * @param {string} emailConfig.html - Email HTML body
  * @param {Object} emailConfig.replacements - Replacement tokens for personalization
  * @param {string} emailConfig.referenceNumber - Optional reference number for tracking
+ * @param {string} [emailConfig.variant] - Optional A/B variant id ("a"/"b") tagged on the send
  * @param {string} senderEmail - Sender email address
  * @returns {Promise<{sentCount: number, sentRecipients: string[]}>} Send stats and sent recipients
  */
 const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
-  console.log(`[SENDING] Starting - recipients: ${emailAddresses.length}, TPS: ${tpsLimit}, sender: ${senderEmail}`);
+  console.log(`[SENDING] Starting - recipients: ${emailAddresses.length}, TPS: ${tpsLimit}, sender: ${senderEmail}${emailConfig.variant ? `, variant: ${emailConfig.variant}` : ''}`);
 
   let sentCount = 0;
   const sentRecipients = [];
@@ -274,6 +276,14 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
         );
       }
 
+      const emailTags = [];
+      if (emailConfig.referenceNumber) {
+        emailTags.push({ Name: 'referenceNumber', Value: emailConfig.referenceNumber });
+      }
+      if (emailConfig.variant) {
+        emailTags.push({ Name: 'variant', Value: emailConfig.variant });
+      }
+
       await ses.send(new SendEmailCommand({
         FromEmailAddress: senderEmail,
         Destination: { ToAddresses: [email] },
@@ -283,9 +293,7 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
             Body: { Html: { Data: personalizedHtml } }
           }
         },
-        ...emailConfig.referenceNumber && {
-          EmailTags: [{ Name: 'referenceNumber', Value: emailConfig.referenceNumber }]
-        },
+        ...emailTags.length > 0 && { EmailTags: emailTags },
         ConfigurationSetName: process.env.CONFIGURATION_SET
       }));
     }, `Send email to ${email}`);
@@ -366,6 +374,71 @@ const updateSubscriberTrackingPhase = async (tenantId, sentRecipients, issueIden
       ? `, skipped ${nonSubscriberSkips.length} non-subscriber recipient(s)`
       : '')
   );
+};
+
+/**
+ * Schedule the A/B winner evaluation as a one-shot EventBridge Scheduler event,
+ * firing `evaluateAfterMinutes` after the test-sample send. The scheduled event
+ * carries everything evaluate-ab-winner needs to send the winner to the hold-out
+ * remainder (the rendered html travels in sendPayload, mirroring the future-send
+ * scheduling pattern used for delayed sends).
+ * @param {Object} params
+ * @param {string} params.tenantId
+ * @param {string} params.referenceNumber - `${tenantId}_${issueNumber}`
+ * @param {Object} params.abTest - Normalized A/B config (variants, evaluateAfterMinutes, ...)
+ * @param {string} params.html - Rendered email HTML (with personalization placeholders)
+ * @param {Object} [params.replacements] - Personalization replacement tokens
+ * @param {string} [params.from] - Optional sender email
+ * @param {Object} params.to - Recipient config ({ list })
+ */
+const scheduleAbEvaluation = async ({ tenantId, referenceNumber, abTest, html, replacements, from, to }) => {
+  if (!referenceNumber) {
+    console.warn('[A/B] Skipping evaluation schedule - missing referenceNumber');
+    return;
+  }
+
+  const evaluateAfterMinutes = typeof abTest.evaluateAfterMinutes === 'number' ? abTest.evaluateAfterMinutes : 240;
+  const issueNumber = referenceNumber.slice(referenceNumber.lastIndexOf('_') + 1);
+  const evalAt = new Date(Date.now() + evaluateAfterMinutes * 60 * 1000);
+  const scheduleName = `AB-EVAL-${referenceNumber}-${Date.now()}`.replace(/[^0-9a-zA-Z-_.]/g, '-').slice(0, 64);
+
+  const detail = {
+    tenantId,
+    issueNumber,
+    referenceNumber,
+    sendPayload: {
+      html,
+      to: { list: to.list },
+      tenantId,
+      referenceNumber,
+      ...replacements && { replacements },
+      ...from && { from }
+    }
+  };
+
+  await sendWithRetry(async () => {
+    return await scheduler.send(new CreateScheduleCommand({
+      ActionAfterCompletion: 'DELETE',
+      FlexibleTimeWindow: { Mode: 'OFF' },
+      GroupName: 'newsletter',
+      Name: scheduleName,
+      ScheduleExpression: `at(${evalAt.toISOString().slice(0, 19)})`,
+      Target: {
+        Arn: 'arn:aws:scheduler:::aws-sdk:eventbridge:putEvents',
+        RoleArn: process.env.SCHEDULER_ROLE_ARN,
+        Input: JSON.stringify({
+          Entries: [{
+            EventBusName: 'default',
+            Detail: JSON.stringify(detail),
+            DetailType: 'Evaluate AB Test',
+            Source: 'newsletter-service'
+          }]
+        })
+      }
+    }));
+  }, 'Schedule A/B winner evaluation');
+
+  console.log(`[A/B] Scheduled winner evaluation at ${evalAt.toISOString()} (${evaluateAfterMinutes}m) for ${referenceNumber}`);
 };
 
 export const handler = async (event) => {
@@ -464,7 +537,51 @@ export const handler = async (event) => {
     }
 
     // Phase 3: Email Sending
+    // For a managed A/B test (data.abTest), only a deterministic hold-out
+    // *sample* receives the variants now; the winner is sent to the remainder
+    // later by the evaluate-ab-winner lambda. A legacy `data.variants` payload
+    // (no hold-out) splits the whole list. Otherwise a single version is sent.
+    const abTest = data.abTest?.dimension === 'subject' ? data.abTest : null;
+    const variants = abTest?.variants ?? (Array.isArray(data.variants) ? data.variants : null);
     const { sentCount, sentRecipients } = await executePhase('Email Sending', async () => {
+      if (variants?.length && to.list) {
+        const subjectByVariant = Object.fromEntries(
+          variants.map(variant => [variant.variantId, variant.subject])
+        );
+
+        let testRecipients = emailAddresses;
+        if (abTest) {
+          const testFraction = typeof abTest.testFraction === 'number' ? abTest.testFraction : 0.2;
+          const { sample } = selectHoldoutSample(emailAddresses, data.referenceNumber, testFraction);
+          testRecipients = sample;
+          console.log(`[A/B] Hold-out test send - sample: ${sample.length}/${emailAddresses.length}, fraction: ${testFraction}`);
+        }
+
+        const buckets = splitRecipients(testRecipients, data.referenceNumber);
+
+        let total = 0;
+        const allRecipients = [];
+        for (const variantId of Object.keys(buckets)) {
+          const bucketRecipients = buckets[variantId];
+          if (!bucketRecipients.length) {
+            continue;
+          }
+
+          const result = await sendEmailsPhase(bucketRecipients, {
+            subject: subjectByVariant[variantId] ?? subject,
+            html,
+            replacements,
+            referenceNumber: data.referenceNumber,
+            variant: variantId
+          }, senderEmail);
+
+          total += result.sentCount;
+          allRecipients.push(...result.sentRecipients);
+        }
+
+        return { sentCount: total, sentRecipients: allRecipients };
+      }
+
       return await sendEmailsPhase(emailAddresses, {
         subject,
         html,
@@ -482,6 +599,23 @@ export const handler = async (event) => {
     if (senderRecord) {
       await executePhase('Metrics Update', async () => {
         return await updateMetricsPhase(tenantId, senderRecord.senderId, sentCount);
+      });
+    }
+
+    // Phase 5: Schedule A/B winner evaluation (managed A/B tests only).
+    // The test sample has now been sent; schedule the evaluation that picks a
+    // winner and sends it to the hold-out remainder.
+    if (abTest && to.list) {
+      await executePhase('Schedule A/B Evaluation', async () => {
+        return await scheduleAbEvaluation({
+          tenantId,
+          referenceNumber: data.referenceNumber,
+          abTest,
+          html,
+          replacements,
+          from,
+          to
+        });
       });
     }
 

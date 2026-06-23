@@ -120,6 +120,13 @@ pub struct UpdateIssueRequest {
     content_type: Option<String>,
 }
 
+// Request body for declaring an A/B test winner.
+#[derive(Deserialize)]
+pub struct DeclareWinnerRequest {
+    #[serde(rename = "variantId")]
+    variant_id: String,
+}
+
 // Response type for get single issue endpoint
 #[derive(Serialize)]
 pub struct GetIssueResponse {
@@ -149,6 +156,23 @@ pub struct GetIssueResponse {
     insights: Option<Vec<String>>,
     #[serde(rename = "insightsV2", skip_serializing_if = "Option::is_none")]
     insights_v2: Option<Vec<InsightV2>>,
+    #[serde(rename = "abTest", skip_serializing_if = "Option::is_none")]
+    ab_test: Option<serde_json::Value>,
+    #[serde(rename = "variantStats", skip_serializing_if = "Option::is_none")]
+    variant_stats: Option<Vec<VariantStats>>,
+}
+
+// Per-variant engagement counters for an A/B test.
+#[derive(Serialize, Clone)]
+pub struct VariantStats {
+    #[serde(rename = "variantId")]
+    variant_id: String,
+    opens: i64,
+    clicks: i64,
+    deliveries: i64,
+    sends: i64,
+    bounces: i64,
+    complaints: i64,
 }
 
 // Stats structure for issue engagement metrics
@@ -303,6 +327,7 @@ pub struct IssueRecord {
     pub metadata: Option<serde_json::Value>,
     pub template_id: Option<String>,
     pub content_type: Option<String>,
+    pub ab_test: Option<serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -341,6 +366,16 @@ pub async fn resend_issue(
     issue_id: Option<String>,
 ) -> Result<Response<Body>, Error> {
     match handle_resend_issue(event, issue_id).await {
+        Ok(response) => Ok(response),
+        Err(e) => Ok(response::format_error_response(&e)),
+    }
+}
+
+pub async fn declare_ab_winner(
+    event: Request,
+    issue_id: Option<String>,
+) -> Result<Response<Body>, Error> {
+    match handle_declare_ab_winner(event, issue_id).await {
         Ok(response) => Ok(response),
         Err(e) => Ok(response::format_error_response(&e)),
     }
@@ -414,7 +449,13 @@ async fn handle_get_issue(
         .ok()
         .flatten();
 
-    let response_data = build_issue_response(issue, stats, insights);
+    let variant_stats = if issue.ab_test.is_some() {
+        get_variant_stats(&tenant_id, &issue_id).await
+    } else {
+        Vec::new()
+    };
+
+    let response_data = build_issue_response(issue, stats, insights, variant_stats);
 
     response::format_response(200, response_data)
 }
@@ -511,6 +552,93 @@ async fn handle_resend_issue(
     )
 }
 
+async fn handle_declare_ab_winner(
+    event: Request,
+    issue_id: Option<String>,
+) -> Result<Response<Body>, AppError> {
+    let user_context = auth::get_user_context(&event)?;
+    let tenant_id = user_context
+        .tenant_id
+        .ok_or_else(|| AppError::Unauthorized("Tenant access required".to_string()))?;
+
+    let issue_id =
+        issue_id.ok_or_else(|| AppError::BadRequest("Issue ID is required".to_string()))?;
+
+    let body: DeclareWinnerRequest = serde_json::from_slice(event.body())
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
+
+    if body.variant_id != "a" && body.variant_id != "b" {
+        return Err(AppError::BadRequest(
+            "variantId must be \"a\" or \"b\"".to_string(),
+        ));
+    }
+
+    let issue = get_issue_by_id(&tenant_id, &issue_id).await?;
+    let mut ab_test = issue
+        .ab_test
+        .clone()
+        .ok_or_else(|| AppError::BadRequest("Issue has no A/B test configured".to_string()))?;
+
+    // Confirm the declared winner is one of the configured variants.
+    let variant_exists = ab_test
+        .get("variants")
+        .and_then(|v| v.as_array())
+        .map(|variants| {
+            variants.iter().any(|variant| {
+                variant.get("variantId").and_then(|v| v.as_str()) == Some(body.variant_id.as_str())
+            })
+        })
+        .unwrap_or(false);
+    if !variant_exists {
+        return Err(AppError::BadRequest(
+            "variantId is not part of this A/B test".to_string(),
+        ));
+    }
+
+    if let Some(obj) = ab_test.as_object_mut() {
+        obj.insert(
+            "winnerVariantId".to_string(),
+            serde_json::Value::String(body.variant_id.clone()),
+        );
+        obj.insert(
+            "status".to_string(),
+            serde_json::Value::String("sent".to_string()),
+        );
+    }
+
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+    let table_name = std::env::var("TABLE_NAME")
+        .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
+    let pk = format!("{}#{}", tenant_id, issue.issue_number);
+
+    ddb_client
+        .update_item()
+        .table_name(&table_name)
+        .key("pk", AttributeValue::S(pk))
+        .key("sk", AttributeValue::S("newsletter".to_string()))
+        .update_expression("SET abTest = :ab_test, updatedAt = :updated_at")
+        .expression_attribute_values(":ab_test", AttributeValue::S(ab_test.to_string()))
+        .expression_attribute_values(
+            ":updated_at",
+            AttributeValue::S(chrono::Utc::now().to_rfc3339()),
+        )
+        .send()
+        .await?;
+
+    publish_event(&tenant_id, "ISSUE_AB_WINNER_DECLARED", &issue).await?;
+
+    let updated = get_issue_by_id(&tenant_id, &issue_id).await?;
+    let stats = get_issue_stats(&tenant_id, &issue_id).await.ok();
+    let insights = get_issue_insights(&tenant_id, &issue_id)
+        .await
+        .ok()
+        .flatten();
+    let variant_stats = get_variant_stats(&tenant_id, &issue_id).await;
+
+    let response_data = build_issue_response(updated, stats, insights, variant_stats);
+    response::format_response(200, response_data)
+}
+
 async fn handle_get_trends(event: Request) -> Result<Response<Body>, AppError> {
     let user_context = auth::get_user_context(&event)?;
     let tenant_id = user_context
@@ -550,6 +678,10 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
     }
 
     validate_create_request(&body)?;
+
+    let ab_test = extract_ab_test(event.body().as_ref())?
+        .map(|value| validate_and_normalize_ab_test(&value))
+        .transpose()?;
 
     if let Some(template_id) = body.template_id.as_deref() {
         validate_template_exists(&tenant_id, template_id).await?;
@@ -612,6 +744,7 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
         issue_number,
         &body,
         normalized_scheduled_at.clone(),
+        ab_test,
     )
     .await?;
 
@@ -653,7 +786,11 @@ async fn handle_update_issue(
     let body: UpdateIssueRequest = serde_json::from_slice(event.body())
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
 
-    validate_update_request(&body)?;
+    let ab_test = extract_ab_test(event.body().as_ref())?
+        .map(|value| validate_and_normalize_ab_test(&value))
+        .transpose()?;
+
+    validate_update_request(&body, ab_test.is_some())?;
 
     // A non-empty templateId must reference an existing template; an empty
     // templateId is a request to clear the selection (handled in the update).
@@ -682,7 +819,7 @@ async fn handle_update_issue(
 
     let is_publishing = body.status.as_deref() == Some("published");
 
-    let updated = update_issue_record(&tenant_id, &issue_id, &body).await?;
+    let updated = update_issue_record(&tenant_id, &issue_id, &body, ab_test).await?;
 
     if is_publishing {
         let published_at = chrono::Utc::now().to_rfc3339();
@@ -773,6 +910,194 @@ fn validate_list_params(query: &ListIssuesQuery) -> Result<(), AppError> {
     Ok(())
 }
 
+const AB_DIMENSION_SUBJECT: &str = "subject";
+
+/// Extracts the optional `abTest` object from the raw request body. Kept out of
+/// the typed request structs so the (many) existing call sites stay untouched;
+/// serde already ignores this unknown field on the typed parse.
+fn extract_ab_test(raw_body: &[u8]) -> Result<Option<serde_json::Value>, AppError> {
+    if raw_body.is_empty() {
+        return Ok(None);
+    }
+    let value: serde_json::Value = serde_json::from_slice(raw_body)
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
+    match value.get("abTest") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(ab_test) => Ok(Some(ab_test.clone())),
+    }
+}
+
+/// Validates a caller-supplied A/B test config and returns the canonical,
+/// server-normalized object to persist: a server-generated `testId`, `status`
+/// of `pending`, a null `winnerVariantId`, defaults filled in, and only known
+/// fields retained. Phase 1 supports the `subject` dimension with exactly two
+/// variants (`a` = control, `b` = challenger).
+fn validate_and_normalize_ab_test(
+    value: &serde_json::Value,
+) -> Result<serde_json::Value, AppError> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| AppError::BadRequest("abTest must be an object".to_string()))?;
+
+    let dimension = obj
+        .get("dimension")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::BadRequest("abTest.dimension is required".to_string()))?;
+    if dimension != AB_DIMENSION_SUBJECT {
+        return Err(AppError::BadRequest(
+            "abTest.dimension must be \"subject\"".to_string(),
+        ));
+    }
+
+    let variants = obj
+        .get("variants")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| AppError::BadRequest("abTest.variants is required".to_string()))?;
+    if variants.len() != 2 {
+        return Err(AppError::BadRequest(
+            "abTest.variants must contain exactly 2 variants".to_string(),
+        ));
+    }
+
+    let mut normalized_variants = Vec::with_capacity(2);
+    let mut seen_ids: Vec<String> = Vec::new();
+    for variant in variants {
+        let variant_id = variant
+            .get("variantId")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                AppError::BadRequest("each abTest variant requires a variantId".to_string())
+            })?;
+        if variant_id != "a" && variant_id != "b" {
+            return Err(AppError::BadRequest(
+                "abTest variantId must be \"a\" or \"b\"".to_string(),
+            ));
+        }
+        if seen_ids.iter().any(|id| id == variant_id) {
+            return Err(AppError::BadRequest(
+                "abTest variant ids must be unique".to_string(),
+            ));
+        }
+        seen_ids.push(variant_id.to_string());
+
+        let subject = variant
+            .get("subject")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                AppError::BadRequest("each abTest variant requires a subject".to_string())
+            })?;
+        if subject.trim().is_empty() {
+            return Err(AppError::BadRequest(
+                "abTest variant subject cannot be empty".to_string(),
+            ));
+        }
+        if subject.len() > 200 {
+            return Err(AppError::BadRequest(
+                "abTest variant subject must not exceed 200 characters".to_string(),
+            ));
+        }
+
+        normalized_variants.push(serde_json::json!({
+            "variantId": variant_id,
+            "subject": subject,
+        }));
+    }
+    if !seen_ids.iter().any(|id| id == "a") || !seen_ids.iter().any(|id| id == "b") {
+        return Err(AppError::BadRequest(
+            "abTest variants must include ids \"a\" and \"b\"".to_string(),
+        ));
+    }
+
+    let win_metric = match obj.get("winMetric") {
+        None | Some(serde_json::Value::Null) => "openRate".to_string(),
+        Some(v) => {
+            let s = v.as_str().ok_or_else(|| {
+                AppError::BadRequest("abTest.winMetric must be a string".to_string())
+            })?;
+            if s != "openRate" && s != "clickRate" {
+                return Err(AppError::BadRequest(
+                    "abTest.winMetric must be \"openRate\" or \"clickRate\"".to_string(),
+                ));
+            }
+            s.to_string()
+        }
+    };
+
+    let confidence = match obj.get("confidence") {
+        None | Some(serde_json::Value::Null) => 0.95,
+        Some(v) => {
+            let n = v.as_f64().ok_or_else(|| {
+                AppError::BadRequest("abTest.confidence must be a number".to_string())
+            })?;
+            if !(0.80..=0.99).contains(&n) {
+                return Err(AppError::BadRequest(
+                    "abTest.confidence must be between 0.80 and 0.99".to_string(),
+                ));
+            }
+            n
+        }
+    };
+
+    let min_sample = match obj.get("minSamplePerVariant") {
+        None | Some(serde_json::Value::Null) => 500,
+        Some(v) => {
+            let n = v.as_i64().ok_or_else(|| {
+                AppError::BadRequest("abTest.minSamplePerVariant must be an integer".to_string())
+            })?;
+            if n < 1 {
+                return Err(AppError::BadRequest(
+                    "abTest.minSamplePerVariant must be >= 1".to_string(),
+                ));
+            }
+            n
+        }
+    };
+
+    let test_fraction = match obj.get("testFraction") {
+        None | Some(serde_json::Value::Null) => 0.2,
+        Some(v) => {
+            let n = v.as_f64().ok_or_else(|| {
+                AppError::BadRequest("abTest.testFraction must be a number".to_string())
+            })?;
+            if n <= 0.0 || n > 0.5 {
+                return Err(AppError::BadRequest(
+                    "abTest.testFraction must be greater than 0 and at most 0.5".to_string(),
+                ));
+            }
+            n
+        }
+    };
+
+    let evaluate_after_minutes = match obj.get("evaluateAfterMinutes") {
+        None | Some(serde_json::Value::Null) => 240,
+        Some(v) => {
+            let n = v.as_i64().ok_or_else(|| {
+                AppError::BadRequest("abTest.evaluateAfterMinutes must be an integer".to_string())
+            })?;
+            if n < 1 {
+                return Err(AppError::BadRequest(
+                    "abTest.evaluateAfterMinutes must be >= 1".to_string(),
+                ));
+            }
+            n
+        }
+    };
+
+    Ok(serde_json::json!({
+        "testId": ulid::Ulid::new().to_string(),
+        "dimension": AB_DIMENSION_SUBJECT,
+        "variants": normalized_variants,
+        "winMetric": win_metric,
+        "confidence": confidence,
+        "minSamplePerVariant": min_sample,
+        "testFraction": test_fraction,
+        "evaluateAfterMinutes": evaluate_after_minutes,
+        "status": "pending",
+        "winnerVariantId": serde_json::Value::Null,
+        "evaluation": serde_json::Value::Null,
+    }))
+}
+
 fn validate_create_request(body: &CreateIssueRequest) -> Result<(), AppError> {
     if let Some(issue_number) = body.issue_number {
         if issue_number < 1 {
@@ -824,7 +1149,7 @@ fn validate_json_content(content: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-fn validate_update_request(body: &UpdateIssueRequest) -> Result<(), AppError> {
+fn validate_update_request(body: &UpdateIssueRequest, has_ab_test: bool) -> Result<(), AppError> {
     if body.subject.is_none()
         && body.content.is_none()
         && body.scheduled_at.is_none()
@@ -832,6 +1157,7 @@ fn validate_update_request(body: &UpdateIssueRequest) -> Result<(), AppError> {
         && body.status.is_none()
         && body.template_id.is_none()
         && body.content_type.is_none()
+        && !has_ab_test
     {
         return Err(AppError::BadRequest(
             "At least one field must be provided for update".to_string(),
@@ -1150,6 +1476,15 @@ fn parse_issue_record(item: &HashMap<String, AttributeValue>) -> Result<IssueRec
         .and_then(|v| v.as_s().ok())
         .map(|s| s.to_string());
 
+    // abTest is persisted as a JSON string (mirroring metadata).
+    let ab_test = item.get("abTest").and_then(|v| {
+        if let Ok(s) = v.as_s() {
+            serde_json::from_str(s).ok()
+        } else {
+            None
+        }
+    });
+
     Ok(IssueRecord {
         pk,
         sk,
@@ -1166,6 +1501,7 @@ fn parse_issue_record(item: &HashMap<String, AttributeValue>) -> Result<IssueRec
         metadata,
         template_id,
         content_type,
+        ab_test,
     })
 }
 
@@ -1828,6 +2164,7 @@ async fn create_issue_record(
     issue_number: i32,
     body: &CreateIssueRequest,
     scheduled_at: Option<String>,
+    ab_test: Option<serde_json::Value>,
 ) -> Result<CreateIssueResponse, AppError> {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
@@ -1885,6 +2222,12 @@ async fn create_issue_record(
         );
     }
 
+    // abTest is persisted as a JSON string (mirroring metadata) so the publish
+    // pipeline and GET endpoint can read it back without a typed schema.
+    if let Some(ab_test) = &ab_test {
+        item.insert("abTest".to_string(), AttributeValue::S(ab_test.to_string()));
+    }
+
     ddb_client
         .put_item()
         .table_name(&table_name)
@@ -1909,6 +2252,7 @@ async fn update_issue_record(
     tenant_id: &str,
     issue_id: &str,
     body: &UpdateIssueRequest,
+    ab_test: Option<serde_json::Value>,
 ) -> Result<GetIssueResponse, AppError> {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
@@ -1993,6 +2337,14 @@ async fn update_issue_record(
         }
     }
 
+    if let Some(ab_test) = &ab_test {
+        update_expression_parts.push("abTest = :ab_test".to_string());
+        expression_attribute_values.insert(
+            ":ab_test".to_string(),
+            AttributeValue::S(ab_test.to_string()),
+        );
+    }
+
     let mut update_expression = update_expression_parts.join(", ");
     if !remove_expression_parts.is_empty() {
         update_expression.push_str(" REMOVE ");
@@ -2026,7 +2378,18 @@ async fn update_issue_record(
 
     let insights = get_issue_insights(tenant_id, issue_id).await.ok().flatten();
 
-    Ok(build_issue_response(updated_issue, stats, insights))
+    let variant_stats = if updated_issue.ab_test.is_some() {
+        get_variant_stats(tenant_id, issue_id).await
+    } else {
+        Vec::new()
+    };
+
+    Ok(build_issue_response(
+        updated_issue,
+        stats,
+        insights,
+        variant_stats,
+    ))
 }
 
 async fn delete_issue_records(tenant_id: &str, issue_id: &str) -> Result<(), AppError> {
@@ -2213,6 +2576,7 @@ fn build_issue_response(
     issue: IssueRecord,
     stats: Option<IssueStats>,
     insights: Option<IssueInsights>,
+    variant_stats: Vec<VariantStats>,
 ) -> GetIssueResponse {
     GetIssueResponse {
         id: issue.issue_number.to_string(),
@@ -2230,14 +2594,70 @@ fn build_issue_response(
         stats,
         insights: insights.as_ref().and_then(|data| data.insights.clone()),
         insights_v2: insights.and_then(|data| data.insights_v2),
+        ab_test: issue.ab_test,
+        variant_stats: if variant_stats.is_empty() {
+            None
+        } else {
+            Some(variant_stats)
+        },
     }
+}
+
+/// Reads the per-variant engagement counters (sk "stats#v#a" / "stats#v#b") for
+/// an issue. Missing variant records are skipped; errors are swallowed so a
+/// stats read never fails the issue fetch.
+async fn get_variant_stats(tenant_id: &str, issue_id: &str) -> Vec<VariantStats> {
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+    let Ok(table_name) = std::env::var("TABLE_NAME") else {
+        return Vec::new();
+    };
+    let Ok(issue_number) = issue_id.parse::<i32>() else {
+        return Vec::new();
+    };
+    let pk = format!("{}#{}", tenant_id, issue_number);
+
+    let mut out = Vec::new();
+    for variant_id in ["a", "b"] {
+        let result = ddb_client
+            .get_item()
+            .table_name(&table_name)
+            .key("pk", AttributeValue::S(pk.clone()))
+            .key("sk", AttributeValue::S(format!("stats#v#{}", variant_id)))
+            .send()
+            .await;
+
+        if let Ok(output) = result {
+            if let Some(item) = output.item() {
+                let counter = |name: &str| -> i64 {
+                    item.get(name)
+                        .and_then(|v| v.as_n().ok())
+                        .and_then(|s| s.parse::<i64>().ok())
+                        .unwrap_or(0)
+                };
+                out.push(VariantStats {
+                    variant_id: variant_id.to_string(),
+                    opens: counter("opens"),
+                    clicks: counter("clicks"),
+                    deliveries: counter("deliveries"),
+                    sends: counter("sends"),
+                    bounces: counter("bounces"),
+                    complaints: counter("complaints"),
+                });
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn create_request(content: &str, content_type: Option<&str>, template: Option<&str>) -> CreateIssueRequest {
+    fn create_request(
+        content: &str,
+        content_type: Option<&str>,
+        template: Option<&str>,
+    ) -> CreateIssueRequest {
         CreateIssueRequest {
             issue_number: None,
             subject: "A subject".to_string(),
@@ -2303,7 +2723,11 @@ mod tests {
 
     #[test]
     fn test_validate_create_json_happy_path() {
-        let body = create_request("{\"metadata\": {\"title\": \"x\"}}", Some("json"), Some("tmpl-1"));
+        let body = create_request(
+            "{\"metadata\": {\"title\": \"x\"}}",
+            Some("json"),
+            Some("tmpl-1"),
+        );
         assert!(validate_create_request(&body).is_ok());
     }
 
@@ -2318,14 +2742,95 @@ mod tests {
             template_id: None,
             content_type: Some("json".to_string()),
         };
-        assert!(validate_update_request(&body).is_err());
+        assert!(validate_update_request(&body, false).is_err());
+    }
+
+    fn valid_ab_test() -> serde_json::Value {
+        serde_json::json!({
+            "dimension": "subject",
+            "variants": [
+                { "variantId": "a", "subject": "Control subject" },
+                { "variantId": "b", "subject": "Challenger subject" }
+            ]
+        })
+    }
+
+    #[test]
+    fn test_ab_test_normalizes_defaults_and_generated_fields() {
+        let normalized = validate_and_normalize_ab_test(&valid_ab_test()).unwrap();
+        assert_eq!(normalized["dimension"], "subject");
+        assert_eq!(normalized["status"], "pending");
+        assert!(normalized["winnerVariantId"].is_null());
+        assert_eq!(normalized["winMetric"], "openRate");
+        assert_eq!(normalized["confidence"], 0.95);
+        assert_eq!(normalized["minSamplePerVariant"], 500);
+        assert_eq!(normalized["testFraction"], 0.2);
+        assert!(normalized["testId"].as_str().is_some_and(|s| !s.is_empty()));
+        assert_eq!(normalized["variants"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_ab_test_rejects_non_subject_dimension() {
+        let mut ab = valid_ab_test();
+        ab["dimension"] = serde_json::json!("sendTime");
+        assert!(validate_and_normalize_ab_test(&ab).is_err());
+    }
+
+    #[test]
+    fn test_ab_test_requires_exactly_two_variants() {
+        let mut ab = valid_ab_test();
+        ab["variants"] = serde_json::json!([{ "variantId": "a", "subject": "only one" }]);
+        assert!(validate_and_normalize_ab_test(&ab).is_err());
+    }
+
+    #[test]
+    fn test_ab_test_requires_ids_a_and_b() {
+        let mut ab = valid_ab_test();
+        ab["variants"] = serde_json::json!([
+            { "variantId": "a", "subject": "one" },
+            { "variantId": "a", "subject": "dup" }
+        ]);
+        assert!(validate_and_normalize_ab_test(&ab).is_err());
+    }
+
+    #[test]
+    fn test_ab_test_rejects_empty_variant_subject() {
+        let mut ab = valid_ab_test();
+        ab["variants"][1]["subject"] = serde_json::json!("   ");
+        assert!(validate_and_normalize_ab_test(&ab).is_err());
+    }
+
+    #[test]
+    fn test_ab_test_rejects_out_of_range_confidence_and_fraction() {
+        let mut bad_conf = valid_ab_test();
+        bad_conf["confidence"] = serde_json::json!(0.5);
+        assert!(validate_and_normalize_ab_test(&bad_conf).is_err());
+
+        let mut bad_fraction = valid_ab_test();
+        bad_fraction["testFraction"] = serde_json::json!(0.8);
+        assert!(validate_and_normalize_ab_test(&bad_fraction).is_err());
+    }
+
+    #[test]
+    fn test_extract_ab_test_absent_and_present() {
+        assert!(extract_ab_test(b"{\"subject\":\"x\"}").unwrap().is_none());
+        assert!(extract_ab_test(b"{\"abTest\":null}").unwrap().is_none());
+        assert!(extract_ab_test(b"").unwrap().is_none());
+        let present = extract_ab_test(b"{\"abTest\":{\"dimension\":\"subject\"}}").unwrap();
+        assert!(present.is_some());
     }
 
     #[test]
     fn test_parse_issue_record_reads_content_type() {
         let mut item = HashMap::new();
-        item.insert("pk".to_string(), AttributeValue::S("tenant-1#5".to_string()));
-        item.insert("sk".to_string(), AttributeValue::S("newsletter".to_string()));
+        item.insert(
+            "pk".to_string(),
+            AttributeValue::S("tenant-1#5".to_string()),
+        );
+        item.insert(
+            "sk".to_string(),
+            AttributeValue::S("newsletter".to_string()),
+        );
         item.insert(
             "GSI1PK".to_string(),
             AttributeValue::S("tenant-1#newsletter".to_string()),
@@ -2345,7 +2850,10 @@ mod tests {
             "updatedAt".to_string(),
             AttributeValue::S("2024-01-15T10:30:00Z".to_string()),
         );
-        item.insert("contentType".to_string(), AttributeValue::S("json".to_string()));
+        item.insert(
+            "contentType".to_string(),
+            AttributeValue::S("json".to_string()),
+        );
 
         let issue = parse_issue_record(&item).unwrap();
         assert_eq!(issue.content_type, Some("json".to_string()));
@@ -2514,7 +3022,10 @@ mod tests {
             "subscribers".to_string(),
             AttributeValue::N("480".to_string()),
         );
-        item.insert("subscribes".to_string(), AttributeValue::N("12".to_string()));
+        item.insert(
+            "subscribes".to_string(),
+            AttributeValue::N("12".to_string()),
+        );
         item.insert(
             "unsubscribes".to_string(),
             AttributeValue::N("3".to_string()),
@@ -2675,6 +3186,7 @@ mod tests {
             metadata: None,
             template_id: None,
             content_type: None,
+            ab_test: None,
         };
 
         let stats = Some(IssueStats {
@@ -2691,7 +3203,7 @@ mod tests {
             analytics: None,
         });
 
-        let response = build_issue_response(issue, stats, None);
+        let response = build_issue_response(issue, stats, None, Vec::new());
 
         assert_eq!(response.id, "42");
         assert_eq!(response.issue_number, 42);
@@ -2719,9 +3231,10 @@ mod tests {
             metadata: None,
             template_id: None,
             content_type: None,
+            ab_test: None,
         };
 
-        let response = build_issue_response(issue, None, None);
+        let response = build_issue_response(issue, None, None, Vec::new());
 
         assert_eq!(response.id, "1");
         assert_eq!(response.issue_number, 1);
@@ -2813,7 +3326,7 @@ mod tests {
             content_type: None,
         };
 
-        let result = validate_update_request(&request);
+        let result = validate_update_request(&request, false);
         assert!(result.is_ok());
     }
 
@@ -2829,7 +3342,7 @@ mod tests {
             content_type: None,
         };
 
-        let result = validate_update_request(&request);
+        let result = validate_update_request(&request, false);
         assert!(result.is_ok());
     }
 
@@ -2845,7 +3358,7 @@ mod tests {
             content_type: None,
         };
 
-        let result = validate_update_request(&request);
+        let result = validate_update_request(&request, false);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), AppError::BadRequest(_)));
     }
@@ -2862,7 +3375,7 @@ mod tests {
             content_type: None,
         };
 
-        let result = validate_update_request(&request);
+        let result = validate_update_request(&request, false);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), AppError::BadRequest(_)));
     }
@@ -2879,7 +3392,7 @@ mod tests {
             content_type: None,
         };
 
-        let result = validate_update_request(&request);
+        let result = validate_update_request(&request, false);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), AppError::BadRequest(_)));
     }
@@ -2896,7 +3409,7 @@ mod tests {
             content_type: None,
         };
 
-        let result = validate_update_request(&request);
+        let result = validate_update_request(&request, false);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), AppError::BadRequest(_)));
     }
@@ -2919,6 +3432,7 @@ mod tests {
             metadata: None,
             template_id: None,
             content_type: None,
+            ab_test: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -2943,6 +3457,7 @@ mod tests {
             metadata: None,
             template_id: None,
             content_type: None,
+            ab_test: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -2968,6 +3483,7 @@ mod tests {
             metadata: None,
             template_id: None,
             content_type: None,
+            ab_test: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -2993,6 +3509,7 @@ mod tests {
             metadata: None,
             template_id: None,
             content_type: None,
+            ab_test: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -3017,6 +3534,7 @@ mod tests {
             metadata: None,
             template_id: None,
             content_type: None,
+            ab_test: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -3042,6 +3560,7 @@ mod tests {
             metadata: None,
             template_id: None,
             content_type: None,
+            ab_test: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -3067,6 +3586,7 @@ mod tests {
             metadata: None,
             template_id: None,
             content_type: None,
+            ab_test: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -3449,7 +3969,7 @@ mod tests {
             content_type: None,
             };
 
-            let result = validate_update_request(&request);
+            let result = validate_update_request(&request, false);
             prop_assert!(result.is_ok());
 
             if let Some(subject) = &request.subject {
@@ -3624,6 +4144,8 @@ mod tests {
             insights_v2: None,
             template_id: None,
             content_type: None,
+            ab_test: None,
+            variant_stats: None,
         };
 
         let result = publish_event(tenant_id, event_type, &data).await;
@@ -3650,6 +4172,7 @@ mod tests {
             metadata: None,
             template_id: None,
             content_type: None,
+            ab_test: None,
         };
 
         let result = publish_event(tenant_id, event_type, &data).await;

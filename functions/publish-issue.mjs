@@ -26,13 +26,20 @@ export const handler = async (state) => {
       const tenant = await getTenant(state.tenantId);
       const publishedAt = new Date().toISOString();
       await setupIssueStats(tenant, state.data.metadata.number, state.subject, publishedAt);
+
+      // A/B config is persisted on the issue record by the API. Reading it here
+      // (rather than threading it through the state machine) keeps every state
+      // machine entry point unchanged and works for non-A/B issues by default.
+      const abTest = await getIssueAbTest(state.tenantId, state.data.metadata.number);
+
       await sendEmail({
         subject: state.subject,
         html,
         to: { list: tenant.list },
         sendAt: state.sendAtDate,
         referenceNumber: `${tenant.pk}_${state.data.metadata.number}`,
-        tenantId: state.tenantId
+        tenantId: state.tenantId,
+        abTest: abTest?.dimension === 'subject' ? abTest : undefined
       });
 
       await publishIssueEvent(
@@ -114,6 +121,41 @@ const getTemplateContent = async (tenantId, templateId) => {
 };
 
 /**
+ * Loads the persisted A/B test configuration for an issue, if any.
+ * The API stores `abTest` as a JSON string on the issue record (sk "newsletter"),
+ * mirroring how `metadata` is persisted.
+ * @param {string} tenantId - Tenant identifier.
+ * @param {number|string} issueNumber - Issue number.
+ * @returns {Promise<Object|null>} Parsed abTest config, or null when not set/invalid.
+ */
+const getIssueAbTest = async (tenantId, issueNumber) => {
+  try {
+    const result = await ddb.send(new GetItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({
+        pk: `${tenantId}#${issueNumber}`,
+        sk: 'newsletter'
+      }),
+      ProjectionExpression: 'abTest'
+    }));
+
+    if (!result.Item) {
+      return null;
+    }
+
+    const record = unmarshall(result.Item);
+    if (!record.abTest) {
+      return null;
+    }
+
+    return typeof record.abTest === 'string' ? JSON.parse(record.abTest) : record.abTest;
+  } catch (err) {
+    console.error('Failed to load A/B test config for issue', { tenantId, issueNumber, error: err.message });
+    return null;
+  }
+};
+
+/**
  * Loads all snippets for a tenant via GSI1.
  * @param {string} tenantId - Tenant identifier.
  * @returns {Promise<Array<{name: string, content: string}>>} List of snippets.
@@ -140,6 +182,7 @@ const getSnippets = async (tenantId) => {
  * @param {string} [params.to.email] - Individual recipient email address
  * @param {string} [params.to.list] - SES list name for bulk sending
  * @param {string} [params.sendAt] - ISO date string for scheduled sending
+ * @param {Object} [params.abTest] - Optional A/B test configuration (variants, testFraction, evaluateAfterMinutes, ...)
  */
 const sendEmail = async (params) => {
   await eventBridge.send(new PutEventsCommand({
@@ -156,6 +199,7 @@ const sendEmail = async (params) => {
         ...params.sendAt && { sendAt: params.sendAt },
         ...params.referenceNumber && { referenceNumber: params.referenceNumber },
         ...params.tenantId && { tenantId: params.tenantId },
+        ...params.abTest && { abTest: params.abTest },
         replacements: {
           emailAddress: "__EMAIL__",
           emailAddressHash: "__EMAIL_HASH__"

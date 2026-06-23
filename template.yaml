@@ -2124,6 +2124,9 @@ Resources:
               Action: iam:PassRole
               Resource: !GetAtt SchedulerExecutionRole.Arn
             - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+            - Effect: Allow
               Action:
                 - dynamodb:UpdateItem
                 - dynamodb:Query

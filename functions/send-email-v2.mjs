@@ -1,5 +1,6 @@
 import { SESv2Client, SendEmailCommand } from "@aws-sdk/client-sesv2";
 import { SchedulerClient, CreateScheduleCommand } from "@aws-sdk/client-scheduler";
+import { EventBridgeClient, PutEventsCommand } from "@aws-sdk/client-eventbridge";
 import { DynamoDBClient, QueryCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { encrypt, sendWithRetry } from './utils/helpers.mjs';
@@ -14,6 +15,7 @@ const KEY_PATTERNS = {
 
 const ses = new SESv2Client();
 const scheduler = new SchedulerClient();
+const eventBridge = new EventBridgeClient();
 const ddb = new DynamoDBClient();
 
 const tpsLimit = parseInt(process.env.SES_TPS_LIMIT || "14", 10);
@@ -391,7 +393,7 @@ const updateSubscriberTrackingPhase = async (tenantId, sentRecipients, issueIden
  * @param {string} [params.from] - Optional sender email
  * @param {Object} params.to - Recipient config ({ list })
  */
-const scheduleAbEvaluation = async ({ tenantId, referenceNumber, abTest, html, replacements, from, to }) => {
+const scheduleAbEvaluation = async ({ tenantId, referenceNumber, abTest, subject, html, replacements, from, to }) => {
   if (!referenceNumber) {
     console.warn('[A/B] Skipping evaluation schedule - missing referenceNumber');
     return;
@@ -399,7 +401,15 @@ const scheduleAbEvaluation = async ({ tenantId, referenceNumber, abTest, html, r
 
   const evaluateAfterMinutes = typeof abTest.evaluateAfterMinutes === 'number' ? abTest.evaluateAfterMinutes : 240;
   const issueNumber = referenceNumber.slice(referenceNumber.lastIndexOf('_') + 1);
-  const evalAt = new Date(Date.now() + evaluateAfterMinutes * 60 * 1000);
+  // For send-time tests the variants are delivered at different times, so the
+  // evaluation window starts after the LAST candidate send time, not now.
+  const candidateTimes = abTest.dimension === 'sendTime'
+    ? (abTest.variants || [])
+      .map(variant => new Date(variant.sendAt).getTime())
+      .filter(time => !Number.isNaN(time))
+    : [];
+  const baseMs = Math.max(Date.now(), ...candidateTimes);
+  const evalAt = new Date(baseMs + evaluateAfterMinutes * 60 * 1000);
   const scheduleName = `AB-EVAL-${referenceNumber}-${Date.now()}`.replace(/[^0-9a-zA-Z-_.]/g, '-').slice(0, 64);
 
   const detail = {
@@ -407,6 +417,7 @@ const scheduleAbEvaluation = async ({ tenantId, referenceNumber, abTest, html, r
     issueNumber,
     referenceNumber,
     sendPayload: {
+      subject,
       html,
       to: { list: to.list },
       tenantId,
@@ -439,6 +450,51 @@ const scheduleAbEvaluation = async ({ tenantId, referenceNumber, abTest, html, r
   }, 'Schedule A/B winner evaluation');
 
   console.log(`[A/B] Scheduled winner evaluation at ${evalAt.toISOString()} (${evaluateAfterMinutes}m) for ${referenceNumber}`);
+};
+
+/**
+ * Fan out a send-time A/B test: emit one `Send Email v2` event per variant, each
+ * carrying a `variantFilter` and the variant's `sendAt`. The existing future-send
+ * scheduling defers each event to its send time; when it fires, the handler sends
+ * only that variant's bucket of the test sample. The subject/content is identical
+ * across variants — only the send time differs.
+ * @param {Object} params
+ * @param {Object} params.data - The original event detail (for referenceNumber).
+ * @param {string} params.subject - The shared subject line.
+ * @param {string} params.html - Rendered email HTML.
+ * @param {Object} params.to - Recipient config ({ list }).
+ * @param {string} params.tenantId
+ * @param {Object} [params.replacements]
+ * @param {string} [params.from]
+ * @param {Object} params.abTest - Normalized A/B config (dimension 'sendTime').
+ */
+const fanOutSendTimeVariants = async ({ data, subject, html, to, tenantId, replacements, from, abTest }) => {
+  for (const variant of abTest.variants) {
+    const detail = {
+      subject,
+      html,
+      to: { list: to.list },
+      tenantId,
+      referenceNumber: data.referenceNumber,
+      ...replacements && { replacements },
+      ...from && { from },
+      abTest,
+      variantFilter: variant.variantId,
+      ...variant.sendAt && { sendAt: variant.sendAt }
+    };
+
+    await sendWithRetry(async () => {
+      return await eventBridge.send(new PutEventsCommand({
+        Entries: [{
+          Source: 'newsletter-service',
+          DetailType: 'Send Email v2',
+          Detail: JSON.stringify(detail)
+        }]
+      }));
+    }, `Fan out send-time variant ${variant.variantId}`);
+
+    console.log(`[A/B] Fanned out send-time variant ${variant.variantId} at ${variant.sendAt || 'now'} for ${data.referenceNumber}`);
+  }
 };
 
 export const handler = async (event) => {
@@ -506,6 +562,24 @@ export const handler = async (event) => {
       }
     }
 
+    // Recognize a managed A/B test (subject-line or send-time dimension).
+    const abTest = (data.abTest?.dimension === 'subject' || data.abTest?.dimension === 'sendTime')
+      ? data.abTest
+      : null;
+    const variantFilter = data.variantFilter ?? null;
+
+    // Initial send-time test: don't send anything now. Defer each variant to its
+    // own send time via per-variant events, and schedule the winner evaluation.
+    // Each per-variant event re-enters this handler with `variantFilter` set.
+    if (abTest?.dimension === 'sendTime' && !variantFilter && to.list) {
+      await executePhase('A/B Send-Time Fan-Out', async () => {
+        await fanOutSendTimeVariants({ data, subject, html, to, tenantId, replacements, from, abTest });
+        await scheduleAbEvaluation({ tenantId, referenceNumber: data.referenceNumber, abTest, subject, html, replacements, from, to });
+      });
+      console.log('[EXECUTION COMPLETE] Send-time A/B test fanned out to per-variant sends');
+      return { sent: false, scheduled: true, abTest: 'sendTime', variants: abTest.variants.length };
+    }
+
     let subscribers = [];
     if (to.email) {
       const subscriber = await getSubscriberByEmail(tenantId, to.email);
@@ -537,32 +611,42 @@ export const handler = async (event) => {
     }
 
     // Phase 3: Email Sending
-    // For a managed A/B test (data.abTest), only a deterministic hold-out
-    // *sample* receives the variants now; the winner is sent to the remainder
-    // later by the evaluate-ab-winner lambda. A legacy `data.variants` payload
-    // (no hold-out) splits the whole list. Otherwise a single version is sent.
-    const abTest = data.abTest?.dimension === 'subject' ? data.abTest : null;
+    // For a managed A/B test, only a deterministic hold-out *sample* receives the
+    // variants; the winner is sent to the remainder later by evaluate-ab-winner.
+    // The sample + variant split are derived from the FULL recipient list (not
+    // the idempotency-filtered one) so the partition is identical across a
+    // send-time test's staggered per-variant sends; already-sent recipients are
+    // then filtered out per bucket. A legacy `data.variants` payload (no
+    // hold-out) splits the eligible list directly. Otherwise a single send.
     const variants = abTest?.variants ?? (Array.isArray(data.variants) ? data.variants : null);
+    const allEmails = subscribers.map(subscriber => subscriber.email);
+    const eligibleSet = new Set(emailAddresses);
     const { sentCount, sentRecipients } = await executePhase('Email Sending', async () => {
       if (variants?.length && to.list) {
         const subjectByVariant = Object.fromEntries(
           variants.map(variant => [variant.variantId, variant.subject])
         );
 
-        let testRecipients = emailAddresses;
+        let buckets;
         if (abTest) {
           const testFraction = typeof abTest.testFraction === 'number' ? abTest.testFraction : 0.2;
-          const { sample } = selectHoldoutSample(emailAddresses, data.referenceNumber, testFraction);
-          testRecipients = sample;
-          console.log(`[A/B] Hold-out test send - sample: ${sample.length}/${emailAddresses.length}, fraction: ${testFraction}`);
+          const { sample } = selectHoldoutSample(allEmails, data.referenceNumber, testFraction);
+          buckets = splitRecipients(sample, data.referenceNumber);
+          console.log(`[A/B] Test sample: ${sample.length}/${allEmails.length} (fraction ${testFraction})${variantFilter ? `, variant ${variantFilter}` : ''}`);
+        } else {
+          buckets = splitRecipients(emailAddresses, data.referenceNumber);
         }
 
-        const buckets = splitRecipients(testRecipients, data.referenceNumber);
+        // A send-time per-variant fire targets only its own bucket.
+        const variantIds = variantFilter ? [variantFilter] : Object.keys(buckets);
 
         let total = 0;
         const allRecipients = [];
-        for (const variantId of Object.keys(buckets)) {
-          const bucketRecipients = buckets[variantId];
+        for (const variantId of variantIds) {
+          let bucketRecipients = buckets[variantId] || [];
+          if (abTest) {
+            bucketRecipients = bucketRecipients.filter(email => eligibleSet.has(email));
+          }
           if (!bucketRecipients.length) {
             continue;
           }
@@ -602,10 +686,12 @@ export const handler = async (event) => {
       });
     }
 
-    // Phase 5: Schedule A/B winner evaluation (managed A/B tests only).
+    // Phase 5: Schedule A/B winner evaluation (subject-line tests only here).
     // The test sample has now been sent; schedule the evaluation that picks a
-    // winner and sends it to the hold-out remainder.
-    if (abTest && to.list) {
+    // winner and sends it to the hold-out remainder. Send-time tests schedule
+    // their evaluation up front during fan-out, and their per-variant fires
+    // (variantFilter set) must not schedule a duplicate.
+    if (abTest && to.list && !variantFilter) {
       await executePhase('Schedule A/B Evaluation', async () => {
         return await scheduleAbEvaluation({
           tenantId,

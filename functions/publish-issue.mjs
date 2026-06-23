@@ -39,7 +39,7 @@ export const handler = async (state) => {
         sendAt: state.sendAtDate,
         referenceNumber: `${tenant.pk}_${state.data.metadata.number}`,
         tenantId: state.tenantId,
-        abTest: abTest?.dimension === 'subject' ? abTest : undefined
+        abTest: (abTest?.dimension === 'subject' || abTest?.dimension === 'sendTime') ? abTest : undefined
       });
 
       await publishIssueEvent(

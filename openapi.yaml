@@ -4154,7 +4154,6 @@ components:
       type: object
       required:
         - variantId
-        - subject
       properties:
         variantId:
           type: string
@@ -4163,7 +4162,11 @@ components:
         subject:
           type: string
           maxLength: 200
-          description: Subject line used for this variant
+          description: Subject line used for this variant (used for "subject" dimension tests)
+        sendAt:
+          type: string
+          format: date-time
+          description: Absolute send time for this variant (used for "sendTime" dimension tests only)
 
     AbTest:
       type: object
@@ -4177,8 +4180,11 @@ components:
           description: Server-generated test identifier (ULID), assigned on create
         dimension:
           type: string
-          enum: [subject]
-          description: The dimension being tested. Phase 1 supports "subject" only.
+          enum: [subject, sendTime]
+          description: >-
+            The dimension being tested. "subject" runs a subject-line test where
+            variants differ by subject line; "sendTime" runs a send-time test where
+            all variants share the same subject and content but differ by send time.
         variants:
           type: array
           minItems: 2
@@ -4256,7 +4262,10 @@ components:
               type: string
               enum: [a, b]
               nullable: true
-              description: The winning variant ("a" or "b"), or null when inconclusive
+              description: >-
+                The winning variant ("a" or "b"), or null when inconclusive. For
+                send-time tests, the winning variant represents the better-performing
+                send time.
             decidedAt:
               type: string
               format: date-time

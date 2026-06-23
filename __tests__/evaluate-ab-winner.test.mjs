@@ -259,6 +259,43 @@ describe('evaluate-ab-winner', () => {
     expect(updateCalls.find((v) => v[':v'] !== undefined)).toBeUndefined();
   });
 
+  it('send-time: keeps base subject, records winning send time, applies winning time', async () => {
+    const winnerSendAt = new Date(Date.now() + 3600 * 1000).toISOString();
+    wireDdb({
+      abTest: abTestConfig({
+        dimension: 'sendTime',
+        variants: [
+          { variantId: 'a', sendAt: new Date(Date.now() + 1800 * 1000).toISOString() },
+          { variantId: 'b', sendAt: winnerSendAt }
+        ]
+      }),
+      // b's send time clearly outperforms a.
+      aStats: { opens: 200, clicks: 10, deliveries: 1000 },
+      bStats: { opens: 400, clicks: 20, deliveries: 1000 }
+    });
+
+    const event = {
+      detail: {
+        ...baseEvent.detail,
+        sendPayload: { ...baseEvent.detail.sendPayload, subject: 'Original subject' }
+      }
+    };
+
+    const result = await handler(event);
+    expect(result).toBe(true);
+
+    const persisted = getUpdateAbTest();
+    expect(persisted.status).toBe('sent');
+    expect(persisted.winnerVariantId).toBe('b');
+    expect(persisted.evaluation.winningSendAt).toBe(winnerSendAt);
+
+    const sent = getSentEmail();
+    // Send-time winner keeps the shared subject (no per-variant subject) ...
+    expect(sent.detail.subject).toBe('Original subject');
+    // ... and targets the winning send time (still in the future here).
+    expect(sent.detail.sendAt).toBe(winnerSendAt);
+  });
+
   it('guard: status already sent => no Send Email v2 and no DDB write', async () => {
     wireDdb({
       abTest: abTestConfig({ status: 'sent' }),

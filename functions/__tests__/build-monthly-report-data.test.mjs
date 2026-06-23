@@ -102,6 +102,58 @@ describe('build-monthly-report-data', () => {
     expect(reportData.bestIssue.byClicks.issueNumber).toBe(43);
   });
 
+  test('includes A/B test summaries for issues that ran a test', async () => {
+    const abItems = [
+      {
+        pk: 'tenant123#43', sk: 'stats', subject: 'Second May issue',
+        publishedAt: '2026-05-20T10:00:00.000Z', deliveries: 1100, sends: 1110,
+        opens: 700, bounces: 4, unsubscribes: 1, subscribers: 1100, clicks_total: 200,
+        analytics: {
+          abTest: {
+            dimension: 'subject',
+            winMetric: 'openRate',
+            status: 'sent',
+            winnerVariantId: 'b',
+            variants: [
+              { variantId: 'a', subject: 'Control subject', opens: 300, clicks: 50, deliveries: 550, openRate: 54.5, clickRate: 9.1 },
+              { variantId: 'b', subject: 'Challenger subject', opens: 400, clicks: 70, deliveries: 550, openRate: 72.7, clickRate: 12.7 }
+            ],
+            evaluation: { significant: true, confidence: 0.95 }
+          }
+        }
+      }
+    ];
+    mockSend = jest.fn(async (command) => {
+      const input = command.input;
+      if (input.IndexName === 'GSI1') {
+        return { Items: abItems.map((i) => marshall(i)) };
+      }
+      const pk = input.ExpressionAttributeValues[':pk'].S;
+      return { Items: (linksByIssue[pk] || []).map((l) => marshall(l)) };
+    });
+    DynamoDBClient.prototype.send = mockSend;
+
+    const { reportData } = await handler(baseInput);
+
+    expect(reportData.abTests).toHaveLength(1);
+    const test = reportData.abTests[0];
+    expect(test.issueNumber).toBe('43');
+    expect(test.dimension).toBe('subject');
+    expect(test.winnerVariantId).toBe('b');
+    expect(test.significant).toBe(true);
+    expect(test.confidence).toBe(0.95);
+    // lift = winner open rate (72.7) - control open rate (54.5)
+    expect(test.lift).toBeCloseTo(18.2, 1);
+    const winner = test.variants.find((v) => v.variantId === 'b');
+    expect(winner.isWinner).toBe(true);
+    expect(winner.label).toBe('Challenger subject');
+  });
+
+  test('omits abTests for issues without a test', async () => {
+    const { reportData } = await handler(baseInput);
+    expect(reportData.abTests).toEqual([]);
+  });
+
   test('returns hasIssues=false when no issues fall in the window', async () => {
     mockSend = jest.fn(async () => ({ Items: [] }));
     DynamoDBClient.prototype.send = mockSend;

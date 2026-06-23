@@ -33,62 +33,153 @@ export const handler = async (event) => {
       return false;
     }
 
-    // Idempotency guard: never evaluate/send a finished test twice.
+    // Fast-path idempotency: a fully-completed (or manually finalized) test.
     if (abTest.status === 'sent' || abTest.status === 'inconclusive') {
       console.log('A/B test already finalized, skipping evaluation', { issueId, status: abTest.status });
       return true;
     }
 
-    const aCounters = await getVariantCounters(issueId, 'a');
-    const bCounters = await getVariantCounters(issueId, 'b');
+    // Atomically claim the evaluation so a duplicate or concurrent delivery
+    // cannot also send the winner. abTest is stored as an opaque JSON string, so
+    // the compare-and-swap is done on a dedicated top-level `abTestStatus`
+    // attribute that mirrors the lifecycle state.
+    const claimed = await claimEvaluation(issueId);
+    if (!claimed) {
+      console.log('A/B evaluation already claimed/finalized by another invocation, skipping', { issueId });
+      return true;
+    }
 
-    const { winnerVariantId, status, evaluation } = evaluateAbResult(aCounters, bCounters, {
-      winMetric: abTest.winMetric,
-      confidence: abTest.confidence,
-      minSamplePerVariant: abTest.minSamplePerVariant
-    });
+    try {
+      const aCounters = await getVariantCounters(issueId, 'a');
+      const bCounters = await getVariantCounters(issueId, 'b');
 
-    // Inconclusive => fall back to the control (variant "a").
-    const winningVariantId = winnerVariantId ?? 'a';
-    const winningSubject = resolveSubject(abTest, winningVariantId);
+      const { winnerVariantId, status, evaluation } = evaluateAbResult(aCounters, bCounters, {
+        winMetric: abTest.winMetric,
+        confidence: abTest.confidence,
+        minSamplePerVariant: abTest.minSamplePerVariant
+      });
 
-    const updatedAbTest = {
-      ...abTest,
-      evaluation,
-      winnerVariantId: winningVariantId,
-      status
-    };
+      // Inconclusive => fall back to the control (variant "a").
+      const winningVariantId = winnerVariantId ?? 'a';
+      const winningSubject = resolveSubject(abTest, winningVariantId);
 
-    const now = new Date().toISOString();
-    await ddb.send(new UpdateItemCommand({
-      TableName: process.env.TABLE_NAME,
-      Key: marshall({ pk: issueId, sk: 'newsletter' }),
-      UpdateExpression: 'SET abTest = :v, updatedAt = :now',
-      ExpressionAttributeValues: marshall({
-        ':v': JSON.stringify(updatedAbTest),
-        ':now': now
-      })
-    }));
+      // Enqueue the winner BEFORE marking the test final. Together with the claim
+      // above this gives: exactly one invocation ever sends (no duplicate
+      // emails), and if the publish fails the claim is released so a redelivery
+      // retries instead of the test being stuck in a final state.
+      await sendWinner(sendPayload, winningSubject);
 
-    await sendWinner(sendPayload, winningSubject);
-
-    await publishIssueEvent(
-      tenantId,
-      'system',
-      EVENT_TYPES.ISSUE_AB_COMPLETED,
-      {
-        issueId,
-        issueNumber,
+      const updatedAbTest = {
+        ...abTest,
+        evaluation,
         winnerVariantId: winningVariantId,
-        status,
-        evaluation
-      }
-    );
+        status
+      };
+      await finalizeEvaluation(issueId, updatedAbTest, status);
 
-    return true;
+      await publishIssueEvent(
+        tenantId,
+        'system',
+        EVENT_TYPES.ISSUE_AB_COMPLETED,
+        {
+          issueId,
+          issueNumber,
+          winnerVariantId: winningVariantId,
+          status,
+          evaluation
+        }
+      );
+
+      return true;
+    } catch (err) {
+      // Release the claim so a redelivery can re-run the evaluation and send.
+      await releaseEvaluationClaim(issueId);
+      throw err;
+    }
   } catch (err) {
     console.error(err);
     return false;
+  }
+};
+
+// Lifecycle states (mirrored into the top-level `abTestStatus` attribute) that
+// still allow a fresh evaluation to be claimed.
+const CLAIMABLE_STATUSES = ['pending', 'testing'];
+const CLAIM_STATUS = 'evaluating';
+
+/**
+ * Atomically claims the evaluation by moving `abTestStatus` to a transient
+ * `evaluating` lock, only when it is currently unset or non-final. Returns false
+ * when another invocation already owns or finalized the evaluation.
+ * @param {string} issueId - `${tenantId}#${issueNumber}`.
+ * @returns {Promise<boolean>} true when the claim was acquired.
+ */
+const claimEvaluation = async (issueId) => {
+  try {
+    await ddb.send(new UpdateItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({ pk: issueId, sk: 'newsletter' }),
+      UpdateExpression: 'SET abTestStatus = :claim, updatedAt = :now',
+      ConditionExpression:
+        'attribute_not_exists(abTestStatus) OR abTestStatus = :pending OR abTestStatus = :testing',
+      ExpressionAttributeValues: marshall({
+        ':claim': CLAIM_STATUS,
+        ':pending': CLAIMABLE_STATUSES[0],
+        ':testing': CLAIMABLE_STATUSES[1],
+        ':now': new Date().toISOString()
+      })
+    }));
+    return true;
+  } catch (err) {
+    if (err.name === 'ConditionalCheckFailedException') {
+      return false;
+    }
+    throw err;
+  }
+};
+
+/**
+ * Persists the final evaluation result and the matching `abTestStatus`.
+ * @param {string} issueId - `${tenantId}#${issueNumber}`.
+ * @param {Object} updatedAbTest - The abTest config with evaluation/winner/status.
+ * @param {string} status - Final status ('sent' | 'inconclusive').
+ */
+const finalizeEvaluation = async (issueId, updatedAbTest, status) => {
+  await ddb.send(new UpdateItemCommand({
+    TableName: process.env.TABLE_NAME,
+    Key: marshall({ pk: issueId, sk: 'newsletter' }),
+    UpdateExpression: 'SET abTest = :v, abTestStatus = :status, updatedAt = :now',
+    ExpressionAttributeValues: marshall({
+      ':v': JSON.stringify(updatedAbTest),
+      ':status': status,
+      ':now': new Date().toISOString()
+    })
+  }));
+};
+
+/**
+ * Releases a held evaluation claim back to a claimable state so a redelivery can
+ * retry. Conditioned on the claim still being held to avoid clobbering a
+ * concurrent finalize. Best-effort: failures are logged, not thrown.
+ * @param {string} issueId - `${tenantId}#${issueNumber}`.
+ */
+const releaseEvaluationClaim = async (issueId) => {
+  try {
+    await ddb.send(new UpdateItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({ pk: issueId, sk: 'newsletter' }),
+      UpdateExpression: 'SET abTestStatus = :testing, updatedAt = :now',
+      ConditionExpression: 'abTestStatus = :claim',
+      ExpressionAttributeValues: marshall({
+        ':testing': CLAIMABLE_STATUSES[1],
+        ':claim': CLAIM_STATUS,
+        ':now': new Date().toISOString()
+      })
+    }));
+  } catch (err) {
+    if (err.name !== 'ConditionalCheckFailedException') {
+      console.error('Failed to release A/B evaluation claim', { issueId, error: err.message });
+    }
   }
 };
 

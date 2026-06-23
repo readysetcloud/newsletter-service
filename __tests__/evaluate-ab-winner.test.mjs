@@ -116,7 +116,13 @@ const getSentEmail = () => {
 };
 
 const getUpdateAbTest = () => {
-  const call = ddbSend.mock.calls.find(([cmd]) => cmd.__type === 'UpdateItem');
+  // The finalize write carries the serialized abTest under ":v"; the claim write
+  // does not, so skip it.
+  const call = ddbSend.mock.calls.find(([cmd]) => {
+    if (cmd.__type !== 'UpdateItem') return false;
+    const values = unmarshall(cmd.ExpressionAttributeValues);
+    return values[':v'] !== undefined;
+  });
   expect(call).toBeDefined();
   const values = unmarshall(call[0].ExpressionAttributeValues);
   return JSON.parse(values[':v']);
@@ -185,6 +191,72 @@ describe('evaluate-ab-winner', () => {
     expect(eventType).toBe('ISSUE_AB_COMPLETED');
     expect(data.status).toBe('inconclusive');
     expect(data.winnerVariantId).toBe('a');
+  });
+
+  it('claim race: a lost compare-and-swap skips the send and finalize', async () => {
+    // GetItem(newsletter) returns a non-final test, but the claim UpdateItem
+    // loses the CAS (another invocation already claimed/finalized).
+    ddbSend.mockImplementation(async (cmd) => {
+      if (cmd.__type === 'GetItem') {
+        const sk = unmarshall(cmd.Key).sk;
+        if (sk === 'newsletter') {
+          return { Item: marshall({ abTest: JSON.stringify(abTestConfig()) }) };
+        }
+        return { Item: null };
+      }
+      if (cmd.__type === 'UpdateItem') {
+        const err = new Error('The conditional request failed');
+        err.name = 'ConditionalCheckFailedException';
+        throw err;
+      }
+      return {};
+    });
+
+    const result = await handler(baseEvent);
+    expect(result).toBe(true);
+
+    // No winner send, no finalize write, no completion event.
+    expect(getSentEmail()).toBeNull();
+    const finalizeCall = ddbSend.mock.calls.find(([cmd]) => {
+      if (cmd.__type !== 'UpdateItem') return false;
+      return unmarshall(cmd.ExpressionAttributeValues)[':v'] !== undefined;
+    });
+    expect(finalizeCall).toBeUndefined();
+    expect(publishIssueEvent).not.toHaveBeenCalled();
+  });
+
+  it('releases the claim and rethrows when the winner send fails', async () => {
+    const updateCalls = [];
+    ddbSend.mockImplementation(async (cmd) => {
+      if (cmd.__type === 'GetItem') {
+        const sk = unmarshall(cmd.Key).sk;
+        if (sk === 'newsletter') {
+          return { Item: marshall({ abTest: JSON.stringify(abTestConfig()) }) };
+        }
+        if (sk === 'stats#v#a') return { Item: marshall({ opens: 200, clicks: 10, deliveries: 1000 }) };
+        if (sk === 'stats#v#b') return { Item: marshall({ opens: 400, clicks: 20, deliveries: 1000 }) };
+        return { Item: null };
+      }
+      if (cmd.__type === 'UpdateItem') {
+        updateCalls.push(unmarshall(cmd.ExpressionAttributeValues));
+      }
+      return {};
+    });
+    // The winner Send Email v2 publish fails.
+    eventBridgeSend.mockRejectedValueOnce(new Error('EventBridge unavailable'));
+
+    const result = await handler(baseEvent);
+    // Handler swallows the error (returns false) after rolling back the claim.
+    expect(result).toBe(false);
+
+    // Claim was acquired (evaluating, has the :pending CAS operand) and then
+    // released back to a claimable state (no :pending operand); no finalize
+    // (":v") write happened because the send failed first.
+    const claimWrite = updateCalls.find((v) => v[':claim'] === 'evaluating' && v[':pending'] !== undefined);
+    const releaseWrite = updateCalls.find((v) => v[':claim'] === 'evaluating' && v[':pending'] === undefined && v[':testing'] === 'testing');
+    expect(claimWrite).toBeDefined();
+    expect(releaseWrite).toBeDefined();
+    expect(updateCalls.find((v) => v[':v'] !== undefined)).toBeUndefined();
   });
 
   it('guard: status already sent => no Send Email v2 and no DDB write', async () => {

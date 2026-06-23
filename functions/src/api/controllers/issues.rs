@@ -790,7 +790,10 @@ async fn handle_update_issue(
         .map(|value| validate_and_normalize_ab_test(&value))
         .transpose()?;
 
-    validate_update_request(&body, ab_test.is_some())?;
+    // An explicit `abTest: null` is a request to clear a previously-saved test.
+    let clear_ab_test = ab_test.is_none() && ab_test_explicitly_cleared(event.body().as_ref());
+
+    validate_update_request(&body, ab_test.is_some() || clear_ab_test)?;
 
     // A non-empty templateId must reference an existing template; an empty
     // templateId is a request to clear the selection (handled in the update).
@@ -819,7 +822,8 @@ async fn handle_update_issue(
 
     let is_publishing = body.status.as_deref() == Some("published");
 
-    let updated = update_issue_record(&tenant_id, &issue_id, &body, ab_test).await?;
+    let updated =
+        update_issue_record(&tenant_id, &issue_id, &body, ab_test, clear_ab_test).await?;
 
     if is_publishing {
         let published_at = chrono::Utc::now().to_rfc3339();
@@ -926,6 +930,20 @@ fn extract_ab_test(raw_body: &[u8]) -> Result<Option<serde_json::Value>, AppErro
         None | Some(serde_json::Value::Null) => Ok(None),
         Some(ab_test) => Ok(Some(ab_test.clone())),
     }
+}
+
+/// Returns true when the request body explicitly sets `abTest` to null, which on
+/// update signals the caller wants any previously-saved A/B test cleared
+/// (distinct from omitting the field, which leaves it unchanged).
+fn ab_test_explicitly_cleared(raw_body: &[u8]) -> bool {
+    if raw_body.is_empty() {
+        return false;
+    }
+    serde_json::from_slice::<serde_json::Value>(raw_body)
+        .ok()
+        .and_then(|value| value.get("abTest").cloned())
+        .map(|ab_test| ab_test.is_null())
+        .unwrap_or(false)
 }
 
 /// Validates a caller-supplied A/B test config and returns the canonical,
@@ -2289,6 +2307,7 @@ async fn update_issue_record(
     issue_id: &str,
     body: &UpdateIssueRequest,
     ab_test: Option<serde_json::Value>,
+    clear_ab_test: bool,
 ) -> Result<GetIssueResponse, AppError> {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
@@ -2379,6 +2398,11 @@ async fn update_issue_record(
             ":ab_test".to_string(),
             AttributeValue::S(ab_test.to_string()),
         );
+    } else if clear_ab_test {
+        // Disabling a previously-saved A/B test: drop both the config and its
+        // lifecycle control attribute.
+        remove_expression_parts.push("abTest".to_string());
+        remove_expression_parts.push("abTestStatus".to_string());
     }
 
     let mut update_expression = update_expression_parts.join(", ");
@@ -2906,6 +2930,16 @@ mod tests {
         assert!(extract_ab_test(b"").unwrap().is_none());
         let present = extract_ab_test(b"{\"abTest\":{\"dimension\":\"subject\"}}").unwrap();
         assert!(present.is_some());
+    }
+
+    #[test]
+    fn test_ab_test_explicitly_cleared() {
+        // Explicit null => clear requested.
+        assert!(ab_test_explicitly_cleared(b"{\"abTest\":null}"));
+        // Omitted, empty, or a real object => not a clear.
+        assert!(!ab_test_explicitly_cleared(b"{\"subject\":\"x\"}"));
+        assert!(!ab_test_explicitly_cleared(b""));
+        assert!(!ab_test_explicitly_cleared(b"{\"abTest\":{\"dimension\":\"subject\"}}"));
     }
 
     #[test]

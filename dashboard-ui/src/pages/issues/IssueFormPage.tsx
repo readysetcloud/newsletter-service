@@ -8,9 +8,15 @@ import { ConfirmationDialog } from '@/components/ui/ConfirmationDialog';
 import { MarkdownPreview } from '@/components/issues/MarkdownPreview';
 import { MarkdownWysiwygEditor } from '@/components/issues/MarkdownWysiwygEditor';
 import { TemplateJsonEditor } from '@/components/issues/TemplateJsonEditor';
+import {
+  AbTestConfig,
+  validateAbTest,
+  hasAbTestErrors,
+  type AbTestErrors,
+} from '@/components/issues/AbTestConfig';
 import { issuesService } from '@/services/issuesService';
 import { templateService } from '@/services/templateService';
-import type { Issue, CreateIssueRequest, UpdateIssueRequest, IssueContentType } from '@/types/issues';
+import type { Issue, CreateIssueRequest, UpdateIssueRequest, IssueContentType, AbTest } from '@/types/issues';
 import type { TemplateSummary } from '@/types/api';
 
 // Sentinel value used for the "Default template" option (no templateId persisted).
@@ -56,6 +62,28 @@ const validateContent = (value: string, contentType: IssueContentType): string |
   return undefined;
 };
 
+/**
+ * Builds the API-ready A/B test payload from the form's working state:
+ * converts variant send times from datetime-local to ISO and strips
+ * server-managed fields (testId/status/winner/evaluation).
+ */
+const buildAbTestRequest = (abTest: AbTest): AbTest => ({
+  dimension: abTest.dimension,
+  variants: abTest.variants.map((v) => ({
+    variantId: v.variantId,
+    ...(abTest.dimension === 'subject'
+      ? { subject: v.subject }
+      : { sendAt: v.sendAt ? new Date(v.sendAt).toISOString() : v.sendAt }),
+  })),
+  winMetric: abTest.winMetric,
+  confidence: abTest.confidence,
+  testFraction: abTest.testFraction,
+  evaluateAfterMinutes: abTest.evaluateAfterMinutes,
+  ...(abTest.minSamplePerVariant !== undefined
+    ? { minSamplePerVariant: abTest.minSamplePerVariant }
+    : {}),
+});
+
 export const IssueFormPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -72,6 +100,9 @@ export const IssueFormPage: React.FC = () => {
   });
 
   const [templates, setTemplates] = useState<TemplateSummary[]>([]);
+
+  const [abTest, setAbTest] = useState<AbTest | null>(null);
+  const [abTestErrors, setAbTestErrors] = useState<AbTestErrors>({});
 
   const [errors, setErrors] = useState<FormErrors>({});
   const [isDirty, setIsDirty] = useState(false);
@@ -98,6 +129,19 @@ export const IssueFormPage: React.FC = () => {
           templateId: issue.templateId ?? DEFAULT_TEMPLATE_VALUE,
           contentType: issue.contentType === 'json' ? 'json' : 'markdown',
         });
+
+        // Hydrate A/B test config, converting send times to datetime-local.
+        if (issue.abTest) {
+          setAbTest({
+            ...issue.abTest,
+            variants: issue.abTest.variants.map((v) => ({
+              ...v,
+              sendAt: v.sendAt ? toDatetimeLocal(v.sendAt) : v.sendAt,
+            })),
+          });
+        } else {
+          setAbTest(null);
+        }
 
         // Disable form for published/scheduled issues
         if (issue.status !== 'draft') {
@@ -182,6 +226,13 @@ export const IssueFormPage: React.FC = () => {
     }
   }, [errors]);
 
+  // Handle A/B test config changes
+  const handleAbTestChange = useCallback((next: AbTest | null) => {
+    setAbTest(next);
+    setIsDirty(true);
+    setAbTestErrors({});
+  }, []);
+
   // Validate single field
   const validateField = useCallback((field: keyof FormData, value: string): string | undefined => {
     switch (field) {
@@ -237,14 +288,19 @@ export const IssueFormPage: React.FC = () => {
 
     setErrors(newErrors);
 
+    // Validate A/B test config when enabled.
+    const abErrors = validateAbTest(abTest);
+    setAbTestErrors(abErrors);
+
     return (
       !newErrors.subject &&
       !newErrors.content &&
       !newErrors.issueNumber &&
       !newErrors.scheduledAt &&
-      !newErrors.templateId
+      !newErrors.templateId &&
+      !hasAbTestErrors(abErrors)
     );
-  }, [formData, validateField]);
+  }, [formData, validateField, abTest]);
 
   // Switch authoring mode (markdown <-> json), clearing content-specific errors.
   const handleModeChange = useCallback((mode: IssueContentType) => {
@@ -312,6 +368,14 @@ export const IssueFormPage: React.FC = () => {
         // clears a previously-saved template instead of leaving it in place.
         updateData.templateId = formData.templateId ?? DEFAULT_TEMPLATE_VALUE;
 
+        if (abTest) {
+          updateData.abTest = buildAbTestRequest(abTest);
+        } else if (existingIssue?.abTest) {
+          // The test was turned off after being saved — send an explicit null so
+          // the API clears the stored config (omitting it leaves it in place).
+          updateData.abTest = null;
+        }
+
         const response = await issuesService.updateIssue(id, updateData);
 
         if (response.success) {
@@ -370,6 +434,10 @@ export const IssueFormPage: React.FC = () => {
           createData.templateId = formData.templateId;
         }
 
+        if (abTest) {
+          createData.abTest = buildAbTestRequest(abTest);
+        }
+
         const response = await issuesService.createIssue(createData);
 
         if (response.success && response.data) {
@@ -416,7 +484,7 @@ export const IssueFormPage: React.FC = () => {
     } finally {
       setIsSubmitting(false);
     }
-  }, [validateForm, isEditMode, id, formData, navigate, addToast]);
+  }, [validateForm, isEditMode, id, formData, abTest, existingIssue, navigate, addToast]);
 
   // Handle cancel with unsaved changes confirmation
   const handleCancel = useCallback(() => {
@@ -730,6 +798,17 @@ export const IssueFormPage: React.FC = () => {
                   </p>
                 )}
               </div>
+            )}
+
+            {/* A/B Test Configuration */}
+            {!isFormDisabled && (
+              <AbTestConfig
+                value={abTest}
+                onChange={handleAbTestChange}
+                disabled={isFormDisabled}
+                errors={abTestErrors}
+                scheduledAtLocal={formData.scheduledAt}
+              />
             )}
           </div>
 

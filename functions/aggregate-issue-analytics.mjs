@@ -46,6 +46,8 @@ export const handler = async (event) => {
 
     console.log(`Aggregating analytics for ${pk}: ${events.clicks.length} clicks, ${events.opens.length} opens, ${events.bounces.length} bounces, ${events.complaints.length} complaints`);
 
+    const abTestSummary = await calculateAbTestSummary(ddb, tenantId, issueNumber);
+
     const analytics = {
       links: calculateLinkPerformance(events.clicks),
       clickDecay: calculateClickDecay(events.clicks, publishedAt),
@@ -56,7 +58,8 @@ export const handler = async (event) => {
       engagementType: await calculateEngagementType(events.clicks, ddb, tenantId),
       trafficSource: calculateTrafficSource(events.clicks),
       bounceReasons: calculateBounceReasons(events.bounces),
-      complaintDetails: formatComplaintDetails(events.complaints)
+      complaintDetails: formatComplaintDetails(events.complaints),
+      ...(abTestSummary && { abTest: abTestSummary })
     };
 
     await ddb.send(new UpdateItemCommand({
@@ -424,6 +427,81 @@ async function lookupSubscriberEngagements(ddb, tenantId, emails) {
 
   await Promise.all(lookups);
   return emailToEngagement;
+}
+
+/**
+ * Builds the A/B test summary for consolidated analytics/reports: per-variant
+ * engagement rates plus the recorded significance verdict. Returns null when the
+ * issue has no A/B test. The abTest config (with its evaluation) is read from the
+ * issue record; per-variant counters come from the `stats#v#{a,b}` records.
+ *
+ * @param {DynamoDBClient} ddb
+ * @param {string} tenantId
+ * @param {string|number} issueNumber
+ * @returns {Promise<Object|null>}
+ */
+export async function calculateAbTestSummary(ddb, tenantId, issueNumber) {
+  const pk = `${tenantId}#${issueNumber}`;
+
+  let abTest = null;
+  try {
+    const result = await ddb.send(new GetItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({ pk, sk: 'newsletter' }),
+      ProjectionExpression: 'abTest'
+    }));
+    if (result.Item) {
+      const record = unmarshall(result.Item);
+      if (record.abTest) {
+        abTest = typeof record.abTest === 'string' ? JSON.parse(record.abTest) : record.abTest;
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load abTest for analytics summary', { pk, error: err.message });
+  }
+
+  if (!abTest || !Array.isArray(abTest.variants)) {
+    return null;
+  }
+
+  const counters = {};
+  await Promise.all(['a', 'b'].map(async (variantId) => {
+    try {
+      const result = await ddb.send(new GetItemCommand({
+        TableName: process.env.TABLE_NAME,
+        Key: marshall({ pk, sk: `stats#v#${variantId}` })
+      }));
+      counters[variantId] = result.Item ? unmarshall(result.Item) : {};
+    } catch {
+      counters[variantId] = {};
+    }
+  }));
+
+  const variants = abTest.variants.map((variant) => {
+    const counter = counters[variant.variantId] || {};
+    const opens = counter.opens || 0;
+    const clicks = counter.clicks || 0;
+    const deliveries = counter.deliveries || 0;
+    return {
+      variantId: variant.variantId,
+      ...(variant.subject !== undefined && { subject: variant.subject }),
+      ...(variant.sendAt !== undefined && { sendAt: variant.sendAt }),
+      opens,
+      clicks,
+      deliveries,
+      openRate: deliveries > 0 ? (opens / deliveries) * 100 : 0,
+      clickRate: deliveries > 0 ? (clicks / deliveries) * 100 : 0
+    };
+  });
+
+  return {
+    dimension: abTest.dimension,
+    winMetric: abTest.winMetric || 'openRate',
+    status: abTest.status,
+    winnerVariantId: abTest.winnerVariantId ?? null,
+    variants,
+    evaluation: abTest.evaluation ?? null
+  };
 }
 
 export function calculateTrafficSource(clicks) {

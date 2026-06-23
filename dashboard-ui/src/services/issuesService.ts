@@ -8,6 +8,7 @@ import type {
   CreateIssueRequest,
   UpdateIssueRequest,
   ListIssuesParams,
+  VariantId,
 } from '@/types/issues';
 import type { ApiResponse } from '@/types';
 import { calculateCompositeScore } from '@/utils/analyticsCalculations';
@@ -141,6 +142,17 @@ class IssuesService {
    */
   async rebuildAnalytics(issueId: string): Promise<ApiResponse<{ status: string }>> {
     return apiClient.post(`/issues/${issueId}/analytics/rebuild`, {});
+  }
+
+  /**
+   * Manually declares the winner of an issue's A/B test, overriding automatic
+   * evaluation. Records the winner and marks the test as sent.
+   * @param issueId - Unique identifier of the issue
+   * @param variantId - The winning variant ('a' or 'b')
+   * @returns Promise resolving to the updated issue
+   */
+  async declareAbWinner(issueId: string, variantId: VariantId): Promise<ApiResponse<Issue>> {
+    return apiClient.post(`/issues/${issueId}/ab-test/declare-winner`, { variantId });
   }
 
   /**

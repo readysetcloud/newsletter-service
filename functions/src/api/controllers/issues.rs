@@ -388,6 +388,13 @@ pub async fn get_trends(event: Request) -> Result<Response<Body>, Error> {
     }
 }
 
+pub async fn get_ab_history(event: Request) -> Result<Response<Body>, Error> {
+    match handle_get_ab_history(event).await {
+        Ok(response) => Ok(response),
+        Err(e) => Ok(response::format_error_response(&e)),
+    }
+}
+
 pub async fn create_issue(event: Request) -> Result<Response<Body>, Error> {
     match handle_create_issue(event).await {
         Ok(response) => Ok(response),
@@ -651,6 +658,266 @@ async fn handle_get_trends(event: Request) -> Result<Response<Body>, AppError> {
     response::format_response(200, trends)
 }
 
+// ---------------------------------------------------------------------------
+// A/B test history (cross-issue)
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+pub struct AbHistoryVariant {
+    #[serde(rename = "variantId")]
+    variant_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subject: Option<String>,
+    #[serde(rename = "sendAt", skip_serializing_if = "Option::is_none")]
+    send_at: Option<String>,
+    opens: i64,
+    clicks: i64,
+    deliveries: i64,
+    #[serde(rename = "openRate")]
+    open_rate: f64,
+    #[serde(rename = "clickRate")]
+    click_rate: f64,
+}
+
+#[derive(Serialize)]
+pub struct AbHistoryTest {
+    #[serde(rename = "issueNumber")]
+    issue_number: i64,
+    dimension: String,
+    #[serde(rename = "winMetric")]
+    win_metric: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+    #[serde(rename = "winnerVariantId", skip_serializing_if = "Option::is_none")]
+    winner_variant_id: Option<String>,
+    significant: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    confidence: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lift: Option<f64>,
+    #[serde(rename = "decidedAt", skip_serializing_if = "Option::is_none")]
+    decided_at: Option<String>,
+    variants: Vec<AbHistoryVariant>,
+}
+
+#[derive(Serialize)]
+pub struct SendHourWins {
+    #[serde(rename = "hourUtc")]
+    hour_utc: u32,
+    wins: i64,
+}
+
+#[derive(Serialize)]
+pub struct AbHistoryAggregates {
+    #[serde(rename = "totalTests")]
+    total_tests: i64,
+    #[serde(rename = "significantTests")]
+    significant_tests: i64,
+    #[serde(rename = "subjectTests")]
+    subject_tests: i64,
+    #[serde(rename = "sendTimeTests")]
+    send_time_tests: i64,
+    #[serde(rename = "avgWinningLift", skip_serializing_if = "Option::is_none")]
+    avg_winning_lift: Option<f64>,
+    #[serde(rename = "topSendHoursUtc")]
+    top_send_hours_utc: Vec<SendHourWins>,
+}
+
+#[derive(Serialize)]
+pub struct AbHistoryResponse {
+    tests: Vec<AbHistoryTest>,
+    aggregates: AbHistoryAggregates,
+}
+
+async fn handle_get_ab_history(event: Request) -> Result<Response<Body>, AppError> {
+    let user_context = auth::get_user_context(&event)?;
+    let tenant_id = user_context
+        .tenant_id
+        .ok_or_else(|| AppError::Unauthorized("Tenant access required".to_string()))?;
+
+    let tests = query_ab_history(&tenant_id).await?;
+    let aggregates = compute_ab_history_aggregates(&tests);
+
+    response::format_response(200, AbHistoryResponse { tests, aggregates })
+}
+
+/// Reads the tenant's A/B history partition (pk = `${tenantId}#abhistory`,
+/// sk begins_with `test#`), newest issue first.
+async fn query_ab_history(tenant_id: &str) -> Result<Vec<AbHistoryTest>, AppError> {
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+    let table_name = std::env::var("TABLE_NAME")
+        .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
+
+    let pk = format!("{}#abhistory", tenant_id);
+    let mut tests = Vec::new();
+    let mut last_key: Option<HashMap<String, AttributeValue>> = None;
+
+    loop {
+        let mut builder = ddb_client
+            .query()
+            .table_name(&table_name)
+            .key_condition_expression("pk = :pk AND begins_with(sk, :prefix)")
+            .expression_attribute_values(":pk", AttributeValue::S(pk.clone()))
+            .expression_attribute_values(":prefix", AttributeValue::S("test#".to_string()))
+            .scan_index_forward(false);
+
+        if let Some(start) = last_key.take() {
+            builder = builder.set_exclusive_start_key(Some(start));
+        }
+
+        let result = builder.send().await?;
+        for item in result.items() {
+            if let Some(test) = parse_ab_history_item(item) {
+                tests.push(test);
+            }
+        }
+
+        match result.last_evaluated_key() {
+            Some(key) if !key.is_empty() => last_key = Some(key.clone()),
+            _ => break,
+        }
+    }
+
+    Ok(tests)
+}
+
+fn parse_ab_history_item(item: &HashMap<String, AttributeValue>) -> Option<AbHistoryTest> {
+    let num = |key: &str| -> Option<f64> {
+        item.get(key)
+            .and_then(|v| v.as_n().ok())
+            .and_then(|s| s.parse::<f64>().ok())
+    };
+    let text = |key: &str| -> Option<String> {
+        item.get(key)
+            .and_then(|v| v.as_s().ok())
+            .map(|s| s.to_string())
+    };
+
+    let dimension = text("dimension")?;
+    let win_metric = text("winMetric").unwrap_or_else(|| "openRate".to_string());
+    let issue_number = num("issueNumber").unwrap_or(0.0) as i64;
+
+    let variants = item
+        .get("variants")
+        .and_then(|v| v.as_l().ok())
+        .map(|list| {
+            list.iter()
+                .filter_map(|entry| entry.as_m().ok())
+                .map(parse_ab_history_variant)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    Some(AbHistoryTest {
+        issue_number,
+        dimension,
+        win_metric,
+        status: text("status"),
+        winner_variant_id: text("winnerVariantId"),
+        significant: item
+            .get("significant")
+            .and_then(|v| v.as_bool().ok())
+            .copied()
+            .unwrap_or(false),
+        confidence: num("confidence"),
+        lift: num("lift"),
+        decided_at: text("decidedAt"),
+        variants,
+    })
+}
+
+fn parse_ab_history_variant(m: &HashMap<String, AttributeValue>) -> AbHistoryVariant {
+    let num = |key: &str| -> f64 {
+        m.get(key)
+            .and_then(|v| v.as_n().ok())
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0)
+    };
+    let text = |key: &str| -> Option<String> {
+        m.get(key)
+            .and_then(|v| v.as_s().ok())
+            .map(|s| s.to_string())
+    };
+
+    AbHistoryVariant {
+        variant_id: text("variantId").unwrap_or_default(),
+        subject: text("subject"),
+        send_at: text("sendAt"),
+        opens: num("opens") as i64,
+        clicks: num("clicks") as i64,
+        deliveries: num("deliveries") as i64,
+        open_rate: num("openRate"),
+        click_rate: num("clickRate"),
+    }
+}
+
+fn compute_ab_history_aggregates(tests: &[AbHistoryTest]) -> AbHistoryAggregates {
+    use chrono::Timelike;
+
+    let total_tests = tests.len() as i64;
+    let mut significant_tests = 0i64;
+    let mut subject_tests = 0i64;
+    let mut send_time_tests = 0i64;
+    let mut lift_sum = 0.0;
+    let mut lift_count = 0i64;
+    let mut hour_wins: HashMap<u32, i64> = HashMap::new();
+
+    for test in tests {
+        if test.dimension == AB_DIMENSION_SENDTIME {
+            send_time_tests += 1;
+        } else if test.dimension == AB_DIMENSION_SUBJECT {
+            subject_tests += 1;
+        }
+
+        if test.significant {
+            significant_tests += 1;
+            if let Some(lift) = test.lift {
+                lift_sum += lift;
+                lift_count += 1;
+            }
+
+            // Tally winning send hour (UTC) for significant send-time tests.
+            if test.dimension == AB_DIMENSION_SENDTIME {
+                if let Some(winner_id) = &test.winner_variant_id {
+                    if let Some(send_at) = test
+                        .variants
+                        .iter()
+                        .find(|v| &v.variant_id == winner_id)
+                        .and_then(|v| v.send_at.as_deref())
+                    {
+                        if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(send_at) {
+                            let hour = parsed.with_timezone(&chrono::Utc).hour();
+                            *hour_wins.entry(hour).or_insert(0) += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut top_send_hours_utc: Vec<SendHourWins> = hour_wins
+        .into_iter()
+        .map(|(hour_utc, wins)| SendHourWins { hour_utc, wins })
+        .collect();
+    top_send_hours_utc.sort_by(|a, b| b.wins.cmp(&a.wins).then(a.hour_utc.cmp(&b.hour_utc)));
+    top_send_hours_utc.truncate(3);
+
+    let avg_winning_lift = if lift_count > 0 {
+        Some(((lift_sum / lift_count as f64) * 100.0).round() / 100.0)
+    } else {
+        None
+    };
+
+    AbHistoryAggregates {
+        total_tests,
+        significant_tests,
+        subject_tests,
+        send_time_tests,
+        avg_winning_lift,
+        top_send_hours_utc,
+    }
+}
+
 async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError> {
     let user_context = auth::get_user_context(&event)?;
     let tenant_id = user_context
@@ -822,8 +1089,7 @@ async fn handle_update_issue(
 
     let is_publishing = body.status.as_deref() == Some("published");
 
-    let updated =
-        update_issue_record(&tenant_id, &issue_id, &body, ab_test, clear_ab_test).await?;
+    let updated = update_issue_record(&tenant_id, &issue_id, &body, ab_test, clear_ab_test).await?;
 
     if is_publishing {
         let published_at = chrono::Utc::now().to_rfc3339();
@@ -2939,7 +3205,76 @@ mod tests {
         // Omitted, empty, or a real object => not a clear.
         assert!(!ab_test_explicitly_cleared(b"{\"subject\":\"x\"}"));
         assert!(!ab_test_explicitly_cleared(b""));
-        assert!(!ab_test_explicitly_cleared(b"{\"abTest\":{\"dimension\":\"subject\"}}"));
+        assert!(!ab_test_explicitly_cleared(
+            b"{\"abTest\":{\"dimension\":\"subject\"}}"
+        ));
+    }
+
+    fn ab_history_test(
+        dimension: &str,
+        significant: bool,
+        winner: Option<&str>,
+        lift: Option<f64>,
+        winner_send_at: Option<&str>,
+    ) -> AbHistoryTest {
+        let variants = match winner {
+            Some(id) => vec![AbHistoryVariant {
+                variant_id: id.to_string(),
+                subject: None,
+                send_at: winner_send_at.map(|s| s.to_string()),
+                opens: 0,
+                clicks: 0,
+                deliveries: 0,
+                open_rate: 0.0,
+                click_rate: 0.0,
+            }],
+            None => vec![],
+        };
+        AbHistoryTest {
+            issue_number: 1,
+            dimension: dimension.to_string(),
+            win_metric: "openRate".to_string(),
+            status: Some(if significant { "sent" } else { "inconclusive" }.to_string()),
+            winner_variant_id: winner.map(|s| s.to_string()),
+            significant,
+            confidence: Some(0.95),
+            lift,
+            decided_at: Some("2026-06-01T00:00:00Z".to_string()),
+            variants,
+        }
+    }
+
+    #[test]
+    fn test_ab_history_aggregates() {
+        let tests = vec![
+            ab_history_test("subject", true, Some("b"), Some(10.0), None),
+            ab_history_test("subject", false, None, None, None),
+            ab_history_test(
+                "sendTime",
+                true,
+                Some("a"),
+                Some(6.0),
+                Some("2026-06-01T09:30:00Z"),
+            ),
+            ab_history_test(
+                "sendTime",
+                true,
+                Some("b"),
+                Some(8.0),
+                Some("2026-06-08T09:00:00Z"),
+            ),
+        ];
+
+        let agg = compute_ab_history_aggregates(&tests);
+        assert_eq!(agg.total_tests, 4);
+        assert_eq!(agg.significant_tests, 3);
+        assert_eq!(agg.subject_tests, 2);
+        assert_eq!(agg.send_time_tests, 2);
+        // avg lift over the 3 significant winners: (10 + 6 + 8) / 3 = 8.0
+        assert_eq!(agg.avg_winning_lift, Some(8.0));
+        // Both significant send-time winners landed in the 09:00 UTC hour.
+        assert_eq!(agg.top_send_hours_utc[0].hour_utc, 9);
+        assert_eq!(agg.top_send_hours_utc[0].wins, 2);
     }
 
     #[test]

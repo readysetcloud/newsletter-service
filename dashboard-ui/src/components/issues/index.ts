@@ -62,3 +62,6 @@ export type { SubscriberMetricsPanelProps } from './SubscriberMetricsPanel';
 
 export { AbTestConfig, validateAbTest, hasAbTestErrors } from './AbTestConfig';
 export type { AbTestConfigProps, AbTestErrors } from './AbTestConfig';
+
+export { AbTestHistory } from './AbTestHistory';
+export type { AbTestHistoryProps } from './AbTestHistory';

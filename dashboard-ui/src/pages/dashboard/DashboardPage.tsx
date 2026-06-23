@@ -3,12 +3,14 @@ import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { dashboardService } from '@/services/dashboardService';
 import { profileService } from '@/services/profileService';
+import { issuesService } from '@/services/issuesService';
 import { DashboardSkeleton } from '@/components/ui/SkeletonLoader';
 import { InfoTooltip } from '@/components/ui/InfoTooltip';
 import MetricsCard from '@/components/MetricsCard';
 import { SubscriberGrowthChart } from '@/components/SubscriberGrowthChart';
 import { MiniSparkline } from '@/components/MiniSparkline';
 import type { TrendsData, UserProfile, TrendComparison } from '@/types';
+import type { AbHistoryResponse } from '@/types/issues';
 import { useAuth } from '@/contexts/AuthContext';
 import { calculatePercentageDifference, calculateHealthStatus } from '@/utils/analyticsCalculations';
 import {
@@ -28,6 +30,9 @@ const QualitySignalsChart = lazy(() => import('@/components/QualitySignalsChart'
 const EngagementTypeTrendChart = lazy(() => import('@/components/EngagementTypeTrendChart'));
 const TrafficSourceTrendChart = lazy(() => import('@/components/TrafficSourceTrendChart'));
 const TopRegionsWidget = lazy(() => import('@/components/TopRegionsWidget'));
+const AbTestHistory = lazy(() =>
+  import('@/components/issues/AbTestHistory').then((m) => ({ default: m.AbTestHistory }))
+);
 
 export function DashboardPage() {
   const { user } = useAuth();
@@ -35,6 +40,9 @@ export function DashboardPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [trendsData, setTrendsData] = useState<TrendsData | null>(null);
+  const [abHistory, setAbHistory] = useState<AbHistoryResponse | null>(null);
+  const [abHistoryLoading, setAbHistoryLoading] = useState(true);
+  const [abHistoryError, setAbHistoryError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -183,9 +191,28 @@ export function DashboardPage() {
     }
   }, [issueCount]);
 
+  const loadAbHistory = useCallback(async () => {
+    try {
+      setAbHistoryLoading(true);
+      setAbHistoryError(null);
+      const response = await issuesService.getAbHistory();
+      if (response.success && response.data) {
+        setAbHistory(response.data);
+      } else {
+        setAbHistoryError(response.error || 'Failed to load A/B test history');
+      }
+    } catch (err) {
+      console.error('A/B history error:', err);
+      setAbHistoryError(err instanceof Error ? err.message : 'Failed to load A/B test history');
+    } finally {
+      setAbHistoryLoading(false);
+    }
+  }, []);
+
   const handleRefresh = () => {
     dashboardService.invalidateTrendsCache();
     loadTrendsData(true);
+    loadAbHistory();
   };
 
   useEffect(() => {
@@ -210,6 +237,10 @@ export function DashboardPage() {
   useEffect(() => {
     loadTrendsData();
   }, [loadTrendsData]);
+
+  useEffect(() => {
+    loadAbHistory();
+  }, [loadAbHistory]);
 
   const formatPercentage = (value: number) => `${value.toFixed(1)}%`;
   const formatNumber = (value: number) => value.toLocaleString();
@@ -641,6 +672,21 @@ export function DashboardPage() {
                     )}
                   </div>
                 </div>
+              </div>
+
+              {/* A/B Test History */}
+              <div className="space-y-3 sm:space-y-4">
+                <div className="flex items-center justify-between pt-2 border-t border-border">
+                  <h3 className="text-sm uppercase tracking-widest text-muted-foreground">A/B Testing</h3>
+                </div>
+                <Suspense fallback={<div className="bg-surface rounded-lg shadow p-6 animate-pulse h-48" />}>
+                  <AbTestHistory
+                    data={abHistory}
+                    loading={abHistoryLoading}
+                    error={abHistoryError}
+                    onRetry={loadAbHistory}
+                  />
+                </Suspense>
               </div>
 
             </div>

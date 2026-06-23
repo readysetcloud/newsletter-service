@@ -335,3 +335,60 @@ export interface InsightV2 {
   recommendation: string;
   evidence?: InsightEvidence[];
 }
+
+// ---------------------------------------------------------------------------
+// A/B test history (GET /ab-test/history)
+// ---------------------------------------------------------------------------
+
+/** Per-variant rollup for a completed A/B test in the history feed. */
+export interface AbHistoryVariant {
+  variantId: VariantId;
+  /** Subject line for this variant (subject-dimension tests). */
+  subject?: string;
+  /** Absolute send time for this variant (send-time tests). */
+  sendAt?: string;
+  opens: number;
+  clicks: number;
+  deliveries: number;
+  openRate: number;
+  clickRate: number;
+}
+
+/** A single past A/B test as returned by the history endpoint. */
+export interface AbHistoryTest {
+  issueNumber: number;
+  dimension: AbTestDimension;
+  winMetric: AbTestWinMetric;
+  status?: AbTestStatus;
+  winnerVariantId?: VariantId | null;
+  significant: boolean;
+  confidence?: number;
+  /** Winner vs control on the win metric, in percentage points. */
+  lift?: number;
+  decidedAt?: string;
+  variants: AbHistoryVariant[];
+}
+
+/** A winning send hour (UTC) and the number of tests it won. */
+export interface SendHourWins {
+  hourUtc: number;
+  wins: number;
+}
+
+/** Headline aggregates across a tenant's A/B test history. */
+export interface AbHistoryAggregates {
+  totalTests: number;
+  significantTests: number;
+  subjectTests: number;
+  sendTimeTests: number;
+  /** Average lift over significant winners (percentage points). */
+  avgWinningLift?: number;
+  /** Top winning send hours (UTC) from significant send-time tests. */
+  topSendHoursUtc: SendHourWins[];
+}
+
+/** Response payload for GET /ab-test/history. */
+export interface AbHistoryResponse {
+  tests: AbHistoryTest[];
+  aggregates: AbHistoryAggregates;
+}

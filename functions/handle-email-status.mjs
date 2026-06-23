@@ -94,12 +94,39 @@ export const handler = async (event) => {
           ...(failedEmail ? { ':failedAddresses': [failedEmail], ':emptyList': [] } : {})
         })
       }));
+
+      const variantId = detail.mail.tags?.variant?.[0];
+      if (variantId === 'a' || variantId === 'b') {
+        await incrementVariantStat(issueId, variantId, stat);
+      }
     }
 
     return true;
   } catch (err) {
     console.error(err);
     return false;
+  }
+};
+
+const incrementVariantStat = async (issueId, variantId, stat) => {
+  try {
+    await ddb.send(new UpdateItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({
+        pk: issueId,
+        sk: `stats#v#${variantId}`
+      }),
+      UpdateExpression: 'ADD #stat :val SET statsPhase = if_not_exists(statsPhase, :phase)',
+      ExpressionAttributeNames: {
+        '#stat': stat
+      },
+      ExpressionAttributeValues: marshall({
+        ':val': 1,
+        ':phase': 'realtime'
+      })
+    }));
+  } catch (err) {
+    console.error('Failed to increment per-variant stat', { issueId, variantId, stat, error: err.message });
   }
 };
 

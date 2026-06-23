@@ -4,6 +4,7 @@ import { DynamoDBClient, QueryCommand, UpdateItemCommand } from "@aws-sdk/client
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { encrypt, sendWithRetry } from './utils/helpers.mjs';
 import { listSubscribers, getSubscriberByEmail, updateSubscriberSendMetadata } from './utils/subscriber.mjs';
+import { splitRecipients } from './utils/ab-variants.mjs';
 
 // Key patterns for DynamoDB (previously from ./senders/types.mjs)
 const KEY_PATTERNS = {
@@ -241,11 +242,12 @@ const filterIdempotentRecipientsPhase = async (tenantId, subscribers, issueIdent
  * @param {string} emailConfig.html - Email HTML body
  * @param {Object} emailConfig.replacements - Replacement tokens for personalization
  * @param {string} emailConfig.referenceNumber - Optional reference number for tracking
+ * @param {string} [emailConfig.variant] - Optional A/B variant id ("a"/"b") tagged on the send
  * @param {string} senderEmail - Sender email address
  * @returns {Promise<{sentCount: number, sentRecipients: string[]}>} Send stats and sent recipients
  */
 const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
-  console.log(`[SENDING] Starting - recipients: ${emailAddresses.length}, TPS: ${tpsLimit}, sender: ${senderEmail}`);
+  console.log(`[SENDING] Starting - recipients: ${emailAddresses.length}, TPS: ${tpsLimit}, sender: ${senderEmail}${emailConfig.variant ? `, variant: ${emailConfig.variant}` : ''}`);
 
   let sentCount = 0;
   const sentRecipients = [];
@@ -274,6 +276,14 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
         );
       }
 
+      const emailTags = [];
+      if (emailConfig.referenceNumber) {
+        emailTags.push({ Name: 'referenceNumber', Value: emailConfig.referenceNumber });
+      }
+      if (emailConfig.variant) {
+        emailTags.push({ Name: 'variant', Value: emailConfig.variant });
+      }
+
       await ses.send(new SendEmailCommand({
         FromEmailAddress: senderEmail,
         Destination: { ToAddresses: [email] },
@@ -283,9 +293,7 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
             Body: { Html: { Data: personalizedHtml } }
           }
         },
-        ...emailConfig.referenceNumber && {
-          EmailTags: [{ Name: 'referenceNumber', Value: emailConfig.referenceNumber }]
-        },
+        ...emailTags.length > 0 && { EmailTags: emailTags },
         ConfigurationSetName: process.env.CONFIGURATION_SET
       }));
     }, `Send email to ${email}`);
@@ -464,7 +472,40 @@ export const handler = async (event) => {
     }
 
     // Phase 3: Email Sending
+    // When A/B variants are supplied (and we're sending to a list), split the
+    // recipients deterministically across variants and tag each send so opens/
+    // clicks can be attributed per variant. Otherwise send a single version.
+    const variants = Array.isArray(data.variants) ? data.variants : null;
     const { sentCount, sentRecipients } = await executePhase('Email Sending', async () => {
+      if (variants?.length && to.list) {
+        const subjectByVariant = Object.fromEntries(
+          variants.map(variant => [variant.variantId, variant.subject])
+        );
+        const buckets = splitRecipients(emailAddresses, data.referenceNumber);
+
+        let total = 0;
+        const allRecipients = [];
+        for (const variantId of Object.keys(buckets)) {
+          const bucketRecipients = buckets[variantId];
+          if (!bucketRecipients.length) {
+            continue;
+          }
+
+          const result = await sendEmailsPhase(bucketRecipients, {
+            subject: subjectByVariant[variantId] ?? subject,
+            html,
+            replacements,
+            referenceNumber: data.referenceNumber,
+            variant: variantId
+          }, senderEmail);
+
+          total += result.sentCount;
+          allRecipients.push(...result.sentRecipients);
+        }
+
+        return { sentCount: total, sentRecipients: allRecipients };
+      }
+
       return await sendEmailsPhase(emailAddresses, {
         subject,
         html,

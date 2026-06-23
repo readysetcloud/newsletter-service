@@ -1515,4 +1515,116 @@ describe('handle-email-status', () => {
       expect(linkUpdateCall.ExpressionAttributeValues[':country'].S).toBe('GB');
     });
   });
+
+  describe('A/B per-variant stats', () => {
+    it('should write both aggregate and per-variant stats on an open event with a variant tag', async () => {
+      ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem (publishedAt)
+      ddbSend.mockResolvedValueOnce({}); // PutItem (capture open)
+      ddbSend.mockResolvedValueOnce({}); // PutItem (track unique)
+      ddbSend.mockResolvedValueOnce({}); // UpdateItem (aggregate stats)
+      ddbSend.mockResolvedValueOnce({}); // UpdateItem (per-variant stats)
+
+      const event = {
+        detail: {
+          eventType: 'Open',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456'],
+              variant: ['a']
+            },
+            destination: ['subscriber@example.com'],
+            commonHeaders: {}
+          },
+          open: {}
+        }
+      };
+
+      const result = await handler(event);
+
+      expect(result).toBe(true);
+      expect(ddbSend).toHaveBeenCalledTimes(5);
+
+      const updateCalls = ddbSend.mock.calls
+        .map(([command]) => command)
+        .filter((command) => command.__type === 'UpdateItem');
+      expect(updateCalls).toHaveLength(2);
+
+      const aggregateCall = updateCalls.find((c) => c.Key.sk.S === 'stats');
+      const variantCall = updateCalls.find((c) => c.Key.sk.S === 'stats#v#a');
+
+      // Aggregate update unchanged
+      expect(aggregateCall).toBeDefined();
+      expect(aggregateCall.Key.pk.S).toBe('tenant123#issue-456');
+      expect(aggregateCall.ExpressionAttributeNames['#stat']).toBe('opens');
+      expect(aggregateCall.UpdateExpression).toContain('GSI1PK = if_not_exists(GSI1PK, :gsi1pk)');
+
+      // Per-variant update
+      expect(variantCall).toBeDefined();
+      expect(variantCall.Key.pk.S).toBe('tenant123#issue-456');
+      expect(variantCall.Key.sk.S).toBe('stats#v#a');
+      expect(variantCall.ExpressionAttributeNames['#stat']).toBe('opens');
+      expect(variantCall.UpdateExpression).toBe('ADD #stat :val SET statsPhase = if_not_exists(statsPhase, :phase)');
+      expect(variantCall.UpdateExpression).not.toContain('GSI1PK');
+      expect(variantCall.ExpressionAttributeValues[':val'].N).toBe('1');
+      expect(variantCall.ExpressionAttributeValues[':phase'].S).toBe('realtime');
+    });
+
+    it('should write only the aggregate stats when no variant tag is present', async () => {
+      ddbSend.mockResolvedValueOnce({}); // UpdateItem (aggregate stats)
+
+      const event = {
+        detail: {
+          eventType: 'Delivery',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456']
+            },
+            destination: ['subscriber@example.com']
+          }
+        }
+      };
+
+      const result = await handler(event);
+
+      expect(result).toBe(true);
+      expect(ddbSend).toHaveBeenCalledTimes(1);
+
+      const updateCalls = ddbSend.mock.calls
+        .map(([command]) => command)
+        .filter((command) => command.__type === 'UpdateItem');
+      expect(updateCalls).toHaveLength(1);
+      expect(updateCalls[0].Key.sk.S).toBe('stats');
+
+      const variantCall = updateCalls.find((c) => c.Key.sk.S.startsWith('stats#v#'));
+      expect(variantCall).toBeUndefined();
+    });
+
+    it('should ignore an invalid variant value', async () => {
+      ddbSend.mockResolvedValueOnce({}); // UpdateItem (aggregate stats)
+
+      const event = {
+        detail: {
+          eventType: 'Delivery',
+          mail: {
+            tags: {
+              referenceNumber: ['tenant123_issue-456'],
+              variant: ['c']
+            },
+            destination: ['subscriber@example.com']
+          }
+        }
+      };
+
+      const result = await handler(event);
+
+      expect(result).toBe(true);
+      expect(ddbSend).toHaveBeenCalledTimes(1);
+
+      const updateCalls = ddbSend.mock.calls
+        .map(([command]) => command)
+        .filter((command) => command.__type === 'UpdateItem');
+      expect(updateCalls).toHaveLength(1);
+      expect(updateCalls[0].Key.sk.S).toBe('stats');
+    });
+  });
 });

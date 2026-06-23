@@ -1,5 +1,5 @@
 import { jest } from '@jest/globals';
-import { DynamoDBClient, GetItemCommand, PutItemCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, GetItemCommand, PutItemCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { handler } from '../update-link-tracking.mjs';
@@ -88,10 +88,10 @@ describe('update-link-tracking handler', () => {
     expect(item.position).toBe(1);
   });
 
-  test('skips classification and write when the link record already exists', async () => {
+  test('skips classification and write when the link record is already classified', async () => {
     mockSend.mockImplementation((command) => {
       if (command instanceof GetItemCommand) {
-        return Promise.resolve({ Item: marshall({ pk: 'tenant123#42' }) });
+        return Promise.resolve({ Item: marshall({ pk: 'tenant123#42', primaryTopic: 'ai' }) });
       }
       return Promise.resolve({});
     });
@@ -104,10 +104,84 @@ describe('update-link-tracking handler', () => {
 
     // Link is still rewritten...
     expect(result.content).toContain('cid=tenant123%2342');
-    // ...but no LLM call and no PutItem happen for an existing record.
+    // ...but no LLM call and no write happen for an already-classified record.
     expect(mockBedrockSend).not.toHaveBeenCalled();
+    const writes = mockSend.mock.calls.filter(
+      call => call[0] instanceof PutItemCommand || call[0] instanceof UpdateItemCommand
+    );
+    expect(writes).toHaveLength(0);
+  });
+
+  test('re-classifies an existing record that has no topics', async () => {
+    mockSend.mockImplementation((command) => {
+      if (command instanceof GetItemCommand) {
+        // Record exists (e.g. created by a failed preview) but is unclassified.
+        return Promise.resolve({ Item: marshall({ pk: 'tenant123#42' }) });
+      }
+      return Promise.resolve({});
+    });
+
+    let bedrockCall = 0;
+    mockBedrockSend.mockImplementation(() => {
+      bedrockCall += 1;
+      if (bedrockCall % 2 === 1) {
+        return Promise.resolve(toolUseResponse('submit_link_classification', {
+          primaryTopic: 'security',
+          secondaryTopics: [],
+          summary: 'A guide to zero-trust auth.',
+          confidence: 0.8
+        }));
+      }
+      return Promise.resolve(textResponse('done'));
+    });
+
+    await handler({
+      tenantId: 'tenant123',
+      issueId: '42',
+      content: 'See [zero trust](https://example.com/zero-trust) details.'
+    });
+
+    // Backfill is an UpdateItem (the base record already exists), not a Put.
+    const updateCmd = mockSend.mock.calls
+      .map(call => call[0])
+      .find(cmd => cmd instanceof UpdateItemCommand);
+    expect(updateCmd).toBeDefined();
+    const values = unmarshall(updateCmd.input.ExpressionAttributeValues);
+    expect(values[':primaryTopic']).toBe('security');
+    expect(updateCmd.input.ConditionExpression).toContain('attribute_not_exists(primaryTopic)');
+
     const putCalls = mockSend.mock.calls.filter(call => call[0] instanceof PutItemCommand);
     expect(putCalls).toHaveLength(0);
+  });
+
+  test('does not store low-confidence classifications', async () => {
+    let bedrockCall = 0;
+    mockBedrockSend.mockImplementation(() => {
+      bedrockCall += 1;
+      if (bedrockCall % 2 === 1) {
+        return Promise.resolve(toolUseResponse('submit_link_classification', {
+          primaryTopic: 'ai',
+          secondaryTopics: [],
+          summary: 'Ambiguous link.',
+          confidence: 0.2
+        }));
+      }
+      return Promise.resolve(textResponse('done'));
+    });
+
+    await handler({
+      tenantId: 'tenant123',
+      issueId: '42',
+      content: 'A [maybe-ai](https://example.com/maybe) link.'
+    });
+
+    const putCmd = mockSend.mock.calls
+      .map(call => call[0])
+      .find(cmd => cmd instanceof PutItemCommand);
+    expect(putCmd).toBeDefined();
+    const item = unmarshall(putCmd.input.Item);
+    expect(item.primaryTopic).toBeUndefined();
+    expect(item.url).toBe('https://example.com/maybe');
   });
 
   test('still creates the link record when classification fails', async () => {

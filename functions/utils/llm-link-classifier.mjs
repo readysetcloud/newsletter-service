@@ -17,6 +17,9 @@ const classificationSchema = z.object({
 
 const SUMMARY_MAX_LENGTH = 280;
 
+/** Minimum confidence required to store a classification (drives segmentation). */
+const CONFIDENCE_THRESHOLD = 0.5;
+
 const systemPrompt = [
   'Role: You categorize links inside a developer newsletter so readers can be auto-segmented by interest.',
   'You will be given a link URL, its anchor text, and the paragraph the author wrote around it.',
@@ -80,6 +83,12 @@ export async function classifyLinkWithLlm(url, anchorText, context) {
     : '';
 
   const confidence = typeof captured.confidence === 'number' ? captured.confidence : 1;
+
+  // Don't drive segmentation off ambiguous classifications. Mirrors the
+  // bar the previous heuristic classifier used.
+  if (confidence < CONFIDENCE_THRESHOLD) {
+    return null;
+  }
 
   return { primaryTopic, secondaryTopics, summary, confidence, classifiedBy: 'llm' };
 }

@@ -1,11 +1,14 @@
-import { DynamoDBClient, PutItemCommand, GetItemCommand } from '@aws-sdk/client-dynamodb';
-import { marshall } from '@aws-sdk/util-dynamodb';
+import { DynamoDBClient, PutItemCommand, GetItemCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
+import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { hash } from './utils/helpers.mjs';
 import { classifyLinkWithLlm } from './utils/llm-link-classifier.mjs';
 
 const ddb = new DynamoDBClient();
 
-const LINK_EXPIRATION_DAYS = 14;
+// Match the click-event retention window (process-link-click writes click
+// events with a 90-day TTL). Interest scoring reads topics off this record on
+// click, so it must outlive the period in which clicks can still arrive.
+const LINK_EXPIRATION_DAYS = 90;
 const MAX_CONTEXT_LENGTH = 600;
 
 /**
@@ -80,10 +83,12 @@ export const handler = async (state) => {
  * Creates the link tracking record for an issue link, enriched with an LLM
  * topic classification and summary derived from the author's paragraph.
  *
- * Skips enrichment (and the LLM call) when the record already exists, so
- * re-runs and preview sends don't re-classify. Enrichment is best-effort:
- * a classification failure still creates the base tracking record so click
- * counting keeps working.
+ * Skips the LLM call only when the record is already classified, so re-runs
+ * and preview sends don't re-classify needlessly — but a record that exists
+ * without topics (e.g. created by a preview where classification failed) is
+ * re-classified, since interest scoring reads topics off this record on click.
+ * Enrichment is best-effort: a classification failure still creates the base
+ * tracking record so click counting keeps working.
  *
  * @param {string} tenantId
  * @param {string} issueId
@@ -96,23 +101,39 @@ const enrichLinkRecord = async (tenantId, issueId, url, anchorText, context, pos
   const pk = `${tenantId}#${issueId}`;
   const sk = `link#${hash(url)}`;
 
+  let existing = null;
   try {
-    const existing = await ddb.send(new GetItemCommand({
+    const result = await ddb.send(new GetItemCommand({
       TableName: process.env.TABLE_NAME,
       Key: marshall({ pk, sk }),
-      ProjectionExpression: 'pk'
+      ProjectionExpression: 'pk, primaryTopic'
     }));
-
-    // Record already exists — don't spend another LLM call re-classifying it.
-    if (existing.Item) {
-      return;
-    }
+    existing = result.Item ? unmarshall(result.Item) : null;
   } catch (err) {
     console.error('Failed to check existing link record', { pk, sk, error: err.message });
   }
 
+  // Already classified — nothing to do (and no wasted LLM call).
+  if (existing?.primaryTopic) {
+    return;
+  }
+
   const classification = await classifyLinkWithLlm(url, anchorText, context);
 
+  if (existing) {
+    // Base record exists but has no topics yet — backfill the classification
+    // if we got one this time. Without topics there is nothing to write.
+    if (classification) {
+      await applyClassification(pk, sk, classification);
+    }
+    return;
+  }
+
+  await createLinkRecord(pk, sk, url, position, classification);
+};
+
+/** Creates the base link tracking record plus any classification fields. */
+const createLinkRecord = async (pk, sk, url, position, classification) => {
   try {
     await ddb.send(new PutItemCommand({
       TableName: process.env.TABLE_NAME,
@@ -123,14 +144,7 @@ const enrichLinkRecord = async (tenantId, issueId, url, anchorText, context, pos
         position,
         clicks_total: 0,
         byDay: {},
-        ...(classification && {
-          primaryTopic: classification.primaryTopic,
-          secondaryTopics: classification.secondaryTopics,
-          summary: classification.summary,
-          confidence: classification.confidence,
-          classifiedBy: classification.classifiedBy,
-          classifiedAt: new Date().toISOString()
-        }),
+        ...(classification && classificationFields(classification)),
         ttl: Math.floor(Date.now() / 1000) + (LINK_EXPIRATION_DAYS * 24 * 60 * 60)
       }),
       ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)'
@@ -141,3 +155,37 @@ const enrichLinkRecord = async (tenantId, issueId, url, anchorText, context, pos
     }
   }
 };
+
+/** Backfills classification fields onto an existing, unclassified link record. */
+const applyClassification = async (pk, sk, classification) => {
+  try {
+    await ddb.send(new UpdateItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({ pk, sk }),
+      UpdateExpression: 'SET primaryTopic = :primaryTopic, secondaryTopics = :secondaryTopics, summary = :summary, confidence = :confidence, classifiedBy = :classifiedBy, classifiedAt = :classifiedAt',
+      ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(primaryTopic)',
+      ExpressionAttributeValues: marshall({
+        ':primaryTopic': classification.primaryTopic,
+        ':secondaryTopics': classification.secondaryTopics,
+        ':summary': classification.summary,
+        ':confidence': classification.confidence,
+        ':classifiedBy': classification.classifiedBy,
+        ':classifiedAt': new Date().toISOString()
+      })
+    }));
+  } catch (err) {
+    // Another run classified it first (or the record vanished) — that's fine.
+    if (err.name !== 'ConditionalCheckFailedException') {
+      throw err;
+    }
+  }
+};
+
+const classificationFields = (classification) => ({
+  primaryTopic: classification.primaryTopic,
+  secondaryTopics: classification.secondaryTopics,
+  summary: classification.summary,
+  confidence: classification.confidence,
+  classifiedBy: classification.classifiedBy,
+  classifiedAt: new Date().toISOString()
+});

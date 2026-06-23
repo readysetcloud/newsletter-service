@@ -61,13 +61,23 @@ export const handler = async (event) => {
 
       // Inconclusive => fall back to the control (variant "a").
       const winningVariantId = winnerVariantId ?? 'a';
-      const winningSubject = resolveSubject(abTest, winningVariantId);
+      const isSendTime = abTest.dimension === 'sendTime';
+      const winningVariant = (abTest.variants || []).find((v) => v.variantId === winningVariantId);
+
+      // Subject-line tests send the winning subject. Send-time tests keep the
+      // shared subject and deliver the hold-out at the winning send time (or
+      // immediately if that time has already passed).
+      const winningSubject = isSendTime ? sendPayload?.subject : resolveSubject(abTest, winningVariantId);
+      const winningSendAt = isSendTime ? winningVariant?.sendAt : undefined;
+      if (isSendTime && winningSendAt) {
+        evaluation.winningSendAt = winningSendAt;
+      }
 
       // Enqueue the winner BEFORE marking the test final. Together with the claim
       // above this gives: exactly one invocation ever sends (no duplicate
       // emails), and if the publish fails the claim is released so a redelivery
       // retries instead of the test being stuck in a final state.
-      await sendWinner(sendPayload, winningSubject);
+      await sendWinner(sendPayload, winningSubject, winningSendAt);
 
       const updatedAbTest = {
         ...abTest,
@@ -261,16 +271,21 @@ const resolveSubject = (abTest, variantId) => {
  * @param {Object} sendPayload - Everything needed to send except the subject.
  * @param {string} winningSubject - The chosen subject line.
  */
-const sendWinner = async (sendPayload, winningSubject) => {
+const sendWinner = async (sendPayload, winningSubject, winningSendAt) => {
   const { abTest: _abTest, variants: _variants, ...rest } = sendPayload || {};
+  const detail = { ...rest, subject: winningSubject };
+
+  // Send-time winner: deliver at the winning time when it is still in the
+  // future; otherwise send immediately (send-email-v2 schedules future sends).
+  if (winningSendAt && new Date(winningSendAt).getTime() > Date.now()) {
+    detail.sendAt = winningSendAt;
+  }
+
   await eventBridge.send(new PutEventsCommand({
     Entries: [{
       Source: 'newsletter-service',
       DetailType: 'Send Email v2',
-      Detail: JSON.stringify({
-        ...rest,
-        subject: winningSubject
-      })
+      Detail: JSON.stringify(detail)
     }]
   }));
 };

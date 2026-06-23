@@ -3,6 +3,7 @@ import { jest } from '@jest/globals';
 // Mock instances
 const sesInstance = { send: jest.fn() };
 const schedulerInstance = { send: jest.fn() };
+const eventBridgeInstance = { send: jest.fn() };
 const ddbInstance = { send: jest.fn() };
 
 // Mock AWS SDK
@@ -14,6 +15,11 @@ jest.unstable_mockModule('@aws-sdk/client-sesv2', () => ({
 jest.unstable_mockModule('@aws-sdk/client-scheduler', () => ({
   SchedulerClient: jest.fn(() => schedulerInstance),
   CreateScheduleCommand: jest.fn((params) => ({ __type: 'CreateSchedule', ...params }))
+}));
+
+jest.unstable_mockModule('@aws-sdk/client-eventbridge', () => ({
+  EventBridgeClient: jest.fn(() => eventBridgeInstance),
+  PutEventsCommand: jest.fn((params) => ({ __type: 'PutEvents', ...params }))
 }));
 
 jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
@@ -546,6 +552,89 @@ describe('send-email-v2', () => {
       expect(detail.issueNumber).toBe('42');
       expect(detail.sendPayload.html).toBe('<p>Hello __EMAIL__</p>');
       expect(detail.sendPayload.to.list).toBe('my-list');
+    });
+  });
+
+  describe('A/B send-time testing', () => {
+    const makeSubscribers = (count) =>
+      Array.from({ length: count }, (_, i) => ({ email: `user${i}@example.com`, lastIssueSent: null }));
+    const futureIso = (h) => new Date(Date.now() + h * 3600 * 1000).toISOString();
+    const sendTimeDetail = (overrides = {}) => ({
+      subject: 'Same subject for all',
+      html: '<p>Hello __EMAIL__</p>',
+      to: { list: 'my-list' },
+      from: 'sender@example.com',
+      tenantId: 'tenant-123',
+      referenceNumber: 'tenant-123_42',
+      replacements: { emailAddress: '__EMAIL__' },
+      abTest: {
+        dimension: 'sendTime',
+        testFraction: 0.5,
+        evaluateAfterMinutes: 120,
+        variants: [
+          { variantId: 'a', sendAt: futureIso(2) },
+          { variantId: 'b', sendAt: futureIso(6) }
+        ]
+      },
+      ...overrides
+    });
+
+    beforeEach(() => {
+      ddbInstance.send.mockResolvedValueOnce({
+        Items: [{
+          unmarshalled: { senderId: 'sender-123', email: 'sender@example.com', verificationStatus: 'verified', isDefault: false }
+        }]
+      });
+      ddbInstance.send.mockResolvedValue({});
+      sesInstance.send.mockResolvedValue({ MessageId: 'msg-123' });
+      schedulerInstance.send.mockResolvedValue({});
+      eventBridgeInstance.send.mockResolvedValue({});
+    });
+
+    test('initial publish fans out one Send Email v2 per variant and sends nothing inline', async () => {
+      const result = await handler({ detail: sendTimeDetail() });
+
+      expect(result.scheduled).toBe(true);
+      // Nothing is sent in this invocation; subscribers are not even retrieved.
+      expect(sesInstance.send).not.toHaveBeenCalled();
+      expect(listSubscribers).not.toHaveBeenCalled();
+
+      // One per-variant Send Email v2 event per variant, each with a variantFilter.
+      expect(eventBridgeInstance.send).toHaveBeenCalledTimes(2);
+      const filters = eventBridgeInstance.send.mock.calls.map(([cmd]) => {
+        const entry = cmd.Entries[0];
+        expect(entry.DetailType).toBe('Send Email v2');
+        const detail = JSON.parse(entry.Detail);
+        expect(detail.abTest.dimension).toBe('sendTime');
+        expect(detail.sendAt).toBeDefined();
+        return detail.variantFilter;
+      });
+      expect(new Set(filters)).toEqual(new Set(['a', 'b']));
+
+      // Evaluation scheduled once, after the latest candidate send time.
+      expect(schedulerInstance.send).toHaveBeenCalledTimes(1);
+      const entry = JSON.parse(schedulerInstance.send.mock.calls[0][0].Target.Input).Entries[0];
+      expect(entry.DetailType).toBe('Evaluate AB Test');
+    });
+
+    test('per-variant fire (variantFilter) sends only that variant bucket and schedules nothing', async () => {
+      listSubscribers.mockResolvedValue({ subscribers: makeSubscribers(40), lastEvaluatedKey: undefined });
+
+      const result = await handler({ detail: sendTimeDetail({ variantFilter: 'a' }) });
+
+      // Only variant a's slice of the 50% sample is sent.
+      expect(result.recipients).toBeGreaterThan(0);
+      expect(result.recipients).toBeLessThan(20);
+      expect(sesInstance.send).toHaveBeenCalledTimes(result.recipients);
+      for (const [cmd] of sesInstance.send.mock.calls) {
+        const variantTag = (cmd.EmailTags ?? []).find((t) => t.Name === 'variant');
+        expect(variantTag?.Value).toBe('a');
+        // Send-time variants share the base subject.
+        expect(cmd.Content.Simple.Subject.Data).toBe('Same subject for all');
+      }
+      // No fan-out and no duplicate evaluation scheduling on a per-variant fire.
+      expect(eventBridgeInstance.send).not.toHaveBeenCalled();
+      expect(schedulerInstance.send).not.toHaveBeenCalled();
     });
   });
 });

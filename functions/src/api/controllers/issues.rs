@@ -911,6 +911,7 @@ fn validate_list_params(query: &ListIssuesQuery) -> Result<(), AppError> {
 }
 
 const AB_DIMENSION_SUBJECT: &str = "subject";
+const AB_DIMENSION_SENDTIME: &str = "sendTime";
 
 /// Extracts the optional `abTest` object from the raw request body. Kept out of
 /// the typed request structs so the (many) existing call sites stay untouched;
@@ -943,9 +944,9 @@ fn validate_and_normalize_ab_test(
         .get("dimension")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("abTest.dimension is required".to_string()))?;
-    if dimension != AB_DIMENSION_SUBJECT {
+    if dimension != AB_DIMENSION_SUBJECT && dimension != AB_DIMENSION_SENDTIME {
         return Err(AppError::BadRequest(
-            "abTest.dimension must be \"subject\"".to_string(),
+            "abTest.dimension must be \"subject\" or \"sendTime\"".to_string(),
         ));
     }
 
@@ -961,6 +962,7 @@ fn validate_and_normalize_ab_test(
 
     let mut normalized_variants = Vec::with_capacity(2);
     let mut seen_ids: Vec<String> = Vec::new();
+    let mut seen_send_at: Vec<i64> = Vec::new();
     for variant in variants {
         let variant_id = variant
             .get("variantId")
@@ -980,27 +982,61 @@ fn validate_and_normalize_ab_test(
         }
         seen_ids.push(variant_id.to_string());
 
-        let subject = variant
-            .get("subject")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                AppError::BadRequest("each abTest variant requires a subject".to_string())
-            })?;
-        if subject.trim().is_empty() {
-            return Err(AppError::BadRequest(
-                "abTest variant subject cannot be empty".to_string(),
-            ));
-        }
-        if subject.len() > 200 {
-            return Err(AppError::BadRequest(
-                "abTest variant subject must not exceed 200 characters".to_string(),
-            ));
-        }
+        if dimension == AB_DIMENSION_SUBJECT {
+            let subject = variant
+                .get("subject")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    AppError::BadRequest("each abTest variant requires a subject".to_string())
+                })?;
+            if subject.trim().is_empty() {
+                return Err(AppError::BadRequest(
+                    "abTest variant subject cannot be empty".to_string(),
+                ));
+            }
+            if subject.len() > 200 {
+                return Err(AppError::BadRequest(
+                    "abTest variant subject must not exceed 200 characters".to_string(),
+                ));
+            }
 
-        normalized_variants.push(serde_json::json!({
-            "variantId": variant_id,
-            "subject": subject,
-        }));
+            normalized_variants.push(serde_json::json!({
+                "variantId": variant_id,
+                "subject": subject,
+            }));
+        } else {
+            // send-time dimension: each variant is delivered at its own sendAt.
+            let send_at = variant
+                .get("sendAt")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    AppError::BadRequest(
+                        "each abTest variant requires a sendAt for send-time tests".to_string(),
+                    )
+                })?;
+            let parsed = chrono::DateTime::parse_from_rfc3339(send_at).map_err(|_| {
+                AppError::BadRequest(
+                    "abTest variant sendAt must be an RFC3339 timestamp".to_string(),
+                )
+            })?;
+            if parsed.with_timezone(&chrono::Utc) <= chrono::Utc::now() {
+                return Err(AppError::BadRequest(
+                    "abTest variant sendAt must be in the future".to_string(),
+                ));
+            }
+            let instant = parsed.timestamp_millis();
+            if seen_send_at.contains(&instant) {
+                return Err(AppError::BadRequest(
+                    "abTest variant sendAt values must be distinct".to_string(),
+                ));
+            }
+            seen_send_at.push(instant);
+
+            normalized_variants.push(serde_json::json!({
+                "variantId": variant_id,
+                "sendAt": parsed.to_rfc3339(),
+            }));
+        }
     }
     if !seen_ids.iter().any(|id| id == "a") || !seen_ids.iter().any(|id| id == "b") {
         return Err(AppError::BadRequest(
@@ -1085,7 +1121,7 @@ fn validate_and_normalize_ab_test(
 
     Ok(serde_json::json!({
         "testId": ulid::Ulid::new().to_string(),
-        "dimension": AB_DIMENSION_SUBJECT,
+        "dimension": dimension,
         "variants": normalized_variants,
         "winMetric": win_metric,
         "confidence": confidence,
@@ -2809,6 +2845,65 @@ mod tests {
         let mut bad_fraction = valid_ab_test();
         bad_fraction["testFraction"] = serde_json::json!(0.8);
         assert!(validate_and_normalize_ab_test(&bad_fraction).is_err());
+    }
+
+    fn future_rfc3339(hours: i64) -> String {
+        (chrono::Utc::now() + chrono::Duration::hours(hours)).to_rfc3339()
+    }
+
+    fn valid_send_time_ab_test() -> serde_json::Value {
+        serde_json::json!({
+            "dimension": "sendTime",
+            "variants": [
+                { "variantId": "a", "sendAt": future_rfc3339(2) },
+                { "variantId": "b", "sendAt": future_rfc3339(6) }
+            ]
+        })
+    }
+
+    #[test]
+    fn test_ab_test_send_time_normalizes() {
+        let normalized = validate_and_normalize_ab_test(&valid_send_time_ab_test()).unwrap();
+        assert_eq!(normalized["dimension"], "sendTime");
+        assert_eq!(normalized["status"], "pending");
+        let variants = normalized["variants"].as_array().unwrap();
+        assert_eq!(variants.len(), 2);
+        // Each variant carries a normalized sendAt and no subject.
+        assert!(variants[0]["sendAt"].as_str().is_some());
+        assert!(variants[0].get("subject").is_none());
+    }
+
+    #[test]
+    fn test_ab_test_send_time_rejects_past_sendat() {
+        let mut ab = valid_send_time_ab_test();
+        ab["variants"][1]["sendAt"] = serde_json::json!(future_rfc3339(-2));
+        assert!(validate_and_normalize_ab_test(&ab).is_err());
+    }
+
+    #[test]
+    fn test_ab_test_send_time_rejects_missing_and_duplicate_sendat() {
+        // Missing sendAt.
+        let mut missing = valid_send_time_ab_test();
+        missing["variants"][0] = serde_json::json!({ "variantId": "a" });
+        assert!(validate_and_normalize_ab_test(&missing).is_err());
+
+        // Identical send times for both variants.
+        let when = future_rfc3339(3);
+        let dup = serde_json::json!({
+            "dimension": "sendTime",
+            "variants": [
+                { "variantId": "a", "sendAt": when },
+                { "variantId": "b", "sendAt": when }
+            ]
+        });
+        assert!(validate_and_normalize_ab_test(&dup).is_err());
+    }
+
+    #[test]
+    fn test_ab_test_rejects_unknown_dimension() {
+        let mut ab = valid_ab_test();
+        ab["dimension"] = serde_json::json!("fromName");
+        assert!(validate_and_normalize_ab_test(&ab).is_err());
     }
 
     #[test]

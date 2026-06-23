@@ -2157,6 +2157,45 @@ Resources:
               detail-type:
                 - Send Email v2
 
+  EvaluateAbWinnerFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - evaluate-ab-winner.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: evaluate-ab-winner.handler
+      Timeout: 60
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          TABLE_NAME: !Ref NewsletterTable
+      Events:
+        EvaluateAbTestEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - newsletter-service
+              detail-type:
+                - Evaluate AB Test
+
   MigrateContactsFunction:
     Type: AWS::Serverless::Function
     Metadata:

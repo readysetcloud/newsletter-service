@@ -1068,6 +1068,21 @@ fn validate_and_normalize_ab_test(
         }
     };
 
+    let evaluate_after_minutes = match obj.get("evaluateAfterMinutes") {
+        None | Some(serde_json::Value::Null) => 240,
+        Some(v) => {
+            let n = v.as_i64().ok_or_else(|| {
+                AppError::BadRequest("abTest.evaluateAfterMinutes must be an integer".to_string())
+            })?;
+            if n < 1 {
+                return Err(AppError::BadRequest(
+                    "abTest.evaluateAfterMinutes must be >= 1".to_string(),
+                ));
+            }
+            n
+        }
+    };
+
     Ok(serde_json::json!({
         "testId": ulid::Ulid::new().to_string(),
         "dimension": AB_DIMENSION_SUBJECT,
@@ -1076,8 +1091,10 @@ fn validate_and_normalize_ab_test(
         "confidence": confidence,
         "minSamplePerVariant": min_sample,
         "testFraction": test_fraction,
+        "evaluateAfterMinutes": evaluate_after_minutes,
         "status": "pending",
         "winnerVariantId": serde_json::Value::Null,
+        "evaluation": serde_json::Value::Null,
     }))
 }
 

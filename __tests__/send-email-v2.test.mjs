@@ -464,6 +464,90 @@ describe('send-email-v2', () => {
       await expect(handler(event)).rejects.toThrow('Missing required fields: subject, html, or to');
     });
   });
+
+  describe('A/B hold-out testing', () => {
+    const makeSubscribers = (count) =>
+      Array.from({ length: count }, (_, i) => ({ email: `user${i}@example.com`, lastIssueSent: null }));
+
+    const abEvent = {
+      detail: {
+        subject: 'Default subject',
+        html: '<p>Hello __EMAIL__</p>',
+        to: { list: 'my-list' },
+        from: 'sender@example.com',
+        tenantId: 'tenant-123',
+        referenceNumber: 'tenant-123_42',
+        replacements: { emailAddress: '__EMAIL__', emailAddressHash: '__EMAIL_HASH__' },
+        abTest: {
+          dimension: 'subject',
+          testFraction: 0.5,
+          evaluateAfterMinutes: 120,
+          variants: [
+            { variantId: 'a', subject: 'Subject A' },
+            { variantId: 'b', subject: 'Subject B' }
+          ]
+        }
+      }
+    };
+
+    beforeEach(() => {
+      ddbInstance.send.mockResolvedValueOnce({
+        Items: [{
+          unmarshalled: {
+            senderId: 'sender-123',
+            email: 'sender@example.com',
+            verificationStatus: 'verified',
+            isDefault: false
+          }
+        }]
+      });
+      ddbInstance.send.mockResolvedValue({});
+      sesInstance.send.mockResolvedValue({ MessageId: 'msg-123' });
+      schedulerInstance.send.mockResolvedValue({});
+    });
+
+    test('only sends to the test sample (hold-out) and tags each send with a variant', async () => {
+      listSubscribers.mockResolvedValue({ subscribers: makeSubscribers(40), lastEvaluatedKey: undefined });
+
+      const result = await handler({ detail: { ...abEvent.detail } });
+
+      // Hold-out: only a fraction of the 40 recipients are sent the test now.
+      expect(result.recipients).toBeGreaterThan(0);
+      expect(result.recipients).toBeLessThan(40);
+      expect(sesInstance.send).toHaveBeenCalledTimes(result.recipients);
+
+      // Every test send carries both the referenceNumber and a variant tag.
+      const variantValues = new Set();
+      for (const call of sesInstance.send.mock.calls) {
+        const tags = call[0].EmailTags ?? [];
+        const variantTag = tags.find((t) => t.Name === 'variant');
+        expect(variantTag).toBeDefined();
+        expect(['a', 'b']).toContain(variantTag.Value);
+        expect(tags.find((t) => t.Name === 'referenceNumber')).toBeDefined();
+        variantValues.add(variantTag.Value);
+      }
+      // Both variants should appear across a 40-recipient sample.
+      expect(variantValues.has('a')).toBe(true);
+      expect(variantValues.has('b')).toBe(true);
+    });
+
+    test('schedules the winner evaluation as an Evaluate AB Test event', async () => {
+      listSubscribers.mockResolvedValue({ subscribers: makeSubscribers(20), lastEvaluatedKey: undefined });
+
+      await handler({ detail: { ...abEvent.detail } });
+
+      expect(schedulerInstance.send).toHaveBeenCalledTimes(1);
+      const scheduleParams = schedulerInstance.send.mock.calls[0][0];
+      const entry = JSON.parse(scheduleParams.Target.Input).Entries[0];
+      expect(entry.DetailType).toBe('Evaluate AB Test');
+      const detail = JSON.parse(entry.Detail);
+      expect(detail.tenantId).toBe('tenant-123');
+      expect(detail.referenceNumber).toBe('tenant-123_42');
+      expect(detail.issueNumber).toBe('42');
+      expect(detail.sendPayload.html).toBe('<p>Hello __EMAIL__</p>');
+      expect(detail.sendPayload.to.list).toBe('my-list');
+    });
+  });
 });
 
 // Property-based tests

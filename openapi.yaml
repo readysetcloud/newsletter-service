@@ -4208,6 +4208,11 @@ components:
           maximum: 0.5
           default: 0.2
           description: Fraction of the list used for testing (stored for Phase 2; not used to send in Phase 1)
+        evaluateAfterMinutes:
+          type: integer
+          minimum: 1
+          default: 240
+          description: Minutes to wait after the test-sample send before evaluating the winner
         status:
           type: string
           enum: [pending, testing, evaluating, sent, inconclusive]
@@ -4219,6 +4224,57 @@ components:
           nullable: true
           readOnly: true
           description: The winning variant, set when a winner is declared (null until then)
+        evaluation:
+          type: object
+          nullable: true
+          readOnly: true
+          description: Computed result of the winner evaluation (null until the test is evaluated)
+          properties:
+            winMetric:
+              type: string
+              description: Metric used to determine the winner
+            confidence:
+              type: number
+              description: Statistical confidence threshold applied during evaluation
+            minSamplePerVariant:
+              type: integer
+              description: Minimum sample size per variant required before a winner can be declared
+            variantA:
+              $ref: "#/components/schemas/VariantEvaluation"
+            variantB:
+              $ref: "#/components/schemas/VariantEvaluation"
+            zScore:
+              type: number
+              description: Two-proportion z-test statistic
+            pValue:
+              type: number
+              description: Two-tailed p-value of the z-test
+            significant:
+              type: boolean
+              description: Whether the rate difference is statistically significant at the confidence threshold
+            winnerVariantId:
+              type: string
+              enum: [a, b]
+              nullable: true
+              description: The winning variant ("a" or "b"), or null when inconclusive
+            decidedAt:
+              type: string
+              format: date-time
+              description: Timestamp when the evaluation was computed
+
+    VariantEvaluation:
+      type: object
+      description: Per-variant evaluation counters and computed rate
+      properties:
+        successes:
+          type: integer
+          description: Number of successes for the win metric (opens or clicks)
+        deliveries:
+          type: integer
+          description: Number of successful deliveries for this variant
+        rate:
+          type: number
+          description: Success rate (successes divided by deliveries)
 
     VariantStats:
       type: object

@@ -39,7 +39,7 @@ export const handler = async (state) => {
         sendAt: state.sendAtDate,
         referenceNumber: `${tenant.pk}_${state.data.metadata.number}`,
         tenantId: state.tenantId,
-        variants: abTest?.dimension === 'subject' ? abTest.variants : undefined
+        abTest: abTest?.dimension === 'subject' ? abTest : undefined
       });
 
       await publishIssueEvent(
@@ -182,7 +182,7 @@ const getSnippets = async (tenantId) => {
  * @param {string} [params.to.email] - Individual recipient email address
  * @param {string} [params.to.list] - SES list name for bulk sending
  * @param {string} [params.sendAt] - ISO date string for scheduled sending
- * @param {Array<{variantId: string, subject: string}>} [params.variants] - Optional A/B subject variants
+ * @param {Object} [params.abTest] - Optional A/B test configuration (variants, testFraction, evaluateAfterMinutes, ...)
  */
 const sendEmail = async (params) => {
   await eventBridge.send(new PutEventsCommand({
@@ -199,7 +199,7 @@ const sendEmail = async (params) => {
         ...params.sendAt && { sendAt: params.sendAt },
         ...params.referenceNumber && { referenceNumber: params.referenceNumber },
         ...params.tenantId && { tenantId: params.tenantId },
-        ...params.variants?.length && { variants: params.variants },
+        ...params.abTest && { abTest: params.abTest },
         replacements: {
           emailAddress: "__EMAIL__",
           emailAddressHash: "__EMAIL_HASH__"

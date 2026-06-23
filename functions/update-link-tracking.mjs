@@ -1,19 +1,23 @@
-import { DynamoDBClient, PutItemCommand, GetItemCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, PutItemCommand, GetItemCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { hash } from './utils/helpers.mjs';
-import { normalizeUrl } from './utils/url-normalizer.mjs';
-import { classifyLink } from './utils/link-classifier.mjs';
+import { classifyLinkWithLlm } from './utils/llm-link-classifier.mjs';
 
 const ddb = new DynamoDBClient();
 
-const LINK_EXPIRATION_DAYS = 14;
+// Match the click-event retention window (process-link-click writes click
+// events with a 90-day TTL). Interest scoring reads topics off this record on
+// click, so it must outlive the period in which clicks can still arrive.
+const LINK_EXPIRATION_DAYS = 90;
+const MAX_CONTEXT_LENGTH = 600;
 
 /**
- * Extracts all markdown hyperlinks from content, returning anchor text and URL.
+ * Extracts all markdown hyperlinks from content, returning anchor text, URL,
+ * and the author's surrounding paragraph (used as classification context).
  * Excludes mailto: links.
  *
  * @param {string} content - Markdown content string
- * @returns {{ anchorText: string, url: string }[]} Array of extracted links
+ * @returns {{ anchorText: string, url: string, context: string }[]} Array of extracted links
  */
 export function extractLinks(content) {
   const linkRegex = /\[(.*?)\]\((.*?)\)/g;
@@ -29,7 +33,7 @@ export function extractLinks(content) {
     const url = matches[2];
 
     if (url && url.indexOf('mailto:') === -1) {
-      links.push({ anchorText, url });
+      links.push({ anchorText, url, context: extractContext(content, matches.index) });
     }
   }
 
@@ -37,61 +41,25 @@ export function extractLinks(content) {
 }
 
 /**
- * Classifies a link and stores Link_Metadata if not already classified.
- * Failures are logged and swallowed — classification errors must not
- * break the content pipeline.
+ * Extracts the paragraph surrounding a link (the block bounded by blank lines),
+ * stripped of markdown markers, to feed the classifier as authored context.
  *
- * @param {string} originalUrl - The original URL before normalization
- * @param {string} anchorText - The link's anchor text from the markdown
+ * @param {string} content - Full markdown content
+ * @param {number} matchIndex - Index where the link match begins
+ * @returns {string} Cleaned paragraph text, capped at MAX_CONTEXT_LENGTH
  */
-export async function classifyAndStoreLinkMetadata(originalUrl, anchorText) {
-  try {
-    const normalizedUrl = normalizeUrl(originalUrl);
-    if (!normalizedUrl) {
-      return;
-    }
+function extractContext(content, matchIndex) {
+  const prevBreak = content.lastIndexOf('\n\n', matchIndex);
+  const start = prevBreak === -1 ? 0 : prevBreak + 2;
+  const nextBreak = content.indexOf('\n\n', matchIndex);
+  const end = nextBreak === -1 ? content.length : nextBreak;
 
-    const urlHash = hash(normalizedUrl);
-
-    // Check for existing Link_Metadata
-    const existing = await ddb.send(new GetItemCommand({
-      TableName: process.env.TABLE_NAME,
-      Key: marshall({ pk: 'LINK_META', sk: urlHash }),
-      ProjectionExpression: 'primaryTopic, secondaryTopics, confidence'
-    }));
-
-    if (existing.Item) {
-      return;
-    }
-
-    // Classify the link
-    const classification = classifyLink(normalizedUrl, anchorText);
-
-    if (classification.confidence < 0.5) {
-      return;
-    }
-
-    // Store Link_Metadata with conditional write (idempotent)
-    await ddb.send(new PutItemCommand({
-      TableName: process.env.TABLE_NAME,
-      Item: marshall({
-        pk: 'LINK_META',
-        sk: urlHash,
-        originalUrl,
-        normalizedUrl,
-        primaryTopic: classification.primaryTopic,
-        secondaryTopics: classification.secondaryTopics,
-        confidence: classification.confidence,
-        classifiedBy: 'heuristic',
-        classifiedAt: new Date().toISOString()
-      }),
-      ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)'
-    }));
-  } catch (err) {
-    if (err.name !== 'ConditionalCheckFailedException') {
-      console.error('Link classification failed', { url: originalUrl, error: err.message });
-    }
-  }
+  return content.slice(start, end)
+    .replace(/\[(.*?)\]\((.*?)\)/g, '$1') // markdown links -> anchor text
+    .replace(/[#>*_`~]/g, '')             // strip common markdown markers
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_CONTEXT_LENGTH);
 }
 
 export const handler = async (state) => {
@@ -99,30 +67,84 @@ export const handler = async (state) => {
   let linkPosition = 0;
 
   let updatedContent = state.content;
-  for (const { url, anchorText } of links) {
+  for (const { url, anchorText, context } of links) {
     linkPosition += 1;
-    await classifyAndStoreLinkMetadata(url, anchorText);
-    await initializeLinkRecord(state.tenantId, state.issueId, url, linkPosition);
     updatedContent = updatedContent.replace(
       url,
       `${process.env.REDIRECT_URL}?u=${encodeURI(url)}&cid=${encodeURIComponent(`${state.tenantId}#${state.issueId}`)}&p=${encodeURIComponent(linkPosition)}&s=__EMAIL_HASH__`
     );
+    await enrichLinkRecord(state.tenantId, state.issueId, url, anchorText, context, linkPosition);
   }
 
   return { content: updatedContent };
 };
 
-const initializeLinkRecord = async (tenantId, issueId, link, position) => {
+/**
+ * Creates the link tracking record for an issue link, enriched with an LLM
+ * topic classification and summary derived from the author's paragraph.
+ *
+ * Skips the LLM call only when the record is already classified, so re-runs
+ * and preview sends don't re-classify needlessly — but a record that exists
+ * without topics (e.g. created by a preview where classification failed) is
+ * re-classified, since interest scoring reads topics off this record on click.
+ * Enrichment is best-effort: a classification failure still creates the base
+ * tracking record so click counting keeps working.
+ *
+ * @param {string} tenantId
+ * @param {string} issueId
+ * @param {string} url - The original link URL
+ * @param {string} anchorText - The link's anchor text
+ * @param {string} context - The author's surrounding paragraph
+ * @param {number} position - 1-based ordinal of the link within the issue
+ */
+const enrichLinkRecord = async (tenantId, issueId, url, anchorText, context, position) => {
+  const pk = `${tenantId}#${issueId}`;
+  const sk = `link#${hash(url)}`;
+
+  let existing = null;
+  try {
+    const result = await ddb.send(new GetItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({ pk, sk }),
+      ProjectionExpression: 'pk, primaryTopic'
+    }));
+    existing = result.Item ? unmarshall(result.Item) : null;
+  } catch (err) {
+    console.error('Failed to check existing link record', { pk, sk, error: err.message });
+  }
+
+  // Already classified — nothing to do (and no wasted LLM call).
+  if (existing?.primaryTopic) {
+    return;
+  }
+
+  const classification = await classifyLinkWithLlm(url, anchorText, context);
+
+  if (existing) {
+    // Base record exists but has no topics yet — backfill the classification
+    // if we got one this time. Without topics there is nothing to write.
+    if (classification) {
+      await applyClassification(pk, sk, classification);
+    }
+    return;
+  }
+
+  await createLinkRecord(pk, sk, url, position, classification);
+};
+
+/** Creates the base link tracking record plus any classification fields. */
+const createLinkRecord = async (pk, sk, url, position, classification) => {
   try {
     await ddb.send(new PutItemCommand({
       TableName: process.env.TABLE_NAME,
       Item: marshall({
-        pk: `${tenantId}#${issueId}`,
-        sk: `link#${hash(link)}`,
-        url: link,
+        pk,
+        sk,
+        url,
         position,
         clicks_total: 0,
         byDay: {},
+        ...(classification && classificationFields(classification)),
         ttl: Math.floor(Date.now() / 1000) + (LINK_EXPIRATION_DAYS * 24 * 60 * 60)
       }),
       ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)'
@@ -133,3 +155,37 @@ const initializeLinkRecord = async (tenantId, issueId, link, position) => {
     }
   }
 };
+
+/** Backfills classification fields onto an existing, unclassified link record. */
+const applyClassification = async (pk, sk, classification) => {
+  try {
+    await ddb.send(new UpdateItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({ pk, sk }),
+      UpdateExpression: 'SET primaryTopic = :primaryTopic, secondaryTopics = :secondaryTopics, summary = :summary, confidence = :confidence, classifiedBy = :classifiedBy, classifiedAt = :classifiedAt',
+      ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(primaryTopic)',
+      ExpressionAttributeValues: marshall({
+        ':primaryTopic': classification.primaryTopic,
+        ':secondaryTopics': classification.secondaryTopics,
+        ':summary': classification.summary,
+        ':confidence': classification.confidence,
+        ':classifiedBy': classification.classifiedBy,
+        ':classifiedAt': new Date().toISOString()
+      })
+    }));
+  } catch (err) {
+    // Another run classified it first (or the record vanished) — that's fine.
+    if (err.name !== 'ConditionalCheckFailedException') {
+      throw err;
+    }
+  }
+};
+
+const classificationFields = (classification) => ({
+  primaryTopic: classification.primaryTopic,
+  secondaryTopics: classification.secondaryTopics,
+  summary: classification.summary,
+  confidence: classification.confidence,
+  classifiedBy: classification.classifiedBy,
+  classifiedAt: new Date().toISOString()
+});

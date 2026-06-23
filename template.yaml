@@ -3264,10 +3264,16 @@ Resources:
                 - dynamodb:PutItem
                 - dynamodb:GetItem
               Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - arn:aws:bedrock:*::foundation-model/amazon.nova-*
+                - !Sub arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/us.amazon.nova-*
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           TABLE_NAME: !Ref NewsletterTable
+          MODEL_ID: us.amazon.nova-pro-v1:0
           REDIRECT_URL: !If
             - HasRedirectCustomDomain
             - !Sub https://${RedirectCustomDomain}/r

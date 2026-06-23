@@ -1538,6 +1538,27 @@ paths:
         "500":
           $ref: "#/components/responses/UnknownError"
 
+  /ab-test/history:
+    get:
+      summary: Get A/B test history
+      description: >-
+        Retrieves the authenticated tenant's completed A/B tests (newest issue
+        first) along with aggregate statistics. For an empty tenant, returns an
+        empty tests array and zeroed aggregates with an empty topSendHoursUtc list.
+      tags:
+        - Issues
+      responses:
+        "200":
+          description: A/B test history and aggregate statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AbHistoryResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
   /issues/{id}:
     parameters:
       - name: id
@@ -4329,3 +4350,155 @@ components:
           enum: [a, b]
           description: The variant to declare as the winner
       additionalProperties: false
+
+    AbHistoryResponse:
+      type: object
+      required:
+        - tests
+        - aggregates
+      properties:
+        tests:
+          type: array
+          items:
+            $ref: "#/components/schemas/AbHistoryTest"
+          description: Completed A/B tests, newest issue first (empty when the tenant has no tests)
+        aggregates:
+          $ref: "#/components/schemas/AbHistoryAggregates"
+          description: Aggregate statistics across all returned tests
+
+    AbHistoryTest:
+      type: object
+      required:
+        - issueNumber
+        - dimension
+        - winMetric
+        - significant
+        - variants
+      properties:
+        issueNumber:
+          type: integer
+          description: The issue number this A/B test belongs to
+        dimension:
+          type: string
+          enum: [subject, sendTime]
+          description: >-
+            The dimension that was tested. "subject" tests differ by subject line;
+            "sendTime" tests differ by send time.
+        winMetric:
+          type: string
+          enum: [openRate, clickRate]
+          description: Metric used to determine the winner
+        status:
+          type: string
+          description: Final state of the A/B test (e.g. "sent", "inconclusive")
+        winnerVariantId:
+          type: string
+          enum: [a, b]
+          nullable: true
+          description: The winning variant, or null when no winner was determined
+        significant:
+          type: boolean
+          description: Whether the result was statistically significant
+        confidence:
+          type: number
+          nullable: true
+          description: Statistical confidence threshold applied during evaluation
+        lift:
+          type: number
+          nullable: true
+          description: Lift of the winner versus control on the win metric, in percentage points
+        decidedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: ISO 8601 timestamp when the winner was decided
+        variants:
+          type: array
+          items:
+            $ref: "#/components/schemas/AbHistoryVariant"
+          description: Per-variant statistics for this test
+
+    AbHistoryVariant:
+      type: object
+      required:
+        - variantId
+        - opens
+        - clicks
+        - deliveries
+        - openRate
+        - clickRate
+      properties:
+        variantId:
+          type: string
+          enum: [a, b]
+          description: Variant identifier these stats belong to
+        subject:
+          type: string
+          description: Subject line for this variant (present for subject-dimension tests)
+        sendAt:
+          type: string
+          format: date-time
+          description: Scheduled send time for this variant (present for send-time tests)
+        opens:
+          type: integer
+          description: Number of email opens for this variant
+        clicks:
+          type: integer
+          description: Number of link clicks for this variant
+        deliveries:
+          type: integer
+          description: Number of successful deliveries for this variant
+        openRate:
+          type: number
+          description: Open rate percentage (0-100)
+        clickRate:
+          type: number
+          description: Click rate percentage (0-100)
+
+    AbHistoryAggregates:
+      type: object
+      required:
+        - totalTests
+        - significantTests
+        - subjectTests
+        - sendTimeTests
+        - topSendHoursUtc
+      properties:
+        totalTests:
+          type: integer
+          description: Total number of A/B tests returned
+        significantTests:
+          type: integer
+          description: Number of tests with a statistically significant result
+        subjectTests:
+          type: integer
+          description: Number of subject-dimension tests
+        sendTimeTests:
+          type: integer
+          description: Number of send-time-dimension tests
+        avgWinningLift:
+          type: number
+          nullable: true
+          description: Average lift over significant winners, in percentage points
+        topSendHoursUtc:
+          type: array
+          items:
+            $ref: "#/components/schemas/SendHourWins"
+          description: >-
+            Winning send hours (UTC) from significant send-time tests, top 3
+            (empty when there are none)
+
+    SendHourWins:
+      type: object
+      required:
+        - hourUtc
+        - wins
+      properties:
+        hourUtc:
+          type: integer
+          minimum: 0
+          maximum: 23
+          description: Hour of day in UTC (0-23)
+        wins:
+          type: integer
+          description: Number of winning send-time tests at this hour

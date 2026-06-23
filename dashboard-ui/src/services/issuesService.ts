@@ -9,6 +9,7 @@ import type {
   UpdateIssueRequest,
   ListIssuesParams,
   VariantId,
+  AbHistoryResponse,
 } from '@/types/issues';
 import type { ApiResponse } from '@/types';
 import { calculateCompositeScore } from '@/utils/analyticsCalculations';
@@ -153,6 +154,16 @@ class IssuesService {
    */
   async declareAbWinner(issueId: string, variantId: VariantId): Promise<ApiResponse<Issue>> {
     return apiClient.post(`/issues/${issueId}/ab-test/declare-winner`, { variantId });
+  }
+
+  /**
+   * Retrieves the tenant's A/B test history: past tests with per-variant
+   * engagement plus headline aggregates (significant counts, avg winning lift,
+   * top winning send hours). Tests are returned newest-issue-first.
+   * @returns Promise resolving to the A/B test history response
+   */
+  async getAbHistory(): Promise<ApiResponse<AbHistoryResponse>> {
+    return apiClient.get<AbHistoryResponse>('/ab-test/history');
   }
 
   /**

@@ -83,6 +83,7 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
         // Issues endpoints
         (&Method::GET, "/issues") => issues::list_issues(event).await,
         (&Method::GET, "/issues/trends") => issues::get_trends(event).await,
+        (&Method::GET, "/ab-test/history") => issues::get_ab_history(event).await,
         (&Method::POST, "/issues") => issues::create_issue(event).await,
         (&Method::POST, path)
             if path.starts_with("/issues/") && path.ends_with("/analytics/rebuild") =>
@@ -388,6 +389,7 @@ fn is_valid_api_path(path: &str) -> bool {
         // Issues paths
         || path == "/issues"
         || path == "/issues/trends"
+        || path == "/ab-test/history"
         || path.starts_with("/issues/")
         // Reports paths
         || path == "/reports"

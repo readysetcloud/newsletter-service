@@ -58,7 +58,7 @@ export const handler = async (event) => {
   const normalizedBase = dashboardBaseUrl ? dashboardBaseUrl.replace(/\/+$/, '') : '';
   const reportUrl = normalizedBase ? `${normalizedBase}/reports/${month}` : null;
 
-  const { summary, subscriberGrowth, topLinks, issues, bestIssue } = report;
+  const { summary, subscriberGrowth, topLinks, issues, bestIssue, abTests = [] } = report;
 
   const templateData = {
     monthLabel,
@@ -107,7 +107,34 @@ export const handler = async (event) => {
       ...insight,
       color: severityColor(insight.severity)
     })),
-    hasInsights: report.insights.length > 0
+    hasInsights: report.insights.length > 0,
+    abTests: abTests.map((test) => ({
+      issueNumber: test.issueNumber,
+      subject: test.subject,
+      dimensionLabel: test.dimension === 'sendTime' ? 'Send time' : 'Subject line',
+      winMetricLabel: test.winMetric === 'clickRate' ? 'click rate' : 'open rate',
+      outcome:
+        test.status === 'inconclusive'
+          ? 'Inconclusive'
+          : test.winnerVariantId
+            ? `Variant ${test.winnerVariantId.toUpperCase()} won`
+            : 'In progress',
+      significanceText:
+        test.status === 'inconclusive'
+          ? 'No significant difference — control was sent'
+          : test.significant
+            ? `Significant${test.confidence != null ? ` at ${Math.round(n(test.confidence) * 100)}% confidence` : ''}`
+            : 'Not yet significant',
+      liftText: test.lift != null ? `${n(test.lift) >= 0 ? '+' : ''}${n(test.lift).toFixed(2)} pts` : '—',
+      variants: (test.variants || []).map((v) => ({
+        variantId: String(v.variantId).toUpperCase(),
+        label: v.label,
+        openRate: `${n(v.openRate).toFixed(2)}%`,
+        clickRate: `${n(v.clickRate).toFixed(2)}%`,
+        isWinner: Boolean(v.isWinner)
+      }))
+    })),
+    hasAbTests: abTests.length > 0
   };
 
   const html = template(templateData);

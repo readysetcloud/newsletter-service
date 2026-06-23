@@ -8,6 +8,58 @@ const pct = (num, den) => (den > 0 ? Number(((n(num) / n(den)) * 100).toFixed(2)
 const round = (v) => Number(n(v).toFixed(2));
 
 /**
+ * Format an A/B variant send time (ISO) as a short, human-friendly UTC label.
+ */
+const formatSendAt = (iso) => {
+  if (!iso) return '—';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return String(iso);
+  return `${date.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'UTC'
+  })} UTC`;
+};
+
+/**
+ * Builds a monthly-report A/B entry from an issue's consolidated abTest summary
+ * (written by aggregate-issue-analytics). Returns null when the issue has no test.
+ */
+const buildAbTestEntry = (issueNumber, subject, abTest) => {
+  if (!abTest || !Array.isArray(abTest.variants) || abTest.variants.length === 0) {
+    return null;
+  }
+
+  const metricKey = abTest.winMetric === 'clickRate' ? 'clickRate' : 'openRate';
+  const byId = new Map(abTest.variants.map((v) => [v.variantId, v]));
+  const control = byId.get('a');
+  const winner = abTest.winnerVariantId ? byId.get(abTest.winnerVariantId) : null;
+  const lift = winner && control ? round(n(winner[metricKey]) - n(control[metricKey])) : null;
+
+  return {
+    issueNumber: String(issueNumber),
+    subject: subject || 'Untitled issue',
+    dimension: abTest.dimension,
+    winMetric: metricKey,
+    status: abTest.status || null,
+    winnerVariantId: abTest.winnerVariantId ?? null,
+    significant: Boolean(abTest.evaluation?.significant),
+    confidence: abTest.evaluation?.confidence ?? null,
+    lift,
+    variants: abTest.variants.map((v) => ({
+      variantId: v.variantId,
+      label: abTest.dimension === 'sendTime' ? formatSendAt(v.sendAt) : (v.subject || '—'),
+      openRate: round(v.openRate),
+      clickRate: round(v.clickRate),
+      deliveries: n(v.deliveries),
+      isWinner: abTest.winnerVariantId === v.variantId
+    }))
+  };
+};
+
+/**
  * Derive a short, human friendly label for a link (hostname + trimmed path).
  */
 const linkLabel = (url) => {
@@ -107,6 +159,7 @@ export const handler = async (state) => {
 
   const linkTotals = new Map(); // url -> { url, clicks, issues:Set }
   const issues = [];
+  const abTests = [];
 
   const summary = {
     issuesSent: monthIssues.length,
@@ -165,6 +218,11 @@ export const handler = async (state) => {
       clickToOpenRate: pct(clicks, uniqueOpens),
       bounceRate: pct(bounces, sends)
     });
+
+    const abEntry = buildAbTestEntry(issueNumber, issue.subject, issue.analytics?.abTest);
+    if (abEntry) {
+      abTests.push(abEntry);
+    }
   }
 
   summary.avgOpenRate = pct(summary.totalUniqueOpens, summary.totalDelivered);
@@ -213,6 +271,6 @@ export const handler = async (state) => {
     periodStart,
     periodEnd,
     hasIssues: true,
-    reportData: { summary, subscriberGrowth, topLinks, issues, bestIssue }
+    reportData: { summary, subscriberGrowth, topLinks, issues, bestIssue, abTests }
   };
 };

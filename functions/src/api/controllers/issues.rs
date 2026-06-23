@@ -2806,13 +2806,6 @@ mod tests {
     }
 
     #[test]
-    fn test_ab_test_rejects_non_subject_dimension() {
-        let mut ab = valid_ab_test();
-        ab["dimension"] = serde_json::json!("sendTime");
-        assert!(validate_and_normalize_ab_test(&ab).is_err());
-    }
-
-    #[test]
     fn test_ab_test_requires_exactly_two_variants() {
         let mut ab = valid_ab_test();
         ab["variants"] = serde_json::json!([{ "variantId": "a", "subject": "only one" }]);

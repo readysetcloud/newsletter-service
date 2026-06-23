@@ -2181,6 +2181,7 @@ Resources:
               Action:
                 - dynamodb:GetItem
                 - dynamodb:UpdateItem
+                - dynamodb:PutItem
               Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
               Action: events:PutEvents

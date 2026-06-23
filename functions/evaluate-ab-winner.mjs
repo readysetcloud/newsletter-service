@@ -1,7 +1,8 @@
-import { DynamoDBClient, GetItemCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, GetItemCommand, UpdateItemCommand, PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { evaluateAbResult } from './utils/ab-stats.mjs';
+import { buildAbHistoryRecord } from './utils/ab-history.mjs';
 import { publishIssueEvent, EVENT_TYPES } from './utils/event-publisher.mjs';
 
 const ddb = new DynamoDBClient();
@@ -87,6 +88,10 @@ export const handler = async (event) => {
       };
       await finalizeEvaluation(issueId, updatedAbTest, status);
 
+      // Record the completed test in the tenant's cross-issue A/B history.
+      // Best-effort: a failure here must not affect the (already enqueued) send.
+      await writeAbHistory(tenantId, issueNumber, updatedAbTest, { a: aCounters, b: bCounters });
+
       await publishIssueEvent(
         tenantId,
         'system',
@@ -165,6 +170,28 @@ const finalizeEvaluation = async (issueId, updatedAbTest, status) => {
       ':now': new Date().toISOString()
     })
   }));
+};
+
+/**
+ * Records the completed test in the tenant's cross-issue A/B history. The record
+ * is keyed by issue, so the PutItem is an idempotent upsert (a redelivery
+ * overwrites rather than duplicating). Best-effort: failures are logged and
+ * swallowed so history never affects the winner send or finalize.
+ * @param {string} tenantId
+ * @param {number|string} issueNumber
+ * @param {Object} abTest - The finalized abTest config.
+ * @param {Object} counters - Per-variant counters keyed by variantId.
+ */
+const writeAbHistory = async (tenantId, issueNumber, abTest, counters) => {
+  try {
+    const record = buildAbHistoryRecord({ tenantId, issueNumber, abTest, counters });
+    await ddb.send(new PutItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Item: marshall(record, { removeUndefinedValues: true })
+    }));
+  } catch (err) {
+    console.error('Failed to write A/B history record', { tenantId, issueNumber, error: err.message });
+  }
 };
 
 /**

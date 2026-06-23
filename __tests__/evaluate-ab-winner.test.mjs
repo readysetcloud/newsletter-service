@@ -42,7 +42,8 @@ const loadIsolated = async () => {
     jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
       DynamoDBClient: jest.fn(() => ({ send: ddbSend })),
       GetItemCommand: jest.fn((params) => ({ __type: 'GetItem', ...params })),
-      UpdateItemCommand: jest.fn((params) => ({ __type: 'UpdateItem', ...params }))
+      UpdateItemCommand: jest.fn((params) => ({ __type: 'UpdateItem', ...params })),
+      PutItemCommand: jest.fn((params) => ({ __type: 'PutItem', ...params }))
     }));
 
     jest.unstable_mockModule('@aws-sdk/client-eventbridge', () => ({
@@ -166,6 +167,25 @@ describe('evaluate-ab-winner', () => {
     expect(data.winnerVariantId).toBe('b');
     expect(data.status).toBe('sent');
     expect(data.issueId).toBe('tenant-1#42');
+  });
+
+  it('writes a cross-issue A/B history record (idempotent upsert keyed by issue)', async () => {
+    wireDdb({
+      abTest: abTestConfig(),
+      aStats: { opens: 200, clicks: 10, deliveries: 1000 },
+      bStats: { opens: 400, clicks: 20, deliveries: 1000 }
+    });
+
+    await handler(baseEvent);
+
+    const putCall = ddbSend.mock.calls.find(([cmd]) => cmd.__type === 'PutItem');
+    expect(putCall).toBeDefined();
+    const item = unmarshall(putCall[0].Item);
+    expect(item.recordType).toBe('abHistory');
+    expect(item.pk).toBe('tenant-1#abhistory');
+    expect(item.sk).toBe('test#42'); // keyed by issue => upsert is idempotent
+    expect(item.winnerVariantId).toBe('b');
+    expect(item.dimension).toBe('subject');
   });
 
   it('inconclusive: persists status inconclusive, sends control variant a subject', async () => {

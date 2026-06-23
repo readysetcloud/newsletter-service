@@ -1,9 +1,6 @@
-import React, { useMemo, useState, useCallback } from 'react';
+import React, { useMemo } from 'react';
 import { FlaskConical, Trophy, Mail, Clock, CheckCircle2, MinusCircle, Loader2, AlertTriangle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/Card';
-import { Button } from '../ui/Button';
-import { useToast } from '../ui/Toast';
-import { issuesService } from '../../services/issuesService';
 import { formatDate } from '../../utils/issueDetailUtils';
 import { cn } from '../../utils/cn';
 import type { AbTest, VariantStats, VariantId, AbTestVariant } from '../../types/issues';
@@ -13,10 +10,6 @@ export interface AbTestResultsProps {
   abTest: AbTest;
   /** Per-variant engagement counters returned alongside the issue. */
   variantStats?: VariantStats[];
-  /** Identifier of the issue this test belongs to. */
-  issueId: string;
-  /** Invoked after a winner is successfully declared so the page can refetch. */
-  onWinnerDeclared?: () => void;
 }
 
 const VARIANT_LABELS: Record<VariantId, string> = {
@@ -127,12 +120,7 @@ VariantCard.displayName = 'VariantCard';
 export const AbTestResults: React.FC<AbTestResultsProps> = ({
   abTest,
   variantStats,
-  issueId,
-  onWinnerDeclared,
 }) => {
-  const { addToast } = useToast();
-  const [decBusy, setDecBusy] = useState<VariantId | null>(null);
-
   const status = abTest.status ?? 'pending';
   const winMetric = abTest.winMetric ?? 'openRate';
   const evaluation = abTest.evaluation ?? null;
@@ -150,48 +138,7 @@ export const AbTestResults: React.FC<AbTestResultsProps> = ({
     return map;
   }, [abTest.variants]);
 
-  // The manual override is only meaningful while the test has not been finalized.
-  const isFinalized = status === 'sent' || status === 'inconclusive';
   const isDecided = status === 'sent' || status === 'inconclusive' || status === 'evaluating';
-
-  const handleDeclare = useCallback(
-    async (variantId: VariantId) => {
-      const label = VARIANT_LABELS[variantId];
-      const confirmed = window.confirm(
-        `Declare ${label} as the winner? This overrides automatic evaluation and marks the test as sent.`
-      );
-      if (!confirmed) return;
-
-      try {
-        setDecBusy(variantId);
-        const response = await issuesService.declareAbWinner(issueId, variantId);
-
-        if (response.success) {
-          addToast({
-            type: 'success',
-            title: 'Winner declared',
-            message: `${label} has been recorded as the winner.`,
-          });
-          onWinnerDeclared?.();
-        } else {
-          addToast({
-            type: 'error',
-            title: 'Failed to declare winner',
-            message: response.error || 'Could not record the A/B test winner.',
-          });
-        }
-      } catch (err) {
-        addToast({
-          type: 'error',
-          title: 'Failed to declare winner',
-          message: err instanceof Error ? err.message : 'Could not record the A/B test winner.',
-        });
-      } finally {
-        setDecBusy(null);
-      }
-    },
-    [issueId, addToast, onWinnerDeclared]
-  );
 
   const dimensionLabel = abTest.dimension === 'subject' ? 'Subject line' : 'Send time';
   const statusConfig = STATUS_CONFIG[status];
@@ -318,37 +265,6 @@ export const AbTestResults: React.FC<AbTestResultsProps> = ({
               This test is decided on open rate. Apple Mail Privacy Protection can inflate open rates, so
               click rate may be a more reliable signal.
             </p>
-          </div>
-        )}
-
-        {/* Manual override */}
-        {!isFinalized && (
-          <div className="border-t border-border pt-4">
-            <p className="text-xs text-muted-foreground mb-2">
-              Manually declare a winner to override automatic evaluation.
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => handleDeclare('a')}
-                isLoading={decBusy === 'a'}
-                disabled={decBusy !== null}
-                aria-label="Declare Variant A as the winner"
-              >
-                Declare A
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => handleDeclare('b')}
-                isLoading={decBusy === 'b'}
-                disabled={decBusy !== null}
-                aria-label="Declare Variant B as the winner"
-              >
-                Declare B
-              </Button>
-            </div>
           </div>
         )}
       </CardContent>

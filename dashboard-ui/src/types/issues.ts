@@ -207,7 +207,8 @@ export interface UpdateIssueRequest {
   status?: 'published';
   templateId?: string;
   contentType?: IssueContentType;
-  abTest?: AbTest;
+  /** An explicit `null` clears a previously-saved A/B test. */
+  abTest?: AbTest | null;
 }
 
 export interface ListIssuesParams {

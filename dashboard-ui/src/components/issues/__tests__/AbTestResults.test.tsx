@@ -1,18 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { AbTestResults } from '../AbTestResults';
 import type { AbTest, VariantStats } from '@/types/issues';
 
 const addToast = vi.fn();
 vi.mock('../../ui/Toast', () => ({
   useToast: () => ({ addToast }),
-}));
-
-const declareAbWinner = vi.fn();
-vi.mock('../../../services/issuesService', () => ({
-  issuesService: {
-    declareAbWinner: (...args: unknown[]) => declareAbWinner(...args),
-  },
 }));
 
 const baseStats: VariantStats[] = [
@@ -37,7 +30,7 @@ describe('AbTestResults', () => {
   });
 
   it('renders the dimension header and computes open/click rates', () => {
-    render(<AbTestResults abTest={subjectTest()} variantStats={baseStats} issueId="i1" />);
+    render(<AbTestResults abTest={subjectTest()} variantStats={baseStats} />);
 
     expect(screen.getByText('Subject line')).toBeInTheDocument();
     expect(screen.getByText('Control subject')).toBeInTheDocument();
@@ -53,14 +46,13 @@ describe('AbTestResults', () => {
       <AbTestResults
         abTest={subjectTest()}
         variantStats={[{ variantId: 'a', opens: 0, clicks: 0, deliveries: 0 }]}
-        issueId="i1"
       />
     );
     expect(screen.getAllByText('—').length).toBeGreaterThan(0);
   });
 
   it('shows in-progress state when not yet decided', () => {
-    render(<AbTestResults abTest={subjectTest({ status: 'testing' })} variantStats={baseStats} issueId="i1" />);
+    render(<AbTestResults abTest={subjectTest({ status: 'testing' })} variantStats={baseStats} />);
     expect(screen.getByText(/awaiting results/i)).toBeInTheDocument();
   });
 
@@ -81,53 +73,24 @@ describe('AbTestResults', () => {
         decidedAt: '2026-06-01T00:00:00Z',
       },
     });
-    render(<AbTestResults abTest={abTest} variantStats={baseStats} issueId="i1" />);
+    render(<AbTestResults abTest={abTest} variantStats={baseStats} />);
     expect(screen.getByText(/Significant at 95% confidence/i)).toBeInTheDocument();
     expect(screen.getByText('Winner')).toBeInTheDocument();
   });
 
   it('shows inconclusive state', () => {
-    render(<AbTestResults abTest={subjectTest({ status: 'inconclusive' })} variantStats={baseStats} issueId="i1" />);
+    render(<AbTestResults abTest={subjectTest({ status: 'inconclusive' })} variantStats={baseStats} />);
     expect(screen.getByText(/Inconclusive — control was sent/i)).toBeInTheDocument();
   });
 
   it('shows the Apple MPP caveat for open-rate tests', () => {
-    render(<AbTestResults abTest={subjectTest({ winMetric: 'openRate' })} variantStats={baseStats} issueId="i1" />);
+    render(<AbTestResults abTest={subjectTest({ winMetric: 'openRate' })} variantStats={baseStats} />);
     expect(screen.getByText(/Apple Mail Privacy Protection/i)).toBeInTheDocument();
   });
 
-  it('hides the override buttons once finalized', () => {
-    render(<AbTestResults abTest={subjectTest({ status: 'sent' })} variantStats={baseStats} issueId="i1" />);
-    expect(screen.queryByRole('button', { name: /Declare Variant A/i })).not.toBeInTheDocument();
-  });
-
-  it('declares a winner after confirmation and triggers refetch', async () => {
-    declareAbWinner.mockResolvedValue({ success: true });
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-    const onWinnerDeclared = vi.fn();
-
-    render(
-      <AbTestResults
-        abTest={subjectTest({ status: 'testing' })}
-        variantStats={baseStats}
-        issueId="i1"
-        onWinnerDeclared={onWinnerDeclared}
-      />
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: /Declare Variant B/i }));
-
-    await waitFor(() => expect(declareAbWinner).toHaveBeenCalledWith('i1', 'b'));
-    await waitFor(() => expect(onWinnerDeclared).toHaveBeenCalled());
-    confirmSpy.mockRestore();
-  });
-
-  it('does not declare when confirmation is cancelled', () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
-    render(<AbTestResults abTest={subjectTest({ status: 'testing' })} variantStats={baseStats} issueId="i1" />);
-    fireEvent.click(screen.getByRole('button', { name: /Declare Variant A/i }));
-    expect(declareAbWinner).not.toHaveBeenCalled();
-    confirmSpy.mockRestore();
+  it('is display-only — it does not render manual declare-winner controls', () => {
+    render(<AbTestResults abTest={subjectTest({ status: 'testing' })} variantStats={baseStats} />);
+    expect(screen.queryByRole('button', { name: /Declare/i })).not.toBeInTheDocument();
   });
 
   it('renders send time for send-time tests', () => {
@@ -140,7 +103,7 @@ describe('AbTestResults', () => {
       ],
       status: 'testing',
     };
-    render(<AbTestResults abTest={abTest} variantStats={baseStats} issueId="i1" />);
+    render(<AbTestResults abTest={abTest} variantStats={baseStats} />);
     expect(screen.getByText('Send time')).toBeInTheDocument();
   });
 });

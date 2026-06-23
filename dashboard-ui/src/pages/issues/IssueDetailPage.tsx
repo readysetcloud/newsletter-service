@@ -918,8 +918,6 @@ export const IssueDetailPage: React.FC = () => {
                 <AbTestResults
                   abTest={issue.abTest}
                   variantStats={issue.variantStats}
-                  issueId={issue.id}
-                  onWinnerDeclared={loadIssue}
                 />
               </AsyncErrorBoundary>
             </FadeIn>

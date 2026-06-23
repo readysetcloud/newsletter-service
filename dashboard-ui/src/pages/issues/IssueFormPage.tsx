@@ -370,6 +370,10 @@ export const IssueFormPage: React.FC = () => {
 
         if (abTest) {
           updateData.abTest = buildAbTestRequest(abTest);
+        } else if (existingIssue?.abTest) {
+          // The test was turned off after being saved — send an explicit null so
+          // the API clears the stored config (omitting it leaves it in place).
+          updateData.abTest = null;
         }
 
         const response = await issuesService.updateIssue(id, updateData);
@@ -480,7 +484,7 @@ export const IssueFormPage: React.FC = () => {
     } finally {
       setIsSubmitting(false);
     }
-  }, [validateForm, isEditMode, id, formData, abTest, navigate, addToast]);
+  }, [validateForm, isEditMode, id, formData, abTest, existingIssue, navigate, addToast]);
 
   // Handle cancel with unsaved changes confirmation
   const handleCancel = useCallback(() => {

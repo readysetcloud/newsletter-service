@@ -59,3 +59,6 @@ export type { DeliverabilityHealthCardProps } from './DeliverabilityHealthCard';
 
 export { SubscriberMetricsPanel } from './SubscriberMetricsPanel';
 export type { SubscriberMetricsPanelProps } from './SubscriberMetricsPanel';
+
+export { AbTestConfig, validateAbTest, hasAbTestErrors } from './AbTestConfig';
+export type { AbTestConfigProps, AbTestErrors } from './AbTestConfig';

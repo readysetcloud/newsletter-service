@@ -15,7 +15,8 @@ const {
   calculateEngagementType,
   calculateTrafficSource,
   calculateBounceReasons,
-  formatComplaintDetails
+  formatComplaintDetails,
+  calculateAbTestSummary
 } = await import('../aggregate-issue-analytics.mjs');
 
 describe('aggregate-issue-analytics', () => {
@@ -48,19 +49,20 @@ describe('aggregate-issue-analytics', () => {
         .mockResolvedValueOnce({ Items: [] })
         .mockResolvedValueOnce({ Items: [] })
         .mockResolvedValueOnce({ Items: [] })
+        .mockResolvedValueOnce({}) // abTest summary: newsletter GetItem (no A/B test)
         .mockResolvedValueOnce({});
 
       const result = await handler(event);
 
       expect(result.success).toBe(true);
       expect(result.issueNumber).toBe('42');
-      expect(mockSend).toHaveBeenCalledTimes(6);
+      expect(mockSend).toHaveBeenCalledTimes(7);
 
       const firstCall = mockSend.mock.calls[0][0];
       expect(firstCall).toBeInstanceOf(UpdateItemCommand);
       expect(firstCall.input.ConditionExpression).toContain('statsPhase');
 
-      const lastCall = mockSend.mock.calls[5][0];
+      const lastCall = mockSend.mock.calls[6][0];
       expect(lastCall).toBeInstanceOf(UpdateItemCommand);
       const updateValues = unmarshall(lastCall.input.ExpressionAttributeValues);
       expect(updateValues[':phase']).toBe('consolidated');
@@ -171,13 +173,14 @@ describe('aggregate-issue-analytics', () => {
         .mockResolvedValueOnce({ Items: sampleOpens })
         .mockResolvedValueOnce({ Items: sampleBounces })
         .mockResolvedValueOnce({ Items: sampleComplaints })
+        .mockResolvedValueOnce({}) // abTest summary: newsletter GetItem (no A/B test)
         .mockResolvedValueOnce({});
 
       const result = await handler(event);
 
       expect(result.success).toBe(true);
 
-      const finalUpdateCall = mockSend.mock.calls[5][0];
+      const finalUpdateCall = mockSend.mock.calls[6][0];
       const updateValues = unmarshall(finalUpdateCall.input.ExpressionAttributeValues);
       const analytics = updateValues[':analytics'];
 
@@ -1138,6 +1141,70 @@ describe('aggregate-issue-analytics', () => {
       const result = formatComplaintDetails([]);
 
       expect(result).toEqual([]);
+    });
+  });
+
+  describe('calculateAbTestSummary', () => {
+    let mockSend;
+    let originalEnv;
+
+    beforeEach(() => {
+      originalEnv = process.env.TABLE_NAME;
+      process.env.TABLE_NAME = 'test-table';
+      mockSend = jest.fn();
+      DynamoDBClient.prototype.send = mockSend;
+    });
+
+    afterEach(() => {
+      process.env.TABLE_NAME = originalEnv;
+    });
+
+    test('returns null when the issue has no A/B test', async () => {
+      mockSend.mockResolvedValue({ Item: marshall({ subject: 'No test here' }) });
+      const result = await calculateAbTestSummary(new DynamoDBClient(), 'tenant1', '42');
+      expect(result).toBeNull();
+    });
+
+    test('summarizes per-variant rates and surfaces the evaluation verdict', async () => {
+      const abTest = {
+        dimension: 'subject',
+        winMetric: 'openRate',
+        status: 'sent',
+        winnerVariantId: 'b',
+        variants: [
+          { variantId: 'a', subject: 'Control' },
+          { variantId: 'b', subject: 'Challenger' }
+        ],
+        evaluation: { significant: true, confidence: 0.95, winnerVariantId: 'b' }
+      };
+
+      mockSend.mockImplementation(async (cmd) => {
+        const key = unmarshall(cmd.input.Key);
+        if (key.sk === 'newsletter') {
+          return { Item: marshall({ abTest: JSON.stringify(abTest) }) };
+        }
+        if (key.sk === 'stats#v#a') {
+          return { Item: marshall({ opens: 200, clicks: 10, deliveries: 1000 }) };
+        }
+        if (key.sk === 'stats#v#b') {
+          return { Item: marshall({ opens: 400, clicks: 40, deliveries: 1000 }) };
+        }
+        return {};
+      });
+
+      const result = await calculateAbTestSummary(new DynamoDBClient(), 'tenant1', '42');
+
+      expect(result).not.toBeNull();
+      expect(result.dimension).toBe('subject');
+      expect(result.winnerVariantId).toBe('b');
+      expect(result.evaluation.significant).toBe(true);
+
+      const a = result.variants.find((v) => v.variantId === 'a');
+      const b = result.variants.find((v) => v.variantId === 'b');
+      expect(a.openRate).toBeCloseTo(20, 5);
+      expect(b.openRate).toBeCloseTo(40, 5);
+      expect(b.clickRate).toBeCloseTo(4, 5);
+      expect(b.subject).toBe('Challenger');
     });
   });
 });

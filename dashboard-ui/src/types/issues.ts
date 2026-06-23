@@ -40,6 +40,77 @@ export interface Issue extends IssueListItem {
   stats?: IssueStats;
   insights?: string[];
   insightsV2?: InsightV2[];
+  abTest?: AbTest;
+  variantStats?: VariantStats[];
+}
+
+// ---------------------------------------------------------------------------
+// A/B testing
+// ---------------------------------------------------------------------------
+
+/** Which attribute an A/B test varies. */
+export type AbTestDimension = 'subject' | 'sendTime';
+
+/** Metric used to decide the winner. */
+export type AbTestWinMetric = 'openRate' | 'clickRate';
+
+/** Lifecycle of a managed A/B test. */
+export type AbTestStatus = 'pending' | 'testing' | 'evaluating' | 'sent' | 'inconclusive';
+
+export type VariantId = 'a' | 'b';
+
+export interface AbTestVariant {
+  variantId: VariantId;
+  /** Subject line for this variant (subject-dimension tests). */
+  subject?: string;
+  /** Absolute send time for this variant (send-time tests). */
+  sendAt?: string;
+}
+
+export interface VariantEvaluation {
+  successes: number;
+  deliveries: number;
+  rate: number;
+}
+
+export interface AbTestEvaluation {
+  winMetric: AbTestWinMetric;
+  confidence: number;
+  minSamplePerVariant: number;
+  variantA: VariantEvaluation;
+  variantB: VariantEvaluation;
+  zScore: number;
+  pValue: number;
+  significant: boolean;
+  winnerVariantId: VariantId | null;
+  decidedAt: string;
+  /** Winning send time, recorded for send-time tests. */
+  winningSendAt?: string;
+}
+
+export interface AbTest {
+  testId?: string;
+  dimension: AbTestDimension;
+  variants: AbTestVariant[];
+  winMetric?: AbTestWinMetric;
+  confidence?: number;
+  minSamplePerVariant?: number;
+  testFraction?: number;
+  evaluateAfterMinutes?: number;
+  status?: AbTestStatus;
+  winnerVariantId?: VariantId | null;
+  evaluation?: AbTestEvaluation | null;
+}
+
+/** Per-variant engagement counters returned alongside an issue. */
+export interface VariantStats {
+  variantId: VariantId;
+  opens: number;
+  clicks: number;
+  deliveries: number;
+  sends?: number;
+  bounces?: number;
+  complaints?: number;
 }
 
 export interface TopPerformer {
@@ -125,6 +196,7 @@ export interface CreateIssueRequest {
   metadata?: Record<string, unknown>;
   templateId?: string;
   contentType?: IssueContentType;
+  abTest?: AbTest;
 }
 
 export interface UpdateIssueRequest {
@@ -135,6 +207,7 @@ export interface UpdateIssueRequest {
   status?: 'published';
   templateId?: string;
   contentType?: IssueContentType;
+  abTest?: AbTest;
 }
 
 export interface ListIssuesParams {
@@ -210,6 +283,27 @@ export interface ComplaintDetail {
   complaintType: string;
 }
 
+/** Per-variant rollup included in consolidated analytics/reports. */
+export interface AbTestVariantAnalytics {
+  variantId: VariantId;
+  subject?: string;
+  sendAt?: string;
+  opens: number;
+  clicks: number;
+  deliveries: number;
+  openRate: number;
+  clickRate: number;
+}
+
+export interface AbTestAnalytics {
+  dimension: AbTestDimension;
+  winMetric: AbTestWinMetric;
+  status?: AbTestStatus;
+  winnerVariantId?: VariantId | null;
+  variants: AbTestVariantAnalytics[];
+  evaluation?: AbTestEvaluation | null;
+}
+
 export interface IssueAnalytics {
   links: LinkPerformance[];
   clickDecay: ClickDecayPoint[];
@@ -221,6 +315,7 @@ export interface IssueAnalytics {
   trafficSource: TrafficSource;
   bounceReasons: BounceReasons;
   complaintDetails: ComplaintDetail[];
+  abTest?: AbTestAnalytics;
 }
 
 export interface InsightEvidence {

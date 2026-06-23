@@ -8,6 +8,7 @@ import { IssueStatusBadge } from '../../components/issues/IssueStatusBadge';
 import { MarkdownPreview } from '../../components/issues/MarkdownPreview';
 import { DeleteIssueDialog } from '../../components/issues/DeleteIssueDialog';
 import { SubscriberMetricsPanel } from '../../components/issues/SubscriberMetricsPanel';
+import { AbTestResults } from '../../components/issues/AbTestResults';
 import {
   IssueDetailSkeleton,
   InsightsHeroSkeleton,
@@ -905,6 +906,22 @@ export const IssueDetailPage: React.FC = () => {
                 manualRemovals={issue.stats.manualRemovals}
                 subscribers={issue.stats.subscribers}
               />
+            </FadeIn>
+          </div>
+        )}
+
+        {/* A/B Test Results Panel - Show whenever the issue has a managed A/B test */}
+        {issue.abTest && (
+          <div className="mb-4 sm:mb-6">
+            <FadeIn variant="fade" speed="normal">
+              <AsyncErrorBoundary onRetry={loadIssue}>
+                <AbTestResults
+                  abTest={issue.abTest}
+                  variantStats={issue.variantStats}
+                  issueId={issue.id}
+                  onWinnerDeclared={loadIssue}
+                />
+              </AsyncErrorBoundary>
             </FadeIn>
           </div>
         )}

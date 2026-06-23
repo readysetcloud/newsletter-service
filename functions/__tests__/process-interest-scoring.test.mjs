@@ -20,19 +20,14 @@ beforeEach(async () => {
 });
 
 describe('processInterestScoring', () => {
-  const tenantId = 'tenant-1';
+  const cid = 'tenant-1#42';
   const email = 'subscriber@example.com';
 
   describe('early returns', () => {
-    test('should return early when URL normalization fails (null)', async () => {
-      await processInterestScoring(tenantId, email, 'not-a-valid-url');
-      expect(mockSend).not.toHaveBeenCalled();
-    });
-
-    test('should return early when no Link_Metadata found', async () => {
+    test('should return early when no link record found', async () => {
       mockSend.mockResolvedValueOnce({ Item: undefined });
 
-      await processInterestScoring(tenantId, email, 'https://example.com/article');
+      await processInterestScoring(cid, email, 'https://example.com/article');
 
       expect(mockSend).toHaveBeenCalledTimes(1);
       const cmd = mockSend.mock.calls[0][0];
@@ -40,17 +35,20 @@ describe('processInterestScoring', () => {
     });
   });
 
-  describe('Link_Metadata lookup', () => {
-    test('should normalize URL and hash before looking up metadata', async () => {
+  describe('link record lookup', () => {
+    test('should look up the issue link record by cid and hashed url', async () => {
       mockSend.mockResolvedValueOnce({ Item: undefined });
 
-      await processInterestScoring(tenantId, email, 'https://EXAMPLE.COM/article/?utm_source=test');
+      await processInterestScoring(cid, email, 'https://example.com/article');
 
       expect(mockSend).toHaveBeenCalledTimes(1);
       const cmd = mockSend.mock.calls[0][0];
       expect(cmd).toBeInstanceOf(GetItemCommand);
       expect(cmd.input.TableName).toBe('test-newsletter-table');
-      expect(cmd.input.Key).toBeDefined();
+
+      const key = unmarshall(cmd.input.Key);
+      expect(key.pk).toBe(cid);
+      expect(key.sk).toMatch(/^link#/);
     });
   });
 
@@ -71,7 +69,7 @@ describe('processInterestScoring', () => {
       // UpdateItem for secondary topic 'serverless'
       mockSend.mockResolvedValueOnce(makeUpdateResult('serverless', 0.5));
 
-      await processInterestScoring(tenantId, email, 'https://example.com/ai-article');
+      await processInterestScoring(cid, email, 'https://example.com/ai-article');
 
       // 1 GetItem + 2 UpdateItems
       expect(mockSend).toHaveBeenCalledTimes(3);
@@ -99,7 +97,7 @@ describe('processInterestScoring', () => {
       });
       mockSend.mockResolvedValueOnce(makeUpdateResult('devops', 1.0));
 
-      await processInterestScoring(tenantId, email, 'https://example.com/devops-article');
+      await processInterestScoring(cid, email, 'https://example.com/devops-article');
 
       // 1 GetItem + 1 UpdateItem
       expect(mockSend).toHaveBeenCalledTimes(2);
@@ -112,7 +110,7 @@ describe('processInterestScoring', () => {
       mockSend.mockResolvedValueOnce(makeUpdateResult('ai', 1.0));
       mockSend.mockResolvedValueOnce(makeUpdateResult('serverless', 0.5));
 
-      await processInterestScoring(tenantId, email, 'https://example.com/multi-topic');
+      await processInterestScoring(cid, email, 'https://example.com/multi-topic');
 
       // 1 GetItem + 2 UpdateItems (ai + serverless, NOT cloud)
       expect(mockSend).toHaveBeenCalledTimes(3);
@@ -124,7 +122,7 @@ describe('processInterestScoring', () => {
       });
       mockSend.mockResolvedValueOnce(makeUpdateResult('ai', 1.0));
 
-      await processInterestScoring(tenantId, email, 'https://example.com/article');
+      await processInterestScoring(cid, email, 'https://example.com/article');
 
       // 1 GetItem + 1 UpdateItem (only primary)
       expect(mockSend).toHaveBeenCalledTimes(2);
@@ -135,7 +133,7 @@ describe('processInterestScoring', () => {
         Item: marshall({ primaryTopic: 'nonexistent', secondaryTopics: [] })
       });
 
-      await processInterestScoring(tenantId, email, 'https://example.com/article');
+      await processInterestScoring(cid, email, 'https://example.com/article');
 
       // Only 1 GetItem, no UpdateItems
       expect(mockSend).toHaveBeenCalledTimes(1);
@@ -164,7 +162,7 @@ describe('processInterestScoring', () => {
         })
       });
 
-      await processInterestScoring(tenantId, email, 'https://example.com/ai-article');
+      await processInterestScoring(cid, email, 'https://example.com/ai-article');
 
       // 1 GetItem + 1 failed UpdateItem + 1 init UpdateItem + 1 retry UpdateItem = 4
       expect(mockSend).toHaveBeenCalledTimes(4);
@@ -186,7 +184,7 @@ describe('processInterestScoring', () => {
         })
       });
 
-      await processInterestScoring(tenantId, email, 'https://example.com/security-article');
+      await processInterestScoring(cid, email, 'https://example.com/security-article');
 
       const updateCmd = mockSend.mock.calls[1][0];
       expect(updateCmd.input.UpdateExpression).toContain('SET');
@@ -204,7 +202,7 @@ describe('processInterestScoring', () => {
         })
       });
 
-      await processInterestScoring(tenantId, email, 'https://example.com/ai-article');
+      await processInterestScoring(cid, email, 'https://example.com/ai-article');
 
       const updateCmd = mockSend.mock.calls[1][0];
       expect(updateCmd.input.ReturnValues).toBe('UPDATED_NEW');
@@ -220,7 +218,7 @@ describe('processInterestScoring', () => {
         })
       });
 
-      await processInterestScoring(tenantId, email, 'https://example.com/ai-article');
+      await processInterestScoring(cid, email, 'https://example.com/ai-article');
 
       const updateCmd = mockSend.mock.calls[1][0];
       const vals = unmarshall(updateCmd.input.ExpressionAttributeValues);
@@ -252,7 +250,7 @@ describe('processInterestScoring', () => {
 
       // processInterestScoring checks threshold crossing internally
       // preScore (2.0) < 3 AND postScore (3.0) >= 3 → triggers handleAutoSegmentation
-      await processInterestScoring(tenantId, email, 'https://example.com/ai-article');
+      await processInterestScoring(cid, email, 'https://example.com/ai-article');
 
       // 1 GetItem (metadata) + 1 UpdateItem (score) + 1 GetItem (segment) + 1 TransactWrite + 1 PutItem (member) + 1 UpdateItem (count) = 6
       expect(mockSend).toHaveBeenCalledTimes(6);
@@ -275,7 +273,7 @@ describe('processInterestScoring', () => {
         })
       });
 
-      await processInterestScoring(tenantId, email, 'https://example.com/ai-article');
+      await processInterestScoring(cid, email, 'https://example.com/ai-article');
 
       // 1 GetItem + 1 UpdateItem = 2 (no handleAutoSegmentation calls)
       expect(mockSend).toHaveBeenCalledTimes(2);
@@ -292,7 +290,7 @@ describe('processInterestScoring', () => {
         })
       });
 
-      await processInterestScoring(tenantId, email, 'https://example.com/ai-article');
+      await processInterestScoring(cid, email, 'https://example.com/ai-article');
 
       // 1 GetItem + 1 UpdateItem = 2 (no handleAutoSegmentation calls)
       expect(mockSend).toHaveBeenCalledTimes(2);
@@ -304,12 +302,12 @@ describe('processInterestScoring', () => {
       mockSend.mockRejectedValueOnce(new Error('DynamoDB timeout'));
       const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
-      await processInterestScoring(tenantId, email, 'https://example.com/article');
+      await processInterestScoring(cid, email, 'https://example.com/article');
 
       expect(consoleSpy).toHaveBeenCalledWith(
         'Interest scoring failed',
         expect.objectContaining({
-          tenantId,
+          cid,
           subscriberEmail: email,
           error: 'DynamoDB timeout'
         })
@@ -322,7 +320,7 @@ describe('processInterestScoring', () => {
       mockSend.mockRejectedValueOnce(new Error('Network error'));
 
       await expect(
-        processInterestScoring(tenantId, email, 'https://example.com/article')
+        processInterestScoring(cid, email, 'https://example.com/article')
       ).resolves.toBeUndefined();
     });
 
@@ -335,7 +333,7 @@ describe('processInterestScoring', () => {
       const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
       // Should not throw (caught by processInterestScoring's try/catch)
-      await processInterestScoring(tenantId, email, 'https://example.com/ai-article');
+      await processInterestScoring(cid, email, 'https://example.com/ai-article');
 
       expect(consoleSpy).toHaveBeenCalledWith(
         'Interest scoring failed',

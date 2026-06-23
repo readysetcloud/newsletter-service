@@ -4,7 +4,6 @@ import { hash, decrypt } from "./utils/helpers.mjs";
 import { detectDevice } from "./utils/detect-device.mjs";
 import { lookupCountry } from "./utils/geolocation.mjs";
 import { updateSubscriberEngagement } from "./utils/subscriber-engagement.mjs";
-import { normalizeUrl } from "./utils/url-normalizer.mjs";
 import {
   VALID_TOPICS,
   AUTO_SEGMENT_THRESHOLD,
@@ -130,11 +129,10 @@ export const handler = async (event) => {
 
     // Interest scoring and auto-segmentation
     if (msg.s) {
-      const [tenantId] = cid.split('#');
       ops.push(async () => {
         try {
           const subscriberEmail = decrypt(msg.s);
-          await processInterestScoring(tenantId, subscriberEmail, msg.u);
+          await processInterestScoring(cid, subscriberEmail, msg.u);
         } catch (err) {
           console.error('Interest scoring failed', { cid, error: err.message });
         }
@@ -256,28 +254,24 @@ const captureClickEvent = async (msg, eventTimestamp, statsCache) => {
 
 
 /**
- * Looks up Link_Metadata for the clicked URL, updates interest scores,
- * and triggers auto-segmentation if threshold is crossed.
+ * Looks up the issue's link record (enriched at staging time with an LLM
+ * topic classification) for the clicked URL, updates interest scores, and
+ * triggers auto-segmentation if the threshold is crossed.
  *
  * Errors are logged but never propagated (follows subscriber-engagement.mjs pattern).
  *
- * @param {string} tenantId
+ * @param {string} cid - The issue partition key, `${tenantId}#${issueNumber}`
  * @param {string} subscriberEmail
  * @param {string} rawUrl - The original clicked URL
  */
-export async function processInterestScoring(tenantId, subscriberEmail, rawUrl) {
+export async function processInterestScoring(cid, subscriberEmail, rawUrl) {
   try {
-    // Normalize the clicked URL
-    const normalizedUrl = normalizeUrl(rawUrl);
-    if (!normalizedUrl) {
-      return;
-    }
+    const [tenantId] = cid.split('#');
 
-    // Hash the normalized URL and look up Link_Metadata
-    const urlHash = hash(normalizedUrl);
+    // The clicked URL hashes to the same link record key written at staging time.
     const result = await ddb.send(new GetItemCommand({
       TableName: process.env.TABLE_NAME,
-      Key: marshall({ pk: 'LINK_META', sk: urlHash }),
+      Key: marshall({ pk: cid, sk: `link#${hash(rawUrl)}` }),
       ProjectionExpression: 'primaryTopic, secondaryTopics'
     }));
 
@@ -316,7 +310,7 @@ export async function processInterestScoring(tenantId, subscriberEmail, rawUrl) 
     }
   } catch (error) {
     console.error('Interest scoring failed', {
-      tenantId,
+      cid,
       subscriberEmail,
       rawUrl,
       error: error.message

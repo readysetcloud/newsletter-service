@@ -392,3 +392,35 @@ export interface AbHistoryResponse {
   tests: AbHistoryTest[];
   aggregates: AbHistoryAggregates;
 }
+
+// ---------------------------------------------------------------------------
+// A/B test AI suggestions (POST /ab-test/suggestions)
+// ---------------------------------------------------------------------------
+
+/** Request payload for POST /ab-test/suggestions. */
+export interface AbSuggestionRequest {
+  dimension: AbTestDimension;
+  /** Current/control subject line, used to seed subject-dimension suggestions. */
+  subject?: string;
+  /** Short summary of the issue's content, used to ground subject suggestions. */
+  contentSummary?: string;
+}
+
+/** A suggested send time: a human label plus its UTC hour. */
+export interface SendTimeSuggestion {
+  label: string;
+  hourUtc: number;
+}
+
+/** Response payload for POST /ab-test/suggestions. */
+export interface AbSuggestionResponse {
+  dimension: AbTestDimension;
+  /** Human-readable explanation for the suggestions. */
+  rationale: string;
+  /** Suggested subject lines (subject dimension). */
+  subjects?: string[];
+  /** Suggested send times (sendTime dimension). */
+  sendTimes?: SendTimeSuggestion[];
+  /** Whether suggestions were personalized from the tenant's past A/B tests. */
+  usedHistory: boolean;
+}

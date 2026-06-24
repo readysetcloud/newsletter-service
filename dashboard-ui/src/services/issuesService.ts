@@ -10,6 +10,8 @@ import type {
   ListIssuesParams,
   VariantId,
   AbHistoryResponse,
+  AbSuggestionRequest,
+  AbSuggestionResponse,
 } from '@/types/issues';
 import type { ApiResponse } from '@/types';
 import { calculateCompositeScore } from '@/utils/analyticsCalculations';
@@ -164,6 +166,20 @@ class IssuesService {
    */
   async getAbHistory(): Promise<ApiResponse<AbHistoryResponse>> {
     return apiClient.get<AbHistoryResponse>('/ab-test/history');
+  }
+
+  /**
+   * Requests AI-generated A/B test suggestions for the given dimension. For
+   * subject tests the response carries candidate `subjects`; for send-time
+   * tests it carries candidate `sendTimes`. The `usedHistory` flag indicates
+   * whether suggestions were personalized from the tenant's past tests.
+   * @param body - The dimension plus optional subject/content context
+   * @returns Promise resolving to the suggestion response
+   */
+  async getAbSuggestions(
+    body: AbSuggestionRequest
+  ): Promise<ApiResponse<AbSuggestionResponse>> {
+    return apiClient.post<AbSuggestionResponse>('/ab-test/suggestions', body);
   }
 
   /**

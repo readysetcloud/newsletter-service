@@ -1,13 +1,15 @@
 /* eslint-disable react-refresh/only-export-components */
-import React, { useCallback } from 'react';
-import { Mail, Clock } from 'lucide-react';
+import React, { useCallback, useState } from 'react';
+import { Mail, Clock, Sparkles, Loader2, AlertCircle } from 'lucide-react';
 import { Input } from '@/components/ui/Input';
+import { issuesService } from '@/services/issuesService';
 import type {
   AbTest,
   AbTestDimension,
   AbTestWinMetric,
   AbTestVariant,
   VariantId,
+  AbSuggestionResponse,
 } from '@/types/issues';
 
 // Defaults for a newly-enabled A/B test.
@@ -84,6 +86,31 @@ function getVariant(value: AbTest, id: VariantId): AbTestVariant {
   return (
     value.variants.find((v) => v.variantId === id) ?? { variantId: id }
   );
+}
+
+/** Formats a Date as the `YYYY-MM-DDTHH:mm` string a datetime-local expects (local time). */
+function toDatetimeLocal(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
+    date.getDate()
+  )}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/**
+ * Computes the next future occurrence of a given UTC hour as a local
+ * `datetime-local` string. Picks today if that UTC hour is still ahead of
+ * `now`, otherwise tomorrow. `now` is injectable for testing.
+ */
+export function nextOccurrenceOfUtcHour(
+  hourUtc: number,
+  now: Date = new Date()
+): string {
+  const candidate = new Date(now);
+  candidate.setUTCHours(hourUtc, 0, 0, 0);
+  if (candidate.getTime() <= now.getTime()) {
+    candidate.setUTCDate(candidate.getUTCDate() + 1);
+  }
+  return toDatetimeLocal(candidate);
 }
 
 /**
@@ -201,9 +228,18 @@ export const AbTestConfig: React.FC<AbTestConfigProps> = ({
 }) => {
   const enabled = value !== null;
 
+  // --- AI suggestions ------------------------------------------------------
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const [suggestError, setSuggestError] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<AbSuggestionResponse | null>(
+    null
+  );
+
   const handleToggle = useCallback(() => {
     if (disabled) return;
     if (enabled) {
+      setSuggestions(null);
+      setSuggestError(null);
       onChange(null);
     } else {
       onChange(makeDefaultAbTest('subject', scheduledAtLocal));
@@ -211,13 +247,16 @@ export const AbTestConfig: React.FC<AbTestConfigProps> = ({
   }, [disabled, enabled, onChange, scheduledAtLocal]);
 
   const handleDimensionChange = useCallback(
-    (dimension: AbTestDimension) => {
-      if (!value || value.dimension === dimension) return;
+    (nextDimension: AbTestDimension) => {
+      if (!value || value.dimension === nextDimension) return;
       // Reset variants for the new dimension but keep the test parameters.
-      const fresh = makeDefaultAbTest(dimension, scheduledAtLocal);
+      const fresh = makeDefaultAbTest(nextDimension, scheduledAtLocal);
+      // Drop any stale suggestions / errors from the previous dimension.
+      setSuggestions(null);
+      setSuggestError(null);
       onChange({
         ...value,
-        dimension,
+        dimension: nextDimension,
         variants: fresh.variants,
       });
     },
@@ -242,6 +281,43 @@ export const AbTestConfig: React.FC<AbTestConfigProps> = ({
     },
     [value, onChange]
   );
+
+  const dimension = value?.dimension;
+
+  const handleSuggest = useCallback(async () => {
+    if (!value || disabled) return;
+    setSuggestLoading(true);
+    setSuggestError(null);
+    try {
+      const a = getVariant(value, 'a');
+      const response =
+        value.dimension === 'subject'
+          ? await issuesService.getAbSuggestions({
+              dimension: 'subject',
+              subject: (a.subject ?? '').trim() || undefined,
+            })
+          : await issuesService.getAbSuggestions({ dimension: 'sendTime' });
+
+      if (response.success && response.data) {
+        setSuggestions(response.data);
+      } else {
+        setSuggestions(null);
+        setSuggestError(
+          response.error || 'Could not load suggestions. Please try again.'
+        );
+      }
+    } catch {
+      setSuggestions(null);
+      setSuggestError('Could not load suggestions. Please try again.');
+    } finally {
+      setSuggestLoading(false);
+    }
+  }, [value, disabled]);
+
+  // Suggestions are dimension-specific; clear stale ones when the dimension
+  // changes so a subject list never lingers under a send-time test.
+  const suggestionsForDimension =
+    suggestions && suggestions.dimension === dimension ? suggestions : null;
 
   // Informational minimum list size for a conclusive test.
   const minSample = value?.minSamplePerVariant ?? DEFAULT_MIN_SAMPLE_PER_VARIANT;
@@ -445,6 +521,118 @@ export const AbTestConfig: React.FC<AbTestConfigProps> = ({
                 )}
               </div>
             </div>
+
+            {/* Suggest with AI */}
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={handleSuggest}
+                disabled={disabled || suggestLoading}
+                aria-busy={suggestLoading}
+                className="inline-flex items-center gap-1.5 rounded-md border border-primary-300 bg-primary-50 px-3 py-1.5 text-xs font-medium text-primary-700 transition-colors hover:bg-primary-100 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed dark:border-primary-700 dark:bg-primary-900/20 dark:text-primary-200 dark:hover:bg-primary-900/40"
+              >
+                {suggestLoading ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                ) : (
+                  <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
+                )}
+                {suggestLoading
+                  ? 'Getting suggestions…'
+                  : value.dimension === 'subject'
+                    ? 'Suggest subjects with AI'
+                    : 'Suggest send times with AI'}
+              </button>
+
+              {suggestError && (
+                <div
+                  className="mt-2 flex items-start gap-2 rounded-lg border border-error-200 bg-error-50 p-3 dark:border-error-500/50 dark:bg-error-900/20"
+                  role="alert"
+                  aria-live="assertive"
+                >
+                  <AlertCircle
+                    className="w-4 h-4 mt-0.5 text-error-500 flex-shrink-0"
+                    aria-hidden="true"
+                  />
+                  <p className="text-xs text-error-700 dark:text-error-300">
+                    {suggestError}
+                  </p>
+                </div>
+              )}
+
+              {suggestionsForDimension && (
+                <div
+                  className="mt-2 rounded-lg border border-border bg-muted/40 p-3"
+                  aria-label="AI suggestions"
+                >
+                  <p className="text-xs text-muted-foreground mb-2">
+                    {suggestionsForDimension.rationale}
+                  </p>
+
+                  {suggestionsForDimension.dimension === 'subject' &&
+                  suggestionsForDimension.subjects &&
+                  suggestionsForDimension.subjects.length > 0 ? (
+                    <ul className="space-y-1.5" aria-label="Suggested subject lines">
+                      {suggestionsForDimension.subjects.map((subject, i) => (
+                        <li
+                          key={`${i}-${subject}`}
+                          className="flex items-center justify-between gap-2 rounded-md border border-border bg-background px-2 py-1.5"
+                        >
+                          <span className="text-xs text-foreground break-words">
+                            {subject}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => updateVariant('b', { subject })}
+                            disabled={disabled}
+                            className="shrink-0 rounded-md border border-primary-300 px-2 py-0.5 text-xs font-medium text-primary-700 transition-colors hover:bg-primary-50 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed dark:border-primary-700 dark:text-primary-200 dark:hover:bg-primary-900/20"
+                          >
+                            Use
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : suggestionsForDimension.dimension === 'sendTime' &&
+                    suggestionsForDimension.sendTimes &&
+                    suggestionsForDimension.sendTimes.length > 0 ? (
+                    <ul className="space-y-1.5" aria-label="Suggested send times">
+                      {suggestionsForDimension.sendTimes.map((st, i) => (
+                        <li
+                          key={`${i}-${st.hourUtc}`}
+                          className="flex items-center justify-between gap-2 rounded-md border border-border bg-background px-2 py-1.5"
+                        >
+                          <span className="text-xs text-foreground break-words">
+                            {st.label}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateVariant('b', {
+                                sendAt: nextOccurrenceOfUtcHour(st.hourUtc),
+                              })
+                            }
+                            disabled={disabled}
+                            className="shrink-0 rounded-md border border-primary-300 px-2 py-0.5 text-xs font-medium text-primary-700 transition-colors hover:bg-primary-50 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed dark:border-primary-700 dark:text-primary-200 dark:hover:bg-primary-900/20"
+                          >
+                            Use
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      No suggestions were returned. Try again later.
+                    </p>
+                  )}
+
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {suggestionsForDimension.usedHistory
+                      ? 'Based on your past A/B tests.'
+                      : 'Based on general best practices — run more tests to personalize this.'}
+                  </p>
+                </div>
+              )}
+            </div>
+
             {errors.general && (
               <p
                 className="mt-2 text-sm text-error-600 dark:text-error-400"

@@ -1,11 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import {
   AbTestConfig,
   validateAbTest,
   hasAbTestErrors,
+  nextOccurrenceOfUtcHour,
 } from '../AbTestConfig';
-import type { AbTest } from '@/types/issues';
+import { issuesService } from '@/services/issuesService';
+import type { AbTest, AbSuggestionResponse } from '@/types/issues';
+
+vi.mock('@/services/issuesService', () => ({
+  issuesService: {
+    getAbSuggestions: vi.fn(),
+  },
+}));
+
+const mockedGetAbSuggestions = vi.mocked(issuesService.getAbSuggestions);
 
 const futureLocal = (offsetMinutes: number): string => {
   const d = new Date(Date.now() + offsetMinutes * 60_000);
@@ -33,6 +43,7 @@ describe('AbTestConfig', () => {
 
   beforeEach(() => {
     onChange.mockClear();
+    mockedGetAbSuggestions.mockReset();
   });
 
   it('renders the enable toggle off by default and shows no config', () => {
@@ -85,6 +96,135 @@ describe('AbTestConfig', () => {
     render(<AbTestConfig value={subjectTest()} onChange={onChange} />);
     // 2 * 500 / 0.2 = 5000
     expect(screen.getByText(/5,000/)).toBeInTheDocument();
+  });
+
+  it('requests subject suggestions and renders them with rationale + history note', async () => {
+    const response: AbSuggestionResponse = {
+      dimension: 'subject',
+      rationale: 'Shorter, curiosity-driven subjects tend to perform better.',
+      subjects: ['Subject idea one', 'Subject idea two'],
+      usedHistory: true,
+    };
+    mockedGetAbSuggestions.mockResolvedValue({ success: true, data: response });
+
+    render(<AbTestConfig value={subjectTest()} onChange={onChange} />);
+    fireEvent.click(screen.getByRole('button', { name: /suggest subjects with ai/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText('Subject idea one')).toBeInTheDocument()
+    );
+    expect(mockedGetAbSuggestions).toHaveBeenCalledWith({
+      dimension: 'subject',
+      subject: 'Hello A',
+    });
+    expect(screen.getByText(/curiosity-driven/i)).toBeInTheDocument();
+    expect(screen.getByText(/based on your past a\/b tests/i)).toBeInTheDocument();
+  });
+
+  it('accepts a subject suggestion into variant B via the Use action', async () => {
+    const response: AbSuggestionResponse = {
+      dimension: 'subject',
+      rationale: 'Try these.',
+      subjects: ['Accepted subject'],
+      usedHistory: false,
+    };
+    mockedGetAbSuggestions.mockResolvedValue({ success: true, data: response });
+
+    render(<AbTestConfig value={subjectTest()} onChange={onChange} />);
+    fireEvent.click(screen.getByRole('button', { name: /suggest subjects with ai/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText('Accepted subject')).toBeInTheDocument()
+    );
+    // Sparse-history note shows best-practices phrasing.
+    expect(screen.getByText(/general best practices/i)).toBeInTheDocument();
+
+    onChange.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /^use$/i }));
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const next = onChange.mock.calls[0][0] as AbTest;
+    const variantB = next.variants.find((v) => v.variantId === 'b');
+    expect(variantB?.subject).toBe('Accepted subject');
+    // Variant A is never overwritten.
+    const variantA = next.variants.find((v) => v.variantId === 'a');
+    expect(variantA?.subject).toBe('Hello A');
+  });
+
+  it('shows an inline error when the suggestions request fails', async () => {
+    mockedGetAbSuggestions.mockResolvedValue({
+      success: false,
+      error: 'Service unavailable',
+    });
+
+    render(<AbTestConfig value={subjectTest()} onChange={onChange} />);
+    fireEvent.click(screen.getByRole('button', { name: /suggest subjects with ai/i }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(/service unavailable/i)
+    );
+    expect(screen.queryByLabelText(/ai suggestions/i)).not.toBeInTheDocument();
+  });
+
+  it('prefills variant B send time from a send-time suggestion', async () => {
+    const response: AbSuggestionResponse = {
+      dimension: 'sendTime',
+      rationale: 'Mornings perform well.',
+      sendTimes: [{ label: '9:00 AM ET', hourUtc: 13 }],
+      usedHistory: false,
+    };
+    mockedGetAbSuggestions.mockResolvedValue({ success: true, data: response });
+
+    const sendTimeTest: AbTest = {
+      dimension: 'sendTime',
+      variants: [
+        { variantId: 'a', sendAt: '' },
+        { variantId: 'b', sendAt: '' },
+      ],
+      winMetric: 'openRate',
+      confidence: 0.95,
+      testFraction: 0.2,
+      evaluateAfterMinutes: 240,
+      minSamplePerVariant: 500,
+    };
+
+    render(<AbTestConfig value={sendTimeTest} onChange={onChange} />);
+    fireEvent.click(
+      screen.getByRole('button', { name: /suggest send times with ai/i })
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText('9:00 AM ET')).toBeInTheDocument()
+    );
+    expect(mockedGetAbSuggestions).toHaveBeenCalledWith({ dimension: 'sendTime' });
+
+    onChange.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /^use$/i }));
+
+    const next = onChange.mock.calls[0][0] as AbTest;
+    const variantB = next.variants.find((v) => v.variantId === 'b');
+    expect(variantB?.sendAt).toBe(nextOccurrenceOfUtcHour(13));
+    // The prefilled value is a valid datetime-local string in the future.
+    expect(variantB?.sendAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+    expect(new Date(variantB!.sendAt!).getTime()).toBeGreaterThan(Date.now());
+  });
+});
+
+describe('nextOccurrenceOfUtcHour', () => {
+  it('picks today when the UTC hour is still ahead', () => {
+    const now = new Date('2026-06-23T05:00:00Z');
+    const result = nextOccurrenceOfUtcHour(13, now);
+    expect(new Date(result).getUTCHours()).toBe(13);
+    expect(new Date(result).getTime()).toBeGreaterThan(now.getTime());
+    // Same UTC day.
+    expect(new Date(result).getUTCDate()).toBe(23);
+  });
+
+  it('rolls to tomorrow when the UTC hour has already passed', () => {
+    const now = new Date('2026-06-23T18:00:00Z');
+    const result = nextOccurrenceOfUtcHour(13, now);
+    expect(new Date(result).getUTCHours()).toBe(13);
+    expect(new Date(result).getUTCDate()).toBe(24);
   });
 });
 

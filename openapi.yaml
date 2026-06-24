@@ -1559,6 +1559,37 @@ paths:
         "500":
           $ref: "#/components/responses/UnknownError"
 
+  /ab-test/suggestions:
+    post:
+      summary: Suggest A/B test variants
+      description: >-
+        Generates LLM-assisted A/B test suggestions for the authenticated tenant
+        along the requested dimension. When the tenant has prior A/B test history,
+        the suggestion is grounded in that history (usedHistory is true). For the
+        "subject" dimension the response includes candidate subject lines; for the
+        "sendTime" dimension it includes candidate send times.
+      tags:
+        - Issues
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AbSuggestionRequest"
+      responses:
+        "200":
+          description: A/B test suggestions for the requested dimension
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AbSuggestionResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
   /issues/{id}:
     parameters:
       - name: id
@@ -4502,3 +4533,68 @@ components:
         wins:
           type: integer
           description: Number of winning send-time tests at this hour
+
+    AbSuggestionRequest:
+      type: object
+      required:
+        - dimension
+      properties:
+        dimension:
+          type: string
+          enum: [subject, sendTime]
+          description: >-
+            The dimension to generate suggestions for. "subject" requests
+            candidate subject lines; "sendTime" requests candidate send times.
+        subject:
+          type: string
+          description: The current or draft subject line to use as context
+        contentSummary:
+          type: string
+          description: A short summary of the issue content to use as context
+      additionalProperties: false
+
+    AbSuggestionResponse:
+      type: object
+      required:
+        - dimension
+        - rationale
+        - usedHistory
+      properties:
+        dimension:
+          type: string
+          enum: [subject, sendTime]
+          description: The dimension these suggestions apply to
+        rationale:
+          type: string
+          description: Explanation of why these suggestions were made
+        subjects:
+          type: array
+          items:
+            type: string
+          description: >-
+            Candidate subject lines (present for the "subject" dimension)
+        sendTimes:
+          type: array
+          items:
+            $ref: "#/components/schemas/SendTimeSuggestion"
+          description: >-
+            Candidate send times (present for the "sendTime" dimension)
+        usedHistory:
+          type: boolean
+          description: >-
+            Whether the tenant's A/B test history was used to ground the suggestion
+
+    SendTimeSuggestion:
+      type: object
+      required:
+        - label
+        - hourUtc
+      properties:
+        label:
+          type: string
+          description: Human-readable label for the suggested send time
+        hourUtc:
+          type: integer
+          minimum: 0
+          maximum: 23
+          description: Hour of day in UTC (0-23)

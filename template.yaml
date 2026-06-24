@@ -1262,6 +1262,11 @@ Resources:
               Action:
                 - s3:PutObject
               Resource: !Sub "${NewsletterBucket.Arn}/*"
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - arn:aws:bedrock:*::foundation-model/amazon.nova-*
+                - !Sub arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/us.amazon.nova-*
       Environment:
         Variables:
           TABLE_NAME: !Ref NewsletterTable
@@ -1286,6 +1291,7 @@ Resources:
           CHECK_SENDER_STATUS_FUNCTION_ARN: !GetAtt CheckSenderStatusAutomaticallyFunction.Arn
           GENERATE_OUTREACH_FUNCTION_ARN: !GetAtt GenerateOutreachFunction.Arn
           SCHEDULER_ROLE_ARN: !GetAtt SchedulerExecutionRole.Arn
+          MODEL_ID: us.amazon.nova-pro-v1:0
       Events:
         ApiProxy:
           Type: Api

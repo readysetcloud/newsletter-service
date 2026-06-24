@@ -2,6 +2,7 @@ use aws_sdk_dynamodb::types::AttributeValue;
 use base64::Engine;
 use lambda_http::{Body, Error, Request, RequestExt, Response};
 use newsletter::admin::{auth, aws_clients, error::AppError, response};
+use newsletter::ai::{converse, ConverseOptions};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -395,6 +396,13 @@ pub async fn get_ab_history(event: Request) -> Result<Response<Body>, Error> {
     }
 }
 
+pub async fn suggest_ab_test(event: Request) -> Result<Response<Body>, Error> {
+    match handle_suggest_ab_test(event).await {
+        Ok(response) => Ok(response),
+        Err(e) => Ok(response::format_error_response(&e)),
+    }
+}
+
 pub async fn create_issue(event: Request) -> Result<Response<Body>, Error> {
     match handle_create_issue(event).await {
         Ok(response) => Ok(response),
@@ -741,9 +749,28 @@ async fn handle_get_ab_history(event: Request) -> Result<Response<Body>, AppErro
     response::format_response(200, AbHistoryResponse { tests, aggregates })
 }
 
+/// Upper bound on history tests read for prompt grounding. The suggestion
+/// summary only surfaces the top few outcomes per dimension, so reading a
+/// recent window (newest-first) is sufficient and keeps DynamoDB reads — and
+/// the API Lambda's latency — bounded regardless of how much history a tenant
+/// has accumulated.
+const SUGGESTION_HISTORY_LIMIT: usize = 50;
+
 /// Reads the tenant's A/B history partition (pk = `${tenantId}#abhistory`,
 /// sk begins_with `test#`), newest issue first.
 async fn query_ab_history(tenant_id: &str) -> Result<Vec<AbHistoryTest>, AppError> {
+    query_ab_history_limited(tenant_id, None).await
+}
+
+/// Reads the tenant's A/B history partition newest-first. When `limit` is
+/// `Some(n)`, stops once at least `n` tests have been collected so callers that
+/// only need a recent window (e.g. prompt grounding) don't page the entire
+/// partition. `None` reads the full history (used by the history endpoint,
+/// which needs every test to compute aggregates).
+async fn query_ab_history_limited(
+    tenant_id: &str,
+    limit: Option<usize>,
+) -> Result<Vec<AbHistoryTest>, AppError> {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
         .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
@@ -761,6 +788,13 @@ async fn query_ab_history(tenant_id: &str) -> Result<Vec<AbHistoryTest>, AppErro
             .expression_attribute_values(":prefix", AttributeValue::S("test#".to_string()))
             .scan_index_forward(false);
 
+        // Cap items evaluated per page to what's still needed so DynamoDB stops
+        // scanning early on the final page.
+        if let Some(n) = limit {
+            let remaining = n.saturating_sub(tests.len());
+            builder = builder.limit(remaining as i32);
+        }
+
         if let Some(start) = last_key.take() {
             builder = builder.set_exclusive_start_key(Some(start));
         }
@@ -769,6 +803,12 @@ async fn query_ab_history(tenant_id: &str) -> Result<Vec<AbHistoryTest>, AppErro
         for item in result.items() {
             if let Some(test) = parse_ab_history_item(item) {
                 tests.push(test);
+            }
+        }
+
+        if let Some(n) = limit {
+            if tests.len() >= n {
+                break;
             }
         }
 
@@ -916,6 +956,277 @@ fn compute_ab_history_aggregates(tests: &[AbHistoryTest]) -> AbHistoryAggregates
         avg_winning_lift,
         top_send_hours_utc,
     }
+}
+
+// ---------------------------------------------------------------------------
+// A/B suggestions (LLM-assisted, grounded in cross-issue history)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct AbSuggestionRequest {
+    dimension: String,
+    #[serde(default)]
+    subject: Option<String>,
+    #[serde(rename = "contentSummary", default)]
+    content_summary: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct AbSendTimeSuggestion {
+    label: String,
+    #[serde(rename = "hourUtc")]
+    hour_utc: u32,
+}
+
+#[derive(Serialize)]
+pub struct AbSuggestionResponse {
+    dimension: String,
+    rationale: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subjects: Option<Vec<String>>,
+    #[serde(rename = "sendTimes", skip_serializing_if = "Option::is_none")]
+    send_times: Option<Vec<AbSendTimeSuggestion>>,
+    #[serde(rename = "usedHistory")]
+    used_history: bool,
+}
+
+async fn handle_suggest_ab_test(event: Request) -> Result<Response<Body>, AppError> {
+    let user_context = auth::get_user_context(&event)?;
+    let tenant_id = user_context
+        .tenant_id
+        .ok_or_else(|| AppError::Unauthorized("Tenant access required".to_string()))?;
+
+    let body: AbSuggestionRequest = serde_json::from_slice(event.body())
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
+
+    if body.dimension != AB_DIMENSION_SUBJECT && body.dimension != AB_DIMENSION_SENDTIME {
+        return Err(AppError::BadRequest(
+            "dimension must be \"subject\" or \"sendTime\"".to_string(),
+        ));
+    }
+
+    // Ground the suggestion in the tenant's prior results. History is best-effort
+    // — a failed read degrades to general best-practice suggestions — and bounded
+    // to a recent window so a large history can't blow the API Lambda's timeout.
+    let history = query_ab_history_limited(&tenant_id, Some(SUGGESTION_HISTORY_LIMIT))
+        .await
+        .unwrap_or_default();
+    let used_history = !history.is_empty();
+    let history_summary = summarize_ab_history_for_prompt(&history, &body.dimension);
+
+    let model_id = std::env::var("MODEL_ID")
+        .map_err(|_| AppError::InternalError("MODEL_ID not set".to_string()))?;
+
+    let (system_prompt, user_prompt) = build_suggestion_prompt(
+        &body.dimension,
+        body.subject.as_deref(),
+        body.content_summary.as_deref(),
+        &history_summary,
+    );
+
+    // No tools => a single model call (bounded cost).
+    let raw = converse(
+        &model_id,
+        &system_prompt,
+        &user_prompt,
+        Vec::new(),
+        ConverseOptions {
+            tenant_id: tenant_id.clone(),
+            user_id: None,
+        },
+    )
+    .await
+    .map_err(|e| AppError::InternalError(format!("Suggestion generation failed: {}", e)))?;
+
+    let (subjects, send_times, rationale) = parse_suggestion_response(&raw, &body.dimension)?;
+
+    response::format_response(
+        200,
+        AbSuggestionResponse {
+            dimension: body.dimension,
+            rationale,
+            subjects,
+            send_times,
+            used_history,
+        },
+    )
+}
+
+/// Compact, prompt-friendly summary of prior A/B outcomes for grounding.
+fn summarize_ab_history_for_prompt(tests: &[AbHistoryTest], dimension: &str) -> String {
+    use chrono::Timelike;
+
+    if tests.is_empty() {
+        return "No prior A/B test history for this tenant.".to_string();
+    }
+
+    let relevant: Vec<&AbHistoryTest> = tests.iter().filter(|t| t.dimension == dimension).collect();
+    let mut lines = vec![format!(
+        "Recent past A/B tests considered: {}.",
+        tests.len()
+    )];
+
+    if dimension == AB_DIMENSION_SUBJECT {
+        let significant: Vec<&&AbHistoryTest> = relevant.iter().filter(|t| t.significant).collect();
+        lines.push(format!(
+            "Subject-line tests: {} ({} statistically significant).",
+            relevant.len(),
+            significant.len()
+        ));
+        for test in significant.iter().take(5) {
+            if let Some(winner_id) = &test.winner_variant_id {
+                if let Some(subject) = test
+                    .variants
+                    .iter()
+                    .find(|v| &v.variant_id == winner_id)
+                    .and_then(|v| v.subject.as_deref())
+                {
+                    lines.push(format!(
+                        "- Winning subject \"{}\" (+{}pts on {}).",
+                        subject,
+                        test.lift.unwrap_or(0.0),
+                        test.win_metric
+                    ));
+                }
+            }
+        }
+    } else {
+        let mut hour_wins: HashMap<u32, i64> = HashMap::new();
+        for test in relevant.iter().filter(|t| t.significant) {
+            if let Some(winner_id) = &test.winner_variant_id {
+                if let Some(send_at) = test
+                    .variants
+                    .iter()
+                    .find(|v| &v.variant_id == winner_id)
+                    .and_then(|v| v.send_at.as_deref())
+                {
+                    if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(send_at) {
+                        *hour_wins
+                            .entry(parsed.with_timezone(&chrono::Utc).hour())
+                            .or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+        lines.push(format!("Send-time tests: {}.", relevant.len()));
+        let mut hours: Vec<(u32, i64)> = hour_wins.into_iter().collect();
+        hours.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        for (hour, wins) in hours.into_iter().take(5) {
+            lines.push(format!("- Hour {:02}:00 UTC won {} time(s).", hour, wins));
+        }
+    }
+
+    lines.join("\n")
+}
+
+/// Builds (system, user) prompts instructing the model to return strict JSON.
+fn build_suggestion_prompt(
+    dimension: &str,
+    subject: Option<&str>,
+    content_summary: Option<&str>,
+    history_summary: &str,
+) -> (String, String) {
+    let system = if dimension == AB_DIMENSION_SUBJECT {
+        "You are an expert email-newsletter strategist. Propose alternative SUBJECT LINES for an A/B test, optimized for open rate and grounded in the tenant's past results when provided. Respond with ONLY a JSON object of the form {\"subjects\": [\"...\", \"...\"], \"rationale\": \"...\"}. Provide 2-3 distinct subjects, each at most 200 characters. Output no text outside the JSON."
+    } else {
+        "You are an expert email-newsletter strategist. Recommend candidate SEND TIMES (hour of day in UTC) for an A/B test, grounded in the tenant's past results when provided. Respond with ONLY a JSON object of the form {\"sendTimes\": [{\"label\": \"09:00 UTC\", \"hourUtc\": 9}], \"rationale\": \"...\"}. Provide 2-3 distinct hours in the range 0-23. Output no text outside the JSON."
+    };
+
+    let mut user = String::new();
+    if let Some(subject) = subject {
+        if !subject.trim().is_empty() {
+            user.push_str(&format!("Current subject line: \"{}\"\n", subject.trim()));
+        }
+    }
+    if let Some(content) = content_summary {
+        if !content.trim().is_empty() {
+            let trimmed: String = content.trim().chars().take(800).collect();
+            user.push_str(&format!("Issue summary: {}\n", trimmed));
+        }
+    }
+    user.push_str("\nPast A/B performance:\n");
+    user.push_str(history_summary);
+    user.push_str("\n\nReturn the JSON now.");
+
+    (system.to_string(), user)
+}
+
+type ParsedSuggestions = (
+    Option<Vec<String>>,
+    Option<Vec<AbSendTimeSuggestion>>,
+    String,
+);
+
+/// Parses the model's JSON response into typed suggestions for the dimension.
+fn parse_suggestion_response(raw: &str, dimension: &str) -> Result<ParsedSuggestions, AppError> {
+    let json_text = extract_json_object(raw)
+        .ok_or_else(|| AppError::InternalError("Model did not return JSON".to_string()))?;
+    let value: serde_json::Value = serde_json::from_str(json_text)
+        .map_err(|e| AppError::InternalError(format!("Failed to parse model JSON: {}", e)))?;
+
+    let rationale = value
+        .get("rationale")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if dimension == AB_DIMENSION_SUBJECT {
+        let subjects: Vec<String> = value
+            .get("subjects")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|s| s.as_str())
+                    .map(|s| s.trim().chars().take(200).collect::<String>())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if subjects.is_empty() {
+            return Err(AppError::InternalError(
+                "Model returned no subject suggestions".to_string(),
+            ));
+        }
+        Ok((Some(subjects), None, rationale))
+    } else {
+        let send_times: Vec<AbSendTimeSuggestion> = value
+            .get("sendTimes")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|entry| {
+                        let hour = entry.get("hourUtc").and_then(|h| h.as_u64())? as u32;
+                        if hour > 23 {
+                            return None;
+                        }
+                        let label = entry
+                            .get("label")
+                            .and_then(|l| l.as_str())
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| format!("{:02}:00 UTC", hour));
+                        Some(AbSendTimeSuggestion {
+                            label,
+                            hour_utc: hour,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if send_times.is_empty() {
+            return Err(AppError::InternalError(
+                "Model returned no send-time suggestions".to_string(),
+            ));
+        }
+        Ok((None, Some(send_times), rationale))
+    }
+}
+
+/// Extracts the first JSON object substring from model output, tolerating code
+/// fences or surrounding prose.
+fn extract_json_object(text: &str) -> Option<&str> {
+    let start = text.find('{')?;
+    let end = text.rfind('}')?;
+    (end > start).then(|| &text[start..=end])
 }
 
 async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError> {
@@ -3275,6 +3586,81 @@ mod tests {
         // Both significant send-time winners landed in the 09:00 UTC hour.
         assert_eq!(agg.top_send_hours_utc[0].hour_utc, 9);
         assert_eq!(agg.top_send_hours_utc[0].wins, 2);
+    }
+
+    #[test]
+    fn test_extract_json_object() {
+        assert_eq!(
+            extract_json_object("noise {\"a\":1} trailing"),
+            Some("{\"a\":1}")
+        );
+        assert_eq!(
+            extract_json_object("```json\n{\"a\":1}\n```"),
+            Some("{\"a\":1}")
+        );
+        assert_eq!(extract_json_object("no json here"), None);
+    }
+
+    #[test]
+    fn test_parse_suggestion_response_subject() {
+        let raw = "```json\n{\"subjects\": [\"First idea\", \"Second idea\"], \"rationale\": \"Punchier openers\"}\n```";
+        let (subjects, send_times, rationale) =
+            parse_suggestion_response(raw, AB_DIMENSION_SUBJECT).unwrap();
+        assert_eq!(subjects.unwrap(), vec!["First idea", "Second idea"]);
+        assert!(send_times.is_none());
+        assert_eq!(rationale, "Punchier openers");
+    }
+
+    #[test]
+    fn test_parse_suggestion_response_send_time_filters_invalid_hours() {
+        let raw = "{\"sendTimes\": [{\"label\": \"9am\", \"hourUtc\": 9}, {\"hourUtc\": 30}, {\"hourUtc\": 14}], \"rationale\": \"r\"}";
+        let (subjects, send_times, _) =
+            parse_suggestion_response(raw, AB_DIMENSION_SENDTIME).unwrap();
+        assert!(subjects.is_none());
+        let times = send_times.unwrap();
+        // hour 30 is dropped; 9 (with label) and 14 (label defaulted) remain.
+        assert_eq!(times.len(), 2);
+        assert_eq!(times[0].hour_utc, 9);
+        assert_eq!(times[0].label, "9am");
+        assert_eq!(times[1].label, "14:00 UTC");
+    }
+
+    #[test]
+    fn test_parse_suggestion_response_errors() {
+        assert!(parse_suggestion_response("not json", AB_DIMENSION_SUBJECT).is_err());
+        assert!(parse_suggestion_response("{\"subjects\": []}", AB_DIMENSION_SUBJECT).is_err());
+        assert!(parse_suggestion_response("{\"sendTimes\": []}", AB_DIMENSION_SENDTIME).is_err());
+    }
+
+    #[test]
+    fn test_summarize_ab_history_for_prompt() {
+        assert!(summarize_ab_history_for_prompt(&[], "subject").contains("No prior"));
+
+        let tests = vec![ab_history_test(
+            "subject",
+            true,
+            Some("b"),
+            Some(12.0),
+            None,
+        )];
+        // Winner variant has no subject in the helper fixture, so only headline lines appear.
+        let summary = summarize_ab_history_for_prompt(&tests, "subject");
+        assert!(summary.contains("Subject-line tests: 1"));
+        assert!(summary.contains("1 statistically significant"));
+    }
+
+    #[test]
+    fn test_build_suggestion_prompt_includes_context() {
+        let (system, user) = build_suggestion_prompt(
+            AB_DIMENSION_SUBJECT,
+            Some("Hello world"),
+            Some("A summary"),
+            "Past A/B performance summary text",
+        );
+        assert!(system.contains("SUBJECT LINES"));
+        assert!(user.contains("Hello world"));
+        assert!(user.contains("A summary"));
+        assert!(user.contains("Past A/B performance summary text"));
     }
 
     #[test]

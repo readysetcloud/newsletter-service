@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Eye, EyeOff, FileText, FileJson } from 'lucide-react';
 import { Input } from '@/components/ui/Input';
@@ -6,7 +6,11 @@ import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/Toast';
 import { ConfirmationDialog } from '@/components/ui/ConfirmationDialog';
 import { MarkdownPreview } from '@/components/issues/MarkdownPreview';
-import { MarkdownWysiwygEditor } from '@/components/issues/MarkdownWysiwygEditor';
+import {
+  MarkdownWysiwygEditor,
+  type MarkdownWysiwygEditorHandle,
+} from '@/components/issues/MarkdownWysiwygEditor';
+import { SnippetShortcodeInserter } from '@/components/issues/SnippetShortcodeInserter';
 import { TemplateJsonEditor } from '@/components/issues/TemplateJsonEditor';
 import {
   AbTestConfig,
@@ -110,6 +114,7 @@ export const IssueFormPage: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoadingSample, setIsLoadingSample] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const editorRef = useRef<MarkdownWysiwygEditorHandle>(null);
   const [showCancelDialog, setShowCancelDialog] = useState(false);
   const [existingIssue, setExistingIssue] = useState<Issue | null>(null);
   const [isFormDisabled, setIsFormDisabled] = useState(false);
@@ -742,29 +747,37 @@ export const IssueFormPage: React.FC = () => {
                   <label htmlFor="content-editor" className="block text-sm font-medium text-foreground">
                     Content *
                   </label>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setShowPreview(!showPreview)}
-                    disabled={isFormDisabled}
-                    aria-label={showPreview ? 'Hide markdown preview' : 'Show markdown preview'}
-                    aria-pressed={showPreview}
-                  >
-                    {showPreview ? (
-                      <>
-                        <EyeOff className="w-4 h-4 mr-2" />
-                        <span className="hidden sm:inline">Hide Preview</span>
-                        <span className="sm:hidden">Hide</span>
-                      </>
-                    ) : (
-                      <>
-                        <Eye className="w-4 h-4 mr-2" />
-                        <span className="hidden sm:inline">Show Preview</span>
-                        <span className="sm:hidden">Preview</span>
-                      </>
+                  <div className="flex items-center gap-1">
+                    {!showPreview && (
+                      <SnippetShortcodeInserter
+                        onInsert={(text) => editorRef.current?.insert(text)}
+                        disabled={isFormDisabled}
+                      />
                     )}
-                  </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setShowPreview(!showPreview)}
+                      disabled={isFormDisabled}
+                      aria-label={showPreview ? 'Hide markdown preview' : 'Show markdown preview'}
+                      aria-pressed={showPreview}
+                    >
+                      {showPreview ? (
+                        <>
+                          <EyeOff className="w-4 h-4 mr-2" />
+                          <span className="hidden sm:inline">Hide Preview</span>
+                          <span className="sm:hidden">Hide</span>
+                        </>
+                      ) : (
+                        <>
+                          <Eye className="w-4 h-4 mr-2" />
+                          <span className="hidden sm:inline">Show Preview</span>
+                          <span className="sm:hidden">Preview</span>
+                        </>
+                      )}
+                    </Button>
+                  </div>
                 </div>
 
                 {showPreview ? (
@@ -779,6 +792,7 @@ export const IssueFormPage: React.FC = () => {
                   </div>
                 ) : (
                   <MarkdownWysiwygEditor
+                    ref={editorRef}
                     id="content-editor"
                     placeholder="Write your newsletter content…"
                     value={formData.content}

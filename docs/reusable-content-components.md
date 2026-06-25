@@ -1,6 +1,6 @@
 # Reusable Content Components (Snippets in Templates and Issue Bodies)
 
-**Status:** Proposed
+**Status:** Accepted (v1 scope decided 2026-06-25)
 **Date:** 2026-06-25
 **Context:** Generalizing one-off body shortcodes (e.g. `robotVoice`) into the
 existing snippet system so reusable blocks can be authored once and used by any
@@ -86,8 +86,9 @@ in the template you reference them the Handlebars way, in the body the shortcode
 way, because the body is prose.* We build exactly one transform — shortcode →
 snippet render — because templates already speak snippets.
 
-We may quietly accept `{{> name }}` in the body as a lenient alias for
-copy-paste, but it is **not** documented as a parallel path.
+The body accepts **only** `{{< name param="..." >}}`. A `{{> name }}` placed in
+body content is not resolved (it is not the body idiom) — there is one obvious
+way to reference a snippet from prose. (Decided: strict, no lenient alias.)
 
 ### 3. Parameter resolution happens once, centrally — this is the real work
 
@@ -148,15 +149,27 @@ not disturb the template preview/parity harness (`template_render.rs` ⇄
 - Treating the syntax transform as the important decision. It is incidental; the
   parameter-resolution layer and the schema are the assets.
 
-## Open questions for v1 scope
+## Resolved decisions (v1)
 
-- **Override model:** does a tenant snippet *override* a same-named hardcoded
-  block, or do we fully replace hardcoded blocks (sponsor included) with seeded
-  system snippets?
-- **v1 surface area:** ship just `robotVoice`-style param blocks, or the general
-  "any snippet usable in body" bridge (which also lets us retire the per-shortcode
-  code in `parse-md-to-json`)?
-- **Content-editor autocomplete:** the current autocomplete
-  (`dashboard-ui/src/pages/templates/builder/autocomplete.ts`) targets the
-  template builder. A body/issue editor would want its own shortcode
-  autocomplete sourced from the same snippet list.
+These were settled on 2026-06-25 and define the v1 build:
+
+- **Surface area — general bridge.** Build the generic "any snippet usable in
+  body" resolver in `parse-md-to-json` and migrate `robotVoice` onto it.
+  `sponsor` / `social` / `vote` remain as bespoke transforms for now but can be
+  retired onto the bridge later. (Avoids a throwaway `robotVoice`-only path.)
+- **Override model — override with fallback.** A tenant snippet whose name
+  matches a block overrides it; when no such snippet exists, the hardcoded block
+  renders. Nothing breaks for tenants who have not defined snippets, and the
+  committed `robotVoice` HTML becomes the seeded default.
+- **Body syntax — `{{< >}}` only, strict.** No lenient `{{> }}` alias in the
+  body (see decision #2 above).
+- **Content-editor autocomplete — in v1.** The issue/body editor gets its own
+  shortcode autocomplete sourced from the snippet list, alongside the rendering
+  bridge. Mirrors the template builder's autocomplete
+  (`dashboard-ui/src/pages/templates/builder/autocomplete.ts`) but for the
+  `{{< >}}` body idiom.
+
+## Still to decide (later)
+
+- Whether and when to retire `sponsor` / `social` / `vote` onto the bridge once
+  the general resolver has proven out.

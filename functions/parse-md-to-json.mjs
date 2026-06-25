@@ -90,11 +90,27 @@ const processSection = (section, sponsor) => {
   const newlineIndex = section.indexOf('\n');
   const header = section.substring(0, newlineIndex);
   let content = section.substring(newlineIndex + 1).trim();
+
+  // Pull robotVoice shortcodes out before markdown conversion so the inline
+  // markdown in the `text` attribute isn't mangled. Each occurrence (0..N) is
+  // swapped for an inert placeholder that survives showdown, then expanded
+  // after the rest of the section has been converted to HTML.
+  const robotVoices = [];
+  content = content.replace(/\{\{<\s*robotVoice\s+text="([^"]+)"(?:\s+[^>]*)?>\}\}/g, (_match, text) => {
+    const placeholder = `%%ROBOTVOICE${robotVoices.length}%%`;
+    robotVoices.push(text);
+    return placeholder;
+  });
+
   content = content.replace(/\n/g, '<br>');
   let html = convertToHtml(content);
   if (html.includes('{{< sponsor >}}')) {
     html = html.replace(/\{\{< sponsor >\}\}/g, formatSponsorAd(sponsor.ad));
   }
+
+  robotVoices.forEach((text, index) => {
+    html = html.replace(`%%ROBOTVOICE${index}%%`, formatRobotVoice(text));
+  });
 
   return {
     header,
@@ -140,6 +156,21 @@ const convertToHtml = (data, removeOuterParagraph = false) => {
   }
 
   return html;
+};
+
+const formatRobotVoice = (text) => {
+  const formattedText = convertToHtml(text, true);
+  return `<div style="margin:24px 0;border:1px solid #CFD6DC;border-radius:5px;padding:16px;background:#FFFFFF;font-family:ui-monospace,'SF Mono','Cascadia Code',Consolas,'Courier New',monospace;">
+  <div style="margin:-27px 0 8px 0;">
+    <span style="background:#FFFFFF;padding:0 8px;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:#8A929A;">robot voice</span>
+  </div>
+  <div style="font-size:14px;line-height:1.6;color:#54606A;">
+    ${formattedText}
+  </div>
+  <div style="text-align:right;margin:8px 0 -28px 0;">
+    <span style="background:#FFFFFF;padding:0 8px;font-size:11px;letter-spacing:.03em;color:#9099A1;">404 &middot; personality not found</span>
+  </div>
+</div>`;
 };
 
 const formatSponsorAd = (ad) => {

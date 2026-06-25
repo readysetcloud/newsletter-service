@@ -1229,7 +1229,9 @@ Resources:
                 - scheduler:CreateSchedule
                 - scheduler:UpdateSchedule
                 - scheduler:DeleteSchedule
-              Resource: !Sub "arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/default/sender-check-*"
+              Resource:
+                - !Sub "arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/default/sender-check-*"
+                - !Sub "arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/newsletter/draft-ttl-*"
             - Effect: Allow
               Action:
                 - iam:PassRole
@@ -4392,6 +4394,39 @@ Resources:
                 - newsletter-service
               detail-type:
                 - ISSUE_PUBLISHED
+
+  DeleteExpiredDraftFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - delete-expired-draft.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: delete-expired-draft.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: dynamodb:DeleteItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          TABLE_NAME: !Ref NewsletterTable
+      Events:
+        DraftExpiredEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - newsletter-service
+              detail-type:
+                - DELETE_EXPIRED_DRAFT
 
   CalculatePricingFunction:
     Type: AWS::Serverless::Function

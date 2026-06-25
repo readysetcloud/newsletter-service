@@ -3265,6 +3265,16 @@ components:
         templateId:
           type: string
           description: Optional identifier of the template to render this issue with. When omitted, the default template is used. Required when contentType is "json".
+        ttlSeconds:
+          type: integer
+          minimum: 1
+          maximum: 31536000
+          description: >-
+            Optional time-to-live, in seconds, after which the draft is
+            automatically deleted. Only valid for drafts (the default action);
+            providing it alongside action "schedule" is rejected. Deletion is
+            performed by a one-time EventBridge schedule, so the draft is
+            removed within roughly an hour of expiry.
         abTest:
           $ref: "#/components/schemas/AbTest"
 

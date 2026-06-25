@@ -63,6 +63,12 @@ pub struct CreateIssueRequest {
     /// string) and a templateId is required.
     #[serde(rename = "contentType", skip_serializing_if = "Option::is_none")]
     content_type: Option<String>,
+    /// Optional time-to-live, in seconds, after which the draft is
+    /// automatically deleted. Only valid for drafts (the default action). A
+    /// one-time EventBridge schedule performs the deletion, so the actual
+    /// removal happens within roughly an hour of expiry.
+    #[serde(rename = "ttlSeconds", skip_serializing_if = "Option::is_none")]
+    ttl_seconds: Option<i64>,
 }
 
 #[derive(Deserialize, Serialize, Copy, Clone, PartialEq, Eq)]
@@ -75,6 +81,10 @@ enum CreateIssueAction {
 // Default value persisted/used when no contentType is supplied.
 const CONTENT_TYPE_MARKDOWN: &str = "markdown";
 const CONTENT_TYPE_JSON: &str = "json";
+
+// Upper bound for a draft's ttlSeconds (one year). Guards against absurd
+// far-future schedules while still allowing long-lived drafts.
+const MAX_TTL_SECONDS: i64 = 365 * 24 * 60 * 60;
 
 /// Normalizes a caller-supplied contentType into "markdown" or "json".
 /// Absent / empty / unknown values fall back to "markdown" for backwards
@@ -1266,6 +1276,15 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
     }
 
     let action = body.action.unwrap_or(CreateIssueAction::Draft);
+
+    // A ttlSeconds only makes sense for drafts — a scheduled issue is on its
+    // way to being published, so auto-expiring it would be surprising.
+    if body.ttl_seconds.is_some() && action != CreateIssueAction::Draft {
+        return Err(AppError::BadRequest(
+            "ttlSeconds is only valid for draft issues".to_string(),
+        ));
+    }
+
     let idempotency_key = get_idempotency_key(&event);
 
     let normalized_scheduled_at = normalize_scheduled_at(body.scheduled_at.as_deref())?;
@@ -1340,6 +1359,8 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
             &body.subject,
         )
         .await?;
+    } else if let Some(ttl_seconds) = body.ttl_seconds {
+        schedule_draft_deletion(&tenant_id, issue_number, ttl_seconds).await?;
     }
 
     if let (Some(key), Some(hash)) = (idempotency_key.as_deref(), payload_hash.as_deref()) {
@@ -1758,6 +1779,20 @@ fn validate_create_request(body: &CreateIssueRequest) -> Result<(), AppError> {
             return Err(AppError::BadRequest(
                 "A templateId is required when contentType is \"json\"".to_string(),
             ));
+        }
+    }
+
+    if let Some(ttl_seconds) = body.ttl_seconds {
+        if ttl_seconds < 1 {
+            return Err(AppError::BadRequest(
+                "ttlSeconds must be a positive integer".to_string(),
+            ));
+        }
+        if ttl_seconds > MAX_TTL_SECONDS {
+            return Err(AppError::BadRequest(format!(
+                "ttlSeconds must not exceed {} seconds",
+                MAX_TTL_SECONDS
+            )));
         }
     }
 
@@ -2547,6 +2582,7 @@ fn compute_idempotency_hash(
         "metadata": body.metadata.clone(),
         "templateId": body.template_id.clone(),
         "contentType": normalize_content_type(body.content_type.as_deref()),
+        "ttlSeconds": body.ttl_seconds,
     });
 
     let mut hasher = Sha256::new();
@@ -2756,6 +2792,80 @@ async fn start_issue_schedule(
         .map_err(|e| AppError::AwsError(format!("Failed to start schedule workflow: {}", e)))?;
 
     Ok(())
+}
+
+/// Creates a one-time EventBridge schedule that deletes the draft once its
+/// ttlSeconds elapses. The schedule fires a `DELETE_EXPIRED_DRAFT` event onto
+/// the default bus (via the universal putEvents target) which the
+/// delete-expired-draft Lambda consumes; the schedule deletes itself after
+/// firing. The deletion is conditional on the issue still being a draft, so a
+/// draft that gets published or scheduled before expiry is left untouched.
+async fn schedule_draft_deletion(
+    tenant_id: &str,
+    issue_number: i32,
+    ttl_seconds: i64,
+) -> Result<(), AppError> {
+    let scheduler = aws_clients::get_scheduler_client().await;
+    let role_arn = std::env::var("SCHEDULER_ROLE_ARN")
+        .map_err(|_| AppError::InternalError("SCHEDULER_ROLE_ARN not set".to_string()))?;
+
+    let run_at = chrono::Utc::now() + chrono::Duration::seconds(ttl_seconds);
+    let schedule_expression = format!("at({})", run_at.format("%Y-%m-%dT%H:%M:%S"));
+    let schedule_name = build_draft_ttl_schedule_name(tenant_id, issue_number);
+
+    let detail = serde_json::json!({
+        "tenantId": tenant_id,
+        "issueNumber": issue_number
+    });
+    let input = serde_json::json!({
+        "Entries": [{
+            "Source": "newsletter-service",
+            "DetailType": "DELETE_EXPIRED_DRAFT",
+            "Detail": detail.to_string(),
+            "EventBusName": "default"
+        }]
+    });
+
+    scheduler
+        .create_schedule()
+        .name(&schedule_name)
+        .group_name("newsletter")
+        .schedule_expression(&schedule_expression)
+        .action_after_completion(aws_sdk_scheduler::types::ActionAfterCompletion::Delete)
+        .flexible_time_window(
+            aws_sdk_scheduler::types::FlexibleTimeWindow::builder()
+                .mode(aws_sdk_scheduler::types::FlexibleTimeWindowMode::Off)
+                .build()
+                .map_err(|e| {
+                    AppError::InternalError(format!("Failed to build time window: {}", e))
+                })?,
+        )
+        .target(
+            aws_sdk_scheduler::types::Target::builder()
+                .arn("arn:aws:scheduler:::aws-sdk:eventbridge:putEvents")
+                .role_arn(&role_arn)
+                .input(input.to_string())
+                .build()
+                .map_err(|e| AppError::InternalError(format!("Failed to build target: {}", e)))?,
+        )
+        .send()
+        .await
+        .map_err(|e| AppError::AwsError(format!("Failed to schedule draft deletion: {}", e)))?;
+
+    Ok(())
+}
+
+/// Builds a schedule name within EventBridge Scheduler's constraints
+/// (<= 64 chars, `[0-9a-zA-Z-_.]`). The tenant id is sanitized and truncated
+/// and a millisecond timestamp keeps repeated drafts from colliding.
+fn build_draft_ttl_schedule_name(tenant_id: &str, issue_number: i32) -> String {
+    let tenant_prefix: String = tenant_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(16)
+        .collect();
+    let suffix = chrono::Utc::now().timestamp_millis();
+    format!("draft-ttl-{}-{}-{}", tenant_prefix, issue_number, suffix)
 }
 
 async fn get_next_issue_number(tenant_id: &str) -> Result<i32, AppError> {
@@ -3304,6 +3414,7 @@ mod tests {
             metadata: None,
             template_id: template.map(|t| t.to_string()),
             content_type: content_type.map(|c| c.to_string()),
+            ttl_seconds: None,
         }
     }
 
@@ -4097,6 +4208,7 @@ mod tests {
             metadata: None,
             template_id: None,
             content_type: None,
+            ttl_seconds: None,
         };
 
         let result = validate_create_request(&request);
@@ -4114,6 +4226,7 @@ mod tests {
             metadata: None,
             template_id: None,
             content_type: None,
+            ttl_seconds: None,
         };
 
         let result = validate_create_request(&request);
@@ -4132,11 +4245,69 @@ mod tests {
             metadata: None,
             template_id: None,
             content_type: None,
+            ttl_seconds: None,
         };
 
         let result = validate_create_request(&request);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn test_validate_create_request_ttl_seconds_valid() {
+        let mut request = create_request("# Test Content", None, None);
+        request.ttl_seconds = Some(3600);
+
+        assert!(validate_create_request(&request).is_ok());
+    }
+
+    #[test]
+    fn test_validate_create_request_ttl_seconds_zero_rejected() {
+        let mut request = create_request("# Test Content", None, None);
+        request.ttl_seconds = Some(0);
+
+        let result = validate_create_request(&request);
+        assert!(matches!(result.unwrap_err(), AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn test_validate_create_request_ttl_seconds_negative_rejected() {
+        let mut request = create_request("# Test Content", None, None);
+        request.ttl_seconds = Some(-5);
+
+        let result = validate_create_request(&request);
+        assert!(matches!(result.unwrap_err(), AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn test_validate_create_request_ttl_seconds_too_large_rejected() {
+        let mut request = create_request("# Test Content", None, None);
+        request.ttl_seconds = Some(MAX_TTL_SECONDS + 1);
+
+        let result = validate_create_request(&request);
+        assert!(matches!(result.unwrap_err(), AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn test_build_draft_ttl_schedule_name_is_valid() {
+        let name = build_draft_ttl_schedule_name("tenant-abc_123", 42);
+
+        assert!(name.starts_with("draft-ttl-tenant-abc_123-42-"));
+        assert!(name.len() <= 64);
+        assert!(name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'));
+    }
+
+    #[test]
+    fn test_build_draft_ttl_schedule_name_sanitizes_tenant() {
+        // Characters outside the allowed scheduler-name set are stripped.
+        let name = build_draft_ttl_schedule_name("ten@nt/with#bad chars", 7);
+
+        assert!(name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'));
+        assert!(name.contains("tenntwithbad"));
     }
 
     #[test]
@@ -4150,6 +4321,7 @@ mod tests {
             metadata: None,
             template_id: None,
             content_type: None,
+            ttl_seconds: None,
         };
 
         let result = validate_create_request(&request);
@@ -4678,6 +4850,7 @@ mod tests {
                 metadata: None,
                 template_id: None,
             content_type: None,
+                ttl_seconds: None,
             };
 
             let now = chrono::Utc::now().to_rfc3339();
@@ -4745,6 +4918,7 @@ mod tests {
                 metadata: None,
                 template_id: None,
             content_type: None,
+                ttl_seconds: None,
             };
 
             let result = validate_create_request(&request);
@@ -4765,6 +4939,7 @@ mod tests {
                 metadata: None,
                 template_id: None,
             content_type: None,
+                ttl_seconds: None,
             };
 
             let result = validate_create_request(&request);
@@ -4785,6 +4960,7 @@ mod tests {
                 metadata: None,
                 template_id: None,
             content_type: None,
+                ttl_seconds: None,
             };
 
             let result = validate_create_request(&request);

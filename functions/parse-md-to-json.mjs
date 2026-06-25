@@ -1,16 +1,37 @@
 
 import showdown from 'showdown';
 import frontmatter from '@github-docs/frontmatter';
-import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, GetItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
+import { renderWithSnippets } from './utils/render-template.mjs';
+import { resolveParameters } from './utils/snippet-parameters.mjs';
 
 const ddb = new DynamoDBClient();
 const converter = new showdown.Converter();
+
+// Body shortcodes that are handled by their own bespoke transforms elsewhere
+// (sponsor inline, social in tip-of-the-week, vote injected upstream) are NOT
+// routed through the generic snippet bridge.
+const RESERVED_SHORTCODES = new Set(['sponsor', 'social', 'vote']);
+
+// Hardcoded body blocks that render even when a tenant has not defined a snippet
+// of the same name. A matching tenant snippet overrides these (see the decision
+// doc: docs/reusable-content-components.md).
+const HARDCODED_BODY_BLOCKS = new Set(['robotVoice']);
+
+// Matches a body shortcode `{{< name attr="x" attr2="y" >}}`, capturing the
+// snippet name and its (well-formed) attribute list. The name follows the same
+// rule as snippet names (start with a letter; letters, digits, _ and -).
+const BODY_SHORTCODE_RE =
+  /\{\{<\s*([a-zA-Z][a-zA-Z0-9_-]*)((?:\s+[a-zA-Z][a-zA-Z0-9_-]*="[^"]*")*)\s*>\}\}/g;
+const ATTRIBUTE_RE = /([a-zA-Z][a-zA-Z0-9_-]*)="([^"]*)"/g;
 
 export const handler = async (state) => {
   const newsletter = frontmatter(state.content);
   const sponsor = await getSponsorDetails(newsletter.data.sponsor, newsletter.data.sponsor_description);
   const author = await getAuthor(newsletter.data.author);
+  const snippets = await getSnippets(state.tenantId);
+  const snippetsByName = new Map(snippets.filter(s => s.name).map(s => [s.name, s]));
   const issueNumber = Number(state.issueId);
 
   if (!Number.isFinite(issueNumber) || issueNumber < 1) {
@@ -18,7 +39,7 @@ export const handler = async (state) => {
   }
 
   let sections = newsletter.content.split('### ');
-  sections = sections.map(s => processSection(s, sponsor));
+  sections = sections.map(s => processSection(s, sponsor, snippets, snippetsByName));
   sections = sections.filter(ps => ps.header);
 
   if (sponsor) {
@@ -86,37 +107,89 @@ export const handler = async (state) => {
   };
 };
 
-const processSection = (section, sponsor) => {
+const processSection = (section, sponsor, snippets = [], snippetsByName = new Map()) => {
   const newlineIndex = section.indexOf('\n');
   const header = section.substring(0, newlineIndex);
-  let content = section.substring(newlineIndex + 1).trim();
+  const rawContent = section.substring(newlineIndex + 1).trim().replace(/\n/g, '<br>');
 
-  // Pull robotVoice shortcodes out before markdown conversion so the inline
-  // markdown in the `text` attribute isn't mangled. Each occurrence (0..N) is
-  // swapped for an inert placeholder that survives showdown, then expanded
-  // after the rest of the section has been converted to HTML.
-  const robotVoices = [];
-  content = content.replace(/\{\{<\s*robotVoice\s+text="([^"]+)"(?:\s+[^>]*)?>\}\}/g, (_match, text) => {
-    const placeholder = `%%ROBOTVOICE${robotVoices.length}%%`;
-    robotVoices.push(text);
+  // Pull body shortcodes (`{{< name attr="x" >}}`, 0..N) out before markdown
+  // conversion so inline markdown inside attribute values isn't mangled. Each is
+  // swapped for an inert placeholder that survives showdown, then expanded after
+  // the rest of the section converts to HTML. A separate working copy is used so
+  // `raw` stays clean for callers that re-render from it (tip-of-the-week,
+  // last words).
+  const blocks = [];
+  const working = rawContent.replace(BODY_SHORTCODE_RE, (match, name, attrString) => {
+    if (RESERVED_SHORTCODES.has(name)) return match;
+    if (!snippetsByName.has(name) && !HARDCODED_BODY_BLOCKS.has(name)) return match;
+    const placeholder = `%%BODYBLOCK${blocks.length}%%`;
+    blocks.push({ name, attrs: parseAttributes(attrString) });
     return placeholder;
   });
 
-  content = content.replace(/\n/g, '<br>');
-  let html = convertToHtml(content);
+  let html = convertToHtml(working);
   if (html.includes('{{< sponsor >}}')) {
     html = html.replace(/\{\{< sponsor >\}\}/g, formatSponsorAd(sponsor.ad));
   }
 
-  robotVoices.forEach((text, index) => {
-    html = html.replace(`%%ROBOTVOICE${index}%%`, formatRobotVoice(text));
+  blocks.forEach((block, index) => {
+    html = html.replace(`%%BODYBLOCK${index}%%`, renderBodyBlock(block, snippets, snippetsByName));
   });
 
   return {
     header,
     html: html,
-    raw: content
+    raw: rawContent
   };
+};
+
+/**
+ * Parse the attribute list of a body shortcode into a `{ name: value }` map of
+ * raw strings.
+ * @param {string} attrString - e.g. ` text="hello" tone="dry"`.
+ * @returns {Record<string, string>}
+ */
+const parseAttributes = (attrString) => {
+  const attrs = {};
+  let match;
+  ATTRIBUTE_RE.lastIndex = 0;
+  while ((match = ATTRIBUTE_RE.exec(attrString)) !== null) {
+    attrs[match[1]] = match[2];
+  }
+  return attrs;
+};
+
+/**
+ * Render a single body block. A tenant snippet whose name matches the shortcode
+ * wins; its parameters are resolved (defaults / required / type coercion) and it
+ * is rendered through the shared snippet renderer so the output matches the rest
+ * of the pipeline. When no snippet exists, a hardcoded block (e.g. robotVoice)
+ * is the fallback.
+ * @param {{name: string, attrs: Record<string,string>}} block
+ * @param {Array<{name?: string, content?: string, parameters?: Array}>} snippets
+ * @param {Map<string, object>} snippetsByName
+ * @returns {string} Rendered HTML (empty string on failure).
+ */
+const renderBodyBlock = (block, snippets, snippetsByName) => {
+  const snippet = snippetsByName.get(block.name);
+  if (snippet) {
+    const { values, errors } = resolveParameters(snippet.parameters ?? [], block.attrs);
+    if (errors.length) {
+      console.warn(`Snippet '${block.name}' parameter issues: ${errors.map(e => e.message).join('; ')}`);
+    }
+    try {
+      return renderWithSnippets(snippet.content ?? '', values, snippets);
+    } catch (err) {
+      console.error(`Failed to render snippet '${block.name}': ${err.message}`);
+      return '';
+    }
+  }
+
+  if (block.name === 'robotVoice') {
+    return formatRobotVoice(block.attrs.text ?? '');
+  }
+
+  return '';
 };
 
 const processTipOfTheWeek = (section) => {
@@ -221,6 +294,29 @@ const getAuthor = async (metadataAuthor) => {
   }
 
   return null;
+};
+
+/**
+ * Loads all snippets for a tenant via GSI1 (mirrors the read in publish-issue).
+ * Returns an empty list when no tenant is supplied so the body bridge falls back
+ * to hardcoded blocks only — keeping older invocations and the default template
+ * path working unchanged.
+ * @param {string} [tenantId] - Tenant identifier.
+ * @returns {Promise<Array<{name?: string, content?: string, parameters?: Array}>>}
+ */
+const getSnippets = async (tenantId) => {
+  if (!tenantId) return [];
+
+  const result = await ddb.send(new QueryCommand({
+    TableName: process.env.TABLE_NAME,
+    IndexName: 'GSI1',
+    KeyConditionExpression: 'GSI1PK = :gsi1pk',
+    ExpressionAttributeValues: marshall({
+      ':gsi1pk': `snippet#${tenantId}`
+    })
+  }));
+
+  return (result.Items ?? []).map(item => unmarshall(item));
 };
 
 const getSponsor = async (sponsorName) => {

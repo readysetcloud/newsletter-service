@@ -288,7 +288,8 @@
             "fileName.$": "$$.Execution.Input.fileName",
             "isPreview.$": "$$.Execution.Input.isPreview",
             "votingOptions.$": "$votingOptions",
-            "issueId.$": "$$.Execution.Input.issueId"
+            "issueId.$": "$$.Execution.Input.issueId",
+            "tenantId.$": "$$.Execution.Input.tenant.id"
           }
         },
               "Retry": [

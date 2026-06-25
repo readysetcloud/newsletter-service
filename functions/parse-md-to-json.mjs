@@ -160,16 +160,34 @@ const convertToHtml = (data, removeOuterParagraph = false) => {
 
 const formatRobotVoice = (text) => {
   const formattedText = convertToHtml(text, true);
+  // The labels use negative margins to sit on the card's border (the "notch").
+  // Apple Mail / web clients honor this; Gmail strips the negative margins and
+  // degrades cleanly to a flat label. Outlook's Word engine *does* apply them
+  // and would clip the label, so it gets a flat version via an MSO conditional.
   return `<div style="margin:24px 0;border:1px solid #CFD6DC;border-radius:5px;padding:16px;background:#FFFFFF;font-family:ui-monospace,'SF Mono','Cascadia Code',Consolas,'Courier New',monospace;">
+  <!--[if !mso]><!-->
   <div style="margin:-27px 0 8px 0;">
     <span style="background:#FFFFFF;padding:0 8px;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:#8A929A;">robot voice</span>
   </div>
+  <!--<![endif]-->
+  <!--[if mso]>
+  <div style="margin:0 0 8px 0;">
+    <span style="background:#FFFFFF;padding:0 8px;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:#8A929A;">robot voice</span>
+  </div>
+  <![endif]-->
   <div style="font-size:14px;line-height:1.6;color:#54606A;">
     ${formattedText}
   </div>
+  <!--[if !mso]><!-->
   <div style="text-align:right;margin:8px 0 -28px 0;">
     <span style="background:#FFFFFF;padding:0 8px;font-size:11px;letter-spacing:.03em;color:#9099A1;">404 &middot; personality not found</span>
   </div>
+  <!--<![endif]-->
+  <!--[if mso]>
+  <div style="text-align:right;margin:8px 0 0 0;">
+    <span style="background:#FFFFFF;padding:0 8px;font-size:11px;letter-spacing:.03em;color:#9099A1;">404 &middot; personality not found</span>
+  </div>
+  <![endif]-->
 </div>`;
 };
 

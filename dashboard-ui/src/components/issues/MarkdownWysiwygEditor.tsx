@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import {
   MDXEditor,
   type MDXEditorMethods,
@@ -20,6 +20,11 @@ import {
 } from '@mdxeditor/editor';
 import '@mdxeditor/editor/style.css';
 import { cn } from '../../utils/cn';
+
+export interface MarkdownWysiwygEditorHandle {
+  /** Insert markdown at the current cursor position (used by the snippet inserter). */
+  insert: (markdown: string) => void;
+}
 
 export interface MarkdownWysiwygEditorProps {
   /** Current markdown value (used to seed the editor). */
@@ -71,16 +76,28 @@ const useDocumentTheme = (): 'light' | 'dark' => {
  * document and external value changes (e.g. loading an issue for edit) are
  * pushed in through the imperative ref.
  */
-export const MarkdownWysiwygEditor: React.FC<MarkdownWysiwygEditorProps> = ({
+export const MarkdownWysiwygEditor = forwardRef<
+  MarkdownWysiwygEditorHandle,
+  MarkdownWysiwygEditorProps
+>(({
   value,
   onChange,
   onBlur,
   disabled = false,
   placeholder = 'Write your newsletter content…',
   id,
-}) => {
+}, ref) => {
   const editorRef = useRef<MDXEditorMethods>(null);
   const theme = useDocumentTheme();
+
+  useImperativeHandle(ref, () => ({
+    insert: (markdown: string) => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      editor.focus();
+      editor.insertMarkdown(markdown);
+    },
+  }));
 
   // Keep the editor in sync when the value is replaced from outside (initial
   // load, programmatic reset) without clobbering in-progress typing.
@@ -137,6 +154,6 @@ export const MarkdownWysiwygEditor: React.FC<MarkdownWysiwygEditorProps> = ({
       />
     </div>
   );
-};
+});
 
 MarkdownWysiwygEditor.displayName = 'MarkdownWysiwygEditor';

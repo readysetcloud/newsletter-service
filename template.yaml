@@ -2274,11 +2274,11 @@ Resources:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
 
   # On-demand test harness: render raw markdown through the real parse + publish
-  # (preview) pipeline and send a single test email. Stage-only by design so it
-  # can never exist in the production stack. Invoke manually from the console.
+  # (preview) pipeline and send a single test email. Always sends via the preview
+  # path (to.email = one recipient); it never reads or sends to the subscriber
+  # list, so it is safe in production. Invoke manually from the console.
   SendTestEmailFunction:
     Type: AWS::Serverless::Function
-    Condition: DeployStageResources
     Metadata:
       BuildMethod: esbuild
       BuildProperties:

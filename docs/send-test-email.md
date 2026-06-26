@@ -7,14 +7,15 @@ as `{{< robotVoice text="..." >}}` render exactly as they do for a live issue,
 then sends **one** `[Preview]` email to an address you choose.
 
 It does **not** write an issue record, schedule jobs, touch the subscriber list,
-or call back to GitHub. It is deployed to **stage/sandbox only** (gated by the
-`DeployStageResources` condition) so it can never exist in the production stack.
+or call back to GitHub. It always sends via the preview path (`to.email`, a
+single recipient) and never reads or sends to the subscriber list, so it is safe
+to run in production as well as stage/sandbox.
 
 ## Prerequisites
 
 - The tenant must have a **verified default sender** configured (the actual SES
   send is performed by `send-email-v2`, which validates the sender).
-- Deploy the stack to a non-production environment so the function exists.
+- Deploy the stack so the function exists in the target environment.
 
 ## How to run it (AWS Lambda console)
 

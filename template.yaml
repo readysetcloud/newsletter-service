@@ -2273,6 +2273,48 @@ Resources:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
 
+  # On-demand test harness: render raw markdown through the real parse + publish
+  # (preview) pipeline and send a single test email. Always sends via the preview
+  # path (to.email = one recipient); it never reads or sends to the subscriber
+  # list, so it is safe in production. Invoke manually from the console.
+  SendTestEmailFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - send-test-email.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: send-test-email.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Query
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action: dynamodb:Query
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}/index/GSI1
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/rsc/*
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          SECRET_ID: "{{resolve:ssm:/readysetcloud/secrets}}"
+
   ParseJsonIssueFunction:
     Type: AWS::Serverless::Function
     Metadata:

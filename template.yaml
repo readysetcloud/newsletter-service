@@ -2099,7 +2099,13 @@ Resources:
               Action:
                 - dynamodb:GetItem
                 - dynamodb:PutItem
+                - dynamodb:Query
               Resource: !GetAtt NewsletterTable.Arn
+            # getSnippets() reads tenant snippets via the GSI1 index when a
+            # custom template is selected.
+            - Effect: Allow
+              Action: dynamodb:Query
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}/index/GSI1
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
@@ -2267,8 +2273,14 @@ Resources:
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: dynamodb:GetItem
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Query
               Resource: !GetAtt NewsletterTable.Arn
+            # getSnippets() reads tenant snippets via the GSI1 index.
+            - Effect: Allow
+              Action: dynamodb:Query
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}/index/GSI1
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1

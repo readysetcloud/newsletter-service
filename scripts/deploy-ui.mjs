@@ -309,9 +309,7 @@ function configureFrontendEnv(outputs) {
 
   const requiredOutputs = {
     VITE_API_BASE_URL: apiBaseUrl,
-    VITE_USER_POOL_ID: outputs.UserPoolId,
     VITE_USER_POOL_CLIENT_ID: outputs.UserPoolClientId,
-    VITE_IDENTITY_POOL_ID: outputs.IdentityPoolId,
     VITE_AWS_REGION: getRegion()
   };
 

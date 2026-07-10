@@ -90,3 +90,7 @@ export type { ContainerProps } from './Container';
 
 export { FadeIn } from './FadeIn';
 export type { FadeInProps } from './FadeIn';
+
+// Shared design-system primitives (no local equivalent) from @readysetcloud/ui
+export { Badge, Alert, Spinner, cx } from '@readysetcloud/ui';
+export type { BadgeProps, BadgeVariant, AlertProps, AlertVariant } from '@readysetcloud/ui';

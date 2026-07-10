@@ -2,6 +2,11 @@ import React, { useId } from 'react';
 import { cn } from '../../utils/cn';
 import { ChevronDownIcon } from '@heroicons/react/24/outline';
 
+/*
+ * Styled by the shared .input/.field-* classes from @readysetcloud/ui.
+ * Stays local for the optional label and the options-array API the package
+ * Select (children-based) doesn't offer.
+ */
 export interface SelectOption {
   value: string;
   label: string;
@@ -26,7 +31,7 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
     return (
       <div className="w-full">
         {label && (
-          <label htmlFor={selectId} className="block text-sm font-medium text-muted-foreground mb-1">
+          <label htmlFor={selectId} className="field-label block mb-1.5">
             {label}
           </label>
         )}
@@ -37,12 +42,9 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
             aria-describedby={error ? errorId : helperText ? descriptionId : undefined}
             aria-invalid={hasError}
             className={cn(
-              'block w-full rounded-md border-border shadow-sm',
-              'focus:border-primary-500 focus:ring-ring',
-              'disabled:bg-background disabled:text-muted-foreground',
-              'pr-10 appearance-none min-h-[44px] px-3 py-2.5 text-base sm:text-sm',
-              'touch-manipulation', // Improves touch responsiveness
-              hasError && 'border-error-300 focus:border-error-500 focus:ring-error-500',
+              'input',
+              'pr-10 appearance-none',
+              hasError && 'input-error',
               className
             )}
             {...props}
@@ -63,12 +65,12 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
           </div>
         </div>
         {error && (
-          <p className="mt-1 text-sm text-error-600" id={errorId} role="alert">
+          <p className="field-error mt-1 block" id={errorId} role="alert">
             {error}
           </p>
         )}
         {helperText && !error && (
-          <p className="mt-1 text-sm text-muted-foreground" id={descriptionId}>
+          <p className="field-hint mt-1 block" id={descriptionId}>
             {helperText}
           </p>
         )}

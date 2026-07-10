@@ -6,10 +6,13 @@ interface SkeletonProps {
   style?: React.CSSProperties;
 }
 
+// Shimmer look comes from the shared .skeleton class (@readysetcloud/ui);
+// sizing stays className-driven, which the package component's inline
+// width/height defaults would override.
 export const Skeleton: React.FC<SkeletonProps> = ({ className, style }) => {
   return (
     <div
-      className={cn('animate-pulse bg-muted rounded', className)}
+      className={cn('skeleton', className)}
       style={style}
       aria-hidden="true"
     />

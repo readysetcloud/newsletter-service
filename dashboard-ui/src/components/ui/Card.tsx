@@ -1,4 +1,5 @@
 import React from 'react';
+import { Card as RscCard } from '@readysetcloud/ui';
 import { cn } from '../../utils/cn';
 
 export interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
@@ -35,6 +36,11 @@ const paddingVariants = {
   lg: 'p-8'
 };
 
+/*
+ * The card surface (background, border, radius, shadow) comes from the
+ * shared .card class. This app puts padding on the Card itself and uses the
+ * subcomponents below purely for spacing, so they stay local.
+ */
 export const Card: React.FC<CardProps> = ({
   children,
   padding = 'md',
@@ -44,9 +50,8 @@ export const Card: React.FC<CardProps> = ({
   ...props
 }) => {
   return (
-    <div
+    <RscCard
       className={cn(
-        'bg-surface rounded-lg border border-border shadow-sm',
         'transition-all duration-200 ease-in-out',
         hoverable && 'hover:shadow-md',
         interactive && 'cursor-pointer hover:shadow-md hover:-translate-y-0.5 hover:border-primary-200',
@@ -56,7 +61,7 @@ export const Card: React.FC<CardProps> = ({
       {...props}
     >
       {children}
-    </div>
+    </RscCard>
   );
 };
 

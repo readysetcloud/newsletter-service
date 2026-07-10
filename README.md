@@ -197,9 +197,7 @@ The UI expects these Vite environment variables:
 
 ```env
 VITE_API_BASE_URL=
-VITE_USER_POOL_ID=
 VITE_USER_POOL_CLIENT_ID=
-VITE_IDENTITY_POOL_ID=
 VITE_AWS_REGION=us-east-1
 ```
 

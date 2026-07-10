@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import { isValidPassword, PASSWORD_REQUIREMENTS } from '@readysetcloud/ui/auth';
 import { EyeIcon, EyeSlashIcon } from '@heroicons/react/24/outline';
 
 interface SignUpFormProps {
@@ -45,7 +46,7 @@ export function SignUpForm({ onSuccess, onNeedConfirmation }: SignUpFormProps) {
       errors.password = 'Password is required';
     } else if (formData.password.length < 8) {
       errors.password = 'Password must be at least 8 characters';
-    } else if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(formData.password)) {
+    } else if (!isValidPassword(formData.password)) {
       errors.password = 'Password must contain at least one uppercase letter, one lowercase letter, and one number';
     }
 
@@ -269,13 +270,14 @@ export function SignUpForm({ onSuccess, onNeedConfirmation }: SignUpFormProps) {
           </button>
         </form>
 
-        {/* Password Requirements */}
+        {/* Password Requirements — sourced from the shared pool policy
+            (no special characters required) */}
         <div className="mt-4 text-xs text-muted-foreground">
           <p className="font-medium mb-1">Password requirements:</p>
           <ul className="list-disc list-inside space-y-1">
-            <li>At least 8 characters long</li>
-            <li>Contains uppercase and lowercase letters</li>
-            <li>Contains at least one number</li>
+            {PASSWORD_REQUIREMENTS.map((requirement) => (
+              <li key={requirement}>{requirement}</li>
+            ))}
           </ul>
         </div>
       </div>

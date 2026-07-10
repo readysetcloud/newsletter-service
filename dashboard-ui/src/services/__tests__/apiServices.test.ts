@@ -13,18 +13,10 @@ vi.mock('../api', () => ({
   },
 }));
 
-// Mock AWS Amplify
-vi.mock('aws-amplify/auth', () => ({
-  fetchAuthSession: vi.fn().mockResolvedValue({
-    tokens: {
-      accessToken: {
-        toString: () => 'mock-access-token',
-      },
-      idToken: {
-        toString: () => 'mock-id-token',
-      },
-    },
-  }),
+// Mock the shared RSC auth core
+vi.mock('@readysetcloud/ui/auth', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@readysetcloud/ui/auth')>()),
+  getFreshIdToken: vi.fn().mockResolvedValue('mock-id-token'),
 }));
 
 // Mock fetch for file uploads

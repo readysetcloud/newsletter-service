@@ -3,14 +3,11 @@ import { vi } from 'vitest';
 import { ConfirmSignUpForm } from '../ConfirmSignUpForm';
 import { AuthProvider } from '../../../contexts/AuthContext';
 
-// Mock AWS Amplify
-vi.mock('aws-amplify/auth', () => ({
+// Mock the shared RSC auth core
+vi.mock('@readysetcloud/ui/auth', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@readysetcloud/ui/auth')>()),
   confirmSignUp: vi.fn(),
-  resendSignUpCode: vi.fn(),
-  getCurrentUser: vi.fn().mockRejectedValue(new Error('No user')),
-  fetchAuthSession: vi.fn().mockResolvedValue({
-    tokens: null
-  })
+  resendConfirmationCode: vi.fn(),
 }));
 
 const renderWithAuth = async (component: React.ReactElement) => {

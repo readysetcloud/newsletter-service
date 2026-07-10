@@ -90,9 +90,6 @@ export default defineConfig(({ command: _command, mode }) => {
               ) {
                 return 'form-vendor';
               }
-              if (id.includes('aws-amplify')) {
-                return 'aws-vendor';
-              }
               if (id.includes('recharts')) {
                 return 'chart-vendor';
               }

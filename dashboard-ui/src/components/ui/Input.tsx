@@ -1,6 +1,11 @@
 import React, { useId } from 'react';
 import { cn } from '../../utils/cn';
 
+/*
+ * Styled by the shared .input/.field-* classes from @readysetcloud/ui.
+ * Stays local for the optional label and the leftIcon/rightIcon slots the
+ * package Input doesn't offer.
+ */
 export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   label?: string;
   error?: string;
@@ -20,7 +25,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
     return (
       <div className="w-full">
         {label && (
-          <label htmlFor={inputId} className="block text-sm font-medium text-muted-foreground mb-1">
+          <label htmlFor={inputId} className="field-label block mb-1.5">
             {label}
           </label>
         )}
@@ -36,15 +41,10 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
             aria-describedby={error ? errorId : helperText ? descriptionId : undefined}
             aria-invalid={hasError}
             className={cn(
-              'block w-full rounded-md border-border shadow-sm',
-              'focus:border-primary-500 focus:ring-ring',
-              'disabled:bg-background disabled:text-muted-foreground',
-              'placeholder:text-muted-foreground',
-              'min-h-[44px] px-3 py-2.5 text-base sm:text-sm', // Better mobile touch targets
-              'touch-manipulation', // Improves touch responsiveness
+              'input',
+              hasError && 'input-error',
               leftIcon && 'pl-10',
               rightIcon && 'pr-10',
-              hasError && 'border-error-300 focus:border-error-500 focus:ring-error-500',
               className
             )}
             {...props}
@@ -56,12 +56,12 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
           )}
         </div>
         {error && (
-          <p className="mt-1 text-sm text-error-600" id={errorId} role="alert">
+          <p className="field-error mt-1 block" id={errorId} role="alert">
             {error}
           </p>
         )}
         {helperText && !error && (
-          <p className="mt-1 text-sm text-muted-foreground" id={descriptionId}>
+          <p className="field-hint mt-1 block" id={descriptionId}>
             {helperText}
           </p>
         )}

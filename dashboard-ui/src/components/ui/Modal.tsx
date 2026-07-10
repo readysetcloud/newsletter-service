@@ -1,12 +1,19 @@
-import React, { useEffect } from 'react';
+import React from 'react';
+import { Modal as RscModal } from '@readysetcloud/ui';
 import { cn } from '../../utils/cn';
 
+/*
+ * Dialog shell comes from @readysetcloud/ui (native <dialog>: focus trap,
+ * Esc-to-close, bottom sheet on small screens). This adapter keeps the app's
+ * isOpen/size API; the Header/Content/Footer spacing components stay local.
+ */
 export interface ModalProps {
   isOpen: boolean;
   onClose: () => void;
   children: React.ReactNode;
   size?: 'sm' | 'md' | 'lg' | 'xl';
   closeOnOverlayClick?: boolean;
+  /** Esc always closes the native dialog; kept for API compatibility. */
   closeOnEscape?: boolean;
 }
 
@@ -27,10 +34,10 @@ export interface ModalFooterProps {
 }
 
 const sizeVariants = {
-  sm: 'max-w-md',
-  md: 'max-w-lg',
-  lg: 'max-w-2xl',
-  xl: 'max-w-4xl'
+  sm: 'sm:max-w-md',
+  md: 'sm:max-w-lg',
+  lg: 'sm:max-w-2xl',
+  xl: 'sm:max-w-4xl'
 };
 
 export const Modal: React.FC<ModalProps> = ({
@@ -38,58 +45,28 @@ export const Modal: React.FC<ModalProps> = ({
   onClose,
   children,
   size = 'md',
-  closeOnOverlayClick = true,
-  closeOnEscape = true
+  closeOnOverlayClick = true
 }) => {
-  useEffect(() => {
-    if (!closeOnEscape) return;
+  // The package Modal closes on backdrop click via its own onClick on the
+  // <dialog>; supplying a no-op onClick replaces that handler when the app
+  // needs the modal to stay open (e.g. one-time API key reveal).
+  const overlayGuard = closeOnOverlayClick
+    ? undefined
+    : ({ onClick: () => undefined } as Record<string, unknown>);
 
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        onClose();
-      }
-    };
-
-    if (isOpen) {
-      document.addEventListener('keydown', handleEscape);
-      document.body.style.overflow = 'hidden';
-    }
-
-    return () => {
-      document.removeEventListener('keydown', handleEscape);
-      document.body.style.overflow = 'unset';
-    };
-  }, [isOpen, onClose, closeOnEscape]);
-
+  // Unmount when closed (the native <dialog> would keep children mounted):
+  // callers rely on modal content/form state resetting between opens.
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      {/* Overlay */}
-      <div
-        className="fixed inset-0 bg-black bg-opacity-50 transition-opacity"
-        onClick={closeOnOverlayClick ? onClose : undefined}
-        onKeyDown={closeOnOverlayClick ? (event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            onClose();
-          }
-        } : undefined}
-        role={closeOnOverlayClick ? 'button' : undefined}
-        tabIndex={closeOnOverlayClick ? 0 : undefined}
-        aria-label={closeOnOverlayClick ? 'Close modal' : undefined}
-      />
-
-      {/* Modal */}
-      <div
-        className={cn(
-          'relative bg-surface rounded-lg shadow-xl mx-4 w-full',
-          sizeVariants[size]
-        )}
-      >
-        {children}
-      </div>
-    </div>
+    <RscModal
+      open={isOpen}
+      onClose={onClose}
+      className={cn('sm:w-full', sizeVariants[size])}
+      {...overlayGuard}
+    >
+      {children}
+    </RscModal>
   );
 };
 
@@ -104,7 +81,8 @@ export const ModalHeader: React.FC<ModalHeaderProps> = ({
       {onClose && (
         <button
           onClick={onClose}
-          className="ml-4 text-muted-foreground hover:text-muted-foreground transition-colors"
+          className="ml-4 text-muted-foreground hover:text-foreground transition-colors"
+          aria-label="Close"
         >
           <svg
             className="h-6 w-6"

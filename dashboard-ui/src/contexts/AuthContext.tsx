@@ -1,14 +1,19 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import {
-  signIn as amplifySignIn,
-  signOut as amplifySignOut,
-  signUp as amplifySignUp,
-  confirmSignUp as amplifyConfirmSignUp,
-  resendSignUpCode as amplifyResendSignUpCode,
-  getCurrentUser,
-  fetchAuthSession,
-} from 'aws-amplify/auth';
+  AUTH_KEY,
+  claims,
+  confirmSignUp as rscConfirmSignUp,
+  getFreshIdToken,
+  isSignedIn,
+  onAuthChange,
+  readSession,
+  resendConfirmationCode,
+  signIn as rscSignIn,
+  signOut as rscSignOut,
+  signUp as rscSignUp,
+} from '@readysetcloud/ui/auth';
+import type { IdClaims } from '@readysetcloud/ui/auth';
 
 interface User {
   userId: string;
@@ -45,60 +50,37 @@ interface AuthProviderProps {
   children: ReactNode;
 }
 
-const parseJwtToken = (token: string): Partial<User> => {
-  try {
-    const payload = JSON.parse(atob(token.split('.')[1]));
-    return {
-      userId: payload.sub,
-      email: payload.email,
-      emailVerified: payload.email_verified,
-      tenantId: payload['custom:tenant_id'],
-      role: payload['custom:role'],
-      isAdmin: payload['custom:role'] === 'admin',
-      isTenantAdmin: payload['custom:role'] === 'tenant_admin',
-      profileCompleted: payload['custom:profile_completed'] === 'true',
-      groups: payload['cognito:groups'] || [],
-      firstName: payload.given_name,
-      lastName: payload.family_name
-    };
-  } catch (error) {
-    console.error('Error parsing JWT token:', error);
-    return {};
-  }
+const userFromClaims = (idClaims: IdClaims): User | null => {
+  if (!idClaims.sub) return null;
+  return {
+    userId: idClaims.sub,
+    email: idClaims.email || '',
+    emailVerified: idClaims.email_verified === true || idClaims.email_verified === 'true',
+    tenantId: idClaims['custom:tenant_id'] as string | undefined,
+    role: idClaims['custom:role'] as string | undefined,
+    isAdmin: idClaims['custom:role'] === 'admin',
+    isTenantAdmin: idClaims['custom:role'] === 'tenant_admin',
+    profileCompleted: idClaims['custom:profile_completed'] === 'true',
+    groups: (idClaims['cognito:groups'] as string[] | undefined) || [],
+    firstName: idClaims.given_name,
+    lastName: idClaims.family_name,
+  };
 };
 
 export function AuthProvider({ children }: AuthProviderProps) {
-  const [user, setUser] = useState<User | null>(null);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  // The rsc:auth session is read synchronously from localStorage, so auth
+  // state is known from the first render — no mount-time loading phase.
+  const [user, setUser] = useState<User | null>(() => userFromClaims(claims()));
+  const [isAuthenticated, setIsAuthenticated] = useState(() => isSignedIn());
+  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const checkAuthStatus = useCallback(async () => {
-    try {
-      setIsLoading(true);
-      const currentUser = await getCurrentUser();
-      const session = await fetchAuthSession();
-
-      if (currentUser && session.tokens?.accessToken && session.tokens?.idToken) {
-        const userInfo = parseJwtToken(session.tokens.idToken.toString());
-        setUser({
-          userId: currentUser.userId,
-          email: currentUser.signInDetails?.loginId || '',
-          emailVerified: true,
-          ...userInfo,
-        });
-        setIsAuthenticated(true);
-      } else {
-        setUser(null);
-        setIsAuthenticated(false);
-      }
-    } catch {
-      console.log('No authenticated user found');
-      setUser(null);
-      setIsAuthenticated(false);
-    } finally {
-      setIsLoading(false);
-    }
+  useEffect(() => {
+    // Sign-in/out in this tab or another one (storage events) re-syncs state.
+    return onAuthChange(() => {
+      setUser(userFromClaims(claims()));
+      setIsAuthenticated(isSignedIn());
+    });
   }, []);
 
   const signIn = async (email: string, password: string) => {
@@ -106,37 +88,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setIsLoading(true);
       setError(null);
 
-      const { isSignedIn, nextStep } = await amplifySignIn({
-        username: email,
-        password,
-      });
-
-      if (isSignedIn) {
-        await checkAuthStatus();
-      } else if (nextStep.signInStep === 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED') {
-        // Handle new password required case
+      const result = await rscSignIn(email, password);
+      if (result.kind === 'newPasswordRequired') {
         setError('New password required. Please contact administrator.');
-      } else {
-        setError('Sign in incomplete. Please try again.');
       }
+      // Success updates state via onAuthChange.
     } catch (error: unknown) {
       console.error('Sign in error:', error);
-      let errorMessage = 'An error occurred during sign in';
-
-      const errorName = getErrorName(error);
-      const errorMessageFromError = getErrorMessage(error);
-
-      if (errorName === 'NotAuthorizedException') {
-        errorMessage = 'Invalid email or password';
-      } else if (errorName === 'UserNotConfirmedException') {
-        errorMessage = 'Account not confirmed. Please check your email.';
-      } else if (errorName === 'UserNotFoundException') {
-        errorMessage = 'User not found';
-      } else if (errorMessageFromError) {
-        errorMessage = errorMessageFromError;
-      }
-
-      setError(errorMessage);
+      setError(getErrorMessage(error) || 'An error occurred during sign in');
       setUser(null);
       setIsAuthenticated(false);
     } finally {
@@ -147,9 +106,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const signOut = async () => {
     try {
       setIsLoading(true);
-      await amplifySignOut();
-      setUser(null);
-      setIsAuthenticated(false);
+      await rscSignOut();
       setError(null);
     } catch (error: unknown) {
       console.error('Sign out error:', error);
@@ -159,44 +116,28 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   };
 
-  // Check authentication status on mount
-  useEffect(() => {
-    checkAuthStatus();
-  }, [checkAuthStatus]);
-
   const getToken = async (): Promise<string> => {
-    try {
-      const session = await fetchAuthSession();
-      if (session.tokens?.accessToken) {
-        return session.tokens.accessToken.toString();
-      }
-      throw new Error('No valid token found');
-    } catch (error) {
-      console.error('Error getting token:', error);
+    const token = await getFreshIdToken();
+    if (!token) {
       throw new Error('Failed to get authentication token');
     }
+    return token;
   };
 
   const refreshUser = async () => {
     try {
-      // Force a fresh token fetch by clearing the cached session
-      const session = await fetchAuthSession({ forceRefresh: true });
-
-      if (session.tokens?.idToken) {
-        const currentUser = await getCurrentUser();
-        const userInfo = parseJwtToken(session.tokens.idToken.toString());
-        setUser({
-          userId: currentUser.userId,
-          email: currentUser.signInDetails?.loginId || '',
-          emailVerified: true,
-          ...userInfo,
-        });
-        console.log('User refreshed with new token, tenantId:', userInfo.tenantId);
+      // Force a token refresh so new claims (e.g. custom:tenant_id set during
+      // onboarding) show up: mark the session expired, then ask for a fresh
+      // token. Candidate for a first-class forceRefresh in @readysetcloud/ui.
+      const session = readSession();
+      if (session?.refreshToken) {
+        localStorage.setItem(AUTH_KEY, JSON.stringify({ ...session, expiresAt: 0 }));
+        await getFreshIdToken();
       }
+      setUser(userFromClaims(claims()));
+      setIsAuthenticated(isSignedIn());
     } catch (error) {
       console.error('Error refreshing user:', error);
-      // Fallback to regular checkAuthStatus
-      await checkAuthStatus();
     }
   };
 
@@ -205,37 +146,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setIsLoading(true);
       setError(null);
 
-      const { isSignUpComplete, nextStep } = await amplifySignUp({
-        username: email,
-        password,
-        options: {
-          userAttributes: {
-            email,
-            given_name: firstName,
-            family_name: lastName,
-          },
-        },
-      });
+      await rscSignUp(firstName, lastName, email, password);
 
-      return { isSignUpComplete, nextStep };
+      // The shared pool always verifies email with a code before sign-in.
+      return { isSignUpComplete: false };
     } catch (error: unknown) {
       console.error('Sign up error:', error);
-      let errorMessage = 'An error occurred during sign up';
-
-      const errorName = getErrorName(error);
-      const errorMessageFromError = getErrorMessage(error);
-
-      if (errorName === 'UsernameExistsException') {
-        errorMessage = 'An account with this email already exists';
-      } else if (errorName === 'InvalidPasswordException') {
-        errorMessage = 'Password does not meet requirements';
-      } else if (errorName === 'InvalidParameterException') {
-        errorMessage = 'Invalid email or password format';
-      } else if (errorMessageFromError) {
-        errorMessage = errorMessageFromError;
-      }
-
-      setError(errorMessage);
+      setError(getErrorMessage(error) || 'An error occurred during sign up');
       throw error;
     } finally {
       setIsLoading(false);
@@ -247,31 +164,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setIsLoading(true);
       setError(null);
 
-      await amplifyConfirmSignUp({
-        username: email,
-        confirmationCode,
-      });
-
-      // After successful confirmation, automatically sign in
-      await checkAuthStatus();
+      await rscConfirmSignUp(email, confirmationCode);
     } catch (error: unknown) {
       console.error('Confirm sign up error:', error);
-      let errorMessage = 'An error occurred during confirmation';
-
-      const errorName = getErrorName(error);
-      const errorMessageFromError = getErrorMessage(error);
-
-      if (errorName === 'CodeMismatchException') {
-        errorMessage = 'Invalid confirmation code';
-      } else if (errorName === 'ExpiredCodeException') {
-        errorMessage = 'Confirmation code has expired';
-      } else if (errorName === 'NotAuthorizedException') {
-        errorMessage = 'User is already confirmed';
-      } else if (errorMessageFromError) {
-        errorMessage = errorMessageFromError;
-      }
-
-      setError(errorMessage);
+      setError(getErrorMessage(error) || 'An error occurred during confirmation');
       throw error;
     } finally {
       setIsLoading(false);
@@ -283,25 +179,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setIsLoading(true);
       setError(null);
 
-      await amplifyResendSignUpCode({
-        username: email,
-      });
+      await resendConfirmationCode(email);
     } catch (error: unknown) {
       console.error('Resend code error:', error);
-      let errorMessage = 'An error occurred while resending code';
-
-      const errorName = getErrorName(error);
-      const errorMessageFromError = getErrorMessage(error);
-
-      if (errorName === 'LimitExceededException') {
-        errorMessage = 'Too many requests. Please wait before requesting another code.';
-      } else if (errorName === 'InvalidParameterException') {
-        errorMessage = 'Invalid email address';
-      } else if (errorMessageFromError) {
-        errorMessage = errorMessageFromError;
-      }
-
-      setError(errorMessage);
+      setError(getErrorMessage(error) || 'An error occurred while resending code');
       throw error;
     } finally {
       setIsLoading(false);
@@ -343,23 +224,14 @@ export function useAuth() {
 }
 
 function getErrorMessage(error: unknown): string | undefined {
+  // AuthError from @readysetcloud/ui/auth already carries friendly copy
+  // (invalid credentials, expired codes, throttling, ...).
   if (error instanceof Error) {
     return error.message;
   }
   if (typeof error === 'object' && error !== null && 'message' in error) {
     const message = (error as { message?: unknown }).message;
     return typeof message === 'string' ? message : undefined;
-  }
-  return undefined;
-}
-
-function getErrorName(error: unknown): string | undefined {
-  if (error instanceof Error) {
-    return error.name;
-  }
-  if (typeof error === 'object' && error !== null && 'name' in error) {
-    const name = (error as { name?: unknown }).name;
-    return typeof name === 'string' ? name : undefined;
   }
   return undefined;
 }

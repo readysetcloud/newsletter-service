@@ -3,13 +3,10 @@ import { vi } from 'vitest';
 import { SignUpForm } from '../SignUpForm';
 import { AuthProvider } from '../../../contexts/AuthContext';
 
-// Mock AWS Amplify
-vi.mock('aws-amplify/auth', () => ({
+// Mock the shared RSC auth core (keep validation helpers real)
+vi.mock('@readysetcloud/ui/auth', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@readysetcloud/ui/auth')>()),
   signUp: vi.fn(),
-  getCurrentUser: vi.fn().mockRejectedValue(new Error('No user')),
-  fetchAuthSession: vi.fn().mockResolvedValue({
-    tokens: null
-  })
 }));
 
 const renderWithAuth = async (component: React.ReactElement) => {
@@ -118,9 +115,9 @@ describe('SignUpForm', () => {
     );
 
     expect(screen.getByText('Password requirements:')).toBeInTheDocument();
-    expect(screen.getByText('At least 8 characters long')).toBeInTheDocument();
-    expect(screen.getByText('Contains uppercase and lowercase letters')).toBeInTheDocument();
-    expect(screen.getByText('Contains at least one number')).toBeInTheDocument();
+    expect(screen.getByText('At least 8 characters')).toBeInTheDocument();
+    expect(screen.getByText('One uppercase and one lowercase letter')).toBeInTheDocument();
+    expect(screen.getByText('At least one number')).toBeInTheDocument();
   });
 
   it('toggles password visibility', async () => {

@@ -46,6 +46,18 @@ struct JwtClaims {
     client_id: Option<String>,
     #[serde(default)]
     token_use: Option<String>,
+    #[serde(default)]
+    aud: Option<String>,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    given_name: Option<String>,
+    #[serde(default)]
+    family_name: Option<String>,
+    #[serde(default)]
+    zoneinfo: Option<String>,
+    #[serde(default, rename = "custom:tenant_id")]
+    tenant_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -195,7 +207,14 @@ async fn handle_jwt_auth(
     state: &AppState,
 ) -> Result<PolicyResponse, Error> {
     let claims = verify_jwt(token, &state.user_pool_id, &state.user_pool_client_id).await?;
-    let user_info = get_user_attributes(token, &state.cognito).await;
+
+    // Id tokens already carry every attribute we need; only access tokens
+    // require a Cognito GetUser round trip (GetUser rejects id tokens).
+    let user_info = if claims.token_use.as_deref() == Some("id") {
+        id_token_attributes(&claims)
+    } else {
+        get_user_attributes(token, &state.cognito).await
+    };
 
     let tenant_id = user_info.get("custom:tenant_id").cloned();
     let principal_id = user_info
@@ -219,6 +238,21 @@ async fn handle_jwt_auth(
     ]);
 
     Ok(generate_policy(&principal_id, "Allow", &api_arn, context))
+}
+
+fn id_token_attributes(claims: &JwtClaims) -> HashMap<String, String> {
+    let entries = [
+        ("sub", &claims.sub),
+        ("email", &claims.email),
+        ("given_name", &claims.given_name),
+        ("family_name", &claims.family_name),
+        ("zoneinfo", &claims.zoneinfo),
+        ("custom:tenant_id", &claims.tenant_id),
+    ];
+    entries
+        .into_iter()
+        .filter_map(|(name, value)| value.clone().map(|value| (name.to_string(), value)))
+        .collect()
 }
 
 async fn get_user_attributes(
@@ -447,31 +481,37 @@ async fn verify_jwt(token: &str, user_pool_id: &str, client_id: &str) -> Result<
     let decoding_key = DecodingKey::from_jwk(&jwk)?;
     let mut validation = Validation::new(Algorithm::RS256);
     validation.validate_exp = true;
+    // The audience claim differs by token type (id: `aud`, access:
+    // `client_id`), so it's checked manually in validate_token_use.
+    validation.validate_aud = false;
     validation.set_issuer(&[issuer_for_pool(user_pool_id)?]);
 
     let token_data = decode::<JwtClaims>(token, &decoding_key, &validation)?;
-
-    if token_data
-        .claims
-        .token_use
-        .as_deref()
-        .filter(|value| *value == "access")
-        .is_none()
-    {
-        return Err("Invalid token_use claim".into());
-    }
-
-    if token_data
-        .claims
-        .client_id
-        .as_deref()
-        .filter(|value| *value == client_id)
-        .is_none()
-    {
-        return Err("Invalid client_id claim".into());
-    }
+    validate_token_use(&token_data.claims, client_id)?;
 
     Ok(token_data.claims)
+}
+
+/// The dashboard sends id tokens (the shared `rsc:auth` session contract);
+/// access tokens stay accepted for pre-migration sessions.
+fn validate_token_use(claims: &JwtClaims, client_id: &str) -> Result<(), Error> {
+    match claims.token_use.as_deref() {
+        Some("id") => {
+            if claims.aud.as_deref() == Some(client_id) {
+                Ok(())
+            } else {
+                Err("Invalid aud claim".into())
+            }
+        }
+        Some("access") => {
+            if claims.client_id.as_deref() == Some(client_id) {
+                Ok(())
+            } else {
+                Err("Invalid client_id claim".into())
+            }
+        }
+        _ => Err("Invalid token_use claim".into()),
+    }
 }
 
 fn issuer_for_pool(user_pool_id: &str) -> Result<String, Error> {
@@ -613,5 +653,62 @@ mod tests {
     fn get_api_arn_pattern_returns_input_when_short() {
         let arn = "invalid";
         assert_eq!(get_api_arn_pattern(arn), arn);
+    }
+
+    fn claims(token_use: &str, aud: Option<&str>, client_id: Option<&str>) -> JwtClaims {
+        JwtClaims {
+            sub: Some("user-1".to_string()),
+            client_id: client_id.map(String::from),
+            token_use: Some(token_use.to_string()),
+            aud: aud.map(String::from),
+            email: Some("user@example.com".to_string()),
+            given_name: Some("Test".to_string()),
+            family_name: Some("User".to_string()),
+            zoneinfo: None,
+            tenant_id: Some("tenant-1".to_string()),
+        }
+    }
+
+    #[test]
+    fn validate_token_use_accepts_id_token_with_matching_aud() {
+        assert!(validate_token_use(&claims("id", Some("client-1"), None), "client-1").is_ok());
+    }
+
+    #[test]
+    fn validate_token_use_rejects_id_token_with_wrong_aud() {
+        assert!(validate_token_use(&claims("id", Some("other"), None), "client-1").is_err());
+        assert!(validate_token_use(&claims("id", None, None), "client-1").is_err());
+    }
+
+    #[test]
+    fn validate_token_use_accepts_access_token_with_matching_client_id() {
+        assert!(validate_token_use(&claims("access", None, Some("client-1")), "client-1").is_ok());
+    }
+
+    #[test]
+    fn validate_token_use_rejects_access_token_with_wrong_client_id() {
+        assert!(validate_token_use(&claims("access", None, Some("other")), "client-1").is_err());
+    }
+
+    #[test]
+    fn validate_token_use_rejects_unknown_token_use() {
+        assert!(validate_token_use(&claims("refresh", None, None), "client-1").is_err());
+    }
+
+    #[test]
+    fn id_token_attributes_maps_claims() {
+        let attrs = id_token_attributes(&claims("id", Some("client-1"), None));
+        assert_eq!(attrs.get("sub").map(String::as_str), Some("user-1"));
+        assert_eq!(
+            attrs.get("email").map(String::as_str),
+            Some("user@example.com")
+        );
+        assert_eq!(attrs.get("given_name").map(String::as_str), Some("Test"));
+        assert_eq!(attrs.get("family_name").map(String::as_str), Some("User"));
+        assert_eq!(
+            attrs.get("custom:tenant_id").map(String::as_str),
+            Some("tenant-1")
+        );
+        assert!(!attrs.contains_key("zoneinfo"));
     }
 }

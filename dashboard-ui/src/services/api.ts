@@ -1,4 +1,4 @@
-import { fetchAuthSession } from 'aws-amplify/auth';
+import { getFreshIdToken } from '@readysetcloud/ui/auth';
 import type { ApiResponse, RequestConfig, ApiClientConfig } from '@/types';
 import { parseApiError, shouldRetryError, getRetryDelay } from '@/utils/errorHandling';
 
@@ -20,11 +20,7 @@ class ApiClient {
 
   private async getAuthToken(): Promise<string | null> {
     try {
-      const session = await fetchAuthSession();
-      if (session.tokens?.accessToken) {
-        return session.tokens.accessToken.toString();
-      }
-      return null;
+      return await getFreshIdToken();
     } catch (error) {
       console.error('Error getting auth token:', error);
       return null;

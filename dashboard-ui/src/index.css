@@ -157,7 +157,7 @@
   color: rgb(var(--primary-600));
 }
 .hbs-block {
-  color: #9333ea; /* purple-600 */
+  color: rgb(var(--warning-600)); /* block helpers — distinct brand accent */
   font-weight: 600;
 }
 .hbs-partial {

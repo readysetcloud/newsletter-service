@@ -39,7 +39,7 @@ const EngagementTypeTrendChart: React.FC<EngagementTypeTrendChartProps> = ({ tre
           <Line
             type="monotone"
             dataKey="newClickers"
-            stroke="#3b82f6"
+            stroke="#219eff"
             strokeWidth={2}
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -50,7 +50,7 @@ const EngagementTypeTrendChart: React.FC<EngagementTypeTrendChartProps> = ({ tre
           <Line
             type="monotone"
             dataKey="returningClickers"
-            stroke="#10b981"
+            stroke="#14b8a6"
             strokeWidth={2}
             strokeLinecap="round"
             strokeLinejoin="round"

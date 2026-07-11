@@ -13,8 +13,8 @@ export interface DeliveryBreakdownChartProps {
 }
 
 const COLORS = {
-  delivered: '#10b981', // success / emerald
-  bounced: '#ef4444', // error / red
+  delivered: '#14b8a6', // success / emerald
+  bounced: '#c81e22', // error / red
 };
 
 interface ChartDatum {

@@ -596,7 +596,7 @@ export const SponsorshipPricingPage: React.FC = () => {
                       <Line
                         type="monotone"
                         dataKey="price"
-                        stroke="var(--color-primary-600, #4f46e5)"
+                        stroke="#0b82e6"
                         strokeWidth={2}
                         dot={{ r: 3 }}
                         activeDot={{ r: 5 }}

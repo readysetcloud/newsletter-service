@@ -46,21 +46,6 @@ export type { ModalProps, ModalHeaderProps, ModalContentProps, ModalFooterProps 
 export { ConfirmationDialog, useConfirmationDialog, confirmationPresets } from './ConfirmationDialog';
 export type { ConfirmationDialogProps } from './ConfirmationDialog';
 
-export {
-  Layout,
-  Header,
-  Sidebar,
-  MainContent,
-  Navigation,
-  NavigationItem
-} from './Layout';
-export type {
-  LayoutProps,
-  HeaderProps,
-  SidebarProps,
-  MainContentProps,
-  NavigationItemProps
-} from './Layout';
 
 // Feedback Components
 export {

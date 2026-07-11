@@ -43,7 +43,7 @@ export const BRAND = {
     ogDescription: 'Manage your newsletter brands, API keys, and view analytics.',
     twitterTitle: 'Outboxed Dashboard',
     twitterDescription: 'Manage your newsletter brands, API keys, and view analytics.',
-    themeColor: '#3B82F6',
+    themeColor: '#219eff',
   },
 
   storageKeyPrefix: 'outboxed',

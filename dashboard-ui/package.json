@@ -24,7 +24,7 @@
     "@heroicons/react": "^2.2.0",
     "@hookform/resolvers": "^5.2.2",
     "@mdxeditor/editor": "^4.0.4",
-    "@readysetcloud/ui": "^0.1.0",
+    "@readysetcloud/ui": "^0.3.0",
     "clsx": "^2.1.1",
     "d3-scale": "^4.0.2",
     "date-fns": "^4.1.0",

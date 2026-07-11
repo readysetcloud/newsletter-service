@@ -269,7 +269,7 @@ export const contrastUtils = {
   getAccessibleColors: () => ({
     primary: {
       text: '#ffffff',
-      background: '#3B82F6',
+      background: '#219eff',
       contrast: 4.5, // WCAG AA compliant
     },
     secondary: {
@@ -279,17 +279,17 @@ export const contrastUtils = {
     },
     success: {
       text: '#ffffff',
-      background: '#10B981',
+      background: '#14b8a6',
       contrast: 4.5,
     },
     warning: {
       text: '#000000',
-      background: '#F59E0B',
+      background: '#f97316',
       contrast: 4.5,
     },
     error: {
       text: '#ffffff',
-      background: '#EF4444',
+      background: '#c81e22',
       contrast: 4.5,
     },
   }),

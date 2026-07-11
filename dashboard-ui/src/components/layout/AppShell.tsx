@@ -1,38 +1,24 @@
-import { useState, useCallback } from 'react';
-import { AppSidebar } from './AppSidebar';
-import { AppHeaderBar } from './AppHeaderBar';
-import { MobileDrawer } from './MobileDrawer';
+import { AppNavBar } from './AppNavBar';
+import { PageHeaderBar } from './PageHeaderBar';
 
 interface AppShellProps {
   children: React.ReactNode;
 }
 
 export function AppShell({ children }: AppShellProps) {
-  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
-
-  const handleMobileMenuOpen = useCallback(() => {
-    setMobileDrawerOpen(true);
-  }, []);
-
-  const handleMobileDrawerClose = useCallback(() => {
-    setMobileDrawerOpen(false);
-  }, []);
-
   return (
-    <div className="min-h-screen bg-background">
-      {/* Sidebar — fixed, hidden below md */}
-      <div className="fixed inset-y-0 left-0 w-64 hidden md:flex">
-        <AppSidebar />
-      </div>
+    // Column on mobile (AppNav collapses to a top-bar drawer); row on ≥sm,
+    // where AppNav renders a fixed-width vertical rail beside the content.
+    <div className="min-h-screen bg-background flex flex-col sm:flex-row">
+      {/* Shared navigation rail (brand, grouped nav, theme, account menu) */}
+      <AppNavBar />
 
-      {/* Mobile drawer */}
-      <MobileDrawer isOpen={mobileDrawerOpen} onClose={handleMobileDrawerClose} />
+      {/* Content column */}
+      <div className="flex-1 min-w-0 flex flex-col">
+        {/* Per-page title / breadcrumb */}
+        <PageHeaderBar />
 
-      {/* Main area offset by sidebar width on md+ */}
-      <div className="md:ml-64">
-        <AppHeaderBar onMobileMenuOpen={handleMobileMenuOpen} />
-
-        <main id="main-content" className="bg-surface">
+        <main id="main-content" className="flex-1 bg-surface">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
             {children}
           </div>

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { AppShell } from '../AppShell';
 
@@ -79,13 +79,13 @@ describe('AppShell', () => {
     vi.clearAllMocks();
   });
 
-  // ---- Requirement 1.1: Renders sidebar, header, and main content ----
+  // ---- Requirement 1.1: Renders nav, header, and main content ----
 
   describe('renders core layout sections', () => {
-    it('renders the sidebar navigation', () => {
+    it('renders the primary navigation', () => {
       renderShell();
       expect(
-        screen.getByRole('navigation', { name: 'Main navigation' }),
+        screen.getByRole('navigation', { name: 'Primary navigation' }),
       ).toBeInTheDocument();
     });
 
@@ -100,15 +100,35 @@ describe('AppShell', () => {
     });
   });
 
-  // ---- Requirement 1.2: Sidebar hidden on mobile viewport ----
+  // ---- Side-nav layout ----
 
-  describe('sidebar responsive visibility', () => {
-    it('sidebar wrapper has hidden md:flex classes', () => {
-      const { container } = renderShell();
-      const sidebarWrapper = container.querySelector('.fixed.inset-y-0.left-0.w-64');
-      expect(sidebarWrapper).toBeInTheDocument();
-      expect(sidebarWrapper!.className).toContain('hidden');
-      expect(sidebarWrapper!.className).toContain('md:flex');
+  describe('side-nav layout', () => {
+    it('renders AppNav in the vertical (side) layout', () => {
+      renderShell();
+      expect(screen.getByRole('banner').className).toContain('app-nav-side');
+    });
+
+    it('renders grouped section headings', () => {
+      renderShell();
+      // Section labels come from NAV_ITEMS `group` values.
+      expect(screen.getByText('Publish')).toBeInTheDocument();
+      expect(screen.getByText('Content')).toBeInTheDocument();
+      expect(screen.getByText('Monetization')).toBeInTheDocument();
+    });
+
+    it('renders nav items as client-side router links', () => {
+      renderShell();
+      const nav = screen.getByRole('navigation', { name: 'Primary navigation' });
+      const issues = within(nav).getByRole('link', { name: /Issues/ });
+      // React Router Link renders a real anchor with a resolved href.
+      expect(issues).toHaveAttribute('href', '/issues');
+    });
+
+    it('marks the active route with aria-current', () => {
+      renderShell();
+      const nav = screen.getByRole('navigation', { name: 'Primary navigation' });
+      const dashboard = within(nav).getByRole('link', { name: /Dashboard/ });
+      expect(dashboard).toHaveAttribute('aria-current', 'page');
     });
   });
 

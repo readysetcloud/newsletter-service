@@ -96,7 +96,7 @@ export function getMetricValue(data: GeoDistributionData, metric: GeoMetric): nu
 
 export function createColorScale(data: GeoDistributionData[], metric: GeoMetric): (value: number) => string {
   if (data.length === 0) {
-    return () => '#e5e7eb';
+    return () => '#e2e8f0';
   }
 
   const values = data.map(d => getMetricValue(d, metric));
@@ -104,12 +104,12 @@ export function createColorScale(data: GeoDistributionData[], metric: GeoMetric)
   const minValue = Math.min(...values);
 
   if (data.length === 1 || minValue === maxValue) {
-    return () => '#60a5fa';
+    return () => '#4eaeff';
   }
 
   return scaleLinear<string>()
     .domain([minValue, maxValue])
-    .range(['#dbeafe', '#1e40af'])
+    .range(['#d6ecff', '#0a5490'])
     .clamp(true);
 }
 

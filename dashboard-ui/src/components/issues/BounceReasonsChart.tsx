@@ -80,12 +80,12 @@ export const BounceReasonsChart: React.FC<BounceReasonsChartProps> = ({ bounceRe
       <div className="mb-4 sm:mb-6">
         <ResponsiveContainer width="100%" height={250}>
           <BarChart data={data} margin={{ top: 20, right: 10, left: 0, bottom: 5 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-            <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#6b7280' }} />
-            <YAxis tick={{ fontSize: 11, fill: '#6b7280' }} />
+            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+            <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#64748b' }} />
+            <YAxis tick={{ fontSize: 11, fill: '#64748b' }} />
             <Tooltip content={<CustomTooltip />} />
             <Legend wrapperStyle={{ fontSize: '12px' }} />
-            <Bar dataKey="count" fill="#3b82f6" name="Bounce Count" radius={[4, 4, 0, 0]} />
+            <Bar dataKey="count" fill="#219eff" name="Bounce Count" radius={[4, 4, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
       </div>

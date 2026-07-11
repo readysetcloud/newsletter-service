@@ -24,7 +24,7 @@ export const TrafficSourceChart: React.FC<TrafficSourceChartProps> = ({ trafficS
     );
   }
 
-  const colors = ['#3b82f6', '#10b981'];
+  const colors = ['#219eff', '#14b8a6'];
 
   return (
     <div className="h-56 sm:h-64">

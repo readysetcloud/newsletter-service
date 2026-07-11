@@ -39,7 +39,7 @@ const TrafficSourceTrendChart: React.FC<TrafficSourceTrendChartProps> = ({ trend
           <Line
             type="monotone"
             dataKey="email"
-            stroke="#6366f1"
+            stroke="#219eff"
             strokeWidth={2}
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -50,7 +50,7 @@ const TrafficSourceTrendChart: React.FC<TrafficSourceTrendChartProps> = ({ trend
           <Line
             type="monotone"
             dataKey="web"
-            stroke="#f59e0b"
+            stroke="#f97316"
             strokeWidth={2}
             strokeLinecap="round"
             strokeLinejoin="round"

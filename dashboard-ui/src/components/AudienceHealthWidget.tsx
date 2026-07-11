@@ -38,9 +38,9 @@ interface ChartTooltipProps {
 }
 
 const COHORT_COLORS = {
-  highlyEngaged: '#10b981',
-  occasional: '#f59e0b',
-  dormant: '#ef4444',
+  highlyEngaged: '#14b8a6',
+  occasional: '#f97316',
+  dormant: '#c81e22',
 };
 
 const COHORT_LABELS: Record<string, string> = {

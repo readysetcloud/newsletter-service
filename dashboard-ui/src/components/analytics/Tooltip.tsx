@@ -69,12 +69,12 @@ export function Tooltip({ content, position }: TooltipProps) {
           <div className="text-sm">
             <div className="flex items-center justify-between">
               <span className="text-gray-600">Click-through:</span>
-              <span className="font-semibold text-purple-600">{formatEngagementRate(content.engagementRate)}</span>
+              <span className="font-semibold text-primary-600">{formatEngagementRate(content.engagementRate)}</span>
             </div>
             {formatUniqueEngagementRate(content.uniqueEngagementRate) && (
               <div className="flex items-center justify-between mt-1">
                 <span className="text-gray-600">Unique CTR:</span>
-                <span className="font-semibold text-purple-600">{formatUniqueEngagementRate(content.uniqueEngagementRate)}</span>
+                <span className="font-semibold text-primary-600">{formatUniqueEngagementRate(content.uniqueEngagementRate)}</span>
               </div>
             )}
           </div>

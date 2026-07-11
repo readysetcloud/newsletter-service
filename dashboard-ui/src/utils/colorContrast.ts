@@ -108,61 +108,61 @@ export const COLOR_COMBINATIONS = {
 
   // Success colors
   'success-text-on-light-bg': {
-    foreground: '#166534', // green-800
-    background: '#f0fdf4', // green-50
+    foreground: '#0f5348', // success-800
+    background: '#ecfdf8', // success-50
     description: 'Success text on light green background',
   },
   'success-text-on-white': {
-    foreground: '#16a34a', // green-600
+    foreground: '#0f8f7f', // success-600
     background: '#ffffff', // white
     description: 'Success text on white background',
   },
 
   // Error colors
   'error-text-on-light-bg': {
-    foreground: '#991b1b', // red-800
-    background: '#fef2f2', // red-50
+    foreground: '#6a0e11', // error-800
+    background: '#fdebeb', // error-50
     description: 'Error text on light red background',
   },
   'error-text-on-white': {
-    foreground: '#dc2626', // red-600
+    foreground: '#9f1216', // error-600
     background: '#ffffff', // white
     description: 'Error text on white background',
   },
 
   // Warning colors
   'warning-text-on-light-bg': {
-    foreground: '#92400e', // amber-800
-    background: '#fffbeb', // amber-50
+    foreground: '#9a3412', // warning-800
+    background: '#fff7ed', // warning-50
     description: 'Warning text on light amber background',
   },
   'warning-text-on-white': {
-    foreground: '#d97706', // amber-600
+    foreground: '#ea580c', // warning-600
     background: '#ffffff', // white
     description: 'Warning text on white background',
   },
 
   // Primary colors
   'primary-text-on-light-bg': {
-    foreground: '#1e40af', // blue-800
-    background: '#eff6ff', // blue-50
+    foreground: '#0a5490', // primary-800
+    background: '#ebf6ff', // primary-50
     description: 'Primary text on light blue background',
   },
   'primary-text-on-white': {
-    foreground: '#2563eb', // blue-600
+    foreground: '#0b82e6', // primary-600
     background: '#ffffff', // white
     description: 'Primary text on white background',
   },
 
   // Interactive elements
   'link-on-white': {
-    foreground: '#2563eb', // blue-600
+    foreground: '#0b82e6', // primary-600
     background: '#ffffff', // white
     description: 'Link text on white background',
   },
   'button-text-on-primary': {
     foreground: '#ffffff', // white
-    background: '#2563eb', // blue-600
+    background: '#0b82e6', // primary-600
     description: 'Button text on primary button',
   },
 } as const;

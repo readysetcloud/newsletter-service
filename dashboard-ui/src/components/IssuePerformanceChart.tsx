@@ -98,7 +98,7 @@ export default function IssuePerformanceChart({ trendsData }: IssuePerformanceCh
         ) : (
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData} onClick={handleChartClick}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
               <XAxis
                 dataKey="name"
                 tick={{ fontSize: 12 }}
@@ -125,40 +125,40 @@ export default function IssuePerformanceChart({ trendsData }: IssuePerformanceCh
                 yAxisId="left"
                 type="monotone"
                 dataKey="openRate"
-                stroke="#3b82f6"
+                stroke="#219eff"
                 strokeWidth={2}
                 name="Open Rate"
-                dot={{ fill: '#3b82f6', strokeWidth: 2, r: 4, cursor: 'pointer' }}
+                dot={{ fill: '#219eff', strokeWidth: 2, r: 4, cursor: 'pointer' }}
                 activeDot={{ r: 6 }}
               />
               <Line
                 yAxisId="right"
                 type="monotone"
                 dataKey="clickRate"
-                stroke="#10b981"
+                stroke="#14b8a6"
                 strokeWidth={2}
                 name="Click Rate (CTR)"
-                dot={{ fill: '#10b981', strokeWidth: 2, r: 4, cursor: 'pointer' }}
+                dot={{ fill: '#14b8a6', strokeWidth: 2, r: 4, cursor: 'pointer' }}
                 activeDot={{ r: 6 }}
               />
               <Line
                 yAxisId="right"
                 type="monotone"
                 dataKey="clickToOpenRate"
-                stroke="#8b5cf6"
+                stroke="#f97316"
                 strokeWidth={2}
                 name="Click-to-Open (CTOR)"
-                dot={{ fill: '#8b5cf6', strokeWidth: 2, r: 4, cursor: 'pointer' }}
+                dot={{ fill: '#f97316', strokeWidth: 2, r: 4, cursor: 'pointer' }}
                 activeDot={{ r: 6 }}
               />
               <Line
                 yAxisId="right"
                 type="monotone"
                 dataKey="bounceRate"
-                stroke="#ef4444"
+                stroke="#c81e22"
                 strokeWidth={2}
                 name="Bounce Rate"
-                dot={{ fill: '#ef4444', strokeWidth: 2, r: 4, cursor: 'pointer' }}
+                dot={{ fill: '#c81e22', strokeWidth: 2, r: 4, cursor: 'pointer' }}
                 activeDot={{ r: 6 }}
               />
             </LineChart>

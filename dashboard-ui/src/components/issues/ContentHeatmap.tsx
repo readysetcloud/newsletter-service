@@ -26,7 +26,7 @@ export function createHeatColorScale(maxClicks: number): (clicks: number) => str
   }
   return scaleLinear<string>()
     .domain([0, maxClicks / 2, maxClicks])
-    .range(['#fef9c3', '#fb923c', '#b91c1c'])
+    .range(['#ffedd5', '#fb923c', '#820f12'])
     .clamp(true);
 }
 
@@ -132,7 +132,7 @@ export const ContentHeatmap: React.FC<ContentHeatmapProps> = React.memo(
         const { clicks, percentOfTotal, position } = perf;
         const intensity = clicks / maxClicks;
         const background = clicks > 0 ? colorScale(clicks) : 'transparent';
-        const textColor = clicks > 0 && intensity > 0.55 ? '#ffffff' : '#1f2937';
+        const textColor = clicks > 0 && intensity > 0.55 ? '#ffffff' : '#1e293b';
         const noun = clicks === 1 ? 'click' : 'clicks';
         const linkLabel = position > 0 ? `Link #${position}` : 'Link';
         const title = escapeHtmlAttribute(
@@ -140,13 +140,13 @@ export const ContentHeatmap: React.FC<ContentHeatmapProps> = React.memo(
         );
 
         if (clicks > 0) {
-          const badge = `<sup class="ml-0.5 inline-block rounded px-1 text-[10px] font-bold leading-tight align-super" style="background-color:#111827;color:#ffffff;">${clicks.toLocaleString()}</sup>`;
+          const badge = `<sup class="ml-0.5 inline-block rounded px-1 text-[10px] font-bold leading-tight align-super" style="background-color:#0f172a;color:#ffffff;">${clicks.toLocaleString()}</sup>`;
           return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer" title="${title}" class="${baseAnchorClasses}" style="background-color:${background};color:${textColor};box-shadow:inset 0 0 0 1px rgba(0,0,0,0.08);">${anchorText}${badge}</a>`;
         }
 
         // Tracked but never clicked — show a muted marker so "dead" links stand out.
-        const badge = `<sup class="ml-0.5 inline-block rounded px-1 text-[10px] font-semibold leading-tight align-super" style="background-color:#e5e7eb;color:#6b7280;">0</sup>`;
-        return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer" title="${title}" class="${baseAnchorClasses} text-gray-600" style="box-shadow:inset 0 0 0 1px rgba(0,0,0,0.08);border-bottom:1px dashed #9ca3af;">${anchorText}${badge}</a>`;
+        const badge = `<sup class="ml-0.5 inline-block rounded px-1 text-[10px] font-semibold leading-tight align-super" style="background-color:#e2e8f0;color:#64748b;">0</sup>`;
+        return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer" title="${title}" class="${baseAnchorClasses} text-gray-600" style="box-shadow:inset 0 0 0 1px rgba(0,0,0,0.08);border-bottom:1px dashed #94a3b8;">${anchorText}${badge}</a>`;
       };
 
       return formatMarkdown(content, { renderLink });

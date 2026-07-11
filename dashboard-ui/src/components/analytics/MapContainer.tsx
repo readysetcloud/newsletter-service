@@ -119,21 +119,21 @@ export function MapContainer({
 
               const fillColor = countryData
                 ? colorScale(getMetricValue(countryData, selectedMetric))
-                : '#e5e7eb';
+                : '#e2e8f0';
 
               return (
                 <Geography
                   key={geo.rsmKey as string}
                   geography={geo}
                   fill={fillColor}
-                  stroke={isHighlighted ? '#1e40af' : '#d1d5db'}
+                  stroke={isHighlighted ? '#0a5490' : '#cbd5e1'}
                   strokeWidth={isHighlighted ? 2 : 0.5}
                   onMouseEnter={(event) => handleCountryHover(isoCode, countryData, event)}
                   onMouseLeave={() => handleCountryHover(null, null)}
                   style={{
                     default: { outline: 'none' },
-                    hover: { fill: '#60a5fa', outline: 'none', cursor: 'pointer' },
-                    pressed: { fill: '#3b82f6', outline: 'none' }
+                    hover: { fill: '#4eaeff', outline: 'none', cursor: 'pointer' },
+                    pressed: { fill: '#219eff', outline: 'none' }
                   }}
                 />
               );

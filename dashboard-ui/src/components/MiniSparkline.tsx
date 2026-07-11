@@ -12,7 +12,7 @@ interface MiniSparklineProps {
  */
 export const MiniSparkline: React.FC<MiniSparklineProps> = ({ value, average, color }) => {
   const isAbove = value >= average;
-  const barColor = color ?? (isAbove ? '#10b981' : '#ef4444');
+  const barColor = color ?? (isAbove ? '#14b8a6' : '#c81e22');
   // Normalize to 0-100 range, capping at 2x average
   const maxVal = Math.max(average * 2, 1);
   const pct = Math.min((value / maxVal) * 100, 100);

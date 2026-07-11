@@ -87,42 +87,42 @@ const OpenDecayChart: React.FC<OpenDecayChartProps> = ({ openDecay }) => {
       >
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
 
             {/* Highlight critical 24-hour window */}
             <ReferenceArea
               x1={0}
               x2={criticalWindowEnd}
-              fill="#dcfce7"
+              fill="#d1faef"
               fillOpacity={0.3}
-              label={{ value: 'Critical Window', position: 'top', fill: '#166534', fontSize: 10 }}
+              label={{ value: 'Critical Window', position: 'top', fill: '#0f5348', fontSize: 10 }}
             />
 
             {/* Median line */}
             <ReferenceLine
               y={stats.median}
-              stroke="#6b7280"
+              stroke="#64748b"
               strokeDasharray="5 5"
-              label={{ value: `Median: ${stats.median}`, position: 'right', fill: '#6b7280', fontSize: 10 }}
+              label={{ value: `Median: ${stats.median}`, position: 'right', fill: '#64748b', fontSize: 10 }}
             />
 
             {/* Peak annotation */}
             <ReferenceLine
               x={stats.peakHour}
-              stroke="#ef4444"
+              stroke="#c81e22"
               strokeDasharray="3 3"
-              label={{ value: 'Peak', position: 'top', fill: '#ef4444', fontSize: 10 }}
+              label={{ value: 'Peak', position: 'top', fill: '#c81e22', fontSize: 10 }}
             />
 
             <XAxis
               dataKey="hour"
-              tick={{ fontSize: 12, fill: '#6b7280' }}
+              tick={{ fontSize: 12, fill: '#64748b' }}
               tickFormatter={formatTimeLabel}
-              label={{ value: 'Time Since Publication', position: 'insideBottom', offset: -5, style: { fontSize: 12, fill: '#6b7280' } }}
+              label={{ value: 'Time Since Publication', position: 'insideBottom', offset: -5, style: { fontSize: 12, fill: '#64748b' } }}
             />
             <YAxis
-              tick={{ fontSize: 12, fill: '#6b7280' }}
-              label={{ value: 'Opens', angle: -90, position: 'insideLeft', style: { fontSize: 12, fill: '#6b7280' } }}
+              tick={{ fontSize: 12, fill: '#64748b' }}
+              label={{ value: 'Opens', angle: -90, position: 'insideLeft', style: { fontSize: 12, fill: '#64748b' } }}
             />
             <Tooltip
               formatter={formatTooltipNumber}
@@ -132,19 +132,19 @@ const OpenDecayChart: React.FC<OpenDecayChartProps> = ({ openDecay }) => {
             <Line
               type="monotone"
               dataKey="opens"
-              stroke="#10b981"
+              stroke="#14b8a6"
               strokeWidth={2}
               name="Opens per Hour"
-              dot={{ fill: '#10b981', strokeWidth: 2, r: 4 }}
+              dot={{ fill: '#14b8a6', strokeWidth: 2, r: 4 }}
               activeDot={{ r: 6 }}
             />
             <Line
               type="monotone"
               dataKey="cumulativeOpens"
-              stroke="#6366f1"
+              stroke="#219eff"
               strokeWidth={2}
               name="Cumulative Opens"
-              dot={{ fill: '#6366f1', strokeWidth: 2, r: 4 }}
+              dot={{ fill: '#219eff', strokeWidth: 2, r: 4 }}
               activeDot={{ r: 6 }}
             />
           </LineChart>

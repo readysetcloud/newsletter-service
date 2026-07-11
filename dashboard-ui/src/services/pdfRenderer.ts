@@ -12,12 +12,12 @@ import {
 import { renderTrendChart } from '@/services/chartRenderer';
 
 // Colors
-const COLOR_DARK = '#1a1a2e';
-const COLOR_ACCENT_BLUE = '#0066cc';
-const COLOR_GREEN = '#22c55e';
-const COLOR_RED = '#ef4444';
-const COLOR_GRAY = '#6b7280';
-const COLOR_CARD_BG = '#f8f9fa';
+const COLOR_DARK = '#0e2233';
+const COLOR_ACCENT_BLUE = '#0b82e6';
+const COLOR_GREEN = '#14b8a6';
+const COLOR_RED = '#c81e22';
+const COLOR_GRAY = '#64748b';
+const COLOR_CARD_BG = '#f8fafc';
 
 // Page dimensions (A4 portrait in mm)
 const PAGE_WIDTH = 210;
@@ -114,13 +114,13 @@ function renderValueNarrative(doc: jsPDF, data: ReportData, y: number): number {
   y += 6;
 
   // Divider line
-  setFillColor(doc, '#e5e7eb');
+  setFillColor(doc, '#e2e8f0');
   doc.rect(MARGIN_LEFT, y, CONTENT_WIDTH, 0.3, 'F');
   y += 8;
 
   doc.setFont('helvetica', 'italic');
   doc.setFontSize(11);
-  setColor(doc, '#4b5563');
+  setColor(doc, '#475569');
 
   const lines = doc.splitTextToSize(data.valueNarrative, CONTENT_WIDTH);
   doc.text(lines, MARGIN_LEFT, y);
@@ -190,7 +190,7 @@ function renderPricingSection(doc: jsPDF, data: ReportData, y: number): number {
   y += 8;
 
   // Divider line
-  setFillColor(doc, '#e5e7eb');
+  setFillColor(doc, '#e2e8f0');
   doc.rect(MARGIN_LEFT, y, CONTENT_WIDTH, 0.3, 'F');
   y += 10;
 
@@ -218,7 +218,7 @@ function renderPricingSection(doc: jsPDF, data: ReportData, y: number): number {
   // Confidence label
   doc.setFont('helvetica', 'italic');
   doc.setFontSize(10);
-  setColor(doc, '#9ca3af');
+  setColor(doc, '#94a3b8');
   doc.text(data.confidenceLabel, MARGIN_LEFT, y);
   y += 4;
 
@@ -229,7 +229,7 @@ function renderFooter(doc: jsPDF, data: ReportData) {
   const footerY = 280;
 
   // Divider line
-  setFillColor(doc, '#e5e7eb');
+  setFillColor(doc, '#e2e8f0');
   doc.rect(MARGIN_LEFT, footerY - 4, CONTENT_WIDTH, 0.3, 'F');
 
   doc.setFont('helvetica', 'normal');
@@ -253,7 +253,7 @@ async function renderTrendSection(doc: jsPDF, data: ReportData, y: number): Prom
   y += 8;
 
   // Divider line
-  setFillColor(doc, '#e5e7eb');
+  setFillColor(doc, '#e2e8f0');
   doc.rect(MARGIN_LEFT, y, CONTENT_WIDTH, 0.3, 'F');
   y += 10;
 

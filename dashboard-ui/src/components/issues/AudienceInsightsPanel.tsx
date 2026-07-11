@@ -62,9 +62,9 @@ export const AudienceInsightsPanel: React.FC<AudienceInsightsPanelProps> = ({
   timingMetrics
 }) => {
   const deviceData = [
-    { name: 'Desktop', value: deviceBreakdown.desktop, color: '#3b82f6' },
-    { name: 'Mobile', value: deviceBreakdown.mobile, color: '#10b981' },
-    { name: 'Tablet', value: deviceBreakdown.tablet, color: '#f59e0b' }
+    { name: 'Desktop', value: deviceBreakdown.desktop, color: '#219eff' },
+    { name: 'Mobile', value: deviceBreakdown.mobile, color: '#14b8a6' },
+    { name: 'Tablet', value: deviceBreakdown.tablet, color: '#f97316' }
   ].filter(d => d.value > 0);
 
   const totalDeviceClicks = deviceBreakdown.desktop + deviceBreakdown.mobile + deviceBreakdown.tablet;
@@ -97,29 +97,29 @@ export const AudienceInsightsPanel: React.FC<AudienceInsightsPanelProps> = ({
           <div className="h-64 sm:h-80" role="img" aria-label="Bar chart showing clicks and opens by country">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={topCountries}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                 <XAxis
                   dataKey="country"
-                  tick={{ fontSize: 10, fill: '#6b7280' }}
+                  tick={{ fontSize: 10, fill: '#64748b' }}
                   angle={-45}
                   textAnchor="end"
                   height={60}
                 />
                 <YAxis
-                  tick={{ fontSize: 10, fill: '#6b7280' }}
-                  label={{ value: 'Clicks', angle: -90, position: 'insideLeft', style: { fontSize: 10, fill: '#6b7280' } }}
+                  tick={{ fontSize: 10, fill: '#64748b' }}
+                  label={{ value: 'Clicks', angle: -90, position: 'insideLeft', style: { fontSize: 10, fill: '#64748b' } }}
                 />
                 <Tooltip content={CustomTooltip} />
                 <Legend wrapperStyle={{ fontSize: '12px' }} />
                 <Bar
                   dataKey="clicks"
-                  fill="#3b82f6"
+                  fill="#219eff"
                   name="Clicks"
                   radius={[4, 4, 0, 0]}
                 />
                 <Bar
                   dataKey="opens"
-                  fill="#10b981"
+                  fill="#14b8a6"
                   name="Opens"
                   radius={[4, 4, 0, 0]}
                 />
@@ -154,7 +154,7 @@ export const AudienceInsightsPanel: React.FC<AudienceInsightsPanelProps> = ({
                     labelLine={false}
                     label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}
                     outerRadius={60}
-                    fill="#8884d8"
+                    fill="#219eff"
                     dataKey="value"
                     style={{ fontSize: '11px' }}
                   >

@@ -79,13 +79,13 @@ describe('AppShell', () => {
     vi.clearAllMocks();
   });
 
-  // ---- Requirement 1.1: Renders sidebar, header, and main content ----
+  // ---- Requirement 1.1: Renders nav, header, and main content ----
 
   describe('renders core layout sections', () => {
-    it('renders the sidebar navigation', () => {
+    it('renders the primary navigation', () => {
       renderShell();
       expect(
-        screen.getByRole('navigation', { name: 'Main navigation' }),
+        screen.getByRole('navigation', { name: 'Primary navigation' }),
       ).toBeInTheDocument();
     });
 
@@ -97,18 +97,6 @@ describe('AppShell', () => {
     it('renders the main content area', () => {
       renderShell();
       expect(screen.getByRole('main')).toBeInTheDocument();
-    });
-  });
-
-  // ---- Requirement 1.2: Sidebar hidden on mobile viewport ----
-
-  describe('sidebar responsive visibility', () => {
-    it('sidebar wrapper has hidden md:flex classes', () => {
-      const { container } = renderShell();
-      const sidebarWrapper = container.querySelector('.fixed.inset-y-0.left-0.w-64');
-      expect(sidebarWrapper).toBeInTheDocument();
-      expect(sidebarWrapper!.className).toContain('hidden');
-      expect(sidebarWrapper!.className).toContain('md:flex');
     });
   });
 

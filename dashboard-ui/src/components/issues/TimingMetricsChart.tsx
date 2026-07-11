@@ -49,9 +49,9 @@ const getNumericTooltipValue = (value: TooltipValue): number => {
 
 // Determine engagement speed category
 const getEngagementSpeed = (medianTime: number): { color: string; label: string } => {
-  if (medianTime < 300) return { color: '#10b981', label: 'Fast' }; // < 5 minutes
-  if (medianTime < 3600) return { color: '#f59e0b', label: 'Medium' }; // < 1 hour
-  return { color: '#ef4444', label: 'Slow' }; // >= 1 hour
+  if (medianTime < 300) return { color: '#14b8a6', label: 'Fast' }; // < 5 minutes
+  if (medianTime < 3600) return { color: '#f97316', label: 'Medium' }; // < 1 hour
+  return { color: '#c81e22', label: 'Slow' }; // >= 1 hour
 };
 
 export const TimingMetricsChart: React.FC<TimingMetricsChartProps> = ({ timingMetrics }) => {
@@ -110,12 +110,12 @@ export const TimingMetricsChart: React.FC<TimingMetricsChartProps> = ({ timingMe
             <XAxis
               type="number"
               tickFormatter={formatSeconds}
-              tick={{ fontSize: 12, fill: '#6b7280' }}
+              tick={{ fontSize: 12, fill: '#64748b' }}
             />
             <YAxis
               type="category"
               dataKey="name"
-              tick={{ fontSize: 12, fill: '#6b7280' }}
+              tick={{ fontSize: 12, fill: '#64748b' }}
               width={75}
             />
             <Tooltip
@@ -134,7 +134,7 @@ export const TimingMetricsChart: React.FC<TimingMetricsChartProps> = ({ timingMe
                 return <Cell key={`cell-${index}`} fill={speed.color} />;
               })}
             </Bar>
-            <Bar dataKey="p95" fill="#f59e0b" radius={[0, 4, 4, 0]} />
+            <Bar dataKey="p95" fill="#f97316" radius={[0, 4, 4, 0]} />
           </BarChart>
         </ResponsiveContainer>
         </div>

@@ -48,7 +48,7 @@ const QualitySignalsChart: React.FC<QualitySignalsChartProps> = ({ trendsData })
           <Line
             type="monotone"
             dataKey="bounces"
-            stroke="#f59e0b"
+            stroke="#f97316"
             strokeWidth={2}
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -58,7 +58,7 @@ const QualitySignalsChart: React.FC<QualitySignalsChartProps> = ({ trendsData })
           <Line
             type="monotone"
             dataKey="complaints"
-            stroke="#ef4444"
+            stroke="#c81e22"
             strokeWidth={2}
             strokeLinecap="round"
             strokeLinejoin="round"

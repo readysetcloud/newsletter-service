@@ -36,22 +36,22 @@ export function EngagementMetrics({ aggregates }: EngagementMetricsProps) {
     {
       name: 'Opened',
       value: aggregates.avgOpenRate,
-      color: '#3b82f6'
+      color: '#219eff'
     },
     {
       name: 'Clicked',
       value: aggregates.avgClickRate,
-      color: '#10b981'
+      color: '#14b8a6'
     },
     {
       name: 'Bounced',
       value: aggregates.avgBounceRate,
-      color: '#ef4444'
+      color: '#c81e22'
     },
     {
       name: 'Other',
       value: Math.max(0, 100 - aggregates.avgOpenRate - aggregates.avgClickRate - aggregates.avgBounceRate),
-      color: '#6b7280'
+      color: '#64748b'
     }
   ].filter(item => item.value > 0);
 

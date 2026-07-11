@@ -14,7 +14,15 @@ import {
 import { UserIcon as UserSolidIcon } from '@heroicons/react/24/solid';
 import { getInitials } from './avatarUtils';
 
-export function AvatarMenu() {
+interface AvatarMenuProps {
+  /**
+   * Render the theme toggle inside the menu. Set to `false` when an ancestor
+   * (e.g. the shared AppNav) already exposes a theme toggle, to avoid two.
+   */
+  showThemeToggle?: boolean;
+}
+
+export function AvatarMenu({ showThemeToggle = true }: AvatarMenuProps = {}) {
   const { user, signOut } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const [isOpen, setIsOpen] = useState(false);
@@ -36,10 +44,12 @@ export function AvatarMenu() {
     if (showBilling) {
       items.push({ id: 'billing', type: 'link' });
     }
-    items.push({ id: 'theme-toggle', type: 'button' });
+    if (showThemeToggle) {
+      items.push({ id: 'theme-toggle', type: 'button' });
+    }
     items.push({ id: 'logout', type: 'button' });
     return items;
-  }, [showBilling]);
+  }, [showBilling, showThemeToggle]);
 
   const toggle = useCallback(() => {
     setIsOpen(prev => {
@@ -158,8 +168,8 @@ export function AvatarMenu() {
       : []),
   ];
 
-  const themeToggleIndex = linkItems.length;
-  const logoutIndex = linkItems.length + 1;
+  const themeToggleIndex = showThemeToggle ? linkItems.length : -1;
+  const logoutIndex = linkItems.length + (showThemeToggle ? 1 : 0);
 
   return (
     <div className="relative">
@@ -225,23 +235,25 @@ export function AvatarMenu() {
 
           {/* Theme toggle */}
           <div className="py-1">
-            <button
-              ref={setItemRef(themeToggleIndex) as React.Ref<HTMLButtonElement>}
-              type="button"
-              role="menuitem"
-              tabIndex={activeIndex === themeToggleIndex ? 0 : -1}
-              onClick={() => {
-                toggleTheme();
-              }}
-              className="flex items-center w-full px-4 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-            >
-              {theme === 'dark' ? (
-                <SunIcon className="w-4 h-4 mr-3" aria-hidden="true" />
-              ) : (
-                <MoonIcon className="w-4 h-4 mr-3" aria-hidden="true" />
-              )}
-              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-            </button>
+            {showThemeToggle && (
+              <button
+                ref={setItemRef(themeToggleIndex) as React.Ref<HTMLButtonElement>}
+                type="button"
+                role="menuitem"
+                tabIndex={activeIndex === themeToggleIndex ? 0 : -1}
+                onClick={() => {
+                  toggleTheme();
+                }}
+                className="flex items-center w-full px-4 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+              >
+                {theme === 'dark' ? (
+                  <SunIcon className="w-4 h-4 mr-3" aria-hidden="true" />
+                ) : (
+                  <MoonIcon className="w-4 h-4 mr-3" aria-hidden="true" />
+                )}
+                {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+              </button>
+            )}
 
             {/* Logout */}
             <button

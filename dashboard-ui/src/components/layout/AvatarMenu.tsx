@@ -197,7 +197,9 @@ export function AvatarMenu({ showThemeToggle = true }: AvatarMenuProps = {}) {
           tabIndex={-1}
           aria-label="User menu"
           onKeyDown={handleMenuKeyDown}
-          className="absolute right-0 mt-2 w-64 rounded-lg bg-surface shadow-lg ring-1 ring-border z-50"
+          // Opens downward in the mobile top-bar drawer; upward on ≥sm, where
+          // the account button sits at the bottom of the vertical nav rail.
+          className="absolute right-0 top-full mt-2 sm:right-auto sm:left-0 sm:top-auto sm:bottom-full sm:mt-0 sm:mb-2 w-64 rounded-lg bg-surface shadow-lg ring-1 ring-border z-50"
         >
           {/* Header: email + role badge */}
           <div className="px-4 py-3 border-b border-border">

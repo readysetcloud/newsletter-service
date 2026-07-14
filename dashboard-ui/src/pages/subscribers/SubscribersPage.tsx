@@ -8,7 +8,7 @@ import { DataList } from '@/components/ui/DataList';
 import { VirtualTable } from '@/components/ui/VirtualTable';
 import type { VirtualTableColumn } from '@/components/ui/VirtualTable';
 import { LoadingSkeleton } from '@/components/ui/Loading';
-import { EmptyState } from '@/components/ui/EmptyState';
+import { EmptyState } from '@readysetcloud/ui';
 import type { DataListColumn } from '@/components/ui/DataList';
 import { SubscriberGrowthChart } from '@/components/SubscriberGrowthChart';
 import { AudienceHealthWidget } from '@/components/AudienceHealthWidget';
@@ -529,10 +529,10 @@ export const SubscribersPage: React.FC = () => {
         </Card>
       ) : segments.length === 0 ? (
         <EmptyState
-          icon={FolderOpen}
-          heading="Get started with segments"
+          icon={<FolderOpen className="w-12 h-12 text-muted-foreground" />}
+          title="Get started with segments"
           description="Create your first segment to start organizing your audience"
-          action={{ label: 'Create Segment', onClick: handleOpenCreateModal }}
+          action={<Button variant="primary" onClick={handleOpenCreateModal}>Create Segment</Button>}
         />
       ) : (
         <Card padding="md">

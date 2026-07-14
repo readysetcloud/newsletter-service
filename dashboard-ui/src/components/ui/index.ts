@@ -62,8 +62,8 @@ export {
 export type { Toast, ToastProviderProps } from './Toast';
 
 // Empty State
-export { EmptyState } from './EmptyState';
-export type { EmptyStateProps } from './EmptyState';
+export { EmptyState } from '@readysetcloud/ui';
+export type { EmptyStateProps } from '@readysetcloud/ui';
 
 // Data List
 export { DataList } from './DataList';

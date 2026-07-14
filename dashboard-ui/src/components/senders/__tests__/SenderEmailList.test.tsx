@@ -176,9 +176,7 @@ describe('SenderEmailList', () => {
   it('shows loading state', () => {
     render(<SenderEmailList {...defaultProps} isLoading={true} />);
 
-    // Should show skeleton loaders
-    const skeletons = screen.getAllByRole('generic');
-    expect(skeletons.some(el => el.classList.contains('animate-pulse'))).toBe(true);
+    expect(document.querySelectorAll('.skeleton').length).toBeGreaterThan(0);
   });
 
   it('handles set as default action', async () => {

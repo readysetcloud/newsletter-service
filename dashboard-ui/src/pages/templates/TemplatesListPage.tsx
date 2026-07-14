@@ -100,7 +100,7 @@ export function TemplatesListPage() {
               title="No templates yet"
               description="Create your first template to start building reusable emails."
               icon={<DocumentDuplicateIcon className="w-12 h-12 text-muted-foreground" />}
-              action={{ label: 'New template', onClick: () => navigate('/templates/new') }}
+              action={<Button onClick={() => navigate('/templates/new')}>New template</Button>}
             />
           ) : (
             <div className="space-y-3">

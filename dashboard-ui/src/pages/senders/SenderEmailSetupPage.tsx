@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ErrorDisplay, NetworkError } from '@/components/ui/ErrorDisplay';
 import { LoadingOverlay, ProgressIndicator, EmptyState, LoadingSpinner } from '@/components/ui/LoadingStates';
+import { Button } from '@/components/ui/Button';
 
 import {
   SenderEmailList,
@@ -490,11 +491,14 @@ export function SenderEmailSetupPage() {
                     description="Add your first sender email to start sending newsletters from your own address."
                     icon={<EnvelopeIcon className="w-12 h-12 text-muted-foreground" />}
                     action={
-                      senderService.canAddSender(state.tierLimits) ? {
-                        label: "Add Sender Email",
-                        onClick: () => setState(prev => ({ ...prev, showAddForm: true })),
-                        isLoading: state.operationInProgress.type === 'create'
-                      } : undefined
+                      senderService.canAddSender(state.tierLimits) ? (
+                        <Button
+                          onClick={() => setState(prev => ({ ...prev, showAddForm: true }))}
+                          isLoading={state.operationInProgress.type === 'create'}
+                        >
+                          Add Sender Email
+                        </Button>
+                      ) : undefined
                     }
                   />
                 ) : (

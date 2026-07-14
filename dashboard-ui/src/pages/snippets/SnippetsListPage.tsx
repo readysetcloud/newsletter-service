@@ -100,7 +100,7 @@ export function SnippetsListPage() {
               title="No snippets yet"
               description="Create your first snippet to start building reusable partials."
               icon={<PuzzlePieceIcon className="w-12 h-12 text-muted-foreground" />}
-              action={{ label: 'New snippet', onClick: () => navigate('/snippets/new') }}
+              action={<Button onClick={() => navigate('/snippets/new')}>New snippet</Button>}
             />
           ) : (
             <div className="space-y-3">

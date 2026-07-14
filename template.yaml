@@ -3360,6 +3360,7 @@ Resources:
       Runtime: nodejs24.x
       CodeUri: functions
       Handler: update-link-tracking.handler
+      Timeout: 60
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -3368,6 +3369,7 @@ Resources:
               Action:
                 - dynamodb:PutItem
                 - dynamodb:GetItem
+                - dynamodb:UpdateItem
               Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
               Action: bedrock:InvokeModel

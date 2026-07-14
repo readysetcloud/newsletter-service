@@ -9,6 +9,7 @@ const ddb = new DynamoDBClient();
 // events with a 90-day TTL). Interest scoring reads topics off this record on
 // click, so it must outlive the period in which clicks can still arrive.
 const LINK_EXPIRATION_DAYS = 90;
+const LINK_PROCESSING_CONCURRENCY = 3;
 const MAX_CONTEXT_LENGTH = 600;
 
 /**
@@ -67,28 +68,43 @@ export const handler = async (state) => {
   let linkPosition = 0;
 
   let updatedContent = state.content;
+  const linkTasks = [];
   for (const { url, anchorText, context } of links) {
     linkPosition += 1;
+    linkTasks.push({ url, anchorText, context, position: linkPosition });
     updatedContent = updatedContent.replace(
       url,
       `${process.env.REDIRECT_URL}?u=${encodeURI(url)}&cid=${encodeURIComponent(`${state.tenantId}#${state.issueId}`)}&p=${encodeURIComponent(linkPosition)}&s=__EMAIL_HASH__`
     );
-    await enrichLinkRecord(state.tenantId, state.issueId, url, anchorText, context, linkPosition);
   }
+
+  await processLinks(linkTasks, state.tenantId, state.issueId);
 
   return { content: updatedContent };
 };
+
+async function processLinks(links, tenantId, issueId) {
+  const workers = Array.from(
+    { length: Math.min(LINK_PROCESSING_CONCURRENCY, links.length) },
+    async (_, workerIndex) => {
+      for (let index = workerIndex; index < links.length; index += LINK_PROCESSING_CONCURRENCY) {
+        const { url, anchorText, context, position } = links[index];
+        await enrichLinkRecord(tenantId, issueId, url, anchorText, context, position);
+      }
+    }
+  );
+
+  await Promise.all(workers);
+}
 
 /**
  * Creates the link tracking record for an issue link, enriched with an LLM
  * topic classification and summary derived from the author's paragraph.
  *
  * Skips the LLM call only when the record is already classified, so re-runs
- * and preview sends don't re-classify needlessly — but a record that exists
- * without topics (e.g. created by a preview where classification failed) is
- * re-classified, since interest scoring reads topics off this record on click.
- * Enrichment is best-effort: a classification failure still creates the base
- * tracking record so click counting keeps working.
+ * and preview sends don't re-classify needlessly. Enrichment is best-effort:
+ * a classification failure still creates the base tracking record so click
+ * counting keeps working.
  *
  * @param {string} tenantId
  * @param {string} issueId
@@ -113,7 +129,7 @@ const enrichLinkRecord = async (tenantId, issueId, url, anchorText, context, pos
     console.error('Failed to check existing link record', { pk, sk, error: err.message });
   }
 
-  // Already classified — nothing to do (and no wasted LLM call).
+  // Already classified: nothing to do and no wasted LLM call.
   if (existing?.primaryTopic) {
     return;
   }
@@ -121,7 +137,7 @@ const enrichLinkRecord = async (tenantId, issueId, url, anchorText, context, pos
   const classification = await classifyLinkWithLlm(url, anchorText, context);
 
   if (existing) {
-    // Base record exists but has no topics yet — backfill the classification
+    // Base record exists but has no topics yet. Backfill the classification
     // if we got one this time. Without topics there is nothing to write.
     if (classification) {
       await applyClassification(pk, sk, classification);
@@ -174,7 +190,7 @@ const applyClassification = async (pk, sk, classification) => {
       })
     }));
   } catch (err) {
-    // Another run classified it first (or the record vanished) — that's fine.
+    // Another run classified it first (or the record vanished). That's fine.
     if (err.name !== 'ConditionalCheckFailedException') {
       throw err;
     }

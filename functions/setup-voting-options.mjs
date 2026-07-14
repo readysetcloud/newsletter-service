@@ -1,10 +1,29 @@
-import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import { DynamoDBClient, PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
+import { Agent, BedrockModel } from '@strands-agents/sdk';
+import { z } from 'zod';
 
-const bedrock = new BedrockRuntimeClient();
 const ddb = new DynamoDBClient();
 const MAX_ATTEMPTS = 3;
+
+const votingOptionsSchema = z.object({
+  options: z.array(z.object({
+    description: z.string().describe('A 3-5 word friendly description of the article')
+  })).length(4)
+});
+
+const systemPrompt = 'You are a seasoned content editor in tune with your tech audience. You know what engages them and how to pull the most exciting content for maximum reach.';
+
+const buildUserPrompt = (content) => `Choose the top 4 most exciting articles based on the newsletter content below. You are tasked with coming up with the options for a vote for "best content". Select a 3-5 word friendly description for each one. Don't select the superhero as an option and make the descriptions unambiguous and feel like a complete thought.
+---
+EXAMPLES
+DSQL vs. Aurora
+Emulating the cloud locally
+AI Agents failing tasks
+
+---
+CONTENT
+${content}`;
 
 export const handler = async (state) => {
   try {
@@ -14,70 +33,7 @@ export const handler = async (state) => {
       throw new Error('Missing issueId');
     }
 
-    let options = [];
-    for (let attempts = 0; attempts < MAX_ATTEMPTS; attempts++) {
-      const response = await bedrock.send(new ConverseCommand({
-        modelId: process.env.MODEL_ID,
-        system: [{ text: 'You are a seasoned content editor in tune with your tech audience. You know what engages them and how to pull the most exciting content for maximum reach' }],
-        messages: [
-          {
-            role: 'user',
-            content: [{
-              text: `Choose the top 4 most exciting articles based on the newsletter content below. You are tasked with coming up with the options for a vote for "best content". Select a 3-5 word friendly description for each one. Don't select the superhero as an option and make the descriptions unambiguous and feel like a complete thought. Use the 'format_vote' tool to generate the options you decide.
----
-EXAMPLES
-DSQL vs. Aurora
-Emulating the cloud locally
-AI Agents failing tasks
-
----
-CONTENT
-${content}`
-            }]
-          }
-        ],
-        toolConfig: {
-          toolChoice: { tool: { name: 'format_vote' } },
-          tools: [
-            {
-              toolSpec: {
-                name: 'format_vote',
-                description: 'Format the vote options for the newsletter',
-                inputSchema: {
-                  json: {
-                    type: 'object',
-                    properties: {
-                      options: {
-                        type: 'array',
-                        minItems: 4,
-                        maxItems: 4,
-                        items: {
-                          type: 'object',
-                          properties: {
-                            description: {
-                              type: 'string',
-                              description: 'A 3-5 word friendly description of the article'
-                            }
-                          },
-                          required: ['description']
-                        }
-                      }
-                    },
-                    required: ['options']
-                  }
-                }
-              }
-            }
-          ]
-        }
-      }));
-
-      const contentBlock = response.output.message?.content?.find(c => c.toolUse);
-      if (!contentBlock) continue;
-
-      options = getFormattedOptions(normalizedIssueId, contentBlock.toolUse.input.options);
-      break;
-    }
+    const options = await generateVotingOptions(content, normalizedIssueId);
     if (!options?.length) {
       throw new Error('Could not generate voting options');
     }
@@ -103,6 +59,45 @@ ${content}`
     return [];
   }
 };
+
+async function generateVotingOptions(content, issueId) {
+  for (let attempts = 0; attempts < MAX_ATTEMPTS; attempts++) {
+    try {
+      const agent = new Agent({
+        model: new BedrockModel({
+          modelId: process.env.MODEL_ID,
+          maxTokens: 800,
+          temperature: 0.3,
+          stream: false
+        }),
+        systemPrompt,
+        structuredOutputSchema: votingOptionsSchema,
+        printer: false
+      });
+
+      const result = await agent.invoke(buildUserPrompt(content), {
+        structuredOutputSchema: votingOptionsSchema,
+        limits: {
+          turns: 1,
+          totalTokens: 5000
+        },
+        cancelSignal: AbortSignal.timeout(10000)
+      });
+
+      const options = result.structuredOutput?.options;
+      if (options?.length === 4) {
+        return getFormattedOptions(issueId, options);
+      }
+    } catch (err) {
+      console.warn('Failed to generate voting options', {
+        attempt: attempts + 1,
+        error: err.message
+      });
+    }
+  }
+
+  return [];
+}
 
 const getFormattedOptions = (issueId, options) => {
   const newOptions = options.map((option, index) => {

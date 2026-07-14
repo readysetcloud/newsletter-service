@@ -3380,7 +3380,7 @@ Resources:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           TABLE_NAME: !Ref NewsletterTable
-          MODEL_ID: us.amazon.nova-pro-v1:0
+          MODEL_ID: us.amazon.nova-lite-v1:0
           REDIRECT_URL: !If
             - HasRedirectCustomDomain
             - !Sub https://${RedirectCustomDomain}/r

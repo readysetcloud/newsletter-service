@@ -1,149 +1,44 @@
-import { z } from 'zod';
-import { Logger } from '@aws-lambda-powertools/logger';
-import { BedrockRuntimeClient, ConverseCommand } from "@aws-sdk/client-bedrock-runtime";
+import { Agent, BedrockModel, tool } from '@strands-agents/sdk';
 
-const logger = new Logger({ serviceName: 'utils' });
-const bedrock = new BedrockRuntimeClient();
-const MAX_ITERATIONS = 10;
-const MAX_TOKENS = 10000;
+const DEFAULT_MODEL_MAX_TOKENS = 4096;
 
-export const converse = async (model, systemPrompt, userPrompt, toolDefs, options) => {
-  let conversation = [];
-  const messages = [{ role: 'user', content: [{ text: userPrompt }] }];
-  let finalResponse = '';
-  let iteration = 0;
+export const converse = async (model, systemPrompt, userPrompt, toolDefs = [], options = {}) => {
+  const agent = new Agent({
+    model: new BedrockModel({
+      modelId: model,
+      maxTokens: options.maxTokens ?? DEFAULT_MODEL_MAX_TOKENS,
+      temperature: options.temperature ?? 0.2,
+      stream: false
+    }),
+    systemPrompt,
+    tools: toolDefs.map(toolDef => toStrandsTool(toolDef, options)),
+    toolExecutor: 'sequential',
+    printer: false
+  });
 
-  const tools = convertToBedrockTools(toolDefs || []);
-  while (iteration < MAX_ITERATIONS) {
-    iteration++;
-    try {
-      const command = new ConverseCommand({
-        modelId: model,
-        system: [{ text: systemPrompt }],
-        messages: [...conversation, ...messages],
-        ...tools.length && { toolConfig: { tools: tools.map(t => { return { toolSpec: t.spec }; }) } },
-        inferenceConfig: { maxTokens: MAX_TOKENS }
-      });
+  const result = await agent.invoke(userPrompt, {
+    limits: {
+      turns: options.maxTurns ?? (toolDefs.length ? 1 : 3),
+      totalTokens: options.maxTotalTokens
+    },
+    cancelSignal: options.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined
+  });
 
-      const response = await bedrock.send(command);
+  return result.toString();
+};
 
-      if (!response.output?.message?.content) {
-        logger.warn('No message output on iteration', {
-          iteration: iteration + 1,
-          response: JSON.stringify(response, null, 2)
-        });
-        break;
-      }
-
-      const messageContent = response.output.message.content;
-      messages.push({ role: 'assistant', content: messageContent });
-
-      // Check if we have tool use or just text
-      const toolUseItems = messageContent.filter(item => 'toolUse' in item && !!item.toolUse);
-      const textItems = messageContent.filter(item => 'text' in item && !!item.text);
-
-      if (toolUseItems.length) {
-        const message = { role: 'user', content: [] };
-        for (const toolUseItem of toolUseItems) {
-          const { toolUse } = toolUseItem;
-          const { name: toolName, input: toolInput, toolUseId } = toolUse;
-
-          logger.info('Tool called', {
-            iteration: iteration + 1,
-            toolName,
-            toolInput,
-            toolUseId
-          });
-
-          let toolResult;
-          try {
-            const tool = tools.find(t => t.spec.name === toolName);
-            if (!tool) {
-              throw new Error(`Unknown tool: ${toolName}`);
-            }
-
-            // Never allow an LLM to provide a tenant id!! Instead infer it from the code for security purposes
-            if (options?.tenantId && tool.isMultiTenant) {
-              const context = {
-                tenantId: options.tenantId,
-                ...options.userId && { userId: options.userId }
-              };
-              toolResult = await tool.handler(context, toolInput);
-            } else {
-              toolResult = await tool.handler(toolInput);
-            }
-          } catch (toolError) {
-            toolResult = { error: toolError.message };
-          }
-          logger.info('Tool result', { toolName, toolResult });
-          const toolResultBlock = {
-            toolUseId,
-            content: [{ text: JSON.stringify(toolResult) }]
-          };
-
-          message.content.push({ toolResult: toolResultBlock });
-        }
-        messages.push(message);
-      } else if (textItems.length > 0) {
-        finalResponse = textItems.map(item => item.text).join('');
-        break;
-      } else {
-        logger.warn('Unexpected content structure', {
-          iteration: iteration + 1,
-          messageContent
-        });
-        finalResponse = 'Received unexpected response type from model';
-        break;
-      }
-    } catch (error) {
-      logger.error('Error on iteration', {
-        iteration,
-        error: error.message,
-        stack: error.stack
-      });
-      throw error;
+const toStrandsTool = (toolDef, options) => tool({
+  name: toolDef.name,
+  description: toolDef.description,
+  inputSchema: toolDef.schema,
+  callback: async (input) => {
+    if (options?.tenantId && toolDef.isMultiTenant) {
+      return toolDef.handler({
+        tenantId: options.tenantId,
+        ...(options.userId && { userId: options.userId })
+      }, input);
     }
+
+    return toolDef.handler(input);
   }
-
-  if (!finalResponse && iteration >= MAX_ITERATIONS) {
-    logger.warn('Stopped due to iteration limit', {
-      maxIterations: MAX_ITERATIONS
-    });
-  }
-
-  if (!finalResponse && messages.length > 1) {
-    const lastAssistantMessage = [...messages].reverse().find(m => m.role === 'assistant');
-    if (lastAssistantMessage?.content) {
-      const textContent = lastAssistantMessage.content
-        .filter(item => 'text' in item && !!item.text)
-        .map(item => item.text)
-        .join('');
-      if (textContent) {
-        finalResponse = textContent;
-      }
-    }
-  }
-
-  return sanitizeResponse(finalResponse, { preserveThinkingTags: false }) || 'No response generated';
-};
-
-const sanitizeResponse = (text, options = {}) => {
-  if (options?.preserveThinkingTags) {
-    return text.trim();
-  }
-  return text.replace(/<thinking>[\s\S]*?<\/thinking>\s*/g, '').trim();
-};
-
-const convertToBedrockTools = (toolDefs) => {
-  return toolDefs?.map(toolDef => {
-    return {
-      isMultiTenant: toolDef.isMultiTenant,
-      spec: {
-        name: toolDef.name,
-        description: toolDef.description,
-        inputSchema: { json: z.toJSONSchema(toolDef.schema) }
-      },
-      handler: toolDef.handler
-    };
-  }) ?? [];
-};
+});

@@ -1,17 +1,17 @@
 import { jest } from '@jest/globals';
 import { DynamoDBClient, GetItemCommand, PutItemCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
-import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
-import { handler } from '../update-link-tracking.mjs';
 
-const textResponse = (text) => ({ output: { message: { content: [{ text }] } } });
-const toolUseResponse = (name, input) => ({
-  output: { message: { content: [{ toolUse: { name, toolUseId: 't1', input } }] } }
-});
+const mockClassifyLinkWithLlm = jest.fn();
+
+jest.unstable_mockModule('../utils/llm-link-classifier.mjs', () => ({
+  classifyLinkWithLlm: mockClassifyLinkWithLlm
+}));
+
+const { handler } = await import('../update-link-tracking.mjs');
 
 describe('update-link-tracking handler', () => {
   let mockSend;
-  let mockBedrockSend;
   let originalEnv;
 
   beforeEach(() => {
@@ -27,16 +27,14 @@ describe('update-link-tracking handler', () => {
     // No existing records by default; writes succeed.
     mockSend = jest.fn().mockResolvedValue({});
     DynamoDBClient.prototype.send = mockSend;
-
-    // Default: model produces no tool call (link stored without classification).
-    mockBedrockSend = jest.fn().mockResolvedValue(textResponse('ok'));
-    BedrockRuntimeClient.prototype.send = mockBedrockSend;
+    mockClassifyLinkWithLlm.mockResolvedValue(null);
   });
 
   afterEach(() => {
     process.env.TABLE_NAME = originalEnv.TABLE_NAME;
     process.env.REDIRECT_URL = originalEnv.REDIRECT_URL;
     process.env.MODEL_ID = originalEnv.MODEL_ID;
+    jest.clearAllMocks();
   });
 
   test('rewrites links with issue cid and position parameters', async () => {
@@ -53,19 +51,12 @@ describe('update-link-tracking handler', () => {
   });
 
   test('stores the LLM topic classification and summary on the link record', async () => {
-    let bedrockCall = 0;
-    mockBedrockSend.mockImplementation(() => {
-      bedrockCall += 1;
-      // converse() loops: first response asks for the tool, second ends with text.
-      if (bedrockCall % 2 === 1) {
-        return Promise.resolve(toolUseResponse('submit_link_classification', {
-          primaryTopic: 'ai',
-          secondaryTopics: ['serverless'],
-          summary: 'A deep dive into running LLMs on Lambda.',
-          confidence: 0.9
-        }));
-      }
-      return Promise.resolve(textResponse('done'));
+    mockClassifyLinkWithLlm.mockResolvedValue({
+      primaryTopic: 'ai',
+      secondaryTopics: ['serverless'],
+      summary: 'A deep dive into running LLMs on Lambda.',
+      confidence: 0.9,
+      classifiedBy: 'llm'
     });
 
     await handler({
@@ -86,6 +77,7 @@ describe('update-link-tracking handler', () => {
     expect(item.confidence).toBe(0.9);
     expect(item.classifiedBy).toBe('llm');
     expect(item.position).toBe(1);
+    expect(mockClassifyLinkWithLlm).toHaveBeenCalledTimes(1);
   });
 
   test('skips classification and write when the link record is already classified', async () => {
@@ -105,7 +97,7 @@ describe('update-link-tracking handler', () => {
     // Link is still rewritten...
     expect(result.content).toContain('cid=tenant123%2342');
     // ...but no LLM call and no write happen for an already-classified record.
-    expect(mockBedrockSend).not.toHaveBeenCalled();
+    expect(mockClassifyLinkWithLlm).not.toHaveBeenCalled();
     const writes = mockSend.mock.calls.filter(
       call => call[0] instanceof PutItemCommand || call[0] instanceof UpdateItemCommand
     );
@@ -121,18 +113,12 @@ describe('update-link-tracking handler', () => {
       return Promise.resolve({});
     });
 
-    let bedrockCall = 0;
-    mockBedrockSend.mockImplementation(() => {
-      bedrockCall += 1;
-      if (bedrockCall % 2 === 1) {
-        return Promise.resolve(toolUseResponse('submit_link_classification', {
-          primaryTopic: 'security',
-          secondaryTopics: [],
-          summary: 'A guide to zero-trust auth.',
-          confidence: 0.8
-        }));
-      }
-      return Promise.resolve(textResponse('done'));
+    mockClassifyLinkWithLlm.mockResolvedValue({
+      primaryTopic: 'security',
+      secondaryTopics: [],
+      summary: 'A guide to zero-trust auth.',
+      confidence: 0.8,
+      classifiedBy: 'llm'
     });
 
     await handler({
@@ -152,22 +138,11 @@ describe('update-link-tracking handler', () => {
 
     const putCalls = mockSend.mock.calls.filter(call => call[0] instanceof PutItemCommand);
     expect(putCalls).toHaveLength(0);
+    expect(mockClassifyLinkWithLlm).toHaveBeenCalledTimes(1);
   });
 
   test('does not store low-confidence classifications', async () => {
-    let bedrockCall = 0;
-    mockBedrockSend.mockImplementation(() => {
-      bedrockCall += 1;
-      if (bedrockCall % 2 === 1) {
-        return Promise.resolve(toolUseResponse('submit_link_classification', {
-          primaryTopic: 'ai',
-          secondaryTopics: [],
-          summary: 'Ambiguous link.',
-          confidence: 0.2
-        }));
-      }
-      return Promise.resolve(textResponse('done'));
-    });
+    mockClassifyLinkWithLlm.mockResolvedValue(null);
 
     await handler({
       tenantId: 'tenant123',
@@ -185,8 +160,7 @@ describe('update-link-tracking handler', () => {
   });
 
   test('still creates the link record when classification fails', async () => {
-    mockBedrockSend.mockRejectedValue(new Error('bedrock unavailable'));
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    mockClassifyLinkWithLlm.mockResolvedValue(null);
 
     await handler({
       tenantId: 'tenant123',
@@ -202,7 +176,41 @@ describe('update-link-tracking handler', () => {
     const item = unmarshall(putCmd.input.Item);
     expect(item.url).toBe('https://example.com/resilient');
     expect(item.primaryTopic).toBeUndefined();
+  });
 
-    consoleSpy.mockRestore();
+  test('waits for link enrichment writes before returning', async () => {
+    let resolveWrite;
+    const pendingWrite = new Promise((resolve) => {
+      resolveWrite = resolve;
+    });
+    let handlerResolved = false;
+
+    mockSend.mockImplementation((command) => {
+      if (command instanceof GetItemCommand) {
+        return Promise.resolve({});
+      }
+      if (command instanceof PutItemCommand) {
+        return pendingWrite;
+      }
+      return Promise.resolve({});
+    });
+
+    const handlerPromise = handler({
+      tenantId: 'tenant123',
+      issueId: '42',
+      content: 'One [first](https://aws.amazon.com/lambda)'
+    }).then((result) => {
+      handlerResolved = true;
+      return result;
+    });
+
+    await Promise.resolve();
+    expect(handlerResolved).toBe(false);
+
+    resolveWrite({});
+    const result = await handlerPromise;
+
+    expect(result.content).toContain('https://redirect.example.com');
+    expect(mockSend.mock.calls.some(([command]) => command instanceof PutItemCommand)).toBe(true);
   });
 });

@@ -3360,6 +3360,7 @@ Resources:
       Runtime: nodejs24.x
       CodeUri: functions
       Handler: update-link-tracking.handler
+      Timeout: 60
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -3368,6 +3369,7 @@ Resources:
               Action:
                 - dynamodb:PutItem
                 - dynamodb:GetItem
+                - dynamodb:UpdateItem
               Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
               Action: bedrock:InvokeModel
@@ -3378,7 +3380,7 @@ Resources:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           TABLE_NAME: !Ref NewsletterTable
-          MODEL_ID: us.amazon.nova-pro-v1:0
+          MODEL_ID: us.amazon.nova-lite-v1:0
           REDIRECT_URL: !If
             - HasRedirectCustomDomain
             - !Sub https://${RedirectCustomDomain}/r

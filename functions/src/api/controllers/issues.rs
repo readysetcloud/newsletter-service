@@ -406,6 +406,13 @@ pub async fn get_ab_history(event: Request) -> Result<Response<Body>, Error> {
     }
 }
 
+pub async fn get_active_ab_tests(event: Request) -> Result<Response<Body>, Error> {
+    match handle_get_active_ab_tests(event).await {
+        Ok(response) => Ok(response),
+        Err(e) => Ok(response::format_error_response(&e)),
+    }
+}
+
 pub async fn suggest_ab_test(event: Request) -> Result<Response<Body>, Error> {
     match handle_suggest_ab_test(event).await {
         Ok(response) => Ok(response),
@@ -757,6 +764,188 @@ async fn handle_get_ab_history(event: Request) -> Result<Response<Body>, AppErro
     let aggregates = compute_ab_history_aggregates(&tests);
 
     response::format_response(200, AbHistoryResponse { tests, aggregates })
+}
+
+// ---------------------------------------------------------------------------
+// Active A/B tests (in-progress, cross-issue)
+// ---------------------------------------------------------------------------
+
+// A/B lifecycle states that mean the test is still running — the sample has gone
+// out and a winner has not been decided yet. These are exactly the non-final
+// statuses (everything except `sent`/`inconclusive`); the dashboard surfaces
+// them as "in progress".
+const IN_PROGRESS_AB_STATUSES: [&str; 3] = ["pending", "testing", "evaluating"];
+
+// Upper bound on newsletter records scanned (newest-first) when collecting
+// in-progress tests. An active test always sits within a tenant's most recent
+// issues — its hold-out window is measured in hours — so a bounded recent window
+// is sufficient and keeps the DynamoDB read (and the API Lambda's latency) flat
+// regardless of how many issues a tenant has published.
+const ACTIVE_AB_SCAN_LIMIT: i32 = 25;
+
+#[derive(Serialize)]
+pub struct ActiveAbTestVariant {
+    #[serde(rename = "variantId")]
+    variant_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subject: Option<String>,
+    #[serde(rename = "sendAt", skip_serializing_if = "Option::is_none")]
+    send_at: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct ActiveAbTest {
+    #[serde(rename = "issueId")]
+    issue_id: String,
+    #[serde(rename = "issueNumber")]
+    issue_number: i32,
+    subject: String,
+    dimension: String,
+    status: String,
+    #[serde(rename = "winMetric")]
+    win_metric: String,
+    #[serde(rename = "publishedAt", skip_serializing_if = "Option::is_none")]
+    published_at: Option<String>,
+    #[serde(rename = "evaluateAfterMinutes", skip_serializing_if = "Option::is_none")]
+    evaluate_after_minutes: Option<i64>,
+    variants: Vec<ActiveAbTestVariant>,
+    #[serde(rename = "variantStats")]
+    variant_stats: Vec<VariantStats>,
+}
+
+#[derive(Serialize)]
+pub struct ActiveAbTestsResponse {
+    tests: Vec<ActiveAbTest>,
+}
+
+async fn handle_get_active_ab_tests(event: Request) -> Result<Response<Body>, AppError> {
+    let user_context = auth::get_user_context(&event)?;
+    let tenant_id = user_context
+        .tenant_id
+        .ok_or_else(|| AppError::Unauthorized("Tenant access required".to_string()))?;
+
+    let tests = query_active_ab_tests(&tenant_id).await?;
+
+    response::format_response(200, ActiveAbTestsResponse { tests })
+}
+
+/// Collects the tenant's in-progress A/B tests by scanning a bounded window of
+/// the most recent newsletter records (GSI1, newest-first) and keeping those
+/// whose embedded abTest is non-final. Live per-variant engagement counters are
+/// attached so the dashboard can show the test's progress while it runs.
+async fn query_active_ab_tests(tenant_id: &str) -> Result<Vec<ActiveAbTest>, AppError> {
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+    let table_name = std::env::var("TABLE_NAME")
+        .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
+
+    let gsi1pk = format!("{}#newsletter", tenant_id);
+
+    let result = ddb_client
+        .query()
+        .table_name(&table_name)
+        .index_name("GSI1")
+        .key_condition_expression("GSI1PK = :gsi1pk")
+        .filter_expression("attribute_exists(abTest)")
+        .expression_attribute_values(":gsi1pk", AttributeValue::S(gsi1pk))
+        .scan_index_forward(false)
+        .limit(ACTIVE_AB_SCAN_LIMIT)
+        .send()
+        .await?;
+
+    let mut tests = Vec::new();
+    for item in result.items() {
+        if let Some(mut test) = parse_active_ab_test(item) {
+            test.variant_stats = get_variant_stats(tenant_id, &test.issue_id).await;
+            tests.push(test);
+        }
+    }
+
+    Ok(tests)
+}
+
+/// Parses a newsletter record into an `ActiveAbTest` when it carries a non-final
+/// managed A/B test on a published issue. Returns `None` for records without an
+/// abTest, with a finished test (`sent`/`inconclusive`), or that are not yet
+/// published (drafts/scheduled issues have not run their sample send, so they
+/// are not "in progress"). Variant stats are left empty here and filled by the
+/// caller.
+fn parse_active_ab_test(item: &HashMap<String, AttributeValue>) -> Option<ActiveAbTest> {
+    // Only published issues have actually sent a test sample.
+    let issue_status = item.get("status").and_then(|v| v.as_s().ok())?;
+    if issue_status != "published" {
+        return None;
+    }
+
+    // abTest is persisted as a JSON string (mirroring metadata).
+    let ab_test: serde_json::Value = item
+        .get("abTest")
+        .and_then(|v| v.as_s().ok())
+        .and_then(|s| serde_json::from_str(s).ok())?;
+
+    let status = ab_test.get("status").and_then(|v| v.as_str()).unwrap_or("");
+    if !IN_PROGRESS_AB_STATUSES.contains(&status) {
+        return None;
+    }
+
+    let issue_number = item
+        .get("pk")
+        .and_then(|v| v.as_s().ok())
+        .and_then(|pk| pk.split('#').nth(1))
+        .and_then(|s| s.parse::<i32>().ok())?;
+
+    let subject = item
+        .get("subject")
+        .and_then(|v| v.as_s().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+
+    let published_at = item
+        .get("publishedAt")
+        .and_then(|v| v.as_s().ok())
+        .map(|s| s.to_string());
+
+    let dimension = ab_test
+        .get("dimension")
+        .and_then(|v| v.as_str())
+        .unwrap_or(AB_DIMENSION_SUBJECT)
+        .to_string();
+    let win_metric = ab_test
+        .get("winMetric")
+        .and_then(|v| v.as_str())
+        .unwrap_or("openRate")
+        .to_string();
+    let evaluate_after_minutes = ab_test.get("evaluateAfterMinutes").and_then(|v| v.as_i64());
+
+    let variants = ab_test
+        .get("variants")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|v| ActiveAbTestVariant {
+                    variant_id: v
+                        .get("variantId")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    subject: v.get("subject").and_then(|x| x.as_str()).map(|s| s.to_string()),
+                    send_at: v.get("sendAt").and_then(|x| x.as_str()).map(|s| s.to_string()),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Some(ActiveAbTest {
+        issue_id: issue_number.to_string(),
+        issue_number,
+        subject,
+        dimension,
+        status: status.to_string(),
+        win_metric,
+        published_at,
+        evaluate_after_minutes,
+        variants,
+        variant_stats: Vec::new(),
+    })
 }
 
 /// Upper bound on history tests read for prompt grounding. The suggestion
@@ -3630,6 +3819,83 @@ mod tests {
         assert!(!ab_test_explicitly_cleared(
             b"{\"abTest\":{\"dimension\":\"subject\"}}"
         ));
+    }
+
+    fn active_ab_item(
+        issue_status: &str,
+        ab_test_json: Option<&str>,
+    ) -> HashMap<String, AttributeValue> {
+        let mut item = HashMap::new();
+        item.insert("pk".to_string(), AttributeValue::S("tenant-123#42".to_string()));
+        item.insert(
+            "status".to_string(),
+            AttributeValue::S(issue_status.to_string()),
+        );
+        item.insert(
+            "subject".to_string(),
+            AttributeValue::S("Weekly digest".to_string()),
+        );
+        item.insert(
+            "publishedAt".to_string(),
+            AttributeValue::S("2026-07-01T00:00:00Z".to_string()),
+        );
+        if let Some(json) = ab_test_json {
+            item.insert("abTest".to_string(), AttributeValue::S(json.to_string()));
+        }
+        item
+    }
+
+    #[test]
+    fn test_parse_active_ab_test_keeps_in_progress_published() {
+        let json = r#"{"dimension":"subject","status":"testing","winMetric":"clickRate","evaluateAfterMinutes":120,"variants":[{"variantId":"a","subject":"A"},{"variantId":"b","subject":"B"}]}"#;
+        let parsed = parse_active_ab_test(&active_ab_item("published", Some(json)))
+            .expect("in-progress published test should parse");
+        assert_eq!(parsed.issue_number, 42);
+        assert_eq!(parsed.issue_id, "42");
+        assert_eq!(parsed.status, "testing");
+        assert_eq!(parsed.dimension, "subject");
+        assert_eq!(parsed.win_metric, "clickRate");
+        assert_eq!(parsed.evaluate_after_minutes, Some(120));
+        assert_eq!(parsed.variants.len(), 2);
+        assert_eq!(parsed.variants[0].subject.as_deref(), Some("A"));
+        // Stats are attached by the caller, not the parser.
+        assert!(parsed.variant_stats.is_empty());
+    }
+
+    #[test]
+    fn test_parse_active_ab_test_keeps_pending_and_evaluating() {
+        for status in ["pending", "evaluating"] {
+            let json =
+                format!(r#"{{"dimension":"subject","status":"{status}","variants":[]}}"#);
+            assert!(
+                parse_active_ab_test(&active_ab_item("published", Some(&json))).is_some(),
+                "status {status} should count as in progress"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_active_ab_test_skips_final_statuses() {
+        for status in ["sent", "inconclusive"] {
+            let json =
+                format!(r#"{{"dimension":"subject","status":"{status}","variants":[]}}"#);
+            assert!(
+                parse_active_ab_test(&active_ab_item("published", Some(&json))).is_none(),
+                "status {status} is final and must be excluded"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_active_ab_test_skips_unpublished_and_missing() {
+        let json = r#"{"dimension":"subject","status":"testing","variants":[]}"#;
+        // Draft/scheduled issues have not sent a sample yet, so their test is not
+        // "in progress" regardless of the embedded status.
+        assert!(parse_active_ab_test(&active_ab_item("draft", Some(json))).is_none());
+        assert!(parse_active_ab_test(&active_ab_item("scheduled", Some(json))).is_none());
+        assert!(parse_active_ab_test(&active_ab_item("failed", Some(json))).is_none());
+        // Published issue with no A/B test at all.
+        assert!(parse_active_ab_test(&active_ab_item("published", None)).is_none());
     }
 
     fn ab_history_test(

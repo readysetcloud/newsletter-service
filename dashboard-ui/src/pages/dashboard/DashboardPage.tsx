@@ -10,7 +10,7 @@ import MetricsCard from '@/components/MetricsCard';
 import { SubscriberGrowthChart } from '@/components/SubscriberGrowthChart';
 import { MiniSparkline } from '@/components/MiniSparkline';
 import type { TrendsData, UserProfile, TrendComparison } from '@/types';
-import type { AbHistoryResponse } from '@/types/issues';
+import type { AbHistoryResponse, ActiveAbTest } from '@/types/issues';
 import { useAuth } from '@/contexts/AuthContext';
 import { calculatePercentageDifference, calculateHealthStatus } from '@/utils/analyticsCalculations';
 import {
@@ -33,6 +33,9 @@ const TopRegionsWidget = lazy(() => import('@/components/TopRegionsWidget'));
 const AbTestHistory = lazy(() =>
   import('@/components/issues/AbTestHistory').then((m) => ({ default: m.AbTestHistory }))
 );
+const AbTestInProgress = lazy(() =>
+  import('@/components/issues/AbTestInProgress').then((m) => ({ default: m.AbTestInProgress }))
+);
 
 export function DashboardPage() {
   const { user } = useAuth();
@@ -43,6 +46,9 @@ export function DashboardPage() {
   const [abHistory, setAbHistory] = useState<AbHistoryResponse | null>(null);
   const [abHistoryLoading, setAbHistoryLoading] = useState(true);
   const [abHistoryError, setAbHistoryError] = useState<string | null>(null);
+  const [activeAbTests, setActiveAbTests] = useState<ActiveAbTest[]>([]);
+  const [activeAbLoading, setActiveAbLoading] = useState(true);
+  const [activeAbError, setActiveAbError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -209,10 +215,29 @@ export function DashboardPage() {
     }
   }, []);
 
+  const loadActiveAbTests = useCallback(async () => {
+    try {
+      setActiveAbLoading(true);
+      setActiveAbError(null);
+      const response = await issuesService.getActiveAbTests();
+      if (response.success && response.data) {
+        setActiveAbTests(response.data.tests);
+      } else {
+        setActiveAbError(response.error || 'Failed to load running A/B tests');
+      }
+    } catch (err) {
+      console.error('Active A/B tests error:', err);
+      setActiveAbError(err instanceof Error ? err.message : 'Failed to load running A/B tests');
+    } finally {
+      setActiveAbLoading(false);
+    }
+  }, []);
+
   const handleRefresh = () => {
     dashboardService.invalidateTrendsCache();
     loadTrendsData(true);
     loadAbHistory();
+    loadActiveAbTests();
   };
 
   useEffect(() => {
@@ -241,6 +266,10 @@ export function DashboardPage() {
   useEffect(() => {
     loadAbHistory();
   }, [loadAbHistory]);
+
+  useEffect(() => {
+    loadActiveAbTests();
+  }, [loadActiveAbTests]);
 
   const formatPercentage = (value: number) => `${value.toFixed(1)}%`;
   const formatNumber = (value: number) => value.toLocaleString();
@@ -679,6 +708,17 @@ export function DashboardPage() {
                 <div className="flex items-center justify-between pt-2 border-t border-border">
                   <h3 className="text-sm uppercase tracking-widest text-muted-foreground">A/B Testing</h3>
                 </div>
+                {/* In-progress tests (running now) surface above the completed history. */}
+                {(activeAbLoading || activeAbError || activeAbTests.length > 0) && (
+                  <Suspense fallback={<div className="bg-surface rounded-lg shadow p-6 animate-pulse h-32" />}>
+                    <AbTestInProgress
+                      tests={activeAbTests}
+                      loading={activeAbLoading}
+                      error={activeAbError}
+                      onRetry={loadActiveAbTests}
+                    />
+                  </Suspense>
+                )}
                 <Suspense fallback={<div className="bg-surface rounded-lg shadow p-6 animate-pulse h-48" />}>
                   <AbTestHistory
                     data={abHistory}

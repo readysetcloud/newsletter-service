@@ -10,6 +10,7 @@ import type {
   ListIssuesParams,
   VariantId,
   AbHistoryResponse,
+  ActiveAbTestsResponse,
   AbSuggestionRequest,
   AbSuggestionResponse,
 } from '@/types/issues';
@@ -166,6 +167,16 @@ class IssuesService {
    */
   async getAbHistory(): Promise<ApiResponse<AbHistoryResponse>> {
     return apiClient.get<AbHistoryResponse>('/ab-test/history');
+  }
+
+  /**
+   * Retrieves the tenant's in-progress A/B tests: managed tests whose sample has
+   * been sent but whose winner has not been decided yet, with live per-variant
+   * engagement counters. Used for the dashboard's "test in progress" indicator.
+   * @returns Promise resolving to the active A/B tests response
+   */
+  async getActiveAbTests(): Promise<ApiResponse<ActiveAbTestsResponse>> {
+    return apiClient.get<ActiveAbTestsResponse>('/ab-test/active');
   }
 
   /**

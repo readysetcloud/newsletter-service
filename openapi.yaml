@@ -1559,6 +1559,30 @@ paths:
         "500":
           $ref: "#/components/responses/UnknownError"
 
+  /ab-test/active:
+    get:
+      summary: Get in-progress A/B tests
+      description: >-
+        Retrieves the authenticated tenant's A/B tests that are currently running
+        — the test sample has been sent but a winner has not been decided yet
+        (status "pending", "testing", or "evaluating") — with live per-variant
+        engagement counters. Only published issues are considered, scanning a
+        bounded window of the most recent issues. Returns an empty tests array
+        when no tests are in progress.
+      tags:
+        - Issues
+      responses:
+        "200":
+          description: In-progress A/B tests with live per-variant stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActiveAbTestsResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
   /ab-test/suggestions:
     post:
       summary: Suggest A/B test variants
@@ -4391,6 +4415,85 @@ components:
           enum: [a, b]
           description: The variant to declare as the winner
       additionalProperties: false
+
+    ActiveAbTestsResponse:
+      type: object
+      required:
+        - tests
+      properties:
+        tests:
+          type: array
+          items:
+            $ref: "#/components/schemas/ActiveAbTest"
+          description: In-progress A/B tests, newest issue first (empty when none are running)
+
+    ActiveAbTest:
+      type: object
+      required:
+        - issueId
+        - issueNumber
+        - subject
+        - dimension
+        - status
+        - winMetric
+        - variants
+        - variantStats
+      properties:
+        issueId:
+          type: string
+          description: Issue id (issue number as a string), matching the issue detail route
+        issueNumber:
+          type: integer
+          description: The issue number this A/B test belongs to
+        subject:
+          type: string
+          description: The issue's subject line
+        dimension:
+          type: string
+          enum: [subject, sendTime]
+          description: The dimension under test
+        status:
+          type: string
+          enum: [pending, testing, evaluating]
+          description: Non-final lifecycle state of the running test
+        winMetric:
+          type: string
+          enum: [openRate, clickRate]
+          description: Metric that will decide the winner
+        publishedAt:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp when the issue was published
+        evaluateAfterMinutes:
+          type: integer
+          description: Hold-out wait, in minutes, before the winner is evaluated
+        variants:
+          type: array
+          items:
+            $ref: "#/components/schemas/ActiveAbTestVariant"
+          description: The test's variant definitions
+        variantStats:
+          type: array
+          items:
+            $ref: "#/components/schemas/VariantStats"
+          description: Live per-variant engagement counters collected so far
+
+    ActiveAbTestVariant:
+      type: object
+      required:
+        - variantId
+      properties:
+        variantId:
+          type: string
+          enum: [a, b]
+          description: Variant identifier
+        subject:
+          type: string
+          description: Subject line for this variant (subject-dimension tests)
+        sendAt:
+          type: string
+          format: date-time
+          description: Send time for this variant (send-time tests)
 
     AbHistoryResponse:
       type: object

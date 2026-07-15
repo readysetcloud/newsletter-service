@@ -50,6 +50,51 @@ describe('update-link-tracking handler', () => {
     expect(result.content).toContain('s=__EMAIL_HASH__');
   });
 
+  test('encodes the destination so query-string links round-trip to the same hash', async () => {
+    // A URL with query params (UTM tags) must be encoded such that its `&`/`?`
+    // do not leak out of the `u=` param and split the redirect query string.
+    // Otherwise the redirect truncates the destination and the logged click
+    // hashes to a different link record, so the increment is silently dropped.
+    const url = 'https://example.com/post?utm_source=newsletter&utm_medium=email';
+    const result = await handler({
+      tenantId: 'tenant123',
+      issueId: '42',
+      content: `Read [the post](${url}) today.`
+    });
+
+    const expected = `u=${encodeURIComponent(url)}`;
+    expect(result.content).toContain(expected);
+    // The raw, unescaped ampersand must not appear inside the tracking link.
+    expect(result.content).not.toContain('utm_medium=email&cid=');
+    // The value under `u=` must decode back to the exact original URL.
+    const uValue = result.content.match(/u=([^&]+)&cid=/)[1];
+    expect(decodeURIComponent(uValue)).toBe(url);
+  });
+
+  test('tracks every occurrence when a URL is reused / is a prefix of others', async () => {
+    // The homepage URL is a prefix of the article URL and appears twice. The old
+    // first-occurrence substring replace left later occurrences un-tracked and
+    // corrupted earlier links; every link must now become a distinct tracking URL.
+    const home = 'https://readysetcloud.io';
+    const article = 'https://readysetcloud.io/serverless';
+    const result = await handler({
+      tenantId: 'tenant123',
+      issueId: '42',
+      content: `Welcome to [home](${home}). Read [serverless](${article}). Visit [home again](${home}).`
+    });
+
+    // No original URL should remain as a bare markdown target (all rewritten).
+    expect(result.content).not.toContain(`](${home})`);
+    expect(result.content).not.toContain(`](${article})`);
+    // Positions 1, 2, 3 all present -> all three links tracked.
+    expect(result.content).toContain('p=1');
+    expect(result.content).toContain('p=2');
+    expect(result.content).toContain('p=3');
+    // No double-wrapped redirect (a symptom of the substring-collision bug).
+    expect(result.content).not.toMatch(/u=[^&]*r(?:edirect)?\.example\.com/);
+    expect(result.content).not.toContain(`u=${encodeURIComponent(process.env.REDIRECT_URL)}`);
+  });
+
   test('stores the LLM topic classification and summary on the link record', async () => {
     mockClassifyLinkWithLlm.mockResolvedValue({
       primaryTopic: 'ai',

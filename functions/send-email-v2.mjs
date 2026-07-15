@@ -453,6 +453,61 @@ const scheduleAbEvaluation = async ({ tenantId, referenceNumber, abTest, subject
 };
 
 /**
+ * Transitions a managed A/B test from `pending` to `testing` the moment the test
+ * sample has actually gone out (subject tests) or the per-variant sends have been
+ * fanned out (send-time tests). Without this the test stays `pending` for the
+ * entire hold-out window, so the dashboard shows an inert "Pending" badge with
+ * zero variant stats from publish until evaluation — indistinguishable, to the
+ * user, from the test never having been picked up at all.
+ *
+ * Both the embedded `abTest.status` (what the dashboard reads) and the top-level
+ * `abTestStatus` CAS mirror (what evaluate-ab-winner claims on) are written
+ * together, mirroring how finalizeEvaluation keeps the two in sync. The write is
+ * conditional on the test still being unset/`pending` so a redelivery can never
+ * regress a test that has already been claimed (`evaluating`) or finalized
+ * (`sent`/`inconclusive`). Best-effort: a failure here is logged, not thrown, so
+ * it never fails an otherwise-successful send.
+ *
+ * @param {Object} params
+ * @param {string} params.tenantId
+ * @param {string} params.referenceNumber - `${tenantId}_${issueNumber}`
+ * @param {Object} params.abTest - The managed A/B config; its status is set to 'testing'.
+ */
+const markAbTestTesting = async ({ tenantId, referenceNumber, abTest }) => {
+  if (!referenceNumber) {
+    console.warn('[A/B] Skipping testing-status transition - missing referenceNumber');
+    return;
+  }
+
+  const issueNumber = referenceNumber.slice(referenceNumber.lastIndexOf('_') + 1);
+  const issueId = `${tenantId}#${issueNumber}`;
+  const updatedAbTest = { ...abTest, status: 'testing' };
+
+  try {
+    await ddb.send(new UpdateItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({ pk: issueId, sk: 'newsletter' }),
+      UpdateExpression: 'SET abTest = :ab, abTestStatus = :testing, updatedAt = :now',
+      ConditionExpression: 'attribute_not_exists(abTestStatus) OR abTestStatus = :pending',
+      ExpressionAttributeValues: marshall({
+        ':ab': JSON.stringify(updatedAbTest),
+        ':testing': 'testing',
+        ':pending': 'pending',
+        ':now': new Date().toISOString()
+      })
+    }));
+    console.log(`[A/B] Marked test as testing for ${referenceNumber}`);
+  } catch (err) {
+    if (err.name === 'ConditionalCheckFailedException') {
+      // Already claimed, finalized, or marked testing by a prior delivery.
+      console.log('[A/B] Test already past pending, leaving status unchanged', { issueId });
+      return;
+    }
+    console.error('[A/B] Failed to mark test as testing', { issueId, error: err.message });
+  }
+};
+
+/**
  * Fan out a send-time A/B test: emit one `Send Email v2` event per variant, each
  * carrying a `variantFilter` and the variant's `sendAt`. The existing future-send
  * scheduling defers each event to its send time; when it fires, the handler sends
@@ -575,6 +630,7 @@ export const handler = async (event) => {
       await executePhase('A/B Send-Time Fan-Out', async () => {
         await fanOutSendTimeVariants({ data, subject, html, to, tenantId, replacements, from, abTest });
         await scheduleAbEvaluation({ tenantId, referenceNumber: data.referenceNumber, abTest, subject, html, replacements, from, to });
+        await markAbTestTesting({ tenantId, referenceNumber: data.referenceNumber, abTest });
       });
       console.log('[EXECUTION COMPLETE] Send-time A/B test fanned out to per-variant sends');
       return { sent: false, scheduled: true, abTest: 'sendTime', variants: abTest.variants.length };
@@ -693,7 +749,7 @@ export const handler = async (event) => {
     // (variantFilter set) must not schedule a duplicate.
     if (abTest && to.list && !variantFilter) {
       await executePhase('Schedule A/B Evaluation', async () => {
-        return await scheduleAbEvaluation({
+        await scheduleAbEvaluation({
           tenantId,
           referenceNumber: data.referenceNumber,
           abTest,
@@ -702,6 +758,7 @@ export const handler = async (event) => {
           from,
           to
         });
+        await markAbTestTesting({ tenantId, referenceNumber: data.referenceNumber, abTest });
       });
     }
 

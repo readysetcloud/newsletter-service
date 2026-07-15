@@ -553,6 +553,29 @@ describe('send-email-v2', () => {
       expect(detail.sendPayload.html).toBe('<p>Hello __EMAIL__</p>');
       expect(detail.sendPayload.to.list).toBe('my-list');
     });
+
+    test('marks the test as testing once the sample has been sent', async () => {
+      listSubscribers.mockResolvedValue({ subscribers: makeSubscribers(20), lastEvaluatedKey: undefined });
+
+      await handler({ detail: { ...abEvent.detail } });
+
+      const newsletterUpdates = ddbInstance.send.mock.calls
+        .map(([cmd]) => cmd)
+        .filter((cmd) => cmd.__type === 'UpdateItem' && cmd.Key?.marshalled?.sk === 'newsletter');
+      expect(newsletterUpdates).toHaveLength(1);
+
+      const update = newsletterUpdates[0];
+      expect(update.Key.marshalled.pk).toBe('tenant-123#42');
+      // Both the CAS mirror and embedded status flip to 'testing', and the write
+      // is guarded so it can only advance a still-pending test.
+      expect(update.UpdateExpression).toContain('abTestStatus = :testing');
+      expect(update.ConditionExpression).toContain('abTestStatus = :pending');
+      const values = update.ExpressionAttributeValues.marshalled;
+      expect(values[':testing']).toBe('testing');
+      const persisted = JSON.parse(values[':ab']);
+      expect(persisted.status).toBe('testing');
+      expect(persisted.dimension).toBe('subject');
+    });
   });
 
   describe('A/B send-time testing', () => {
@@ -615,6 +638,21 @@ describe('send-email-v2', () => {
       expect(schedulerInstance.send).toHaveBeenCalledTimes(1);
       const entry = JSON.parse(schedulerInstance.send.mock.calls[0][0].Target.Input).Entries[0];
       expect(entry.DetailType).toBe('Evaluate AB Test');
+    });
+
+    test('marks the test as testing when fanning out per-variant sends', async () => {
+      await handler({ detail: sendTimeDetail() });
+
+      const newsletterUpdates = ddbInstance.send.mock.calls
+        .map(([cmd]) => cmd)
+        .filter((cmd) => cmd.__type === 'UpdateItem' && cmd.Key?.marshalled?.sk === 'newsletter');
+      expect(newsletterUpdates).toHaveLength(1);
+
+      const values = newsletterUpdates[0].ExpressionAttributeValues.marshalled;
+      expect(values[':testing']).toBe('testing');
+      const persisted = JSON.parse(values[':ab']);
+      expect(persisted.status).toBe('testing');
+      expect(persisted.dimension).toBe('sendTime');
     });
 
     test('per-variant fire (variantFilter) sends only that variant bucket and schedules nothing', async () => {

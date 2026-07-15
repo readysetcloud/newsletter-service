@@ -394,6 +394,34 @@ export interface AbHistoryResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Active A/B tests (in progress) — GET /ab-test/active
+// ---------------------------------------------------------------------------
+
+/** A single in-progress A/B test surfaced on the dashboard. */
+export interface ActiveAbTest {
+  /** Issue id (issue number as a string), matching the issue detail route. */
+  issueId: string;
+  issueNumber: number;
+  /** The issue's subject line. */
+  subject: string;
+  dimension: AbTestDimension;
+  /** Non-final lifecycle state: 'pending' | 'testing' | 'evaluating'. */
+  status: AbTestStatus;
+  winMetric: AbTestWinMetric;
+  publishedAt?: string;
+  /** Hold-out wait before the winner is evaluated. */
+  evaluateAfterMinutes?: number;
+  variants: AbTestVariant[];
+  /** Live per-variant engagement counters collected so far. */
+  variantStats: VariantStats[];
+}
+
+/** Response payload for GET /ab-test/active. */
+export interface ActiveAbTestsResponse {
+  tests: ActiveAbTest[];
+}
+
+// ---------------------------------------------------------------------------
 // A/B test AI suggestions (POST /ab-test/suggestions)
 // ---------------------------------------------------------------------------
 

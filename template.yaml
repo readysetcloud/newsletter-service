@@ -1622,8 +1622,16 @@ Resources:
               Resource: !GetAtt NewsletterTable.Arn
         - Version: 2012-10-17
           Statement:
+            # Email-click interest scoring / auto-segmentation
+            # (processInterestScoring in utils/interest-scoring.mjs) reads the
+            # subscriber record + segment uniqueness/metadata rows (GetItem),
+            # increments interestScores + memberCount (UpdateItem), adds segment
+            # member rows (PutItem), and creates interest segments via
+            # TransactWriteItems (authorized through the underlying PutItem).
             - Effect: Allow
               Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
                 - dynamodb:UpdateItem
               Resource: !GetAtt SubscribersTable.Arn
       Environment:

@@ -29,12 +29,21 @@ export interface BotFlags {
   suspiciousEmailPattern: boolean;
 }
 
+export interface InterestScoreEntry {
+  score: number;
+  lastScoredAt: string;
+}
+
 export interface SubscriberListItem {
   email: string;
   addedAt: string | null;
   firstName?: string;
   lastName?: string;
   lastEngagedIssue: number | null;
+  /** Number of distinct issues this subscriber has opened or clicked. */
+  engagementCount?: number | null;
+  /** Per-topic interest scores accumulated from link clicks, keyed by topic label. */
+  interestScores?: Record<string, InterestScoreEntry> | null;
   suspectedBot?: boolean;
   botFlags?: BotFlags;
 }

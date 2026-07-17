@@ -5,6 +5,7 @@ import { hashEmail } from './utils/hash-email.mjs';
 import { detectDevice } from './utils/detect-device.mjs';
 import { lookupCountry } from './utils/geolocation.mjs';
 import { updateSubscriberEngagement } from './utils/subscriber-engagement.mjs';
+import { processInterestScoring } from './utils/interest-scoring.mjs';
 import { ulid } from 'ulid';
 import crypto from 'crypto';
 
@@ -65,6 +66,19 @@ export const handler = async (event) => {
           await updateSubscriberEngagement(tenantId, detail.mail.destination[0], parseInt(issueNumber, 10));
         } catch (err) {
           console.error('Subscriber engagement update failed on click', { issueId, error: err.message });
+        }
+        // Interest scoring + auto-segmentation runs on the SES email-click path
+        // because that is the click event that identifies the subscriber
+        // (detail.mail.destination). The CloudFront/web-version redirect path is
+        // intentionally anonymous, so it never scores. processInterestScoring
+        // looks up the clicked link's topic (link#hash(url)) and increments the
+        // subscriber's interestScores, auto-creating an interest segment when a
+        // topic crosses the threshold. It swallows its own errors; the wrapper
+        // is defensive so a scoring failure never fails stat aggregation.
+        try {
+          await processInterestScoring(issueId, detail.mail.destination[0], detail.click.link);
+        } catch (err) {
+          console.error('Interest scoring failed on click', { issueId, error: err.message });
         }
         break;
       default:

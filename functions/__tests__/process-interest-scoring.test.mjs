@@ -141,7 +141,7 @@ describe('processInterestScoring', () => {
   });
 
   describe('updateInterestScore - nested map initialization', () => {
-    test('should retry with map initialization on ValidationException', async () => {
+    test('should initialize BOTH the top-level map and the per-topic entry on ValidationException, then retry', async () => {
       // GetItem for Link_Metadata
       mockSend.mockResolvedValueOnce({
         Item: marshall({ primaryTopic: 'ai', secondaryTopics: [] })
@@ -152,7 +152,10 @@ describe('processInterestScoring', () => {
       validationError.name = 'ValidationException';
       mockSend.mockRejectedValueOnce(validationError);
 
-      // Map initialization UpdateItem succeeds
+      // Top-level map initialization UpdateItem succeeds
+      mockSend.mockResolvedValueOnce({});
+
+      // Per-topic entry initialization UpdateItem succeeds
       mockSend.mockResolvedValueOnce({});
 
       // Retry nested UpdateItem succeeds
@@ -164,14 +167,25 @@ describe('processInterestScoring', () => {
 
       await processInterestScoring(cid, email, 'https://example.com/ai-article');
 
-      // 1 GetItem + 1 failed UpdateItem + 1 init UpdateItem + 1 retry UpdateItem = 4
-      expect(mockSend).toHaveBeenCalledTimes(4);
+      // 1 GetItem + 1 failed UpdateItem + 2 init UpdateItems + 1 retry UpdateItem = 5
+      expect(mockSend).toHaveBeenCalledTimes(5);
 
-      // Verify the initialization command
-      const initCmd = mockSend.mock.calls[2][0];
-      expect(initCmd).toBeInstanceOf(UpdateItemCommand);
-      expect(initCmd.input.UpdateExpression).toBe('SET interestScores = if_not_exists(interestScores, :emptyMap)');
-      expect(initCmd.input.TableName).toBe('test-subscribers-table');
+      // Verify the top-level map initialization command
+      const initMapCmd = mockSend.mock.calls[2][0];
+      expect(initMapCmd).toBeInstanceOf(UpdateItemCommand);
+      expect(initMapCmd.input.UpdateExpression).toBe('SET interestScores = if_not_exists(interestScores, :emptyMap)');
+      expect(initMapCmd.input.TableName).toBe('test-subscribers-table');
+
+      // Verify the per-topic entry initialization command — this is the step that
+      // makes the subsequent nested increment legal in real DynamoDB.
+      const initTopicCmd = mockSend.mock.calls[3][0];
+      expect(initTopicCmd).toBeInstanceOf(UpdateItemCommand);
+      expect(initTopicCmd.input.UpdateExpression).toBe('SET interestScores.#topic = if_not_exists(interestScores.#topic, :zeroEntry)');
+      expect(initTopicCmd.input.ExpressionAttributeNames['#topic']).toBe('ai');
+      const initTopicVals = unmarshall(initTopicCmd.input.ExpressionAttributeValues);
+      expect(initTopicVals[':zeroEntry']).toEqual(
+        expect.objectContaining({ score: 0 })
+      );
     });
 
     test('should use SET with if_not_exists, not ADD', async () => {

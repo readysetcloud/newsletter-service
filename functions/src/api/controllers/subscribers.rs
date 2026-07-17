@@ -4,6 +4,7 @@ use newsletter::admin::{auth, aws_clients, error::AppError, response};
 use percent_encoding::percent_decode_str;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::env;
 
 // ── Response types ─────────────────────────────────────────────────────
@@ -111,9 +112,25 @@ struct SubscriberListItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     last_name: Option<String>,
     last_engaged_issue: Option<i64>,
+    /// Total distinct issues this subscriber has opened/clicked. Surfaced so the
+    /// dashboard can show engagement depth, not just recency.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    engagement_count: Option<i64>,
+    /// Per-topic interest scores accumulated from link clicks. Powers the
+    /// interest-profile chips on the subscriber list so auto-segmentation signal
+    /// is visible per subscriber, not just inside a segment's member list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interest_scores: Option<HashMap<String, InterestScoreEntry>>,
     suspected_bot: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     bot_flags: Option<BotFlags>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InterestScoreEntry {
+    score: f64,
+    last_scored_at: String,
 }
 
 #[derive(Serialize)]
@@ -525,6 +542,49 @@ fn hash_email(email: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// Whether a table item is an actual subscriber record rather than a segments
+/// infrastructure row. The segments feature overloads the `email` sort key with
+/// `SEGMENT#...`, `SEGMENT_NAME#...`, `SEGMENT_JOB#...`, and `...#MEMBER#...`
+/// records stored under the same tenant partition; those must never be counted
+/// or listed as subscribers. Real email addresses never start with "SEGMENT".
+fn is_subscriber_record(item: &HashMap<String, AttributeValue>) -> bool {
+    item.get("email")
+        .and_then(|v| v.as_s().ok())
+        .map(|email| !email.starts_with("SEGMENT"))
+        .unwrap_or(false)
+}
+
+/// Parse the `interestScores` map (topic -> { score, lastScoredAt }) off a
+/// subscriber record. Returns None when the attribute is absent or malformed.
+fn parse_interest_scores(
+    item: &HashMap<String, AttributeValue>,
+) -> Option<HashMap<String, InterestScoreEntry>> {
+    let scores_map = item.get("interestScores")?.as_m().ok()?;
+    let mut result = HashMap::new();
+    for (topic, entry_val) in scores_map {
+        if let Ok(entry_map) = entry_val.as_m() {
+            let score = entry_map
+                .get("score")
+                .and_then(|v| v.as_n().ok())
+                .and_then(|n| n.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            let last_scored_at = entry_map
+                .get("lastScoredAt")
+                .and_then(|v| v.as_s().ok())
+                .cloned()
+                .unwrap_or_default();
+            result.insert(
+                topic.clone(),
+                InterestScoreEntry {
+                    score,
+                    last_scored_at,
+                },
+            );
+        }
+    }
+    Some(result)
+}
+
 async fn query_current_subscriber_count(
     ddb_client: &aws_sdk_dynamodb::Client,
     table_name: &str,
@@ -642,6 +702,14 @@ async fn query_all_subscribers(
         let result = query.send().await?;
 
         for item in result.items() {
+            // The segments feature stores its records (SEGMENT#, SEGMENT_NAME#,
+            // SEGMENT_JOB#, and #MEMBER# rows) in this same table under the
+            // tenant partition. Skip them so they don't show up as bogus
+            // subscribers in the list.
+            if !is_subscriber_record(item) {
+                continue;
+            }
+
             let email = item
                 .get("email")
                 .and_then(|v| v.as_s().ok())
@@ -667,6 +735,13 @@ async fn query_all_subscribers(
                 .get("lastEngagedIssue")
                 .and_then(|v| v.as_n().ok())
                 .and_then(|n| n.parse::<i64>().ok());
+
+            let engagement_count = item
+                .get("engagementCount")
+                .and_then(|v| v.as_n().ok())
+                .and_then(|n| n.parse::<i64>().ok());
+
+            let interest_scores = parse_interest_scores(item).filter(|m| !m.is_empty());
 
             let get_bool_flag = |key: &str| -> bool {
                 item.get(key)
@@ -705,6 +780,8 @@ async fn query_all_subscribers(
                 first_name,
                 last_name,
                 last_engaged_issue,
+                engagement_count,
+                interest_scores,
                 suspected_bot,
                 bot_flags,
             });
@@ -751,6 +828,9 @@ async fn query_sunset_candidates(
         let result = query.send().await?;
 
         for item in result.items() {
+            if !is_subscriber_record(item) {
+                continue;
+            }
             if let Some(subscriber) =
                 evaluate_subscriber(item, cutoff_issue, threshold, latest_issue_number)
             {
@@ -898,6 +978,9 @@ async fn query_audience_health(
         let result = query.send().await?;
 
         for item in result.items() {
+            if !is_subscriber_record(item) {
+                continue;
+            }
             total += 1;
 
             let last_engaged_issue = item
@@ -1077,6 +1160,67 @@ mod tests {
             make_subscriber_item("active@example.com", Some(19), Some("2020-01-01T00:00:00Z"));
         let result = evaluate_subscriber(&item, 10, 10, 20);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_is_subscriber_record_accepts_real_email() {
+        let item = make_subscriber_item("person@example.com", Some(3), None);
+        assert!(is_subscriber_record(&item));
+    }
+
+    #[test]
+    fn test_is_subscriber_record_rejects_segment_rows() {
+        for sk in [
+            "SEGMENT#01JABC",
+            "SEGMENT_NAME#vip subscribers",
+            "SEGMENT_JOB#01JXYZ",
+            "SEGMENT#01JABC#MEMBER#person@example.com",
+            "SEGMENT_NAME#auto: ai",
+        ] {
+            let mut item = HashMap::new();
+            item.insert("email".to_string(), AttributeValue::S(sk.to_string()));
+            assert!(
+                !is_subscriber_record(&item),
+                "expected {sk} to be excluded from the subscriber list"
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_subscriber_record_rejects_item_without_email() {
+        let item = HashMap::new();
+        assert!(!is_subscriber_record(&item));
+    }
+
+    #[test]
+    fn test_parse_interest_scores_reads_topic_map() {
+        let mut ai_entry = HashMap::new();
+        ai_entry.insert("score".to_string(), AttributeValue::N("3.5".to_string()));
+        ai_entry.insert(
+            "lastScoredAt".to_string(),
+            AttributeValue::S("2026-01-01T00:00:00Z".to_string()),
+        );
+
+        let mut scores = HashMap::new();
+        scores.insert("ai".to_string(), AttributeValue::M(ai_entry));
+
+        let mut item = HashMap::new();
+        item.insert(
+            "email".to_string(),
+            AttributeValue::S("a@b.com".to_string()),
+        );
+        item.insert("interestScores".to_string(), AttributeValue::M(scores));
+
+        let parsed = parse_interest_scores(&item).expect("should parse");
+        let ai = parsed.get("ai").expect("ai topic present");
+        assert_eq!(ai.score, 3.5);
+        assert_eq!(ai.last_scored_at, "2026-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn test_parse_interest_scores_absent_returns_none() {
+        let item = make_subscriber_item("a@b.com", Some(1), None);
+        assert!(parse_interest_scores(&item).is_none());
     }
 
     #[test]

@@ -63,6 +63,11 @@ const loadIsolated = async () => {
       updateSubscriberEngagement: jest.fn().mockResolvedValue(undefined),
     }));
 
+    jest.unstable_mockModule('../functions/utils/interest-scoring.mjs', () => ({
+      processInterestScoring: jest.fn().mockResolvedValue(undefined),
+      findOrCreateInterestSegment: jest.fn().mockResolvedValue(undefined),
+    }));
+
     ({ handler } = await import('../functions/handle-email-status.mjs'));
     ({ PutItemCommand, UpdateItemCommand, GetItemCommand } = await import('@aws-sdk/client-dynamodb'));
   });

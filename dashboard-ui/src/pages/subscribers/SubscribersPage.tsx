@@ -12,6 +12,8 @@ import { EmptyState } from '@readysetcloud/ui';
 import type { DataListColumn } from '@/components/ui/DataList';
 import { SubscriberGrowthChart } from '@/components/SubscriberGrowthChart';
 import { AudienceHealthWidget } from '@/components/AudienceHealthWidget';
+import { InterestChips } from '@/components/subscribers/InterestChips';
+import { SubscriberProfileModal } from '@/components/subscribers/SubscriberProfileModal';
 import { subscriberService } from '@/services/subscriberService';
 import { segmentService } from '@/services/segmentService';
 import type { Segment } from '@/services/segmentService';
@@ -99,6 +101,7 @@ export const SubscribersPage: React.FC = () => {
   const [segmentsError, setSegmentsError] = useState<string | null>(null);
   const [subscriberListError, setSubscriberListError] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+  const [selectedSubscriber, setSelectedSubscriber] = useState<SubscriberListItem | null>(null);
 
   // Create segment modal state
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -288,11 +291,23 @@ export const SubscribersPage: React.FC = () => {
             <span
               className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${label.className}`}
               role="status"
+              title={
+                sub.engagementCount != null
+                  ? `Engaged with ${sub.engagementCount} issue${sub.engagementCount === 1 ? '' : 's'}`
+                  : undefined
+              }
             >
               {label.text}
             </span>
           );
         },
+      },
+      {
+        key: 'interests',
+        header: 'Interests',
+        className: 'hidden lg:block',
+        headerClassName: 'hidden lg:block',
+        render: (sub) => <InterestChips interestScores={sub.interestScores} max={2} />,
       },
       {
         key: 'subscribed',
@@ -317,14 +332,24 @@ export const SubscribersPage: React.FC = () => {
         key: 'actions',
         header: '',
         render: (sub) => (
-          <button
-            type="button"
-            onClick={() => handleUnsubscribe(sub.email)}
-            className="text-xs text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 transition-colors"
-            aria-label={`Unsubscribe ${sub.email}`}
-          >
-            Remove
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setSelectedSubscriber(sub)}
+              className="text-xs text-primary-600 hover:text-primary-800 dark:text-primary-400 dark:hover:text-primary-300 transition-colors"
+              aria-label={`View profile for ${sub.email}`}
+            >
+              View
+            </button>
+            <button
+              type="button"
+              onClick={() => handleUnsubscribe(sub.email)}
+              className="text-xs text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 transition-colors"
+              aria-label={`Unsubscribe ${sub.email}`}
+            >
+              Remove
+            </button>
+          </div>
         ),
       },
     ],
@@ -551,6 +576,13 @@ export const SubscribersPage: React.FC = () => {
           />
         </Card>
       )}
+
+      {/* Subscriber Profile Modal */}
+      <SubscriberProfileModal
+        subscriber={selectedSubscriber}
+        latestIssueNumber={latestIssueNumber}
+        onClose={() => setSelectedSubscriber(null)}
+      />
 
       {/* Create Segment Modal */}
       {isCreateModalOpen && (

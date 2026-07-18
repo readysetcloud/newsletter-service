@@ -149,6 +149,10 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
         (&Method::GET, "/subscribers/trends") => subscribers::get_subscriber_trends(event).await,
         (&Method::GET, "/subscribers") => subscribers::list_subscribers(event).await,
         (&Method::GET, "/subscribers/health") => subscribers::get_audience_health(event).await,
+        (&Method::GET, path) if path.starts_with("/subscribers/") => {
+            let email = extract_path_param(path, "/subscribers/");
+            subscribers::get_subscriber(event, email).await
+        }
         (&Method::DELETE, path) if path.starts_with("/subscribers/") => {
             let email = extract_path_param(path, "/subscribers/");
             subscribers::delete_subscriber(event, email).await

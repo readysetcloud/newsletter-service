@@ -13,18 +13,26 @@ const TZ_HISTORY_MAX = 6;
 /** Consecutive distinct-issue observations that must agree to confirm a timezone. */
 export const TZ_CONFIRMATION_STREAK = 3;
 
+/** Recognized observation sources. */
+const OBSERVATION_SOURCES = new Set(['open', 'click']);
+
 /**
  * Record a timezone observation for a subscriber and confirm their timezone
  * once the same zone is seen across TZ_CONFIRMATION_STREAK distinct issues.
  *
  * Semantics:
- * - One observation per issue: the first timezone seen for an issue wins;
- *   later opens/clicks of the same issue are ignored.
- * - History is a list of { issue, tz } on the subscriber record (tzHistory),
- *   ordered by issue number, capped at TZ_HISTORY_MAX entries.
- * - When the most recent TZ_CONFIRMATION_STREAK entries all agree and differ
- *   from the stored timeZone, the subscriber's timeZone is set (with
- *   timeZoneUpdatedAt). A subscriber who moves re-confirms the same way, so
+ * - One observation per issue, but click wins: a click-sourced observation
+ *   REPLACES an open-sourced observation for the same issue; an open never
+ *   replaces an existing observation, and a click never replaces a click.
+ *   Apple Mail Privacy Protection proxies the open pixel through Apple
+ *   datacenters, so open IPs geolocate to the wrong zone; click IPs are the
+ *   reader's real device, so clicks are trusted over opens.
+ * - History is a list of { issue, tz, source } on the subscriber record
+ *   (tzHistory), ordered by issue number, capped at TZ_HISTORY_MAX entries.
+ * - When the most recent TZ_CONFIRMATION_STREAK entries all agree, include at
+ *   least one click-sourced observation, and differ from the stored timeZone,
+ *   the subscriber's timeZone is set (with timeZoneUpdatedAt). An all-open
+ *   streak never confirms. A subscriber who moves re-confirms the same way, so
  *   the stored zone follows them after three consistent issues.
  * - Optimistic concurrency: the update is conditional on tzHistory being
  *   unchanged since the read; a concurrent writer winning the race just means
@@ -35,9 +43,10 @@ export const TZ_CONFIRMATION_STREAK = 3;
  * @param {string} email - Subscriber email (sort key)
  * @param {number} issueNumber
  * @param {string} timeZone - IANA timezone name from geolocation
+ * @param {'open'|'click'} source - Which event produced the observation
  */
-export async function recordTimeZoneObservation(tenantId, email, issueNumber, timeZone) {
-  if (!tenantId || !email || !timeZone || !Number.isFinite(issueNumber)) {
+export async function recordTimeZoneObservation(tenantId, email, issueNumber, timeZone, source) {
+  if (!tenantId || !email || !timeZone || !Number.isFinite(issueNumber) || !OBSERVATION_SOURCES.has(source)) {
     return;
   }
 
@@ -59,12 +68,23 @@ export async function recordTimeZoneObservation(tenantId, email, issueNumber, ti
     const current = unmarshall(result.Item);
     const history = Array.isArray(current.tzHistory) ? current.tzHistory : [];
 
-    if (history.some((entry) => entry.issue === issueNumber)) {
-      // Already observed for this issue — first observation wins.
-      return;
+    const observation = { issue: issueNumber, tz: timeZone, source };
+    const existingIndex = history.findIndex((entry) => entry.issue === issueNumber);
+
+    let mergedHistory;
+    if (existingIndex !== -1) {
+      // Already observed for this issue. Only a click over a prior open wins;
+      // open-over-anything and click-over-click are no-ops.
+      if (source === 'click' && history[existingIndex].source === 'open') {
+        mergedHistory = history.map((entry, index) => (index === existingIndex ? observation : entry));
+      } else {
+        return;
+      }
+    } else {
+      mergedHistory = [...history, observation];
     }
 
-    const newHistory = [...history, { issue: issueNumber, tz: timeZone }]
+    const newHistory = mergedHistory
       .sort((a, b) => a.issue - b.issue)
       .slice(-TZ_HISTORY_MAX);
 
@@ -112,9 +132,15 @@ export async function recordTimeZoneObservation(tenantId, email, issueNumber, ti
 
 /**
  * Return the timezone confirmed by the most recent TZ_CONFIRMATION_STREAK
- * distinct-issue observations, or null when the streak is too short or mixed.
+ * distinct-issue observations, or null when the streak is too short, mixed, or
+ * made up entirely of open-sourced observations.
  *
- * @param {Array<{issue: number, tz: string}>} history - Sorted by issue asc.
+ * A confirming streak must both agree on a single zone AND contain at least one
+ * click-sourced observation: opens come through Apple Mail Privacy Protection
+ * proxies and can all point at the same (wrong) Apple datacenter zone, so an
+ * all-open streak is not trustworthy on its own.
+ *
+ * @param {Array<{issue: number, tz: string, source: 'open'|'click'}>} history - Sorted by issue asc.
  * @returns {string|null}
  */
 export function getConfirmedTimeZone(history) {
@@ -124,5 +150,7 @@ export function getConfirmedTimeZone(history) {
 
   const recent = history.slice(-TZ_CONFIRMATION_STREAK);
   const candidate = recent[0].tz;
-  return recent.every((entry) => entry.tz === candidate) ? candidate : null;
+  const allAgree = recent.every((entry) => entry.tz === candidate);
+  const hasClick = recent.some((entry) => entry.source === 'click');
+  return allAgree && hasClick ? candidate : null;
 }

@@ -7,6 +7,8 @@ let UpdateItemCommand;
 let GetItemCommand;
 let lookupGeoMock;
 let recordTimeZoneObservationMock;
+let recordActivityMock;
+let recordOpenHourMock;
 
 const loadIsolated = async () => {
   await jest.isolateModulesAsync(async () => {
@@ -84,6 +86,14 @@ const loadIsolated = async () => {
       recordTimeZoneObservation: recordTimeZoneObservationMock,
       getConfirmedTimeZone: jest.fn(),
       TZ_CONFIRMATION_STREAK: 3,
+    }));
+
+    recordActivityMock = jest.fn().mockResolvedValue(undefined);
+    recordOpenHourMock = jest.fn().mockResolvedValue(undefined);
+
+    jest.unstable_mockModule('../functions/utils/activity-timeline.mjs', () => ({
+      recordActivity: recordActivityMock,
+      recordOpenHour: recordOpenHourMock,
     }));
 
     ({ handler } = await import('../functions/handle-email-status.mjs'));
@@ -1382,6 +1392,11 @@ describe('handle-email-status', () => {
         TZ_CONFIRMATION_STREAK: 3,
       }));
 
+      jest.unstable_mockModule('../functions/utils/activity-timeline.mjs', () => ({
+        recordActivity: jest.fn().mockResolvedValue(undefined),
+        recordOpenHour: jest.fn().mockResolvedValue(undefined),
+      }));
+
       jest.unstable_mockModule('../functions/utils/hash-email.mjs', () => ({
         hashEmail: jest.fn((email) => `hashed_${email}`),
       }));
@@ -1689,7 +1704,8 @@ describe('handle-email-status', () => {
         'tenant123',
         'subscriber@example.com',
         42,
-        'America/Chicago'
+        'America/Chicago',
+        'open'
       );
     });
 
@@ -1720,7 +1736,8 @@ describe('handle-email-status', () => {
         'tenant123',
         'subscriber@example.com',
         42,
-        'Europe/London'
+        'Europe/London',
+        'click'
       );
     });
 
@@ -1753,6 +1770,81 @@ describe('handle-email-status', () => {
       const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
       const result = await handler(openEvent('203.0.113.9'));
+
+      expect(result).toBe(true);
+      consoleSpy.mockRestore();
+    });
+  });
+
+  describe('Activity timeline wiring', () => {
+    it('records an open activity entry and the open-hour histogram on open', async () => {
+      ddbSend.mockResolvedValue({});
+
+      await handler({
+        detail: {
+          eventType: 'Open',
+          mail: {
+            tags: { referenceNumber: ['tenant123_42'] },
+            destination: ['subscriber@example.com'],
+            commonHeaders: {}
+          },
+          open: { timestamp: '2025-01-21T10:30:00.000Z' }
+        }
+      });
+
+      expect(recordActivityMock).toHaveBeenCalledWith('tenant123', 'subscriber@example.com', {
+        type: 'open',
+        issue: 42,
+        ts: '2025-01-21T10:30:00.000Z'
+      });
+      // 10:30 UTC → hour 10
+      expect(recordOpenHourMock).toHaveBeenCalledWith('tenant123', 'subscriber@example.com', 10);
+    });
+
+    it('records a click activity entry with the clicked url on click', async () => {
+      ddbSend.mockResolvedValue({ Item: null });
+
+      await handler({
+        detail: {
+          eventType: 'Click',
+          mail: {
+            tags: { referenceNumber: ['tenant123_42'] },
+            destination: ['subscriber@example.com']
+          },
+          click: {
+            link: 'https://example.com/article',
+            timestamp: '2025-01-21T10:30:00.000Z',
+            ipAddress: '203.0.113.9'
+          }
+        }
+      });
+
+      expect(recordActivityMock).toHaveBeenCalledWith('tenant123', 'subscriber@example.com', {
+        type: 'click',
+        issue: 42,
+        ts: '2025-01-21T10:30:00.000Z',
+        url: 'https://example.com/article'
+      });
+      // The open-hour histogram is an open-only signal.
+      expect(recordOpenHourMock).not.toHaveBeenCalled();
+    });
+
+    it('still succeeds when activity recording throws', async () => {
+      ddbSend.mockResolvedValue({});
+      recordActivityMock.mockRejectedValue(new Error('boom'));
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      const result = await handler({
+        detail: {
+          eventType: 'Open',
+          mail: {
+            tags: { referenceNumber: ['tenant123_42'] },
+            destination: ['subscriber@example.com'],
+            commonHeaders: {}
+          },
+          open: { timestamp: '2025-01-21T10:30:00.000Z' }
+        }
+      });
 
       expect(result).toBe(true);
       consoleSpy.mockRestore();

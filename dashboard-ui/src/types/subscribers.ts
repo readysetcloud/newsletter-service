@@ -44,6 +44,8 @@ export interface SubscriberListItem {
   engagementCount?: number | null;
   /** Per-topic interest scores accumulated from link clicks, keyed by topic label. */
   interestScores?: Record<string, InterestScoreEntry> | null;
+  /** IANA timezone confirmed from engagement geolocation over 3 consecutive issues. */
+  timeZone?: string | null;
   suspectedBot?: boolean;
   botFlags?: BotFlags;
 }

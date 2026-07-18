@@ -42,6 +42,18 @@ export interface Issue extends IssueListItem {
   insightsV2?: InsightV2[];
   abTest?: AbTest;
   variantStats?: VariantStats[];
+  localSend?: LocalSendConfig;
+}
+
+/**
+ * Local-send configuration: when enabled, the issue's scheduled time is read
+ * as a wall-clock time in defaultTimeZone and each subscriber with a confirmed
+ * timezone receives the issue at that time in their own zone.
+ */
+export interface LocalSendConfig {
+  enabled: boolean;
+  /** IANA timezone whose wall clock defines the target send time. */
+  defaultTimeZone?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +209,7 @@ export interface CreateIssueRequest {
   templateId?: string;
   contentType?: IssueContentType;
   abTest?: AbTest;
+  localSend?: LocalSendConfig;
 }
 
 export interface UpdateIssueRequest {
@@ -209,6 +222,8 @@ export interface UpdateIssueRequest {
   contentType?: IssueContentType;
   /** An explicit `null` clears a previously-saved A/B test. */
   abTest?: AbTest | null;
+  /** An explicit `null` clears a previously-saved local-send config. */
+  localSend?: LocalSendConfig | null;
 }
 
 export interface ListIssuesParams {

@@ -121,6 +121,10 @@ struct SubscriberListItem {
     /// is visible per subscriber, not just inside a segment's member list.
     #[serde(skip_serializing_if = "Option::is_none")]
     interest_scores: Option<HashMap<String, InterestScoreEntry>>,
+    /// IANA timezone confirmed from open/click geolocation across 3 consecutive
+    /// issues. Absent until confirmed. Used by the local-send feature.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    time_zone: Option<String>,
     suspected_bot: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     bot_flags: Option<BotFlags>,
@@ -743,6 +747,11 @@ async fn query_all_subscribers(
 
             let interest_scores = parse_interest_scores(item).filter(|m| !m.is_empty());
 
+            let time_zone = item
+                .get("timeZone")
+                .and_then(|v| v.as_s().ok())
+                .map(|s| s.to_string());
+
             let get_bool_flag = |key: &str| -> bool {
                 item.get(key)
                     .and_then(|v| v.as_bool().ok())
@@ -782,6 +791,7 @@ async fn query_all_subscribers(
                 last_engaged_issue,
                 engagement_count,
                 interest_scores,
+                time_zone,
                 suspected_bot,
                 bot_flags,
             });

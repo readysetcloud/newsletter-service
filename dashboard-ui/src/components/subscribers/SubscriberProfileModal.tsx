@@ -66,11 +66,14 @@ export const SubscriberProfileModal: React.FC<SubscriberProfileModalProps> = ({
               </span>
             )}
           </div>
-          {subscriber.addedAt && (
-            <p className="text-xs text-muted-foreground mt-2">
-              Subscribed {formatDate(subscriber.addedAt)}
-            </p>
-          )}
+          <div className="text-xs text-muted-foreground mt-2 space-y-0.5">
+            {subscriber.addedAt && <p>Subscribed {formatDate(subscriber.addedAt)}</p>}
+            {subscriber.timeZone && (
+              <p title="Detected from engagement activity across 3 consecutive issues">
+                Local timezone: {subscriber.timeZone} (auto-detected)
+              </p>
+            )}
+          </div>
         </section>
 
         {/* Interest profile */}

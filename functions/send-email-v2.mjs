@@ -6,6 +6,13 @@ import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { encrypt, sendWithRetry } from './utils/helpers.mjs';
 import { listSubscribers, getSubscriberByEmail, updateSubscriberSendMetadata } from './utils/subscriber.mjs';
 import { splitRecipients, selectHoldoutSample } from './utils/ab-variants.mjs';
+import {
+  isValidTimeZone,
+  groupSubscribersByTimeZone,
+  computeGroupSendTimes,
+  filterSubscribersForGroup,
+  CATCH_ALL_GROUP
+} from './utils/local-send.mjs';
 
 // Key patterns for DynamoDB (previously from ./senders/types.mjs)
 const KEY_PATTERNS = {
@@ -211,6 +218,154 @@ const retrieveSubscribersPhase = async (tenantId) => {
 
   console.log(`[SUBSCRIBERS] Retrieval complete - total subscribers: ${subscribers.length}`);
   return subscribers;
+};
+
+/**
+ * Validate an incoming localSend config. Returns the config when usable,
+ * otherwise null (with a warning) so the send falls back to a plain send —
+ * a bad timezone must never block an issue from going out.
+ * @param {Object|undefined} localSend - { enabled, defaultTimeZone } from the event
+ * @returns {{enabled: true, defaultTimeZone: string}|null}
+ */
+const normalizeLocalSend = (localSend) => {
+  if (!localSend?.enabled) {
+    return null;
+  }
+  if (!isValidTimeZone(localSend.defaultTimeZone)) {
+    console.warn('[LOCAL SEND] Invalid defaultTimeZone - falling back to plain send', {
+      defaultTimeZone: localSend.defaultTimeZone ?? null
+    });
+    return null;
+  }
+  return { enabled: true, defaultTimeZone: localSend.defaultTimeZone };
+};
+
+/**
+ * Re-emit a Send Email v2 event immediately (used for local-send groups whose
+ * local target time has already passed).
+ */
+const emitSendEvent = async (payload) => {
+  await sendWithRetry(async () => {
+    return await eventBridge.send(new PutEventsCommand({
+      Entries: [{
+        EventBusName: 'default',
+        Source: 'newsletter-service',
+        DetailType: 'Send Email v2',
+        Detail: JSON.stringify(payload)
+      }]
+    }));
+  }, 'Emit local-send group event');
+};
+
+/**
+ * Create a one-shot EventBridge Scheduler entry that re-emits the Send Email
+ * v2 event at the group's local target time (same mechanism as future sends).
+ */
+const createLocalSendSchedule = async (payload, sendTime, referenceNumber, label) => {
+  const scheduleName = `local-${referenceNumber || 'send'}-${label}-${Date.now()}`
+    .replace(/[^0-9a-zA-Z-_.]/g, '-')
+    .slice(0, 64);
+
+  await sendWithRetry(async () => {
+    return await scheduler.send(new CreateScheduleCommand({
+      ActionAfterCompletion: 'DELETE',
+      FlexibleTimeWindow: { Mode: 'OFF' },
+      GroupName: 'newsletter',
+      Name: scheduleName,
+      ScheduleExpression: `at(${sendTime.toISOString().slice(0, 19)})`,
+      Target: {
+        Arn: 'arn:aws:scheduler:::aws-sdk:eventbridge:putEvents',
+        RoleArn: process.env.SCHEDULER_ROLE_ARN,
+        Input: JSON.stringify({
+          Entries: [{
+            EventBusName: 'default',
+            Detail: JSON.stringify(payload),
+            DetailType: 'Send Email v2',
+            Source: 'newsletter-service'
+          }]
+        })
+      }
+    }));
+  }, `Schedule local-send group ${label}`);
+};
+
+/**
+ * Fan a local-send issue out into per-timezone group sends.
+ *
+ * The issue's send instant (sendAt, or now) is read as a wall-clock time in
+ * localSend.defaultTimeZone; each timezone group with confirmed subscribers is
+ * scheduled for that wall-clock time in its own zone. Groups whose local time
+ * has already passed are re-emitted immediately. Subscribers without a
+ * confirmed timezone fire with the default group at the original instant.
+ *
+ * A final catch-all send runs 30 minutes after the last group. It carries no
+ * timezone filter, so anyone missed by group filtering (e.g. a timezone
+ * confirmed mid-send) still receives the issue; the lastIssueSent idempotency
+ * filter makes it a no-op for everyone already sent.
+ *
+ * Each re-entry event carries `localSendGroup` and re-derives its member list
+ * at fire time — recipient lists are never embedded in payloads.
+ *
+ * @param {Object} params
+ * @param {Object} params.data - The original Send Email v2 event detail
+ * @param {{defaultTimeZone: string}} params.localSend - Normalized config
+ * @returns {Promise<Object>} Fan-out summary
+ */
+const fanOutLocalSendGroups = async ({ data, localSend }) => {
+  const subscribers = await retrieveSubscribersPhase(data.tenantId);
+  const groups = groupSubscribersByTimeZone(subscribers);
+
+  const now = new Date();
+  const sendAtDate = data.sendAt ? new Date(data.sendAt) : null;
+  const base = sendAtDate && sendAtDate > now ? sendAtDate : now;
+
+  const sendTimes = computeGroupSendTimes(base, localSend.defaultTimeZone, groups.keys());
+
+  // The re-entry payload must not carry the fan-out drivers, or each group
+  // event would fan out (or future-schedule) again.
+  const template = { ...data };
+  delete template.sendAt;
+  delete template.localSend;
+
+  let scheduled = 0;
+  let immediate = 0;
+  let latestMs = base.getTime();
+
+  for (const [zone, sendTime] of sendTimes) {
+    const payload = { ...template, localSendGroup: { timeZone: zone } };
+    latestMs = Math.max(latestMs, sendTime.getTime());
+
+    // Anything due within the next minute is sent now; Scheduler rejects
+    // schedule times in the past.
+    if (sendTime.getTime() <= now.getTime() + 60 * 1000) {
+      await emitSendEvent(payload);
+      immediate++;
+      console.log(`[LOCAL SEND] Group ${zone} (${groups.get(zone).length} subscribers) sending now`);
+    } else {
+      await createLocalSendSchedule(payload, sendTime, data.referenceNumber, zone);
+      scheduled++;
+      console.log(`[LOCAL SEND] Group ${zone} (${groups.get(zone).length} subscribers) scheduled for ${sendTime.toISOString()}`);
+    }
+  }
+
+  const catchAllAt = new Date(latestMs + 30 * 60 * 1000);
+  await createLocalSendSchedule(
+    { ...template, localSendGroup: { timeZone: CATCH_ALL_GROUP } },
+    catchAllAt,
+    data.referenceNumber,
+    'catch-all'
+  );
+
+  console.log(`[LOCAL SEND] Fan-out complete - ${sendTimes.size} groups (${immediate} immediate, ${scheduled} scheduled), catch-all at ${catchAllAt.toISOString()}`);
+
+  return {
+    sent: false,
+    localSend: true,
+    groups: sendTimes.size,
+    immediate,
+    scheduled,
+    catchAllAt: catchAllAt.toISOString()
+  };
 };
 
 
@@ -584,6 +739,21 @@ export const handler = async (event) => {
 
     console.log(`Using sender email: ${senderEmail} for tenant: ${tenantId}`);
 
+    // Local send: fan the list out into per-timezone group sends instead of
+    // one absolute-time send. Runs before the generic sendAt scheduling
+    // because localSend reinterprets sendAt as a per-zone wall-clock target
+    // (zones east of the default would otherwise fire late). Skipped when an
+    // A/B test is active (the two both control send timing) and on group
+    // re-entry events.
+    if (to.list && !data.localSendGroup && !data.abTest) {
+      const localSend = normalizeLocalSend(data.localSend);
+      if (localSend) {
+        return await executePhase('Local Send Fan-Out', async () => {
+          return await fanOutLocalSendGroups({ data, localSend });
+        });
+      }
+    }
+
     if (sendAt) {
       const sendAtDate = new Date(sendAt);
       const now = new Date();
@@ -649,6 +819,16 @@ export const handler = async (event) => {
       subscribers = await executePhase('Subscriber Retrieval', async () => {
         return await retrieveSubscribersPhase(tenantId);
       });
+
+      // Local-send group re-entry: narrow to this group's members. Membership
+      // is derived at fire time (not embedded in the event) so timezone
+      // confirmations landing between fan-out and fire are respected; the
+      // catch-all group takes everyone and relies on the idempotency filter.
+      if (data.localSendGroup?.timeZone) {
+        const groupKey = data.localSendGroup.timeZone;
+        subscribers = filterSubscribersForGroup(subscribers, groupKey);
+        console.log(`[LOCAL SEND] Group ${groupKey}: ${subscribers.length} subscribers after filtering`);
+      }
     }
 
     const { recipients: emailAddresses, skippedCount } = await executePhase('Idempotency Filter', async () => {

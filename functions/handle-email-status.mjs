@@ -3,9 +3,10 @@ import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { hash } from './utils/helpers.mjs';
 import { hashEmail } from './utils/hash-email.mjs';
 import { detectDevice } from './utils/detect-device.mjs';
-import { lookupCountry } from './utils/geolocation.mjs';
+import { lookupCountry, lookupGeo } from './utils/geolocation.mjs';
 import { updateSubscriberEngagement } from './utils/subscriber-engagement.mjs';
 import { processInterestScoring } from './utils/interest-scoring.mjs';
+import { recordTimeZoneObservation } from './utils/timezone-tracking.mjs';
 import { ulid } from 'ulid';
 import crypto from 'crypto';
 
@@ -57,6 +58,7 @@ export const handler = async (event) => {
         } catch (err) {
           console.error('Subscriber engagement update failed on open', { issueId, error: err.message });
         }
+        await recordTimeZoneFromIp(tenantId, detail.mail.destination[0], parseInt(issueNumber, 10), detail.open?.ipAddress);
         break;
       case 'click':
         stat = 'clicks';
@@ -80,6 +82,7 @@ export const handler = async (event) => {
         } catch (err) {
           console.error('Interest scoring failed on click', { issueId, error: err.message });
         }
+        await recordTimeZoneFromIp(tenantId, detail.mail.destination[0], parseInt(issueNumber, 10), detail.click?.ipAddress);
         break;
       default:
         console.warn(`Unsupported stat ${detail.eventType} was provided`);
@@ -119,6 +122,28 @@ export const handler = async (event) => {
   } catch (err) {
     console.error(err);
     return false;
+  }
+};
+
+/**
+ * Resolve the event IP to an IANA timezone (requires the GeoLite2 City DB in
+ * the geolocation layer) and record it as a per-issue observation on the
+ * subscriber. After the same zone is seen for 3 distinct issues the
+ * subscriber's timeZone is confirmed, which powers the local-send feature.
+ * Never throws — timezone tracking must not affect stat aggregation.
+ */
+const recordTimeZoneFromIp = async (tenantId, email, issueNumber, ipAddress) => {
+  if (!ipAddress) {
+    return;
+  }
+
+  try {
+    const geo = await lookupGeo(ipAddress);
+    if (geo?.timeZone) {
+      await recordTimeZoneObservation(tenantId, email, issueNumber, geo.timeZone);
+    }
+  } catch (err) {
+    console.error('Timezone observation failed', { tenantId, issueNumber, error: err.message });
   }
 };
 

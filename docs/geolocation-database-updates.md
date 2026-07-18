@@ -1,10 +1,17 @@
 # MaxMind GeoLite2 Database Update Process
 
-This document describes how to update the MaxMind GeoLite2 Country database used for IP geolocation in analytics.
+This document describes how to update the MaxMind GeoLite2 databases used for IP geolocation in analytics.
 
 ## Overview
 
-The geolocation feature uses MaxMind's GeoLite2 Country database to convert IP addresses to country codes. MaxMind updates this database weekly, but we recommend monthly updates for a balance between accuracy and operational overhead.
+The geolocation feature uses two MaxMind GeoLite2 databases:
+
+- **GeoLite2 Country** (`GeoLite2-Country.mmdb`, ~6-8 MB) — converts IP addresses to country codes for analytics. Required.
+- **GeoLite2 City** (`GeoLite2-City.mmdb`, ~60 MB) — additionally provides the IANA timezone (`location.time_zone`) used for subscriber timezone detection and the local-send feature. Optional but strongly recommended: without it, subscriber timezones are never detected and local send falls back to sending everyone at the default time.
+
+Both files live in the geolocation Lambda layer and are read from `/opt/` at runtime (`functions/utils/geolocation.mjs`). The code prefers the City database and silently falls back to Country-only lookups when `GeoLite2-City.mmdb` is absent, so the City database can be added to the layer at any time without a code change.
+
+MaxMind updates these databases weekly, but we recommend monthly updates for a balance between accuracy and operational overhead.
 
 ## MaxMind Account Setup
 
@@ -26,24 +33,25 @@ The geolocation feature uses MaxMind's GeoLite2 Country database to convert IP a
 
 ## Manual Update Process
 
-### Download Latest Database
+### Download Latest Databases
 
 1. Log in to your MaxMind account
 2. Navigate to "Download Files"
-3. Download "GeoLite2 Country" in MMDB format
-4. Extract the `.tar.gz` file
-5. Locate `GeoLite2-Country.mmdb` in the extracted folder
+3. Download "GeoLite2 Country" and "GeoLite2 City" in MMDB format
+4. Extract each `.tar.gz` file
+5. Locate `GeoLite2-Country.mmdb` and `GeoLite2-City.mmdb` in the extracted folders
 
 ### Update Lambda Layer
 
-1. Replace the database file:
+1. Replace the database files:
    ```bash
    cp /path/to/downloaded/GeoLite2-Country.mmdb layers/geolocation/GeoLite2-Country.mmdb
+   cp /path/to/downloaded/GeoLite2-City.mmdb layers/geolocation/GeoLite2-City.mmdb
    ```
 
-2. Verify file size (should be ~6-8 MB):
+2. Verify file sizes (Country ~6-8 MB, City ~60 MB):
    ```bash
-   ls -lh layers/geolocation/GeoLite2-Country.mmdb
+   ls -lh layers/geolocation/GeoLite2-Country.mmdb layers/geolocation/GeoLite2-City.mmdb
    ```
 
 3. Deploy the updated layer:

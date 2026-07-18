@@ -27,10 +27,27 @@ export const handler = async (state) => {
       const publishedAt = new Date().toISOString();
       await setupIssueStats(tenant, state.data.metadata.number, state.subject, publishedAt);
 
-      // A/B config is persisted on the issue record by the API. Reading it here
-      // (rather than threading it through the state machine) keeps every state
-      // machine entry point unchanged and works for non-A/B issues by default.
-      const abTest = await getIssueAbTest(state.tenantId, state.data.metadata.number);
+      // A/B and local-send configs are persisted on the issue record by the
+      // API. Reading them here (rather than threading them through the state
+      // machine) keeps every state machine entry point unchanged and works for
+      // plain issues by default.
+      const { abTest, localSend } = await getIssueSendConfig(state.tenantId, state.data.metadata.number);
+
+      const activeAbTest = (abTest?.dimension === 'subject' || abTest?.dimension === 'sendTime') ? abTest : undefined;
+
+      // Local send and A/B testing both control send timing/audience split, so
+      // they are mutually exclusive; A/B wins when both are configured.
+      let activeLocalSend;
+      if (localSend?.enabled) {
+        if (activeAbTest) {
+          console.warn('Local send ignored: issue has an active A/B test', {
+            tenantId: state.tenantId,
+            issueNumber: state.data.metadata.number
+          });
+        } else {
+          activeLocalSend = localSend;
+        }
+      }
 
       await sendEmail({
         subject: state.subject,
@@ -39,7 +56,8 @@ export const handler = async (state) => {
         sendAt: state.sendAtDate,
         referenceNumber: `${tenant.pk}_${state.data.metadata.number}`,
         tenantId: state.tenantId,
-        abTest: (abTest?.dimension === 'subject' || abTest?.dimension === 'sendTime') ? abTest : undefined
+        abTest: activeAbTest,
+        localSend: activeLocalSend
       });
 
       await publishIssueEvent(
@@ -122,13 +140,22 @@ const getTemplateContent = async (tenantId, templateId) => {
 
 /**
  * Loads the persisted A/B test configuration for an issue, if any.
- * The API stores `abTest` as a JSON string on the issue record (sk "newsletter"),
- * mirroring how `metadata` is persisted.
+ * The API stores `abTest` and `localSend` as JSON strings on the issue record
+ * (sk "newsletter"), mirroring how `metadata` is persisted.
  * @param {string} tenantId - Tenant identifier.
  * @param {number|string} issueNumber - Issue number.
- * @returns {Promise<Object|null>} Parsed abTest config, or null when not set/invalid.
+ * @returns {Promise<{abTest: Object|null, localSend: Object|null}>} Parsed configs (null when not set/invalid).
  */
-const getIssueAbTest = async (tenantId, issueNumber) => {
+const getIssueSendConfig = async (tenantId, issueNumber) => {
+  const parseJsonAttribute = (value) => {
+    if (!value) return null;
+    try {
+      return typeof value === 'string' ? JSON.parse(value) : value;
+    } catch {
+      return null;
+    }
+  };
+
   try {
     const result = await ddb.send(new GetItemCommand({
       TableName: process.env.TABLE_NAME,
@@ -136,22 +163,21 @@ const getIssueAbTest = async (tenantId, issueNumber) => {
         pk: `${tenantId}#${issueNumber}`,
         sk: 'newsletter'
       }),
-      ProjectionExpression: 'abTest'
+      ProjectionExpression: 'abTest, localSend'
     }));
 
     if (!result.Item) {
-      return null;
+      return { abTest: null, localSend: null };
     }
 
     const record = unmarshall(result.Item);
-    if (!record.abTest) {
-      return null;
-    }
-
-    return typeof record.abTest === 'string' ? JSON.parse(record.abTest) : record.abTest;
+    return {
+      abTest: parseJsonAttribute(record.abTest),
+      localSend: parseJsonAttribute(record.localSend)
+    };
   } catch (err) {
-    console.error('Failed to load A/B test config for issue', { tenantId, issueNumber, error: err.message });
-    return null;
+    console.error('Failed to load send config for issue', { tenantId, issueNumber, error: err.message });
+    return { abTest: null, localSend: null };
   }
 };
 

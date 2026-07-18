@@ -2174,6 +2174,12 @@ paths:
                               type: integer
                               nullable: true
                               description: Number of distinct issues this subscriber has opened or clicked
+                            timeZone:
+                              type: string
+                              nullable: true
+                              description: >-
+                                IANA timezone confirmed from open/click geolocation across 3 consecutive
+                                issues (e.g. "America/New_York"). Omitted until confirmed.
                             interestScores:
                               type: object
                               nullable: true
@@ -3339,6 +3345,8 @@ components:
             removed within roughly an hour of expiry.
         abTest:
           $ref: "#/components/schemas/AbTest"
+        localSend:
+          $ref: "#/components/schemas/LocalSend"
 
     CreateIssueResponse:
       type: object
@@ -3453,6 +3461,8 @@ components:
           description: Per-variant engagement statistics (present only for A/B test issues)
           items:
             $ref: "#/components/schemas/VariantStats"
+        localSend:
+          $ref: "#/components/schemas/LocalSend"
 
     UpdateIssueRequest:
       type: object
@@ -3488,6 +3498,31 @@ components:
           description: Set to 'published' to manually mark an in-progress or failed issue as published
         abTest:
           $ref: "#/components/schemas/AbTest"
+        localSend:
+          $ref: "#/components/schemas/LocalSend"
+
+    LocalSend:
+      type: object
+      nullable: true
+      description: >-
+        Optional local-send configuration. When enabled, the issue's scheduled
+        send time is interpreted as a wall-clock time in defaultTimeZone, and
+        each subscriber with a confirmed timezone receives the issue at that
+        wall-clock time in their own zone. Subscribers without a confirmed
+        timezone are sent at the default time. Set to null (or enabled: false)
+        on update to clear a previously-saved config. Ignored when the issue
+        has an active A/B test.
+      required:
+        - enabled
+      properties:
+        enabled:
+          type: boolean
+          description: Whether local send is active for this issue
+        defaultTimeZone:
+          type: string
+          description: >-
+            IANA timezone (e.g. "America/New_York") whose wall clock defines
+            the target send time. Required when enabled is true.
 
     IssueStats:
       type: object

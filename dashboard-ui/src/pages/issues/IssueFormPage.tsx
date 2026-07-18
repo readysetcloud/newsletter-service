@@ -20,6 +20,7 @@ import {
 } from '@/components/issues/AbTestConfig';
 import { issuesService } from '@/services/issuesService';
 import { templateService } from '@/services/templateService';
+import { timezoneOptions } from '@/schemas/profileSchema';
 import type { Issue, CreateIssueRequest, UpdateIssueRequest, IssueContentType, AbTest } from '@/types/issues';
 import type { TemplateSummary } from '@/types/api';
 
@@ -108,6 +109,15 @@ export const IssueFormPage: React.FC = () => {
   const [abTest, setAbTest] = useState<AbTest | null>(null);
   const [abTestErrors, setAbTestErrors] = useState<AbTestErrors>({});
 
+  const [localSendEnabled, setLocalSendEnabled] = useState(false);
+  const [localSendTimeZone, setLocalSendTimeZone] = useState(() => {
+    // Default to the author's browser timezone when it's one of the options.
+    const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return timezoneOptions.some((option) => option.value === browserZone)
+      ? browserZone
+      : 'America/New_York';
+  });
+
   const [errors, setErrors] = useState<FormErrors>({});
   const [isDirty, setIsDirty] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -146,6 +156,16 @@ export const IssueFormPage: React.FC = () => {
           });
         } else {
           setAbTest(null);
+        }
+
+        // Hydrate local-send config.
+        if (issue.localSend?.enabled) {
+          setLocalSendEnabled(true);
+          if (issue.localSend.defaultTimeZone) {
+            setLocalSendTimeZone(issue.localSend.defaultTimeZone);
+          }
+        } else {
+          setLocalSendEnabled(false);
         }
 
         // Disable form for published/scheduled issues
@@ -381,6 +401,14 @@ export const IssueFormPage: React.FC = () => {
           updateData.abTest = null;
         }
 
+        if (localSendEnabled && !abTest) {
+          updateData.localSend = { enabled: true, defaultTimeZone: localSendTimeZone };
+        } else if (existingIssue?.localSend?.enabled) {
+          // Turned off (or superseded by an A/B test) after being saved —
+          // explicit null clears the stored config.
+          updateData.localSend = null;
+        }
+
         const response = await issuesService.updateIssue(id, updateData);
 
         if (response.success) {
@@ -443,6 +471,10 @@ export const IssueFormPage: React.FC = () => {
           createData.abTest = buildAbTestRequest(abTest);
         }
 
+        if (localSendEnabled && !abTest) {
+          createData.localSend = { enabled: true, defaultTimeZone: localSendTimeZone };
+        }
+
         const response = await issuesService.createIssue(createData);
 
         if (response.success && response.data) {
@@ -489,7 +521,7 @@ export const IssueFormPage: React.FC = () => {
     } finally {
       setIsSubmitting(false);
     }
-  }, [validateForm, isEditMode, id, formData, abTest, existingIssue, navigate, addToast]);
+  }, [validateForm, isEditMode, id, formData, abTest, localSendEnabled, localSendTimeZone, existingIssue, navigate, addToast]);
 
   // Handle cancel with unsaved changes confirmation
   const handleCancel = useCallback(() => {
@@ -636,6 +668,68 @@ export const IssueFormPage: React.FC = () => {
               <p className="mt-1 text-xs text-muted-foreground">
                 Leave empty to save as draft. Set a future date/time to schedule automatic publication. Time is in your local timezone.
               </p>
+            </div>
+
+            {/* Local Send */}
+            <div className="rounded-lg border border-border p-4 space-y-3">
+              <div className="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  id="localSendEnabled"
+                  checked={localSendEnabled}
+                  onChange={(e) => {
+                    setLocalSendEnabled(e.target.checked);
+                    setIsDirty(true);
+                  }}
+                  disabled={isFormDisabled || !!abTest}
+                  className="mt-1 h-4 w-4 rounded border-border text-primary-600 focus:ring-primary-500 disabled:opacity-50"
+                />
+                <div>
+                  <label
+                    htmlFor="localSendEnabled"
+                    className="block text-sm font-medium text-foreground cursor-pointer"
+                  >
+                    Local send
+                  </label>
+                  <p className="text-xs text-muted-foreground">
+                    Deliver at the send time in each subscriber&rsquo;s local timezone. Subscribers whose
+                    timezone hasn&rsquo;t been detected yet receive the issue at the default timezone&rsquo;s time.
+                  </p>
+                </div>
+              </div>
+
+              {localSendEnabled && (
+                <div className="pl-7">
+                  <label htmlFor="localSendTimeZone" className="block text-sm font-medium text-foreground mb-1">
+                    Default timezone
+                  </label>
+                  <select
+                    id="localSendTimeZone"
+                    value={localSendTimeZone}
+                    onChange={(e) => {
+                      setLocalSendTimeZone(e.target.value);
+                      setIsDirty(true);
+                    }}
+                    disabled={isFormDisabled}
+                    className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {timezoneOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    The scheduled time is read as a wall-clock time in this timezone.
+                  </p>
+                </div>
+              )}
+
+              {!!abTest && (
+                <p className="pl-7 text-xs text-muted-foreground" role="note">
+                  Local send is unavailable while an A/B test is configured — both control send timing.
+                </p>
+              )}
             </div>
 
             {/* Authoring Mode Toggle */}

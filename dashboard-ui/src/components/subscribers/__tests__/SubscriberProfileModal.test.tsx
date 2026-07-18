@@ -80,6 +80,24 @@ describe('SubscriberProfileModal', () => {
     expect(screen.getByText(/Auto-segmented into/)).toBeInTheDocument();
   });
 
+  it('shows the detected timezone when confirmed', () => {
+    render(
+      <SubscriberProfileModal
+        subscriber={{ ...base, timeZone: 'America/Chicago' }}
+        latestIssueNumber={20}
+        onClose={() => {}}
+      />
+    );
+    expect(screen.getByText(/Local timezone: America\/Chicago/)).toBeInTheDocument();
+  });
+
+  it('omits the timezone row when not confirmed', () => {
+    render(
+      <SubscriberProfileModal subscriber={base} latestIssueNumber={20} onClose={() => {}} />
+    );
+    expect(screen.queryByText(/Local timezone:/)).not.toBeInTheDocument();
+  });
+
   it('shows an empty-state message when there is no interest signal', () => {
     render(
       <SubscriberProfileModal

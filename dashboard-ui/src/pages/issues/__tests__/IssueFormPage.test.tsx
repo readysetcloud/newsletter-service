@@ -182,3 +182,67 @@ describe('IssueFormPage authoring modes', () => {
     expect(issuesService.createIssue).not.toHaveBeenCalled();
   });
 });
+
+describe('IssueFormPage local send', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(templateService.listTemplates).mockResolvedValue({
+      success: true,
+      data: { total: 0, templates: [] },
+    });
+    vi.mocked(issuesService.createIssue).mockResolvedValue({
+      success: true,
+      data: { id: '1' } as never,
+    });
+  });
+
+  const fillRequiredFields = () => {
+    fireEvent.change(screen.getByPlaceholderText('Enter issue subject'), {
+      target: { value: 'Issue with local send' },
+    });
+    fireEvent.change(screen.getByTestId('wysiwyg'), {
+      target: { value: '# Content' },
+    });
+  };
+
+  it('omits localSend when the toggle is off', async () => {
+    render(<IssueFormPage />);
+    fillRequiredFields();
+
+    fireEvent.click(screen.getByRole('button', { name: /create new issue/i }));
+
+    await waitFor(() => {
+      expect(issuesService.createIssue).toHaveBeenCalled();
+    });
+    const payload = vi.mocked(issuesService.createIssue).mock.calls[0][0];
+    expect(payload.localSend).toBeUndefined();
+  });
+
+  it('sends localSend with the chosen default timezone when enabled', async () => {
+    render(<IssueFormPage />);
+    fillRequiredFields();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /local send/i }));
+
+    const timezoneSelect = await screen.findByRole('combobox', { name: 'Default timezone' });
+    fireEvent.change(timezoneSelect, { target: { value: 'America/Chicago' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /create new issue/i }));
+
+    await waitFor(() => {
+      expect(issuesService.createIssue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          localSend: { enabled: true, defaultTimeZone: 'America/Chicago' },
+        })
+      );
+    });
+  });
+
+  it('hides the timezone picker until local send is enabled', () => {
+    render(<IssueFormPage />);
+
+    expect(screen.queryByRole('combobox', { name: 'Default timezone' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: /local send/i }));
+    expect(screen.getByRole('combobox', { name: 'Default timezone' })).toBeInTheDocument();
+  });
+});

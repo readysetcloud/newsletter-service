@@ -171,6 +171,8 @@ pub struct GetIssueResponse {
     ab_test: Option<serde_json::Value>,
     #[serde(rename = "variantStats", skip_serializing_if = "Option::is_none")]
     variant_stats: Option<Vec<VariantStats>>,
+    #[serde(rename = "localSend", skip_serializing_if = "Option::is_none")]
+    local_send: Option<serde_json::Value>,
 }
 
 // Per-variant engagement counters for an A/B test.
@@ -339,6 +341,7 @@ pub struct IssueRecord {
     pub template_id: Option<String>,
     pub content_type: Option<String>,
     pub ab_test: Option<serde_json::Value>,
+    pub local_send: Option<serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -1460,6 +1463,11 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
         .map(|value| validate_and_normalize_ab_test(&value))
         .transpose()?;
 
+    let local_send = extract_local_send(event.body().as_ref())?
+        .map(|value| validate_and_normalize_local_send(&value))
+        .transpose()?
+        .flatten();
+
     if let Some(template_id) = body.template_id.as_deref() {
         validate_template_exists(&tenant_id, template_id).await?;
     }
@@ -1531,6 +1539,7 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
         &body,
         normalized_scheduled_at.clone(),
         ab_test,
+        local_send,
     )
     .await?;
 
@@ -1581,7 +1590,22 @@ async fn handle_update_issue(
     // An explicit `abTest: null` is a request to clear a previously-saved test.
     let clear_ab_test = ab_test.is_none() && ab_test_explicitly_cleared(event.body().as_ref());
 
-    validate_update_request(&body, ab_test.is_some() || clear_ab_test)?;
+    let raw_local_send = extract_local_send(event.body().as_ref())?;
+    let local_send_provided = raw_local_send.is_some();
+    let local_send = raw_local_send
+        .map(|value| validate_and_normalize_local_send(&value))
+        .transpose()?
+        .flatten();
+
+    // Clear on an explicit `localSend: null` OR a provided-but-disabled config
+    // ({ enabled: false }) — both mean "no local send for this issue".
+    let clear_local_send = local_send.is_none()
+        && (local_send_provided || local_send_explicitly_cleared(event.body().as_ref()));
+
+    validate_update_request(
+        &body,
+        ab_test.is_some() || clear_ab_test || local_send.is_some() || clear_local_send,
+    )?;
 
     // A non-empty templateId must reference an existing template; an empty
     // templateId is a request to clear the selection (handled in the update).
@@ -1610,7 +1634,16 @@ async fn handle_update_issue(
 
     let is_publishing = body.status.as_deref() == Some("published");
 
-    let updated = update_issue_record(&tenant_id, &issue_id, &body, ab_test, clear_ab_test).await?;
+    let updated = update_issue_record(
+        &tenant_id,
+        &issue_id,
+        &body,
+        ab_test,
+        clear_ab_test,
+        local_send,
+        clear_local_send,
+    )
+    .await?;
 
     if is_publishing {
         let published_at = chrono::Utc::now().to_rfc3339();
@@ -1731,6 +1764,95 @@ fn ab_test_explicitly_cleared(raw_body: &[u8]) -> bool {
         .and_then(|value| value.get("abTest").cloned())
         .map(|ab_test| ab_test.is_null())
         .unwrap_or(false)
+}
+
+fn extract_local_send(raw_body: &[u8]) -> Result<Option<serde_json::Value>, AppError> {
+    if raw_body.is_empty() {
+        return Ok(None);
+    }
+    let value: serde_json::Value = serde_json::from_slice(raw_body)
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
+    match value.get("localSend") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(local_send) => Ok(Some(local_send.clone())),
+    }
+}
+
+/// Returns true when the request body explicitly sets `localSend` to null,
+/// which on update signals the caller wants the saved config cleared (distinct
+/// from omitting the field, which leaves it unchanged).
+fn local_send_explicitly_cleared(raw_body: &[u8]) -> bool {
+    if raw_body.is_empty() {
+        return false;
+    }
+    serde_json::from_slice::<serde_json::Value>(raw_body)
+        .ok()
+        .and_then(|value| value.get("localSend").cloned())
+        .map(|local_send| local_send.is_null())
+        .unwrap_or(false)
+}
+
+/// Loose IANA timezone name check: `Area/Location` segments (or `UTC`) built
+/// from letters, digits, `_`, `+`, `-`. The JS send pipeline re-validates with
+/// the Intl API at send time and falls back to a plain send when invalid, so
+/// this only needs to reject obvious garbage early.
+fn is_plausible_iana_time_zone(tz: &str) -> bool {
+    if tz == "UTC" {
+        return true;
+    }
+    if tz.is_empty() || tz.len() > 64 || !tz.contains('/') {
+        return false;
+    }
+    tz.split('/').all(|segment| {
+        !segment.is_empty()
+            && segment
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | '-'))
+    })
+}
+
+/// Validates a caller-supplied local-send config and returns the canonical
+/// object to persist: `{ enabled: true, defaultTimeZone: "<IANA zone>" }`.
+/// Returns Ok(None) when `enabled` is false — a disabled config is stored as
+/// no config at all.
+fn validate_and_normalize_local_send(
+    value: &serde_json::Value,
+) -> Result<Option<serde_json::Value>, AppError> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| AppError::BadRequest("localSend must be an object".to_string()))?;
+
+    let enabled = obj
+        .get("enabled")
+        .and_then(|v| v.as_bool())
+        .ok_or_else(|| AppError::BadRequest("localSend.enabled must be a boolean".to_string()))?;
+
+    if !enabled {
+        return Ok(None);
+    }
+
+    let default_time_zone = obj
+        .get("defaultTimeZone")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|tz| !tz.is_empty())
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "localSend.defaultTimeZone is required when localSend is enabled".to_string(),
+            )
+        })?;
+
+    if !is_plausible_iana_time_zone(default_time_zone) {
+        return Err(AppError::BadRequest(
+            "localSend.defaultTimeZone must be an IANA timezone name (e.g. \"America/New_York\")"
+                .to_string(),
+        ));
+    }
+
+    Ok(Some(serde_json::json!({
+        "enabled": true,
+        "defaultTimeZone": default_time_zone
+    })))
 }
 
 /// Validates a caller-supplied A/B test config and returns the canonical,
@@ -2340,6 +2462,15 @@ fn parse_issue_record(item: &HashMap<String, AttributeValue>) -> Result<IssueRec
         }
     });
 
+    // localSend is persisted as a JSON string (mirroring abTest).
+    let local_send = item.get("localSend").and_then(|v| {
+        if let Ok(s) = v.as_s() {
+            serde_json::from_str(s).ok()
+        } else {
+            None
+        }
+    });
+
     Ok(IssueRecord {
         pk,
         sk,
@@ -2357,6 +2488,7 @@ fn parse_issue_record(item: &HashMap<String, AttributeValue>) -> Result<IssueRec
         template_id,
         content_type,
         ab_test,
+        local_send,
     })
 }
 
@@ -3095,6 +3227,7 @@ async fn create_issue_record(
     body: &CreateIssueRequest,
     scheduled_at: Option<String>,
     ab_test: Option<serde_json::Value>,
+    local_send: Option<serde_json::Value>,
 ) -> Result<CreateIssueResponse, AppError> {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
@@ -3158,6 +3291,15 @@ async fn create_issue_record(
         item.insert("abTest".to_string(), AttributeValue::S(ab_test.to_string()));
     }
 
+    // localSend is persisted the same way; publish-issue reads it right before
+    // emitting the send event.
+    if let Some(local_send) = &local_send {
+        item.insert(
+            "localSend".to_string(),
+            AttributeValue::S(local_send.to_string()),
+        );
+    }
+
     ddb_client
         .put_item()
         .table_name(&table_name)
@@ -3184,6 +3326,8 @@ async fn update_issue_record(
     body: &UpdateIssueRequest,
     ab_test: Option<serde_json::Value>,
     clear_ab_test: bool,
+    local_send: Option<serde_json::Value>,
+    clear_local_send: bool,
 ) -> Result<GetIssueResponse, AppError> {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
@@ -3279,6 +3423,16 @@ async fn update_issue_record(
         // lifecycle control attribute.
         remove_expression_parts.push("abTest".to_string());
         remove_expression_parts.push("abTestStatus".to_string());
+    }
+
+    if let Some(local_send) = &local_send {
+        update_expression_parts.push("localSend = :local_send".to_string());
+        expression_attribute_values.insert(
+            ":local_send".to_string(),
+            AttributeValue::S(local_send.to_string()),
+        );
+    } else if clear_local_send {
+        remove_expression_parts.push("localSend".to_string());
     }
 
     let mut update_expression = update_expression_parts.join(", ");
@@ -3536,6 +3690,7 @@ fn build_issue_response(
         } else {
             Some(variant_stats)
         },
+        local_send: issue.local_send,
     }
 }
 
@@ -3588,6 +3743,94 @@ async fn get_variant_stats(tenant_id: &str, issue_id: &str) -> Vec<VariantStats>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Local-send config validation ────────────────────────────────────
+
+    #[test]
+    fn test_validate_local_send_normalizes_valid_config() {
+        let input = serde_json::json!({
+            "enabled": true,
+            "defaultTimeZone": " America/New_York ",
+            "extraneous": "dropped"
+        });
+        let normalized = validate_and_normalize_local_send(&input).unwrap().unwrap();
+        assert_eq!(
+            normalized,
+            serde_json::json!({ "enabled": true, "defaultTimeZone": "America/New_York" })
+        );
+    }
+
+    #[test]
+    fn test_validate_local_send_disabled_becomes_none() {
+        let input = serde_json::json!({ "enabled": false, "defaultTimeZone": "America/New_York" });
+        assert!(validate_and_normalize_local_send(&input).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_validate_local_send_requires_boolean_enabled() {
+        for input in [
+            serde_json::json!({ "defaultTimeZone": "America/New_York" }),
+            serde_json::json!({ "enabled": "yes", "defaultTimeZone": "America/New_York" }),
+            serde_json::json!("not-an-object"),
+        ] {
+            assert!(validate_and_normalize_local_send(&input).is_err());
+        }
+    }
+
+    #[test]
+    fn test_validate_local_send_requires_timezone_when_enabled() {
+        for input in [
+            serde_json::json!({ "enabled": true }),
+            serde_json::json!({ "enabled": true, "defaultTimeZone": "" }),
+            serde_json::json!({ "enabled": true, "defaultTimeZone": "  " }),
+            serde_json::json!({ "enabled": true, "defaultTimeZone": "Not A Zone" }),
+            serde_json::json!({ "enabled": true, "defaultTimeZone": "nozone" }),
+        ] {
+            assert!(
+                validate_and_normalize_local_send(&input).is_err(),
+                "{input}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_plausible_iana_time_zone() {
+        assert!(is_plausible_iana_time_zone("America/New_York"));
+        assert!(is_plausible_iana_time_zone("Europe/London"));
+        assert!(is_plausible_iana_time_zone(
+            "America/Argentina/Buenos_Aires"
+        ));
+        assert!(is_plausible_iana_time_zone("Etc/GMT+5"));
+        assert!(is_plausible_iana_time_zone("UTC"));
+        assert!(!is_plausible_iana_time_zone("EST"));
+        assert!(!is_plausible_iana_time_zone("America/New York"));
+        assert!(!is_plausible_iana_time_zone("/leading"));
+        assert!(!is_plausible_iana_time_zone("trailing/"));
+        assert!(!is_plausible_iana_time_zone(""));
+    }
+
+    #[test]
+    fn test_extract_local_send_absent_and_null() {
+        assert!(extract_local_send(br#"{"subject":"x"}"#).unwrap().is_none());
+        assert!(extract_local_send(br#"{"localSend":null}"#)
+            .unwrap()
+            .is_none());
+        assert!(extract_local_send(b"").unwrap().is_none());
+        let extracted = extract_local_send(br#"{"localSend":{"enabled":true}}"#)
+            .unwrap()
+            .unwrap();
+        assert_eq!(extracted, serde_json::json!({ "enabled": true }));
+    }
+
+    #[test]
+    fn test_local_send_explicitly_cleared() {
+        assert!(local_send_explicitly_cleared(br#"{"localSend":null}"#));
+        assert!(!local_send_explicitly_cleared(br#"{"subject":"x"}"#));
+        assert!(!local_send_explicitly_cleared(
+            br#"{"localSend":{"enabled":true}}"#
+        ));
+        assert!(!local_send_explicitly_cleared(b""));
+    }
 
     fn create_request(
         content: &str,
@@ -4407,6 +4650,7 @@ mod tests {
             template_id: None,
             content_type: None,
             ab_test: None,
+            local_send: None,
         };
 
         let stats = Some(IssueStats {
@@ -4452,6 +4696,7 @@ mod tests {
             template_id: None,
             content_type: None,
             ab_test: None,
+            local_send: None,
         };
 
         let response = build_issue_response(issue, None, None, Vec::new());
@@ -4714,6 +4959,7 @@ mod tests {
             template_id: None,
             content_type: None,
             ab_test: None,
+            local_send: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -4739,6 +4985,7 @@ mod tests {
             template_id: None,
             content_type: None,
             ab_test: None,
+            local_send: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -4765,6 +5012,7 @@ mod tests {
             template_id: None,
             content_type: None,
             ab_test: None,
+            local_send: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -4791,6 +5039,7 @@ mod tests {
             template_id: None,
             content_type: None,
             ab_test: None,
+            local_send: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -4816,6 +5065,7 @@ mod tests {
             template_id: None,
             content_type: None,
             ab_test: None,
+            local_send: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -4842,6 +5092,7 @@ mod tests {
             template_id: None,
             content_type: None,
             ab_test: None,
+            local_send: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -4868,6 +5119,7 @@ mod tests {
             template_id: None,
             content_type: None,
             ab_test: None,
+            local_send: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -5431,6 +5683,7 @@ mod tests {
             content_type: None,
             ab_test: None,
             variant_stats: None,
+            local_send: None,
         };
 
         let result = publish_event(tenant_id, event_type, &data).await;
@@ -5458,6 +5711,7 @@ mod tests {
             template_id: None,
             content_type: None,
             ab_test: None,
+            local_send: None,
         };
 
         let result = publish_event(tenant_id, event_type, &data).await;

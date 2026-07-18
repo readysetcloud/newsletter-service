@@ -52,18 +52,22 @@ export const listSubscribers = async (tenantId, options = {}) => {
 
     const response = await ddb.send(new QueryCommand(queryParams));
 
-    // Unmarshall items and extract subscriber data
-    const subscribers = (response.Items || []).map(item => {
-      const subscriber = unmarshall(item);
-      return {
+    // Unmarshall items and extract subscriber data. The segments feature stores
+    // its records (SEGMENT#, SEGMENT_NAME#, SEGMENT_JOB#, and member rows)
+    // under the same tenant partition with the sort key overloading `email`;
+    // those must never be treated as sendable subscribers.
+    const subscribers = (response.Items || [])
+      .map(item => unmarshall(item))
+      .filter(subscriber => subscriber.email && !subscriber.email.startsWith('SEGMENT'))
+      .map(subscriber => ({
         email: subscriber.email,
         firstName: subscriber.firstName || null,
         lastName: subscriber.lastName || null,
         addedAt: subscriber.addedAt,
         lastSentAt: subscriber.lastSentAt || null,
-        lastIssueSent: subscriber.lastIssueSent || null
-      };
-    });
+        lastIssueSent: subscriber.lastIssueSent || null,
+        timeZone: subscriber.timeZone || null
+      }));
 
     return {
       subscribers,

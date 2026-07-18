@@ -51,7 +51,37 @@ function isPublicIp(ip) {
   return !isPrivateIpv4(trimmed);
 }
 
-export async function lookupCountry(ipAddress) {
+let cityDbChecked = false;
+let cityDbReader = null;
+
+/**
+ * Lazily load the GeoLite2 City database if it is present in the layer.
+ * The City edition includes location.time_zone (IANA name), which the Country
+ * edition does not. Missing City DB is expected until the layer ships it, so
+ * absence is remembered without logging an error on every lookup.
+ */
+function getCityReader() {
+  if (!cityDbChecked) {
+    cityDbChecked = true;
+    try {
+      const buffer = readFileSync('/opt/GeoLite2-City.mmdb');
+      cityDbReader = new Reader(buffer);
+    } catch {
+      cityDbReader = null;
+    }
+  }
+  return cityDbReader;
+}
+
+/**
+ * Resolve an IP address to country and, when the City database is available,
+ * the IANA timezone. Falls back to the Country database (timeZone: null) when
+ * the City database is not deployed in the layer.
+ *
+ * @param {string} ipAddress
+ * @returns {Promise<{countryCode: string, countryName: string, timeZone: string|null}|null>}
+ */
+export async function lookupGeo(ipAddress) {
   if (!ipAddress || !isPublicIp(ipAddress)) {
     if (ipAddress && !isPublicIp(ipAddress)) {
       console.error('Geolocation lookup failed', { reason: 'private_ip' });
@@ -60,6 +90,20 @@ export async function lookupCountry(ipAddress) {
   }
 
   try {
+    const cityReader = getCityReader();
+    if (cityReader) {
+      const result = cityReader.get(ipAddress);
+      if (result?.country) {
+        return {
+          countryCode: result.country.iso_code,
+          countryName: result.country.names?.en || result.country.iso_code,
+          timeZone: result.location?.time_zone || null
+        };
+      }
+      // City DB present but no record for this IP — fall through to the
+      // Country DB, which has independent coverage.
+    }
+
     if (!dbReader) {
       const dbPath = '/opt/GeoLite2-Country.mmdb';
       try {
@@ -79,7 +123,8 @@ export async function lookupCountry(ipAddress) {
 
     return {
       countryCode: result.country.iso_code,
-      countryName: result.country.names?.en || result.country.iso_code
+      countryName: result.country.names?.en || result.country.iso_code,
+      timeZone: null
     };
   } catch (err) {
     if (err.message?.includes('invalid')) {
@@ -89,4 +134,14 @@ export async function lookupCountry(ipAddress) {
     }
     return null;
   }
+}
+
+/**
+ * Country-only lookup, kept for existing callers. Same result shape as before
+ * ({countryCode, countryName} or null).
+ */
+export async function lookupCountry(ipAddress) {
+  const geo = await lookupGeo(ipAddress);
+  if (!geo) return null;
+  return { countryCode: geo.countryCode, countryName: geo.countryName };
 }

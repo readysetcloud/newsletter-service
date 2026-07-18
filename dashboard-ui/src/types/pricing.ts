@@ -14,6 +14,20 @@ export interface Multiplier {
   smoothed: number;
 }
 
+export interface InterestCompositionTopic {
+  topic: string;
+  displayName: string;
+  confirmed: number;
+  confirmedPct: number;
+  engaged: number;
+  engagedPct: number;
+}
+
+export interface InterestComposition {
+  totalSubscribers: number;
+  topics: InterestCompositionTopic[];
+}
+
 export interface PricingRecord {
   recommendedPrice: number;
   baselinePrice: number;
@@ -31,6 +45,7 @@ export interface PricingRecord {
   smoothingApplied: boolean;
   questionnaireVersion?: string;
   questionnaireResponses?: Record<string, unknown>;
+  interestComposition?: InterestComposition;
 }
 
 export interface PricingData {

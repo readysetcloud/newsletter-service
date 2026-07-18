@@ -7,7 +7,7 @@ import {
   Tooltip as RechartsTooltip,
   ResponsiveContainer,
 } from 'recharts';
-import { RefreshCw, DollarSign, ChevronDown, AlertCircle, Info, FileDown } from 'lucide-react';
+import { RefreshCw, DollarSign, ChevronDown, AlertCircle, Info, FileDown, Users } from 'lucide-react';
 import { reportService } from '../../services/reportService';
 import { Card, CardContent } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -17,6 +17,7 @@ import type {
   PricingData,
   PricingHistoryData,
   PricingRecord,
+  InterestComposition,
   Questionnaire,
   QuestionnaireQuestion,
 } from '../../types';
@@ -571,6 +572,11 @@ export const SponsorshipPricingPage: React.FC = () => {
               </Button>
             </div>
 
+            {/* ---- Audience Interest Composition ---- */}
+            {current.interestComposition && (
+              <AudienceInterestCard composition={current.interestComposition} />
+            )}
+
             {/* ---- Trend chart (Req 3.1–3.5) ---- */}
             {showChart ? (
               <Card padding="md">
@@ -687,6 +693,56 @@ const PriceCard: React.FC<{
     </CardContent>
   </Card>
 );
+
+// ---------------------------------------------------------------------------
+// Audience Interest Composition card
+// ---------------------------------------------------------------------------
+const MAX_INTEREST_TOPICS_SHOWN = 5;
+
+const AudienceInterestCard: React.FC<{ composition: InterestComposition }> = ({ composition }) => {
+  const topTopics = composition.topics.slice(0, MAX_INTEREST_TOPICS_SHOWN);
+  if (topTopics.length === 0) return null;
+
+  return (
+    <Card padding="md">
+      <CardContent>
+        <div className="flex items-center gap-2 mb-1">
+          <Users className="h-5 w-5 text-muted-foreground" aria-hidden="true" />
+          <h2 className="text-lg font-semibold text-foreground">Audience Interest Composition</h2>
+        </div>
+        <p className="text-sm text-muted-foreground mb-4">
+          Share of {composition.totalSubscribers.toLocaleString('en-US')} subscribers with confirmed
+          interest in each topic, based on link-click behavior.
+        </p>
+        <div className="space-y-3">
+          {topTopics.map((topic) => (
+            <div key={topic.topic}>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-sm font-medium text-foreground">{topic.displayName}</span>
+                <span className="text-sm text-muted-foreground" aria-label={`${topic.displayName}: ${topic.confirmedPct}% confirmed interest`}>
+                  {topic.confirmedPct.toFixed(1)}%
+                </span>
+              </div>
+              <div
+                className="w-full bg-muted rounded-full h-2"
+                role="progressbar"
+                aria-valuenow={topic.confirmedPct}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label={`${topic.displayName} confirmed interest`}
+              >
+                <div
+                  className="h-2 rounded-full bg-primary-500 transition-all duration-300"
+                  style={{ width: `${Math.min(topic.confirmedPct, 100)}%` }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
 
 // ---------------------------------------------------------------------------
 // Empty state sub-component

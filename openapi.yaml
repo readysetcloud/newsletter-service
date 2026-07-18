@@ -3543,6 +3543,8 @@ components:
           $ref: "#/components/schemas/AbTest"
         localSend:
           $ref: "#/components/schemas/LocalSend"
+        contentAssembly:
+          $ref: "#/components/schemas/ContentAssembly"
 
     CreateIssueResponse:
       type: object
@@ -3659,6 +3661,8 @@ components:
             $ref: "#/components/schemas/VariantStats"
         localSend:
           $ref: "#/components/schemas/LocalSend"
+        contentAssembly:
+          $ref: "#/components/schemas/ContentAssembly"
 
     UpdateIssueRequest:
       type: object
@@ -3731,6 +3735,8 @@ components:
             delivers at each subscriber's personal peak open hour (from their
             open-hour histogram); subscribers without enough recorded opens
             fall back to the default send time.
+        contentAssembly:
+          $ref: "#/components/schemas/ContentAssembly"
 
     IssueStats:
       type: object
@@ -4723,6 +4729,24 @@ components:
         complaints:
           type: integer
           description: Number of spam complaints for this variant
+
+    ContentAssembly:
+      type: object
+      required:
+        - enabled
+      description: >-
+        Interest-aware issue assembly configuration. When enabled, the
+        reorderable content sections of the rendered email are re-ordered per
+        recipient so each subscriber's highest-interest sections come first
+        (same content for everyone, only the order changes). Requires
+        topic-classified links; recipients without interest data receive the
+        original order. Ignored while an A/B test is active and for
+        JSON-template issues. Set to null on update to clear a previously
+        saved configuration.
+      properties:
+        enabled:
+          type: boolean
+          description: Whether personalized section ordering is enabled for this issue
 
     DeclareWinnerRequest:
       type: object

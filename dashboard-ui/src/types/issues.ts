@@ -43,6 +43,7 @@ export interface Issue extends IssueListItem {
   abTest?: AbTest;
   variantStats?: VariantStats[];
   localSend?: LocalSendConfig;
+  contentAssembly?: ContentAssembly;
 }
 
 /**
@@ -61,6 +62,20 @@ export interface LocalSendConfig {
    * for subscribers without enough recorded opens.
    */
   mode?: 'timezone' | 'peak-hour';
+}
+
+// ---------------------------------------------------------------------------
+// Interest-aware assembly (personalized section order)
+// ---------------------------------------------------------------------------
+
+/**
+ * Interest-aware issue assembly configuration. When enabled, the reorderable
+ * content sections of the rendered email are re-ordered per recipient so each
+ * subscriber's highest-interest sections come first. Same content pool for
+ * everyone - only the order changes.
+ */
+export interface ContentAssembly {
+  enabled: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -217,6 +232,7 @@ export interface CreateIssueRequest {
   contentType?: IssueContentType;
   abTest?: AbTest;
   localSend?: LocalSendConfig;
+  contentAssembly?: ContentAssembly;
 }
 
 export interface UpdateIssueRequest {
@@ -231,6 +247,8 @@ export interface UpdateIssueRequest {
   abTest?: AbTest | null;
   /** An explicit `null` clears a previously-saved local-send config. */
   localSend?: LocalSendConfig | null;
+  /** An explicit `null` clears a previously-saved content assembly config. */
+  contentAssembly?: ContentAssembly | null;
 }
 
 export interface ListIssuesParams {

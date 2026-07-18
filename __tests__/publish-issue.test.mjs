@@ -262,4 +262,90 @@ describe('publish-issue', () => {
       expect(getSentHtml()).toBeTruthy();
     });
   });
+
+  describe('send config (contentAssembly)', () => {
+    const getSentDetail = () => {
+      const call = eventBridgeSend.mock.calls.find(([cmd]) => cmd.__type === 'PutEvents');
+      expect(call).toBeDefined();
+      return JSON.parse(call[0].Entries[0].Detail);
+    };
+
+    // Reads of the issue record (sk 'newsletter') return the given attributes;
+    // every other DynamoDB call resolves empty.
+    const mockIssueRecord = (attributes) => {
+      ddbSend.mockImplementation(async (cmd) => {
+        if (cmd.__type === 'GetItem' && cmd.Key?.sk?.S === 'newsletter') {
+          return { Item: marshall(attributes) };
+        }
+        return {};
+      });
+    };
+
+    const publishEvent = {
+      data: sampleData,
+      subject: 'Subject',
+      tenantId: 'tenant-1',
+      sendAtDate: 'now'
+    };
+
+    it('passes contentAssembly on the send event when enabled on the issue record', async () => {
+      mockIssueRecord({ contentAssembly: JSON.stringify({ enabled: true }) });
+
+      const result = await handler(publishEvent);
+
+      expect(result).toEqual({ success: true });
+      const detail = getSentDetail();
+      expect(detail.contentAssembly).toEqual({ enabled: true });
+      expect(detail.abTest).toBeUndefined();
+      // The config read projects both send configs in one call.
+      const configReads = ddbSend.mock.calls.filter(
+        ([cmd]) => cmd.__type === 'GetItem' && cmd.ProjectionExpression === 'abTest, localSend, contentAssembly'
+      );
+      expect(configReads).toHaveLength(1);
+    });
+
+    it('omits contentAssembly when the issue record has none (or it is disabled)', async () => {
+      mockIssueRecord({ contentAssembly: JSON.stringify({ enabled: false }) });
+
+      await handler(publishEvent);
+
+      expect(getSentDetail().contentAssembly).toBeUndefined();
+    });
+
+    it('warns and disables assembly when an A/B test is active', async () => {
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      mockIssueRecord({
+        contentAssembly: JSON.stringify({ enabled: true }),
+        abTest: JSON.stringify({
+          dimension: 'subject',
+          variants: [
+            { variantId: 'a', subject: 'A' },
+            { variantId: 'b', subject: 'B' }
+          ]
+        })
+      });
+
+      await handler(publishEvent);
+
+      const detail = getSentDetail();
+      expect(detail.abTest).toBeDefined();
+      expect(detail.contentAssembly).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('[ASSEMBLY]'));
+      warnSpy.mockRestore();
+    });
+
+    it('fails open (no contentAssembly on the event) when the config read throws', async () => {
+      ddbSend.mockImplementation(async (cmd) => {
+        if (cmd.__type === 'GetItem' && cmd.Key?.sk?.S === 'newsletter') {
+          throw new Error('DynamoDB unavailable');
+        }
+        return {};
+      });
+
+      const result = await handler(publishEvent);
+
+      expect(result).toEqual({ success: true });
+      expect(getSentDetail().contentAssembly).toBeUndefined();
+    });
+  });
 });

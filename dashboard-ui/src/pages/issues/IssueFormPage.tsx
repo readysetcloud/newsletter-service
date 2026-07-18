@@ -118,6 +118,8 @@ export const IssueFormPage: React.FC = () => {
       ? browserZone
       : 'America/New_York';
   });
+  // Interest-aware assembly: personalized section order (contentAssembly).
+  const [personalizedOrder, setPersonalizedOrder] = useState(false);
 
   const [errors, setErrors] = useState<FormErrors>({});
   const [isDirty, setIsDirty] = useState(false);
@@ -169,6 +171,8 @@ export const IssueFormPage: React.FC = () => {
         } else {
           setLocalSendEnabled(false);
         }
+        // Hydrate the personalized section order flag.
+        setPersonalizedOrder(issue.contentAssembly?.enabled === true);
 
         // Disable form for published/scheduled issues
         if (issue.status !== 'draft') {
@@ -411,6 +415,14 @@ export const IssueFormPage: React.FC = () => {
           updateData.localSend = null;
         }
 
+        if (personalizedOrder && !abTest) {
+          updateData.contentAssembly = { enabled: true };
+        } else if (existingIssue?.contentAssembly?.enabled) {
+          // Turned off after being saved — an explicit null clears the stored
+          // config (omitting it leaves it in place).
+          updateData.contentAssembly = null;
+        }
+
         const response = await issuesService.updateIssue(id, updateData);
 
         if (response.success) {
@@ -477,6 +489,10 @@ export const IssueFormPage: React.FC = () => {
           createData.localSend = { enabled: true, defaultTimeZone: localSendTimeZone, mode: localSendMode };
         }
 
+        if (personalizedOrder && !abTest) {
+          createData.contentAssembly = { enabled: true };
+        }
+
         const response = await issuesService.createIssue(createData);
 
         if (response.success && response.data) {
@@ -523,7 +539,7 @@ export const IssueFormPage: React.FC = () => {
     } finally {
       setIsSubmitting(false);
     }
-  }, [validateForm, isEditMode, id, formData, abTest, localSendEnabled, localSendTimeZone, localSendMode, existingIssue, navigate, addToast]);
+  }, [validateForm, isEditMode, id, formData, abTest, localSendEnabled, localSendTimeZone, localSendMode, personalizedOrder, existingIssue, navigate, addToast]);
 
   // Handle cancel with unsaved changes confirmation
   const handleCancel = useCallback(() => {
@@ -829,6 +845,34 @@ export const IssueFormPage: React.FC = () => {
                   </span>
                 </button>
               </div>
+            </div>
+
+            {/* Personalized Section Order (interest-aware assembly) */}
+            <div className="rounded-lg border border-border p-3 sm:p-4">
+              <label htmlFor="personalized-order" className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  id="personalized-order"
+                  checked={personalizedOrder}
+                  onChange={(e) => {
+                    setPersonalizedOrder(e.target.checked);
+                    setIsDirty(true);
+                  }}
+                  disabled={isFormDisabled}
+                  className="mt-0.5 h-4 w-4 rounded border-border text-primary-600 focus:ring-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                  aria-describedby="personalized-order-description"
+                />
+                <span className="block text-sm font-medium text-foreground">
+                  Personalized section order
+                  <span
+                    id="personalized-order-description"
+                    className="block text-xs font-normal text-muted-foreground"
+                  >
+                    Readers see the sections matching their interests first. Requires
+                    topic-classified links; readers without interest data get the original order.
+                  </span>
+                </span>
+              </label>
             </div>
 
             {/* Template Picker */}

@@ -27,11 +27,11 @@ export const handler = async (state) => {
       const publishedAt = new Date().toISOString();
       await setupIssueStats(tenant, state.data.metadata.number, state.subject, publishedAt);
 
-      // A/B and local-send configs are persisted on the issue record by the
-      // API. Reading them here (rather than threading them through the state
-      // machine) keeps every state machine entry point unchanged and works for
-      // plain issues by default.
-      const { abTest, localSend } = await getIssueSendConfig(state.tenantId, state.data.metadata.number);
+      // Send configs (abTest, localSend, contentAssembly) are persisted on the
+      // issue record by the API. Reading them here (rather than threading them
+      // through the state machine) keeps every state machine entry point
+      // unchanged and works for unconfigured issues by default.
+      const { abTest, localSend, contentAssembly } = await getIssueSendConfig(state.tenantId, state.data.metadata.number);
 
       const activeAbTest = (abTest?.dimension === 'subject' || abTest?.dimension === 'sendTime') ? abTest : undefined;
 
@@ -49,6 +49,17 @@ export const handler = async (state) => {
         }
       }
 
+      // Interest-aware assembly and A/B testing are mutually exclusive: for a
+      // measurable test, every recipient of a variant must receive identical
+      // content, so a per-recipient section order would poison the results.
+      // Assembly DOES compose with local send (order is personalized within
+      // each timezone/peak-hour group send).
+      let assemblyEnabled = contentAssembly?.enabled === true;
+      if (assemblyEnabled && activeAbTest) {
+        console.warn('[ASSEMBLY] Skipping personalized section order - an A/B test is active for this issue');
+        assemblyEnabled = false;
+      }
+
       await sendEmail({
         subject: state.subject,
         html,
@@ -57,7 +68,8 @@ export const handler = async (state) => {
         referenceNumber: `${tenant.pk}_${state.data.metadata.number}`,
         tenantId: state.tenantId,
         abTest: activeAbTest,
-        localSend: activeLocalSend
+        localSend: activeLocalSend,
+        contentAssembly: assemblyEnabled ? { enabled: true } : undefined
       });
 
       await publishIssueEvent(
@@ -139,22 +151,15 @@ const getTemplateContent = async (tenantId, templateId) => {
 };
 
 /**
- * Loads the persisted A/B test configuration for an issue, if any.
- * The API stores `abTest` and `localSend` as JSON strings on the issue record
- * (sk "newsletter"), mirroring how `metadata` is persisted.
+ * Loads the persisted send-time configurations for an issue, if any.
+ * The API stores `abTest`, `localSend`, and `contentAssembly` as JSON strings
+ * on the issue record (sk "newsletter"), mirroring how `metadata` is persisted.
  * @param {string} tenantId - Tenant identifier.
  * @param {number|string} issueNumber - Issue number.
- * @returns {Promise<{abTest: Object|null, localSend: Object|null}>} Parsed configs (null when not set/invalid).
+ * @returns {Promise<{abTest: Object|null, localSend: Object|null, contentAssembly: Object|null}>} Parsed configs (null when not set/invalid).
  */
 const getIssueSendConfig = async (tenantId, issueNumber) => {
-  const parseJsonAttribute = (value) => {
-    if (!value) return null;
-    try {
-      return typeof value === 'string' ? JSON.parse(value) : value;
-    } catch {
-      return null;
-    }
-  };
+  const config = { abTest: null, localSend: null, contentAssembly: null };
 
   try {
     const result = await ddb.send(new GetItemCommand({
@@ -163,21 +168,29 @@ const getIssueSendConfig = async (tenantId, issueNumber) => {
         pk: `${tenantId}#${issueNumber}`,
         sk: 'newsletter'
       }),
-      ProjectionExpression: 'abTest, localSend'
+      ProjectionExpression: 'abTest, localSend, contentAssembly'
     }));
 
     if (!result.Item) {
-      return { abTest: null, localSend: null };
+      return config;
     }
 
     const record = unmarshall(result.Item);
-    return {
-      abTest: parseJsonAttribute(record.abTest),
-      localSend: parseJsonAttribute(record.localSend)
-    };
+    for (const field of ['abTest', 'localSend', 'contentAssembly']) {
+      if (!record[field]) {
+        continue;
+      }
+      try {
+        config[field] = typeof record[field] === 'string' ? JSON.parse(record[field]) : record[field];
+      } catch (err) {
+        console.error(`Failed to parse ${field} config for issue`, { tenantId, issueNumber, error: err.message });
+      }
+    }
+
+    return config;
   } catch (err) {
     console.error('Failed to load send config for issue', { tenantId, issueNumber, error: err.message });
-    return { abTest: null, localSend: null };
+    return config;
   }
 };
 
@@ -209,6 +222,7 @@ const getSnippets = async (tenantId) => {
  * @param {string} [params.to.list] - SES list name for bulk sending
  * @param {string} [params.sendAt] - ISO date string for scheduled sending
  * @param {Object} [params.abTest] - Optional A/B test configuration (variants, testFraction, evaluateAfterMinutes, ...)
+ * @param {Object} [params.contentAssembly] - Optional interest-aware assembly flag ({ enabled: true })
  */
 const sendEmail = async (params) => {
   await eventBridge.send(new PutEventsCommand({
@@ -226,6 +240,7 @@ const sendEmail = async (params) => {
         ...params.referenceNumber && { referenceNumber: params.referenceNumber },
         ...params.tenantId && { tenantId: params.tenantId },
         ...params.abTest && { abTest: params.abTest },
+        ...params.contentAssembly && { contentAssembly: params.contentAssembly },
         replacements: {
           emailAddress: "__EMAIL__",
           emailAddressHash: "__EMAIL_HASH__"

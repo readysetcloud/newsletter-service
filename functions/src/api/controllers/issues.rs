@@ -173,6 +173,8 @@ pub struct GetIssueResponse {
     variant_stats: Option<Vec<VariantStats>>,
     #[serde(rename = "localSend", skip_serializing_if = "Option::is_none")]
     local_send: Option<serde_json::Value>,
+    #[serde(rename = "contentAssembly", skip_serializing_if = "Option::is_none")]
+    content_assembly: Option<serde_json::Value>,
 }
 
 // Per-variant engagement counters for an A/B test.
@@ -342,6 +344,7 @@ pub struct IssueRecord {
     pub content_type: Option<String>,
     pub ab_test: Option<serde_json::Value>,
     pub local_send: Option<serde_json::Value>,
+    pub content_assembly: Option<serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -1467,6 +1470,9 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
         .map(|value| validate_and_normalize_local_send(&value))
         .transpose()?
         .flatten();
+    let content_assembly = extract_content_assembly(event.body().as_ref())?
+        .map(|value| validate_and_normalize_content_assembly(&value))
+        .transpose()?;
 
     if let Some(template_id) = body.template_id.as_deref() {
         validate_template_exists(&tenant_id, template_id).await?;
@@ -1540,6 +1546,7 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
         normalized_scheduled_at.clone(),
         ab_test,
         local_send,
+        content_assembly,
     )
     .await?;
 
@@ -1602,9 +1609,22 @@ async fn handle_update_issue(
     let clear_local_send = local_send.is_none()
         && (local_send_provided || local_send_explicitly_cleared(event.body().as_ref()));
 
+    let content_assembly = extract_content_assembly(event.body().as_ref())?
+        .map(|value| validate_and_normalize_content_assembly(&value))
+        .transpose()?;
+
+    // An explicit `contentAssembly: null` clears a previously-saved config.
+    let clear_content_assembly =
+        content_assembly.is_none() && content_assembly_explicitly_cleared(event.body().as_ref());
+
     validate_update_request(
         &body,
-        ab_test.is_some() || clear_ab_test || local_send.is_some() || clear_local_send,
+        ab_test.is_some()
+            || clear_ab_test
+            || local_send.is_some()
+            || clear_local_send
+            || content_assembly.is_some()
+            || clear_content_assembly,
     )?;
 
     // A non-empty templateId must reference an existing template; an empty
@@ -1642,6 +1662,8 @@ async fn handle_update_issue(
         clear_ab_test,
         local_send,
         clear_local_send,
+        content_assembly,
+        clear_content_assembly,
     )
     .await?;
 
@@ -1792,6 +1814,35 @@ fn local_send_explicitly_cleared(raw_body: &[u8]) -> bool {
         .unwrap_or(false)
 }
 
+/// Extracts the optional `contentAssembly` object from the raw request body.
+/// Mirrors extract_ab_test: kept out of the typed request structs so existing
+/// call sites stay untouched; serde ignores the unknown field on typed parses.
+fn extract_content_assembly(raw_body: &[u8]) -> Result<Option<serde_json::Value>, AppError> {
+    if raw_body.is_empty() {
+        return Ok(None);
+    }
+    let value: serde_json::Value = serde_json::from_slice(raw_body)
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
+    match value.get("contentAssembly") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(content_assembly) => Ok(Some(content_assembly.clone())),
+    }
+}
+
+/// Returns true when the request body explicitly sets `contentAssembly` to
+/// null, which on update signals the caller wants the previously-saved config
+/// cleared (distinct from omitting the field, which leaves it unchanged).
+fn content_assembly_explicitly_cleared(raw_body: &[u8]) -> bool {
+    if raw_body.is_empty() {
+        return false;
+    }
+    serde_json::from_slice::<serde_json::Value>(raw_body)
+        .ok()
+        .and_then(|value| value.get("contentAssembly").cloned())
+        .map(|content_assembly| content_assembly.is_null())
+        .unwrap_or(false)
+}
+
 /// Loose IANA timezone name check: `Area/Location` segments (or `UTC`) built
 /// from letters, digits, `_`, `+`, `-`. The JS send pipeline re-validates with
 /// the Intl API at send time and falls back to a plain send when invalid, so
@@ -1868,6 +1919,27 @@ fn validate_and_normalize_local_send(
         "defaultTimeZone": default_time_zone,
         "mode": mode
     })))
+}
+
+/// Validates a caller-supplied contentAssembly config (interest-aware issue
+/// assembly) and returns the canonical object to persist. V1 supports a single
+/// field: a required boolean `enabled`; unknown fields are dropped.
+fn validate_and_normalize_content_assembly(
+    value: &serde_json::Value,
+) -> Result<serde_json::Value, AppError> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| AppError::BadRequest("contentAssembly must be an object".to_string()))?;
+
+    let enabled = obj
+        .get("enabled")
+        .ok_or_else(|| AppError::BadRequest("contentAssembly.enabled is required".to_string()))?
+        .as_bool()
+        .ok_or_else(|| {
+            AppError::BadRequest("contentAssembly.enabled must be a boolean".to_string())
+        })?;
+
+    Ok(serde_json::json!({ "enabled": enabled }))
 }
 
 /// Validates a caller-supplied A/B test config and returns the canonical,
@@ -2486,6 +2558,15 @@ fn parse_issue_record(item: &HashMap<String, AttributeValue>) -> Result<IssueRec
         }
     });
 
+    // contentAssembly is persisted as a JSON string (mirroring abTest).
+    let content_assembly = item.get("contentAssembly").and_then(|v| {
+        if let Ok(s) = v.as_s() {
+            serde_json::from_str(s).ok()
+        } else {
+            None
+        }
+    });
+
     Ok(IssueRecord {
         pk,
         sk,
@@ -2504,6 +2585,7 @@ fn parse_issue_record(item: &HashMap<String, AttributeValue>) -> Result<IssueRec
         content_type,
         ab_test,
         local_send,
+        content_assembly,
     })
 }
 
@@ -3243,6 +3325,7 @@ async fn create_issue_record(
     scheduled_at: Option<String>,
     ab_test: Option<serde_json::Value>,
     local_send: Option<serde_json::Value>,
+    content_assembly: Option<serde_json::Value>,
 ) -> Result<CreateIssueResponse, AppError> {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
@@ -3315,6 +3398,15 @@ async fn create_issue_record(
         );
     }
 
+    // contentAssembly is persisted as a JSON string (mirroring abTest) so the
+    // publish pipeline and GET endpoint can read it back without a typed schema.
+    if let Some(content_assembly) = &content_assembly {
+        item.insert(
+            "contentAssembly".to_string(),
+            AttributeValue::S(content_assembly.to_string()),
+        );
+    }
+
     ddb_client
         .put_item()
         .table_name(&table_name)
@@ -3343,6 +3435,8 @@ async fn update_issue_record(
     clear_ab_test: bool,
     local_send: Option<serde_json::Value>,
     clear_local_send: bool,
+    content_assembly: Option<serde_json::Value>,
+    clear_content_assembly: bool,
 ) -> Result<GetIssueResponse, AppError> {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
@@ -3448,6 +3542,16 @@ async fn update_issue_record(
         );
     } else if clear_local_send {
         remove_expression_parts.push("localSend".to_string());
+    }
+
+    if let Some(content_assembly) = &content_assembly {
+        update_expression_parts.push("contentAssembly = :content_assembly".to_string());
+        expression_attribute_values.insert(
+            ":content_assembly".to_string(),
+            AttributeValue::S(content_assembly.to_string()),
+        );
+    } else if clear_content_assembly {
+        remove_expression_parts.push("contentAssembly".to_string());
     }
 
     let mut update_expression = update_expression_parts.join(", ");
@@ -3706,6 +3810,7 @@ fn build_issue_response(
             Some(variant_stats)
         },
         local_send: issue.local_send,
+        content_assembly: issue.content_assembly,
     }
 }
 
@@ -4139,6 +4244,67 @@ mod tests {
         assert!(!ab_test_explicitly_cleared(
             b"{\"abTest\":{\"dimension\":\"subject\"}}"
         ));
+    }
+
+    #[test]
+    fn test_extract_content_assembly_absent_and_present() {
+        assert!(extract_content_assembly(b"{\"subject\":\"x\"}")
+            .unwrap()
+            .is_none());
+        assert!(extract_content_assembly(b"{\"contentAssembly\":null}")
+            .unwrap()
+            .is_none());
+        assert!(extract_content_assembly(b"").unwrap().is_none());
+        let present =
+            extract_content_assembly(b"{\"contentAssembly\":{\"enabled\":true}}").unwrap();
+        assert!(present.is_some());
+    }
+
+    #[test]
+    fn test_content_assembly_explicitly_cleared() {
+        // Explicit null => clear requested.
+        assert!(content_assembly_explicitly_cleared(
+            b"{\"contentAssembly\":null}"
+        ));
+        // Omitted, empty, or a real object => not a clear.
+        assert!(!content_assembly_explicitly_cleared(b"{\"subject\":\"x\"}"));
+        assert!(!content_assembly_explicitly_cleared(b""));
+        assert!(!content_assembly_explicitly_cleared(
+            b"{\"contentAssembly\":{\"enabled\":true}}"
+        ));
+    }
+
+    #[test]
+    fn test_validate_content_assembly_normalizes_to_enabled_only() {
+        let normalized = validate_and_normalize_content_assembly(&serde_json::json!({
+            "enabled": true,
+            "somethingElse": "dropped"
+        }))
+        .expect("valid config should normalize");
+        assert_eq!(normalized, serde_json::json!({ "enabled": true }));
+
+        let disabled =
+            validate_and_normalize_content_assembly(&serde_json::json!({ "enabled": false }))
+                .expect("disabled config is valid");
+        assert_eq!(disabled, serde_json::json!({ "enabled": false }));
+    }
+
+    #[test]
+    fn test_validate_content_assembly_rejects_invalid_shapes() {
+        // Not an object.
+        assert!(validate_and_normalize_content_assembly(&serde_json::json!(true)).is_err());
+        assert!(validate_and_normalize_content_assembly(&serde_json::json!("enabled")).is_err());
+        assert!(validate_and_normalize_content_assembly(&serde_json::json!([1, 2])).is_err());
+        // Missing enabled.
+        assert!(validate_and_normalize_content_assembly(&serde_json::json!({})).is_err());
+        // enabled is not a boolean.
+        assert!(
+            validate_and_normalize_content_assembly(&serde_json::json!({ "enabled": "yes" }))
+                .is_err()
+        );
+        assert!(
+            validate_and_normalize_content_assembly(&serde_json::json!({ "enabled": 1 })).is_err()
+        );
     }
 
     fn active_ab_item(
@@ -4728,6 +4894,7 @@ mod tests {
             content_type: None,
             ab_test: None,
             local_send: None,
+            content_assembly: None,
         };
 
         let stats = Some(IssueStats {
@@ -4774,6 +4941,7 @@ mod tests {
             content_type: None,
             ab_test: None,
             local_send: None,
+            content_assembly: None,
         };
 
         let response = build_issue_response(issue, None, None, Vec::new());
@@ -5037,6 +5205,7 @@ mod tests {
             content_type: None,
             ab_test: None,
             local_send: None,
+            content_assembly: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -5063,6 +5232,7 @@ mod tests {
             content_type: None,
             ab_test: None,
             local_send: None,
+            content_assembly: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -5090,6 +5260,7 @@ mod tests {
             content_type: None,
             ab_test: None,
             local_send: None,
+            content_assembly: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -5117,6 +5288,7 @@ mod tests {
             content_type: None,
             ab_test: None,
             local_send: None,
+            content_assembly: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -5143,6 +5315,7 @@ mod tests {
             content_type: None,
             ab_test: None,
             local_send: None,
+            content_assembly: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -5170,6 +5343,7 @@ mod tests {
             content_type: None,
             ab_test: None,
             local_send: None,
+            content_assembly: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -5197,6 +5371,7 @@ mod tests {
             content_type: None,
             ab_test: None,
             local_send: None,
+            content_assembly: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -5759,6 +5934,7 @@ mod tests {
             template_id: None,
             content_type: None,
             ab_test: None,
+            content_assembly: None,
             variant_stats: None,
             local_send: None,
         };
@@ -5789,6 +5965,7 @@ mod tests {
             content_type: None,
             ab_test: None,
             local_send: None,
+            content_assembly: None,
         };
 
         let result = publish_event(tenant_id, event_type, &data).await;

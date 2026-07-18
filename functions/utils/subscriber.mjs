@@ -69,7 +69,12 @@ export const listSubscribers = async (tenantId, options = {}) => {
         timeZone: subscriber.timeZone || null,
         // Open-hour histogram (activity-timeline.mjs) — drives peak-hour local sends.
         openHours: subscriber.openHours ?? null,
-        openHourTotal: subscriber.openHourTotal ?? null
+        openHourTotal: subscriber.openHourTotal ?? null,
+        // Interest data used by the send path for interest-aware issue
+        // assembly (contentAssembly). Omitted when absent so consumers can
+        // cheaply distinguish "no data" subscribers.
+        ...(subscriber.interestScores && { interestScores: subscriber.interestScores }),
+        ...(subscriber.excludedTopics && { excludedTopics: subscriber.excludedTopics })
       }));
 
     return {

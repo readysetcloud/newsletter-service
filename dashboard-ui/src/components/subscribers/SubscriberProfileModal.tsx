@@ -1,5 +1,5 @@
-import React from 'react';
-import { Sparkles } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Sparkles, MailOpen, MousePointerClick } from 'lucide-react';
 import { Modal, ModalHeader, ModalTitle, ModalDescription, ModalContent } from '@/components/ui/Modal';
 import {
   getSortedInterestProfile,
@@ -7,7 +7,8 @@ import {
   AUTO_SEGMENT_THRESHOLD,
 } from '@/utils/interestProfile';
 import { getEngagementStatus } from '@/utils/engagement';
-import type { SubscriberListItem } from '@/types';
+import { subscriberService } from '@/services/subscriberService';
+import type { SubscriberListItem, SubscriberDetail, ActivityEntry } from '@/types';
 
 interface SubscriberProfileModalProps {
   subscriber: SubscriberListItem | null;
@@ -22,6 +23,48 @@ const formatDate = (dateString: string) =>
     day: 'numeric',
   });
 
+/** Shorten a URL to host + path for compact display; full URL goes in a title. */
+const shortenUrl = (url?: string): string => {
+  if (!url) return 'a link';
+  let display = url;
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname === '/' ? '' : parsed.pathname;
+    display = `${parsed.hostname}${path}`;
+  } catch {
+    // Not a parseable URL — fall back to the raw string.
+  }
+  return display.length > 40 ? `${display.slice(0, 39)}…` : display;
+};
+
+/** A short relative timestamp ("just now", "5h ago", "3d ago") with a date fallback. */
+const formatRelative = (iso: string): string => {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '';
+  const diffMs = Date.now() - then;
+  const hour = 60 * 60 * 1000;
+  const day = 24 * hour;
+  if (diffMs < hour) return 'just now';
+  if (diffMs < day) return `${Math.floor(diffMs / hour)}h ago`;
+  const days = Math.floor(diffMs / day);
+  if (days < 30) return `${days}d ago`;
+  return formatDate(iso);
+};
+
+const activityLabel = (entry: ActivityEntry): React.ReactNode => {
+  if (entry.type === 'open') {
+    return <>Opened issue #{entry.issue}</>;
+  }
+  return (
+    <>
+      Clicked{' '}
+      <span className="text-foreground" title={entry.url}>
+        {shortenUrl(entry.url)}
+      </span>
+    </>
+  );
+};
+
 /**
  * A subscriber's "tiny profile": engagement recency/depth plus the interest
  * topics accumulated from their link clicks, with the topics that have reached
@@ -32,6 +75,40 @@ export const SubscriberProfileModal: React.FC<SubscriberProfileModalProps> = ({
   latestIssueNumber,
   onClose,
 }) => {
+  const [detail, setDetail] = useState<SubscriberDetail | null>(null);
+  const [activityLoading, setActivityLoading] = useState(false);
+  const email = subscriber?.email;
+
+  // Fetch the full detail (activity timeline) when the modal opens for a
+  // subscriber. On failure we silently fall back to what the list already
+  // provided — the rest of the modal renders regardless.
+  useEffect(() => {
+    if (!email) return;
+
+    let cancelled = false;
+
+    async function loadDetail(subscriberEmail: string) {
+      setDetail(null);
+      setActivityLoading(true);
+      try {
+        const res = await subscriberService.getSubscriber(subscriberEmail);
+        if (!cancelled && res.success && res.data) {
+          setDetail(res.data);
+        }
+      } catch {
+        // Silent fallback — keep whatever the list already provided.
+      } finally {
+        if (!cancelled) setActivityLoading(false);
+      }
+    }
+
+    loadDetail(email);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [email]);
+
   if (!subscriber) return null;
 
   const name = [subscriber.firstName, subscriber.lastName].filter(Boolean).join(' ');
@@ -112,6 +189,39 @@ export const SubscriberProfileModal: React.FC<SubscriberProfileModalProps> = ({
                 Auto-segmented into{' '}
                 {autoSegmentTopics.map((entry) => entry.displayName).join(', ')} (score {'>='} {AUTO_SEGMENT_THRESHOLD}).
               </span>
+            </p>
+          )}
+        </section>
+
+        {/* Recent activity */}
+        <section>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+            Recent Activity
+          </h3>
+          {activityLoading ? (
+            <p className="text-sm text-muted-foreground">Loading activity…</p>
+          ) : detail && detail.recentActivity.length > 0 ? (
+            <ul className="space-y-1.5">
+              {detail.recentActivity.map((entry, index) => (
+                <li
+                  key={`${entry.type}-${entry.issue}-${entry.ts}-${index}`}
+                  className="flex items-center gap-2 text-sm text-muted-foreground"
+                >
+                  {entry.type === 'open' ? (
+                    <MailOpen className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" aria-label="Open" />
+                  ) : (
+                    <MousePointerClick className="w-3.5 h-3.5 text-primary-500 flex-shrink-0" aria-label="Click" />
+                  )}
+                  <span className="min-w-0 truncate">{activityLabel(entry)}</span>
+                  <span className="ml-auto text-xs text-muted-foreground whitespace-nowrap">
+                    {formatRelative(entry.ts)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              No recent activity recorded yet. Opens and clicks show up here as this subscriber engages with your issues.
             </p>
           )}
         </section>

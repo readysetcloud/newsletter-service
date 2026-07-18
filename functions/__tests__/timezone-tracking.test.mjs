@@ -65,96 +65,135 @@ beforeEach(async () => {
 describe('getConfirmedTimeZone', () => {
   it('returns null for short histories', () => {
     expect(getConfirmedTimeZone([])).toBeNull();
-    expect(getConfirmedTimeZone([{ issue: 1, tz: 'America/New_York' }])).toBeNull();
+    expect(getConfirmedTimeZone([{ issue: 1, tz: 'America/New_York', source: 'click' }])).toBeNull();
     expect(getConfirmedTimeZone([
-      { issue: 1, tz: 'America/New_York' },
-      { issue: 2, tz: 'America/New_York' }
+      { issue: 1, tz: 'America/New_York', source: 'click' },
+      { issue: 2, tz: 'America/New_York', source: 'click' }
     ])).toBeNull();
   });
 
-  it('confirms when the last three distinct issues agree', () => {
+  it('confirms when the last three distinct issues agree and include a click', () => {
     expect(getConfirmedTimeZone([
-      { issue: 1, tz: 'America/New_York' },
-      { issue: 2, tz: 'America/New_York' },
-      { issue: 3, tz: 'America/New_York' }
+      { issue: 1, tz: 'America/New_York', source: 'open' },
+      { issue: 2, tz: 'America/New_York', source: 'click' },
+      { issue: 3, tz: 'America/New_York', source: 'open' }
+    ])).toBe('America/New_York');
+  });
+
+  it('does not confirm an all-open streak (MPP-proxied opens are not trusted alone)', () => {
+    expect(getConfirmedTimeZone([
+      { issue: 1, tz: 'America/New_York', source: 'open' },
+      { issue: 2, tz: 'America/New_York', source: 'open' },
+      { issue: 3, tz: 'America/New_York', source: 'open' }
+    ])).toBeNull();
+  });
+
+  it('confirms a mixed streak with at least one click', () => {
+    expect(getConfirmedTimeZone([
+      { issue: 1, tz: 'America/New_York', source: 'open' },
+      { issue: 2, tz: 'America/New_York', source: 'open' },
+      { issue: 3, tz: 'America/New_York', source: 'click' }
     ])).toBe('America/New_York');
   });
 
   it('does not confirm when the recent streak is mixed', () => {
     expect(getConfirmedTimeZone([
-      { issue: 1, tz: 'America/New_York' },
-      { issue: 2, tz: 'Europe/London' },
-      { issue: 3, tz: 'America/New_York' }
+      { issue: 1, tz: 'America/New_York', source: 'click' },
+      { issue: 2, tz: 'Europe/London', source: 'click' },
+      { issue: 3, tz: 'America/New_York', source: 'click' }
     ])).toBeNull();
   });
 
   it('only considers the most recent streak, so older zones do not block a move', () => {
     expect(getConfirmedTimeZone([
-      { issue: 1, tz: 'America/New_York' },
-      { issue: 2, tz: 'America/New_York' },
-      { issue: 3, tz: 'Europe/London' },
-      { issue: 4, tz: 'Europe/London' },
-      { issue: 5, tz: 'Europe/London' }
+      { issue: 1, tz: 'America/New_York', source: 'click' },
+      { issue: 2, tz: 'America/New_York', source: 'click' },
+      { issue: 3, tz: 'Europe/London', source: 'open' },
+      { issue: 4, tz: 'Europe/London', source: 'click' },
+      { issue: 5, tz: 'Europe/London', source: 'open' }
     ])).toBe('Europe/London');
   });
 });
 
 describe('recordTimeZoneObservation', () => {
   it('does not confirm a timezone before three distinct issues agree', async () => {
-    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 1, 'America/New_York');
-    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 2, 'America/New_York');
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 1, 'America/New_York', 'click');
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 2, 'America/New_York', 'click');
 
     expect(item.tzHistory).toEqual([
-      { issue: 1, tz: 'America/New_York' },
-      { issue: 2, tz: 'America/New_York' }
+      { issue: 1, tz: 'America/New_York', source: 'click' },
+      { issue: 2, tz: 'America/New_York', source: 'click' }
     ]);
     expect(item.timeZone).toBeUndefined();
   });
 
-  it('confirms the timezone on the third agreeing issue', async () => {
-    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 1, 'America/New_York');
-    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 2, 'America/New_York');
-    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 3, 'America/New_York');
+  it('confirms the timezone on the third agreeing issue when a click is present', async () => {
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 1, 'America/New_York', 'open');
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 2, 'America/New_York', 'open');
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 3, 'America/New_York', 'click');
 
     expect(item.timeZone).toBe('America/New_York');
     expect(item.timeZoneUpdatedAt).toEqual(expect.any(String));
   });
 
-  it('ignores repeat observations for the same issue', async () => {
-    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 7, 'America/New_York');
-    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 7, 'Europe/London');
+  it('does not confirm a timezone from an all-open streak', async () => {
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 1, 'America/New_York', 'open');
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 2, 'America/New_York', 'open');
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 3, 'America/New_York', 'open');
 
-    expect(item.tzHistory).toEqual([{ issue: 7, tz: 'America/New_York' }]);
+    expect(item.tzHistory).toHaveLength(3);
+    expect(item.timeZone).toBeUndefined();
+  });
+
+  it('lets a click supersede an open for the same issue (click wins)', async () => {
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 7, 'America/New_York', 'open');
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 7, 'Europe/London', 'click');
+
+    expect(item.tzHistory).toEqual([{ issue: 7, tz: 'Europe/London', source: 'click' }]);
+  });
+
+  it('does not let an open replace an existing observation for the same issue', async () => {
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 7, 'America/New_York', 'click');
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 7, 'Europe/London', 'open');
+
+    expect(item.tzHistory).toEqual([{ issue: 7, tz: 'America/New_York', source: 'click' }]);
+  });
+
+  it('does not let a click replace an existing click for the same issue', async () => {
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 7, 'America/New_York', 'click');
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 7, 'Europe/London', 'click');
+
+    expect(item.tzHistory).toEqual([{ issue: 7, tz: 'America/New_York', source: 'click' }]);
   });
 
   it('re-confirms after a move once three new issues agree', async () => {
     for (const issue of [1, 2, 3]) {
-      await recordTimeZoneObservation('tenant-1', 'reader@example.com', issue, 'America/New_York');
+      await recordTimeZoneObservation('tenant-1', 'reader@example.com', issue, 'America/New_York', 'click');
     }
     expect(item.timeZone).toBe('America/New_York');
 
     // Subscriber moves: two London observations are not yet enough.
-    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 4, 'Europe/London');
-    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 5, 'Europe/London');
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 4, 'Europe/London', 'click');
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 5, 'Europe/London', 'click');
     expect(item.timeZone).toBe('America/New_York');
 
     // Third consistent issue flips the confirmed zone.
-    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 6, 'Europe/London');
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 6, 'Europe/London', 'click');
     expect(item.timeZone).toBe('Europe/London');
   });
 
   it('caps the history length', async () => {
     for (let issue = 1; issue <= 10; issue++) {
-      await recordTimeZoneObservation('tenant-1', 'reader@example.com', issue, 'America/Denver');
+      await recordTimeZoneObservation('tenant-1', 'reader@example.com', issue, 'America/Denver', 'open');
     }
     expect(item.tzHistory.length).toBeLessThanOrEqual(6);
     expect(item.tzHistory[item.tzHistory.length - 1].issue).toBe(10);
   });
 
   it('keeps history ordered by issue when events arrive out of order', async () => {
-    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 5, 'America/New_York');
-    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 3, 'America/New_York');
-    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 4, 'America/New_York');
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 5, 'America/New_York', 'click');
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 3, 'America/New_York', 'click');
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 4, 'America/New_York', 'click');
 
     expect(item.tzHistory.map((entry) => entry.issue)).toEqual([3, 4, 5]);
     expect(item.timeZone).toBe('America/New_York');
@@ -162,23 +201,26 @@ describe('recordTimeZoneObservation', () => {
 
   it('skips unknown subscribers without writing', async () => {
     item = null;
-    await recordTimeZoneObservation('tenant-1', 'ghost@example.com', 1, 'America/New_York');
+    await recordTimeZoneObservation('tenant-1', 'ghost@example.com', 1, 'America/New_York', 'open');
 
     const updates = mockSend.mock.calls.filter(([cmd]) => cmd instanceof UpdateItemCommand);
     expect(updates).toHaveLength(0);
   });
 
   it('skips invalid input without any DynamoDB calls', async () => {
-    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 1, null);
-    await recordTimeZoneObservation('tenant-1', 'reader@example.com', NaN, 'America/New_York');
-    await recordTimeZoneObservation('tenant-1', '', 1, 'America/New_York');
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 1, null, 'open');
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', NaN, 'America/New_York', 'open');
+    await recordTimeZoneObservation('tenant-1', '', 1, 'America/New_York', 'open');
+    // Invalid / missing source is also rejected.
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 1, 'America/New_York', 'sms');
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 1, 'America/New_York');
 
     expect(mockSend).not.toHaveBeenCalled();
   });
 
   it('swallows a lost optimistic-concurrency race silently', async () => {
     // Seed history so the conditional path compares :oldHistory.
-    item.tzHistory = [{ issue: 1, tz: 'America/New_York' }];
+    item.tzHistory = [{ issue: 1, tz: 'America/New_York', source: 'click' }];
 
     // Simulate a concurrent writer landing between the read and the write:
     // GetItem returns the seeded history, then the store changes before update.
@@ -186,21 +228,24 @@ describe('recordTimeZoneObservation', () => {
     mockSend.mockImplementation(async (command) => {
       if (command instanceof GetItemCommand) {
         const snapshot = { Item: marshall(item) };
-        item.tzHistory = [{ issue: 1, tz: 'America/New_York' }, { issue: 2, tz: 'Europe/Paris' }];
+        item.tzHistory = [
+          { issue: 1, tz: 'America/New_York', source: 'click' },
+          { issue: 2, tz: 'Europe/Paris', source: 'click' }
+        ];
         return snapshot;
       }
       return originalHandler(command);
     });
 
     const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 3, 'America/New_York');
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 3, 'America/New_York', 'click');
     expect(consoleSpy).not.toHaveBeenCalled();
     consoleSpy.mockRestore();
 
     // The concurrent writer's history must be intact.
     expect(item.tzHistory).toEqual([
-      { issue: 1, tz: 'America/New_York' },
-      { issue: 2, tz: 'Europe/Paris' }
+      { issue: 1, tz: 'America/New_York', source: 'click' },
+      { issue: 2, tz: 'Europe/Paris', source: 'click' }
     ]);
   });
 
@@ -209,7 +254,7 @@ describe('recordTimeZoneObservation', () => {
     const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
     await expect(
-      recordTimeZoneObservation('tenant-1', 'reader@example.com', 1, 'America/New_York')
+      recordTimeZoneObservation('tenant-1', 'reader@example.com', 1, 'America/New_York', 'open')
     ).resolves.toBeUndefined();
 
     expect(consoleSpy).toHaveBeenCalledWith(

@@ -1883,6 +1883,9 @@ paths:
                     type: object
                     nullable: true
                     description: The latest pricing record (null if no pricing exists)
+                    properties:
+                      interestComposition:
+                        $ref: "#/components/schemas/InterestComposition"
                   hasPricing:
                     type: boolean
                     description: Whether any pricing data exists
@@ -1912,6 +1915,9 @@ paths:
                     type: array
                     items:
                       type: object
+                      properties:
+                        interestComposition:
+                          $ref: "#/components/schemas/InterestComposition"
                     description: List of historical pricing records (most recent first)
                   count:
                     type: integer
@@ -2055,6 +2061,9 @@ paths:
                     type: object
                     nullable: true
                     description: The pricing record (present when status is completed)
+                    properties:
+                      interestComposition:
+                        $ref: "#/components/schemas/InterestComposition"
                   error:
                     type: string
                     nullable: true
@@ -4190,6 +4199,44 @@ components:
             type: string
           nullable: true
           description: Available options (for single-select and multi-select types)
+
+    InterestCompositionTopic:
+      type: object
+      description: Audience interest breakdown for a single taxonomy topic
+      properties:
+        topic:
+          type: string
+          description: Topic label from the platform taxonomy (e.g. ai, serverless)
+        displayName:
+          type: string
+          description: Human-readable topic name (e.g. AI)
+        confirmed:
+          type: integer
+          description: Subscribers with a confirmed interest score (score >= the auto-segment threshold) for this topic
+        confirmedPct:
+          type: number
+          description: Percentage of all subscribers with confirmed interest in this topic, rounded to 1 decimal
+        engaged:
+          type: integer
+          description: Subscribers with any positive interest score for this topic
+        engagedPct:
+          type: number
+          description: Percentage of all subscribers with any positive interest score for this topic, rounded to 1 decimal
+
+    InterestComposition:
+      type: object
+      description: >-
+        Audience interest composition derived from subscriber interest scores, computed
+        during pricing calculation for sponsor-facing reporting. Topics with zero engaged
+        subscribers are omitted; the list is sorted by confirmed count descending.
+      properties:
+        totalSubscribers:
+          type: integer
+          description: Total subscriber count used to compute the percentages
+        topics:
+          type: array
+          items:
+            $ref: "#/components/schemas/InterestCompositionTopic"
 
     RecalculateResponse:
       type: object

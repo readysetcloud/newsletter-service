@@ -21,6 +21,7 @@ import {
   reconcileBandWithFactors,
   buildDeterministicClassification
 } from './utils/pricing.mjs';
+import { computeInterestComposition, buildInterestCompositionLines } from './utils/interest-composition.mjs';
 
 const ddb = new DynamoDBClient();
 
@@ -358,7 +359,7 @@ async function callBedrock(prompt) {
   }
 }
 
-async function generateSponsorNarrative(metrics, classification) {
+async function generateSponsorNarrative(metrics, classification, interestComposition) {
   let captured = null;
   const toolDefs = [{
     name: 'submit_sponsor_narrative',
@@ -367,12 +368,16 @@ async function generateSponsorNarrative(metrics, classification) {
     handler: (input) => { captured = input; return { success: true }; }
   }];
 
+  const compositionLines = buildInterestCompositionLines(interestComposition);
+
   const systemPrompt = [
     'Role: You are a professional copywriter specializing in newsletter sponsorship pitches.',
     'Instructions: Craft a concise, sponsor-facing value narrative. Summarize metrics qualitatively.',
-    'Narrowing: Only use the submit_sponsor_narrative tool. No free-text. No raw numbers or pricing figures.'
+    'Narrowing: Only use the submit_sponsor_narrative tool. No free-text. No raw numbers or pricing figures',
+    'other than the audience interest composition percentages provided below, which you may cite directly',
+    "(e.g. \"34% of the audience has demonstrated interest in AI\") to make the pitch concrete."
   ].join('\n');
-  const userPrompt = [
+  const userPromptLines = [
     'Write a short, professional paragraph (2-4 sentences) for potential sponsors.',
     '',
     `Subscriber count: ${metrics.subscriberCount}`,
@@ -384,7 +389,18 @@ async function generateSponsorNarrative(metrics, classification) {
     `Audience quality: ${classification.audienceQuality}`,
     `Niche specificity: ${classification.nicheSpecificity}`,
     `Sponsor fit: ${classification.sponsorFit}`
-  ].join('\n');
+  ];
+
+  if (compositionLines.length > 0) {
+    userPromptLines.push(
+      '',
+      'Audience interest composition (derived from subscriber link-click behavior):',
+      ...compositionLines,
+      'You may cite 1-2 of the strongest interest percentages above to make the sponsor pitch concrete.'
+    );
+  }
+
+  const userPrompt = userPromptLines.join('\n');
 
   logModelRequest('sponsor-narrative', BEDROCK_MODEL_ID, systemPrompt, userPrompt);
   await converse(BEDROCK_MODEL_ID, systemPrompt, userPrompt, toolDefs);
@@ -477,6 +493,21 @@ async function loadQuestionnaireResponses(tenantId) {
   return unmarshall(result.Items[0]);
 }
 
+/**
+ * Compute the audience interest composition, never throwing — a failure here
+ * must never fail the pricing run. Returns null (and logs) on error.
+ * @param {string} tenantId
+ * @returns {Promise<object|null>}
+ */
+async function safeComputeInterestComposition(tenantId) {
+  try {
+    return await computeInterestComposition(tenantId);
+  } catch (err) {
+    console.warn('[PRICING] Failed to compute interest composition, omitting:', err.message);
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
@@ -501,6 +532,16 @@ export const handler = async (event) => {
       avgClickRate: metrics.avgClickRate,
       publishedIssueCount: metrics.publishedIssueCount
     });
+
+    // Audience interest composition (from subscriber interestScores) for sponsor-facing
+    // reporting. Never allowed to fail the pricing run — errors are logged and omitted.
+    const interestComposition = await safeComputeInterestComposition(tenantId);
+    if (interestComposition) {
+      console.log('[PRICING] Interest composition computed', {
+        totalSubscribers: interestComposition.totalSubscribers,
+        topicCount: interestComposition.topics.length
+      });
+    }
 
     // Load questionnaire responses.
     let questionnaireResponses = eventResponses || null;
@@ -636,12 +677,13 @@ export const handler = async (event) => {
       weekWindow: weekWindowStr, calculatedAt, metricsAsOf,
       isFallback: usedFallback, smoothingApplied,
       ...(questionnaireVersion && { questionnaireVersion }),
-      ...(questionnaireResponses && { questionnaireResponses })
+      ...(questionnaireResponses && { questionnaireResponses }),
+      ...(interestComposition && { interestComposition })
     };
 
     const existingSk = existingWindowRecord?.sk ?? null;
     try {
-      const narrative = await generateSponsorNarrative(metrics, classification);
+      const narrative = await generateSponsorNarrative(metrics, classification, interestComposition);
       if (narrative) pricingRecord.narrative = narrative;
     } catch (err) {
       console.warn('[NARRATIVE] Failed to generate narrative, skipping:', err.message);

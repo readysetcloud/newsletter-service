@@ -3,7 +3,8 @@ import {
   formatMetrics,
   computeNextPublicationDates,
   buildTemplateFallback,
-  computeTotalRevenue
+  computeTotalRevenue,
+  buildOutreachPrompt
 } from '../generate-outreach.mjs';
 
 const DAYS_OF_WEEK = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -509,5 +510,53 @@ describe('Property 23: Outreach prefers sponsor-specific metrics', () => {
       }),
       { numRuns: 100 }
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Audience interest composition wired into the outreach prompt
+// ---------------------------------------------------------------------------
+
+describe('buildOutreachPrompt: audience interest composition', () => {
+  const sponsor = { sponsorName: 'Acme Co', contactName: 'Jane', contactEmail: 'jane@acme.com' };
+  const basePricing = {
+    metrics: { subscriberCount: 5000, avgOpenRate: 0.45, avgClickRate: 0.1, subscriberGrowthRate: 0.02 },
+    recommendedPrice: 200,
+    confidence: 'high'
+  };
+  const clickTotals = { totalClicks: 0, uniqueClicks: 0 };
+
+  test('includes an audience interest composition section when present on the pricing record', () => {
+    const pricing = {
+      ...basePricing,
+      interestComposition: {
+        totalSubscribers: 5000,
+        topics: [
+          { topic: 'ai', displayName: 'AI', confirmed: 1700, confirmedPct: 34.0, engaged: 2000, engagedPct: 40.0 }
+        ]
+      }
+    };
+
+    const prompt = buildOutreachPrompt(sponsor, pricing, [], null, clickTotals);
+
+    expect(prompt).toContain('Audience Interest Composition');
+    expect(prompt).toContain('AI');
+    expect(prompt).toContain('34%');
+    expect(prompt).toContain('cite one or two audience interest composition percentages');
+  });
+
+  test('omits the section entirely when no interestComposition is present', () => {
+    const prompt = buildOutreachPrompt(sponsor, basePricing, [], null, clickTotals);
+
+    expect(prompt).not.toContain('Audience Interest Composition');
+    expect(prompt).not.toContain('cite one or two audience interest composition percentages');
+  });
+
+  test('omits the section when interestComposition has no topics', () => {
+    const pricing = { ...basePricing, interestComposition: { totalSubscribers: 100, topics: [] } };
+
+    const prompt = buildOutreachPrompt(sponsor, pricing, [], null, clickTotals);
+
+    expect(prompt).not.toContain('Audience Interest Composition');
   });
 });

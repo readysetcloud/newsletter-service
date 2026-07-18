@@ -1,5 +1,6 @@
 pub mod api_keys;
 pub mod brand;
+pub mod churn;
 pub mod domain;
 pub mod issues;
 pub mod pricing;

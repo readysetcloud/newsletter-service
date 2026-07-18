@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 import { apiClient } from '@/services/api';
 import { Loading } from '@/components/ui/Loading';
-import { Users } from 'lucide-react';
+import { Users, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react';
+import { churnService, CHURN_REASON_LABELS, type AtRiskResponse } from '@/services/churnService';
 
 interface CohortData {
   count: number;
@@ -74,6 +75,8 @@ export const AudienceHealthWidget: React.FC<AudienceHealthWidgetProps> = ({ late
   const [data, setData] = useState<AudienceHealthResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [atRisk, setAtRisk] = useState<AtRiskResponse | null>(null);
+  const [atRiskExpanded, setAtRiskExpanded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -97,6 +100,22 @@ export const AudienceHealthWidget: React.FC<AudienceHealthWidgetProps> = ({ late
     }
 
     fetchAudienceHealth();
+
+    return () => { cancelled = true; };
+  }, [latestIssueNumber]);
+
+  // At-risk churn data is a best-effort enhancement — on any failure we simply
+  // hide the section rather than surfacing an error on the whole widget.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchAtRisk() {
+      const response = await churnService.getAtRisk(latestIssueNumber);
+      if (cancelled) return;
+      setAtRisk(response.success && response.data ? response.data : null);
+    }
+
+    fetchAtRisk();
 
     return () => { cancelled = true; };
   }, [latestIssueNumber]);
@@ -230,6 +249,54 @@ export const AudienceHealthWidget: React.FC<AudienceHealthWidgetProps> = ({ late
           <span className="text-xs sm:text-sm font-medium text-foreground">{cohorts.total}</span>
         </div>
       </div>
+
+      {/* At Risk section — leading indicators of churn. Hidden when there is no
+          at-risk data (endpoint error or nobody at risk). */}
+      {atRisk && atRisk.summary.total > 0 && (
+        <div className="mt-3 pt-3 border-t border-border">
+          <button
+            type="button"
+            onClick={() => setAtRiskExpanded((prev) => !prev)}
+            aria-expanded={atRiskExpanded}
+            className="w-full flex items-center justify-between gap-2 text-left"
+          >
+            <span className="flex items-center gap-2">
+              {atRiskExpanded ? (
+                <ChevronDown className="w-4 h-4 text-muted-foreground" aria-hidden="true" />
+              ) : (
+                <ChevronRight className="w-4 h-4 text-muted-foreground" aria-hidden="true" />
+              )}
+              <AlertTriangle className="w-4 h-4 text-amber-500" aria-hidden="true" />
+              <span className="text-xs sm:text-sm font-medium text-foreground">At Risk</span>
+            </span>
+            <span className="inline-flex items-center justify-center min-w-[1.5rem] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-xs font-semibold">
+              {atRisk.summary.total}
+            </span>
+          </button>
+
+          {atRiskExpanded && (
+            <ul className="mt-3 space-y-2" aria-label="At-risk subscribers">
+              {atRisk.atRisk.map((subscriber) => (
+                <li key={subscriber.email} className="flex flex-col gap-1">
+                  <span className="text-xs sm:text-sm text-foreground truncate" title={subscriber.email}>
+                    {subscriber.email}
+                  </span>
+                  <span className="flex flex-wrap gap-1">
+                    {subscriber.reasons.map((reason) => (
+                      <span
+                        key={reason}
+                        className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 text-[10px] sm:text-xs font-medium"
+                      >
+                        {CHURN_REASON_LABELS[reason] ?? reason}
+                      </span>
+                    ))}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </div>
   );
 };

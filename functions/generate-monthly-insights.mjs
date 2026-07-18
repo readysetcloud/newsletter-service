@@ -20,7 +20,7 @@ const insightSchema = z.object({
  * concrete numbers rather than a large nested blob.
  */
 const buildUserPrompt = (reportData, monthLabel) => {
-  const { summary, subscriberGrowth, topLinks, issues, bestIssue } = reportData;
+  const { summary, subscriberGrowth, topLinks, issues, bestIssue, atRiskSummary } = reportData;
 
   const issueLines = issues
     .map((i) => `  #${i.issueNumber} "${i.subject}" — open ${i.openRate}%, click ${i.clickRate}%, CTOR ${i.clickToOpenRate}%, clicks ${i.clicks}, bounces ${i.bounceRate}%`)
@@ -29,6 +29,19 @@ const buildUserPrompt = (reportData, monthLabel) => {
   const linkLines = topLinks.length
     ? topLinks.map((l, idx) => `  ${idx + 1}. ${l.label} — ${l.clicks} clicks (${l.url})`).join('\n')
     : '  (no tracked link clicks this month)';
+
+  // Churn-risk block (leading indicators). Omitted entirely when unavailable so
+  // the model is never handed empty/placeholder churn data.
+  const churnLines = atRiskSummary && atRiskSummary.total > 0
+    ? [
+        '',
+        'Churn risk — subscribers showing leading indicators of disengagement:',
+        `  At risk: ${atRiskSummary.total} (fading ${atRiskSummary.byReason.fading}, interests gone stale ${atRiskSummary.byReason.interestStale}, streak broken ${atRiskSummary.byReason.streakBreak})`,
+        ...(atRiskSummary.examples?.length
+          ? ['  Examples:', ...atRiskSummary.examples.map((e) => `    - ${e}`)]
+          : [])
+      ]
+    : [];
 
   return [
     `Monthly newsletter performance for ${monthLabel}.`,
@@ -50,7 +63,8 @@ const buildUserPrompt = (reportData, monthLabel) => {
     'Best performers:',
     `  Highest open rate: #${bestIssue.byOpenRate.issueNumber} "${bestIssue.byOpenRate.subject}" (${bestIssue.byOpenRate.value}%)`,
     `  Highest click rate: #${bestIssue.byClickRate.issueNumber} "${bestIssue.byClickRate.subject}" (${bestIssue.byClickRate.value}%)`,
-    `  Most clicks: #${bestIssue.byClicks.issueNumber} "${bestIssue.byClicks.subject}" (${bestIssue.byClicks.value})`
+    `  Most clicks: #${bestIssue.byClicks.issueNumber} "${bestIssue.byClicks.subject}" (${bestIssue.byClicks.value})`,
+    ...churnLines
   ].join('\n');
 };
 
@@ -135,7 +149,7 @@ export const handler = async (state) => {
   const systemPrompt = [
     'Role: You are a senior newsletter analytics advisor for a professional newsletter platform.',
     'Task: Review one month of newsletter performance and produce 3-6 high-value, specific insights a publisher would expect from a premium analytics service.',
-    'Cover a mix of: subject-line performance, which link types/topics earned the most and least clicks, engagement trends across issues, subscriber growth, and deliverability/list health.',
+    'Cover a mix of: subject-line performance, which link types/topics earned the most and least clicks, engagement trends across issues, subscriber growth, deliverability/list health, and churn risk (subscribers showing leading indicators of disengagement) when that data is provided.',
     'Be concrete and reference the actual numbers and subject lines provided. Avoid generic filler.',
     'Output: Only call the submit_monthly_insights tool exactly once. Do not produce free-text output.'
   ].join('\n');

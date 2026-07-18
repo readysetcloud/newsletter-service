@@ -1964,9 +1964,16 @@ Resources:
               Resource:
                 - !GetAtt NewsletterTable.Arn
                 - !Sub "${NewsletterTable.Arn}/index/GSI1"
+            # Read-only subscriber query for the additive churn-risk summary.
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource:
+                - !GetAtt SubscribersTable.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
 
   GenerateMonthlyInsightsFunction:
     Type: AWS::Serverless::Function

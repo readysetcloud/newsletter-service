@@ -1,5 +1,6 @@
 import { DynamoDBClient, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
+import { summarizeAtRisk } from './utils/churn-risk.mjs';
 
 const ddb = new DynamoDBClient();
 
@@ -98,6 +99,41 @@ const queryTenantIssues = async (tenantId) => {
   } while (lastEvaluatedKey);
 
   return items;
+};
+
+/**
+ * Query every real subscriber record for a tenant from the subscribers table.
+ * SEGMENT* rows (segment infrastructure sharing the tenant partition) are
+ * filtered out. Returns [] when SUBSCRIBERS_TABLE_NAME is unset.
+ */
+const queryTenantSubscribers = async (tenantId) => {
+  const tableName = process.env.SUBSCRIBERS_TABLE_NAME;
+  if (!tableName) return [];
+
+  const subscribers = [];
+  let lastEvaluatedKey;
+
+  do {
+    const response = await ddb.send(new QueryCommand({
+      TableName: tableName,
+      KeyConditionExpression: 'tenantId = :tid',
+      ExpressionAttributeValues: marshall({ ':tid': tenantId }),
+      ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey })
+    }));
+
+    if (response.Items) {
+      for (const raw of response.Items) {
+        const item = unmarshall(raw);
+        // Real subscribers never have an email starting with "SEGMENT".
+        if (typeof item.email === 'string' && !item.email.startsWith('SEGMENT')) {
+          subscribers.push(item);
+        }
+      }
+    }
+    lastEvaluatedKey = response.LastEvaluatedKey;
+  } while (lastEvaluatedKey);
+
+  return subscribers;
 };
 
 /**
@@ -264,6 +300,31 @@ export const handler = async (state) => {
     byClicks: { issueNumber: bestClicks.issueNumber, subject: bestClicks.subject, value: bestClicks.clicks }
   };
 
+  // Churn-risk summary (leading indicators). Additive and best-effort — never
+  // fail the monthly report if the subscriber scan or classification errors.
+  // Uses the highest published issue number as the "latest issue" reference so
+  // recency is measured against the tenant's actual cadence.
+  let atRiskSummary = null;
+  try {
+    const latestIssueNumber = allIssues.reduce((max, issue) => {
+      if (!issue.publishedAt) return max;
+      const num = Number(issue.pk?.split('#')[1]);
+      return Number.isFinite(num) && num > max ? num : max;
+    }, 0);
+
+    if (latestIssueNumber > 0) {
+      const subscribers = await queryTenantSubscribers(tenantId);
+      atRiskSummary = summarizeAtRisk(subscribers, latestIssueNumber);
+    }
+  } catch (error) {
+    console.warn('[MONTHLY-REPORT] At-risk summary failed, omitting:', error.message);
+  }
+
+  const reportData = { summary, subscriberGrowth, topLinks, issues, bestIssue, abTests };
+  if (atRiskSummary) {
+    reportData.atRiskSummary = atRiskSummary;
+  }
+
   return {
     tenant,
     month,
@@ -271,6 +332,6 @@ export const handler = async (state) => {
     periodStart,
     periodEnd,
     hasIssues: true,
-    reportData: { summary, subscriberGrowth, topLinks, issues, bestIssue, abTests }
+    reportData
   };
 };

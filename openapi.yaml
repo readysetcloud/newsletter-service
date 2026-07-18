@@ -2346,6 +2346,93 @@ paths:
         "500":
           $ref: "#/components/responses/UnknownError"
 
+  /subscribers/at-risk:
+    get:
+      summary: Get subscribers at risk of churning, with reasons
+      description: >-
+        Classifies subscribers with leading indicators of disengagement (not just
+        recency). Each at-risk subscriber carries one or more reasons: `fading`
+        (recently active but slipping, with a real engagement history),
+        `interest_stale` (a strong topic interest has not been scored in over 45
+        days), and `streak_break` (historically strong but silent for 3+ issues).
+        Subscribers who are already plain-dormant (last engaged more than 10
+        issues ago, or never) are excluded — those are handled by the sunset flow.
+        The `atRisk` list is sorted by number of reasons (desc) then
+        lastEngagedIssue (asc) and capped at 100 entries; the summary counts
+        reflect the full population.
+      tags:
+        - Subscribers
+      parameters:
+        - name: latestIssueNumber
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: The most recently published issue number
+      responses:
+        "200":
+          description: At-risk subscribers with reasons and a summary by reason
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  atRisk:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        email:
+                          type: string
+                        lastEngagedIssue:
+                          type: integer
+                          nullable: true
+                        engagementCount:
+                          type: integer
+                        reasons:
+                          type: array
+                          items:
+                            type: string
+                            enum: [fading, interest_stale, streak_break]
+                        topTopic:
+                          type: string
+                          description: The stalest qualifying topic (present only when interest_stale fired)
+                      required:
+                        - email
+                        - engagementCount
+                        - reasons
+                  summary:
+                    type: object
+                    properties:
+                      total:
+                        type: integer
+                        description: Total number of at-risk subscribers (not capped)
+                      byReason:
+                        type: object
+                        properties:
+                          fading:
+                            type: integer
+                          interestStale:
+                            type: integer
+                          streakBreak:
+                            type: integer
+                        required:
+                          - fading
+                          - interestStale
+                          - streakBreak
+                    required:
+                      - total
+                      - byReason
+                required:
+                  - atRisk
+                  - summary
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
   /subscribers/{email}:
     get:
       summary: Get subscriber detail

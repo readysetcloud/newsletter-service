@@ -2,7 +2,7 @@ use lambda_http::{http::Method, Body, Error, Request, Response};
 use serde_json::json;
 
 use crate::controllers::{
-    api_keys, brand, domain, issues, pricing, profile, reports, segments, senders, snippets,
+    api_keys, brand, churn, domain, issues, pricing, profile, reports, segments, senders, snippets,
     sponsors, subscribers, templates,
 };
 
@@ -149,6 +149,9 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
         (&Method::GET, "/subscribers/trends") => subscribers::get_subscriber_trends(event).await,
         (&Method::GET, "/subscribers") => subscribers::list_subscribers(event).await,
         (&Method::GET, "/subscribers/health") => subscribers::get_audience_health(event).await,
+        // NOTE: the exact at-risk match must come before the generic
+        // /subscribers/{email} prefix route, or "at-risk" is parsed as an email.
+        (&Method::GET, "/subscribers/at-risk") => churn::get_at_risk_subscribers(event).await,
         (&Method::GET, path) if path.starts_with("/subscribers/") => {
             let email = extract_path_param(path, "/subscribers/");
             subscribers::get_subscriber(event, email).await
@@ -716,6 +719,7 @@ mod tests {
         assert!(is_valid_api_path("/subscribers/count"));
         assert!(is_valid_api_path("/subscribers/trends"));
         assert!(is_valid_api_path("/subscribers/health"));
+        assert!(is_valid_api_path("/subscribers/at-risk"));
     }
 
     #[test]

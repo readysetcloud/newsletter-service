@@ -117,19 +117,37 @@ export async function processInterestScoring(cid, subscriberEmail, rawUrl) {
 async function updateInterestScore(tenantId, email, topic, increment) {
   const now = new Date().toISOString();
 
+  // The subscriber can explicitly correct our inferred profile via the
+  // preference center. A topic they marked "not interested" lands in the
+  // `excludedTopics` set, and a zero-party correction must beat click signal:
+  // this condition makes every automatic score increment a no-op for an
+  // excluded topic. `attribute_not_exists(excludedTopics)` covers the common
+  // case (no exclusions recorded); `NOT contains(...)` gates the rest.
+  const EXCLUSION_GUARD = 'attribute_not_exists(excludedTopics) OR NOT contains(excludedTopics, :topic)';
+
   const buildNestedUpdateCommand = () => new UpdateItemCommand({
     TableName: process.env.SUBSCRIBERS_TABLE_NAME,
     Key: marshall({ tenantId, email }),
     UpdateExpression: 'SET interestScores.#topic.score = if_not_exists(interestScores.#topic.score, :zero) + :increment, interestScores.#topic.lastScoredAt = :now',
+    ConditionExpression: EXCLUSION_GUARD,
     ExpressionAttributeNames: { '#topic': topic },
-    ExpressionAttributeValues: marshall({ ':zero': 0, ':increment': increment, ':now': now }),
+    ExpressionAttributeValues: marshall({ ':zero': 0, ':increment': increment, ':now': now, ':topic': topic }),
     ReturnValues: 'UPDATED_NEW'
   });
+
+  // Sentinel returned when scoring is skipped for an excluded topic. The caller
+  // gates auto-segmentation on `preScore < THRESHOLD && postScore >= THRESHOLD`;
+  // nulls make the second half false, so segmentation never fires.
+  const SKIPPED = { preScore: null, postScore: null };
 
   let result;
   try {
     result = await ddb.send(buildNestedUpdateCommand());
   } catch (error) {
+    if (error.name === 'ConditionalCheckFailedException') {
+      // Topic is on the subscriber's exclusion list — respect the correction.
+      return SKIPPED;
+    }
     if (error.name === 'ValidationException') {
       // The nested path interestScores.<topic> does not exist yet. DynamoDB
       // cannot set interestScores.<topic>.score unless BOTH interestScores and
@@ -148,17 +166,34 @@ async function updateInterestScore(tenantId, email, topic, increment) {
       }));
 
       // Step 2: ensure the per-topic entry exists, zeroed. if_not_exists keeps a
-      // concurrently-created entry (with its accumulated score) intact.
-      await ddb.send(new UpdateItemCommand({
-        TableName: process.env.SUBSCRIBERS_TABLE_NAME,
-        Key: marshall({ tenantId, email }),
-        UpdateExpression: 'SET interestScores.#topic = if_not_exists(interestScores.#topic, :zeroEntry)',
-        ExpressionAttributeNames: { '#topic': topic },
-        ExpressionAttributeValues: marshall({ ':zeroEntry': { score: 0, lastScoredAt: now } })
-      }));
+      // concurrently-created entry (with its accumulated score) intact. The same
+      // exclusion guard applies here so an excluded topic's entry is never even
+      // re-created (an exclusion REMOVEs it, leaving the nested path missing).
+      try {
+        await ddb.send(new UpdateItemCommand({
+          TableName: process.env.SUBSCRIBERS_TABLE_NAME,
+          Key: marshall({ tenantId, email }),
+          UpdateExpression: 'SET interestScores.#topic = if_not_exists(interestScores.#topic, :zeroEntry)',
+          ConditionExpression: EXCLUSION_GUARD,
+          ExpressionAttributeNames: { '#topic': topic },
+          ExpressionAttributeValues: marshall({ ':zeroEntry': { score: 0, lastScoredAt: now }, ':topic': topic })
+        }));
+      } catch (initError) {
+        if (initError.name === 'ConditionalCheckFailedException') {
+          return SKIPPED;
+        }
+        throw initError;
+      }
 
       // Step 3: retry the atomic increment now that both levels exist.
-      result = await ddb.send(buildNestedUpdateCommand());
+      try {
+        result = await ddb.send(buildNestedUpdateCommand());
+      } catch (retryError) {
+        if (retryError.name === 'ConditionalCheckFailedException') {
+          return SKIPPED;
+        }
+        throw retryError;
+      }
     } else {
       throw error;
     }
@@ -186,6 +221,23 @@ async function handleAutoSegmentation(tenantId, email, topic) {
     // Colliding manual segment exists — skip auto-segmentation for this topic
     return;
   }
+  await addSubscriberToSegment(tenantId, email, segmentId);
+}
+
+/**
+ * Idempotently adds a subscriber as a member of an interest segment and keeps
+ * the segment's memberCount in sync. Writes the SEGMENT#<id>#MEMBER#<email> row
+ * with a conditional Put (skip if already a member) and increments memberCount
+ * only when a new row is actually created.
+ *
+ * Exported so the subscriber-facing preference center can reuse the exact same
+ * membership semantics as automatic click-based segmentation.
+ *
+ * @param {string} tenantId
+ * @param {string} email
+ * @param {string} segmentId
+ */
+export async function addSubscriberToSegment(tenantId, email, segmentId) {
   const tableName = process.env.SUBSCRIBERS_TABLE_NAME;
 
   try {

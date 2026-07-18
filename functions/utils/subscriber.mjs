@@ -66,7 +66,10 @@ export const listSubscribers = async (tenantId, options = {}) => {
         addedAt: subscriber.addedAt,
         lastSentAt: subscriber.lastSentAt || null,
         lastIssueSent: subscriber.lastIssueSent || null,
-        timeZone: subscriber.timeZone || null
+        timeZone: subscriber.timeZone || null,
+        // Open-hour histogram (activity-timeline.mjs) — drives peak-hour local sends.
+        openHours: subscriber.openHours ?? null,
+        openHourTotal: subscriber.openHourTotal ?? null
       }));
 
     return {

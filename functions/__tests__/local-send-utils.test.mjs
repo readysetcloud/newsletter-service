@@ -5,6 +5,10 @@ import {
   groupSubscribersByTimeZone,
   computeGroupSendTimes,
   filterSubscribersForGroup,
+  computePeakHour,
+  nextOccurrenceOfUtcHour,
+  groupSubscribersByPeakHour,
+  filterSubscribersForPeakHourGroup,
   DEFAULT_GROUP,
   CATCH_ALL_GROUP
 } from '../utils/local-send.mjs';
@@ -187,5 +191,129 @@ describe('computeGroupSendTimes', () => {
     const base = new Date('2026-01-15T09:00:00Z');
     const times = computeGroupSendTimes(base, 'UTC', ['Asia/Kolkata']);
     expect(times.get('Asia/Kolkata').toISOString()).toBe('2026-01-15T03:30:00.000Z');
+  });
+});
+
+describe('computePeakHour', () => {
+  it('returns the hour with the highest count', () => {
+    expect(computePeakHour({ 2: 1, 14: 7, 20: 3 }, 11)).toBe(14);
+  });
+
+  it('breaks ties to the lowest hour', () => {
+    expect(computePeakHour({ 20: 4, 8: 4, 14: 4 }, 12)).toBe(8);
+    expect(computePeakHour({ 0: 3, 23: 3 }, 6)).toBe(0);
+  });
+
+  it('returns null when total opens are below minSamples', () => {
+    expect(computePeakHour({ 14: 4 }, 4)).toBeNull();
+    expect(computePeakHour({ 14: 4 }, 4, 5)).toBeNull();
+    // Custom threshold: 4 samples suffice when minSamples is 3.
+    expect(computePeakHour({ 14: 4 }, 4, 3)).toBe(14);
+  });
+
+  it('returns null for missing or empty histograms', () => {
+    expect(computePeakHour(undefined, 10)).toBeNull();
+    expect(computePeakHour(null, 10)).toBeNull();
+    expect(computePeakHour({}, 10)).toBeNull();
+    expect(computePeakHour({ 14: 7 }, undefined)).toBeNull();
+    expect(computePeakHour({ 14: 7 }, null)).toBeNull();
+  });
+
+  it('tolerates string keys and counts as stored by DynamoDB', () => {
+    expect(computePeakHour({ '14': '7', '2': '3' }, '10')).toBe(14);
+  });
+
+  it('ignores out-of-range or garbage buckets', () => {
+    expect(computePeakHour({ 24: 100, '-1': 50, abc: 40, 14: 6 }, 200)).toBe(14);
+    expect(computePeakHour({ 24: 100 }, 100)).toBeNull();
+  });
+});
+
+describe('nextOccurrenceOfUtcHour', () => {
+  it('returns the same day when the hour is still ahead', () => {
+    const base = new Date('2026-01-15T09:30:00Z');
+    expect(nextOccurrenceOfUtcHour(base, 14).toISOString()).toBe('2026-01-15T14:30:00.000Z');
+  });
+
+  it('wraps to the next day when the hour has passed', () => {
+    const base = new Date('2026-01-15T09:30:00Z');
+    expect(nextOccurrenceOfUtcHour(base, 2).toISOString()).toBe('2026-01-16T02:30:00.000Z');
+  });
+
+  it('preserves the base minute', () => {
+    const base = new Date('2026-01-15T09:45:00Z');
+    expect(nextOccurrenceOfUtcHour(base, 20).getUTCMinutes()).toBe(45);
+    expect(nextOccurrenceOfUtcHour(base, 3).getUTCMinutes()).toBe(45);
+  });
+
+  it('returns the base itself when it sits exactly on the boundary', () => {
+    const base = new Date('2026-01-15T14:30:00.000Z');
+    expect(nextOccurrenceOfUtcHour(base, 14).toISOString()).toBe('2026-01-15T14:30:00.000Z');
+  });
+
+  it('rolls forward a day when the base is mid-minute at the target hour', () => {
+    // Candidate (14:30:00) is before the base (14:30:45), so it moves +24h.
+    const base = new Date('2026-01-15T14:30:45Z');
+    expect(nextOccurrenceOfUtcHour(base, 14).toISOString()).toBe('2026-01-16T14:30:00.000Z');
+  });
+
+  it('crosses month boundaries', () => {
+    const base = new Date('2026-01-31T22:15:00Z');
+    expect(nextOccurrenceOfUtcHour(base, 6).toISOString()).toBe('2026-02-01T06:15:00.000Z');
+  });
+});
+
+describe('groupSubscribersByPeakHour', () => {
+  const pool = [
+    { email: 'a@x.com', openHours: { 14: 7, 2: 3 }, openHourTotal: 10 },
+    { email: 'b@x.com', openHours: { '14': '6' }, openHourTotal: '6' },
+    { email: 'c@x.com', openHours: { 2: 5 }, openHourTotal: 5 },
+    { email: 'd@x.com', openHours: { 9: 2 }, openHourTotal: 2 },
+    { email: 'e@x.com' }
+  ];
+
+  it('groups by computed peak hour with a default bucket for thin data', () => {
+    const groups = groupSubscribersByPeakHour(pool);
+
+    expect([...groups.keys()].sort()).toEqual([14, 2, DEFAULT_GROUP].sort());
+    expect(groups.get(14).map((s) => s.email)).toEqual(['a@x.com', 'b@x.com']);
+    expect(groups.get(2).map((s) => s.email)).toEqual(['c@x.com']);
+    expect(groups.get(DEFAULT_GROUP).map((s) => s.email)).toEqual(['d@x.com', 'e@x.com']);
+  });
+
+  it('honors a custom minSamples threshold', () => {
+    const groups = groupSubscribersByPeakHour(pool, 2);
+    expect(groups.get(9).map((s) => s.email)).toEqual(['d@x.com']);
+    expect(groups.get(DEFAULT_GROUP).map((s) => s.email)).toEqual(['e@x.com']);
+  });
+
+  it('returns an empty map for no subscribers', () => {
+    expect(groupSubscribersByPeakHour([]).size).toBe(0);
+  });
+
+  it('every subscriber lands in exactly one group, matching re-entry filtering', () => {
+    const groups = groupSubscribersByPeakHour(pool);
+    const covered = [...groups.keys()].flatMap((key) =>
+      filterSubscribersForPeakHourGroup(pool, key === DEFAULT_GROUP ? null : key)
+        .map((s) => s.email)
+    );
+    expect(covered.sort()).toEqual(pool.map((s) => s.email).sort());
+  });
+});
+
+describe('filterSubscribersForPeakHourGroup', () => {
+  const pool = [
+    { email: 'a@x.com', openHours: { 14: 7 }, openHourTotal: 7 },
+    { email: 'b@x.com', openHours: { 2: 5 }, openHourTotal: 5 },
+    { email: 'c@x.com', openHours: { 9: 1 }, openHourTotal: 1 }
+  ];
+
+  it('matches an exact peak hour', () => {
+    expect(filterSubscribersForPeakHourGroup(pool, 14).map((s) => s.email)).toEqual(['a@x.com']);
+    expect(filterSubscribersForPeakHourGroup(pool, 9)).toHaveLength(0);
+  });
+
+  it('null takes the insufficient-data subscribers', () => {
+    expect(filterSubscribersForPeakHourGroup(pool, null).map((s) => s.email)).toEqual(['c@x.com']);
   });
 });

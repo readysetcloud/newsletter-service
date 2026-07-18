@@ -1812,9 +1812,13 @@ fn is_plausible_iana_time_zone(tz: &str) -> bool {
 }
 
 /// Validates a caller-supplied local-send config and returns the canonical
-/// object to persist: `{ enabled: true, defaultTimeZone: "<IANA zone>" }`.
-/// Returns Ok(None) when `enabled` is false — a disabled config is stored as
-/// no config at all.
+/// object to persist:
+/// `{ enabled: true, defaultTimeZone: "<IANA zone>", mode: "timezone" | "peak-hour" }`.
+/// `mode` is optional on input and defaults to `timezone` (deliver at the
+/// scheduled wall-clock time in each subscriber's timezone); `peak-hour`
+/// delivers at each subscriber's personal peak open hour instead. Returns
+/// Ok(None) when `enabled` is false — a disabled config is stored as no
+/// config at all.
 fn validate_and_normalize_local_send(
     value: &serde_json::Value,
 ) -> Result<Option<serde_json::Value>, AppError> {
@@ -1849,9 +1853,20 @@ fn validate_and_normalize_local_send(
         ));
     }
 
+    let mode = match obj.get("mode") {
+        None | Some(serde_json::Value::Null) => "timezone",
+        Some(serde_json::Value::String(s)) if s == "timezone" || s == "peak-hour" => s.as_str(),
+        Some(_) => {
+            return Err(AppError::BadRequest(
+                "localSend.mode must be \"timezone\" or \"peak-hour\"".to_string(),
+            ))
+        }
+    };
+
     Ok(Some(serde_json::json!({
         "enabled": true,
-        "defaultTimeZone": default_time_zone
+        "defaultTimeZone": default_time_zone,
+        "mode": mode
     })))
 }
 
@@ -3756,8 +3771,70 @@ mod tests {
         let normalized = validate_and_normalize_local_send(&input).unwrap().unwrap();
         assert_eq!(
             normalized,
-            serde_json::json!({ "enabled": true, "defaultTimeZone": "America/New_York" })
+            serde_json::json!({
+                "enabled": true,
+                "defaultTimeZone": "America/New_York",
+                "mode": "timezone"
+            })
         );
+    }
+
+    #[test]
+    fn test_validate_local_send_mode_defaults_and_passthrough() {
+        // Absent and null both default to "timezone".
+        for input in [
+            serde_json::json!({ "enabled": true, "defaultTimeZone": "America/New_York" }),
+            serde_json::json!({
+                "enabled": true,
+                "defaultTimeZone": "America/New_York",
+                "mode": null
+            }),
+            serde_json::json!({
+                "enabled": true,
+                "defaultTimeZone": "America/New_York",
+                "mode": "timezone"
+            }),
+        ] {
+            let normalized = validate_and_normalize_local_send(&input).unwrap().unwrap();
+            assert_eq!(normalized["mode"], "timezone", "{input}");
+        }
+
+        let normalized = validate_and_normalize_local_send(&serde_json::json!({
+            "enabled": true,
+            "defaultTimeZone": "America/New_York",
+            "mode": "peak-hour"
+        }))
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            normalized,
+            serde_json::json!({
+                "enabled": true,
+                "defaultTimeZone": "America/New_York",
+                "mode": "peak-hour"
+            })
+        );
+    }
+
+    #[test]
+    fn test_validate_local_send_rejects_unknown_mode() {
+        for mode in [
+            serde_json::json!("peak_hour"),
+            serde_json::json!("Timezone"),
+            serde_json::json!(""),
+            serde_json::json!(3),
+            serde_json::json!({ "nested": true }),
+        ] {
+            let input = serde_json::json!({
+                "enabled": true,
+                "defaultTimeZone": "America/New_York",
+                "mode": mode
+            });
+            assert!(
+                validate_and_normalize_local_send(&input).is_err(),
+                "{input}"
+            );
+        }
     }
 
     #[test]

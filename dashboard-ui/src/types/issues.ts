@@ -54,6 +54,13 @@ export interface LocalSendConfig {
   enabled: boolean;
   /** IANA timezone whose wall clock defines the target send time. */
   defaultTimeZone?: string;
+  /**
+   * Delivery strategy: 'timezone' (default) sends at the scheduled wall-clock
+   * time in each subscriber's timezone; 'peak-hour' sends at each
+   * subscriber's personal peak open hour, falling back to the default time
+   * for subscribers without enough recorded opens.
+   */
+  mode?: 'timezone' | 'peak-hour';
 }
 
 // ---------------------------------------------------------------------------

@@ -110,6 +110,7 @@ export const IssueFormPage: React.FC = () => {
   const [abTestErrors, setAbTestErrors] = useState<AbTestErrors>({});
 
   const [localSendEnabled, setLocalSendEnabled] = useState(false);
+  const [localSendMode, setLocalSendMode] = useState<'timezone' | 'peak-hour'>('timezone');
   const [localSendTimeZone, setLocalSendTimeZone] = useState(() => {
     // Default to the author's browser timezone when it's one of the options.
     const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -164,6 +165,7 @@ export const IssueFormPage: React.FC = () => {
           if (issue.localSend.defaultTimeZone) {
             setLocalSendTimeZone(issue.localSend.defaultTimeZone);
           }
+          setLocalSendMode(issue.localSend.mode === 'peak-hour' ? 'peak-hour' : 'timezone');
         } else {
           setLocalSendEnabled(false);
         }
@@ -402,7 +404,7 @@ export const IssueFormPage: React.FC = () => {
         }
 
         if (localSendEnabled && !abTest) {
-          updateData.localSend = { enabled: true, defaultTimeZone: localSendTimeZone };
+          updateData.localSend = { enabled: true, defaultTimeZone: localSendTimeZone, mode: localSendMode };
         } else if (existingIssue?.localSend?.enabled) {
           // Turned off (or superseded by an A/B test) after being saved —
           // explicit null clears the stored config.
@@ -472,7 +474,7 @@ export const IssueFormPage: React.FC = () => {
         }
 
         if (localSendEnabled && !abTest) {
-          createData.localSend = { enabled: true, defaultTimeZone: localSendTimeZone };
+          createData.localSend = { enabled: true, defaultTimeZone: localSendTimeZone, mode: localSendMode };
         }
 
         const response = await issuesService.createIssue(createData);
@@ -521,7 +523,7 @@ export const IssueFormPage: React.FC = () => {
     } finally {
       setIsSubmitting(false);
     }
-  }, [validateForm, isEditMode, id, formData, abTest, localSendEnabled, localSendTimeZone, existingIssue, navigate, addToast]);
+  }, [validateForm, isEditMode, id, formData, abTest, localSendEnabled, localSendTimeZone, localSendMode, existingIssue, navigate, addToast]);
 
   // Handle cancel with unsaved changes confirmation
   const handleCancel = useCallback(() => {
@@ -697,6 +699,51 @@ export const IssueFormPage: React.FC = () => {
                   </p>
                 </div>
               </div>
+
+              {localSendEnabled && (
+                <fieldset className="pl-7">
+                  <legend className="block text-sm font-medium text-foreground mb-1">
+                    Delivery time
+                  </legend>
+                  <div className="space-y-2">
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="localSendMode"
+                        value="timezone"
+                        checked={localSendMode === 'timezone'}
+                        onChange={() => {
+                          setLocalSendMode('timezone');
+                          setIsDirty(true);
+                        }}
+                        disabled={isFormDisabled}
+                        className="mt-0.5 h-4 w-4 border-border text-primary-600 focus:ring-primary-500 disabled:opacity-50"
+                      />
+                      <span className="text-sm text-foreground">
+                        At the scheduled time in their timezone
+                      </span>
+                    </label>
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="localSendMode"
+                        value="peak-hour"
+                        checked={localSendMode === 'peak-hour'}
+                        onChange={() => {
+                          setLocalSendMode('peak-hour');
+                          setIsDirty(true);
+                        }}
+                        disabled={isFormDisabled}
+                        className="mt-0.5 h-4 w-4 border-border text-primary-600 focus:ring-primary-500 disabled:opacity-50"
+                      />
+                      <span className="text-sm text-foreground">
+                        At each subscriber&rsquo;s personal best hour (falls back to the default time
+                        until we&rsquo;ve seen enough opens)
+                      </span>
+                    </label>
+                  </div>
+                </fieldset>
+              )}
 
               {localSendEnabled && (
                 <div className="pl-7">

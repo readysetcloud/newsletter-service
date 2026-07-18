@@ -144,6 +144,113 @@ export function filterSubscribersForGroup(subscribers, groupKey) {
 }
 
 /**
+ * Minimum recorded opens before a subscriber's histogram is trusted for
+ * peak-hour sends.
+ */
+export const PEAK_HOUR_MIN_SAMPLES = 5;
+
+/**
+ * Compute a subscriber's peak open hour (UTC, 0-23) from their open-hour
+ * histogram, or null when the data is insufficient (fewer than minSamples
+ * recorded opens, or an empty/absent histogram).
+ *
+ * The histogram is stored by activity-timeline.mjs recordOpenHour as a map of
+ * UTC-hour string keys ("0".."23") to counts, plus an openHourTotal counter.
+ * DynamoDB round-trips may surface keys and counts as strings, so both are
+ * coerced. The highest count wins; ties break to the lowest hour so the result
+ * is deterministic.
+ *
+ * @param {Object<string, number|string>|undefined} openHours - Hour -> count map
+ * @param {number|string|undefined} openHourTotal - Total recorded opens
+ * @param {number} [minSamples] - Minimum opens before the histogram is trusted
+ * @returns {number|null} UTC hour 0-23, or null when data is insufficient
+ */
+export function computePeakHour(openHours, openHourTotal, minSamples = PEAK_HOUR_MIN_SAMPLES) {
+  const total = Number(openHourTotal);
+  if (!openHours || typeof openHours !== 'object' || !Number.isFinite(total) || total < minSamples) {
+    return null;
+  }
+
+  let peakHour = null;
+  let peakCount = 0;
+  for (const [key, value] of Object.entries(openHours)) {
+    const hour = Number(key);
+    const count = Number(value);
+    if (!Number.isInteger(hour) || hour < 0 || hour > 23 || !Number.isFinite(count) || count <= 0) {
+      continue;
+    }
+    if (count > peakCount || (count === peakCount && peakHour !== null && hour < peakHour)) {
+      peakHour = hour;
+      peakCount = count;
+    }
+  }
+  return peakHour;
+}
+
+/**
+ * The first instant >= base whose UTC hour equals `hour`, preserving the
+ * base's minute (so a 9:30-scheduled issue lands at each subscriber's peak
+ * hour on the half hour). Candidate = the base's UTC date at
+ * (hour, base minute); when that is before the base it rolls forward 24h.
+ * Seconds/millis are zeroed, so a base mid-minute at the target hour:minute
+ * rolls to the next day rather than firing in the past.
+ *
+ * @param {Date|number} baseInstant - The issue's send instant (UTC)
+ * @param {number} hour - Target UTC hour 0-23
+ * @returns {Date}
+ */
+export function nextOccurrenceOfUtcHour(baseInstant, hour) {
+  const base = new Date(baseInstant);
+  let candidateMs = Date.UTC(
+    base.getUTCFullYear(),
+    base.getUTCMonth(),
+    base.getUTCDate(),
+    hour,
+    base.getUTCMinutes()
+  );
+  if (candidateMs < base.getTime()) {
+    candidateMs += 24 * 60 * 60 * 1000;
+  }
+  return new Date(candidateMs);
+}
+
+/**
+ * Group subscribers by their computed peak open hour. Subscribers without
+ * enough histogram data land in the DEFAULT_GROUP.
+ *
+ * @param {Array<{email: string, openHours?: Object, openHourTotal?: number}>} subscribers
+ * @param {number} [minSamples]
+ * @returns {Map<number|string, Array<object>>} UTC hour (number) or DEFAULT_GROUP -> subscribers
+ */
+export function groupSubscribersByPeakHour(subscribers, minSamples = PEAK_HOUR_MIN_SAMPLES) {
+  const groups = new Map();
+  for (const subscriber of subscribers) {
+    const peakHour = computePeakHour(subscriber.openHours, subscriber.openHourTotal, minSamples);
+    const key = peakHour === null ? DEFAULT_GROUP : peakHour;
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+    groups.get(key).push(subscriber);
+  }
+  return groups;
+}
+
+/**
+ * Filter a subscriber list down to the members of a peak-hour group.
+ * A null group key is the insufficient-data default group.
+ *
+ * @param {Array<{email: string, openHours?: Object, openHourTotal?: number}>} subscribers
+ * @param {number|null} peakHour - UTC hour 0-23, or null for the default group
+ * @param {number} [minSamples]
+ * @returns {Array<object>}
+ */
+export function filterSubscribersForPeakHourGroup(subscribers, peakHour, minSamples = PEAK_HOUR_MIN_SAMPLES) {
+  return subscribers.filter(
+    (s) => computePeakHour(s.openHours, s.openHourTotal, minSamples) === peakHour
+  );
+}
+
+/**
  * Compute the UTC send instant for each timezone group.
  *
  * The base instant (the issue's scheduled/actual send time) is interpreted as

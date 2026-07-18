@@ -319,4 +319,164 @@ describe('send-email-v2 local send', () => {
       );
     });
   });
+
+  describe('peak-hour mode', () => {
+    // Histograms: two subscribers peak at UTC hour 14, one at hour 02, and
+    // one has too little data to trust (openHourTotal below the 5-sample
+    // minimum). String keys/counts mirror what DynamoDB round-trips produce.
+    const peakHourPool = [
+      { email: 'p14a@example.com', openHours: { 14: 7, 2: 3 }, openHourTotal: 10 },
+      { email: 'p14b@example.com', openHours: { '14': '6' }, openHourTotal: '6' },
+      { email: 'p02@example.com', openHours: { 2: 5 }, openHourTotal: 5 },
+      { email: 'nodata@example.com', openHours: { 9: 2 }, openHourTotal: 2 }
+    ];
+
+    const peakHourEvent = (overrides = {}) => baseEvent({
+      localSend: { enabled: true, defaultTimeZone: 'America/New_York', mode: 'peak-hour' },
+      ...overrides
+    });
+
+    test('fans out one schedule per peak hour, preserving the base minute', async () => {
+      mockVerifiedSender();
+      listSubscribers.mockResolvedValue({ subscribers: peakHourPool, lastEvaluatedKey: undefined });
+
+      // Future send at 09:30 UTC: hour 14 lands the same day at 14:30; hour 2
+      // has already passed, so it wraps to the next day at 02:30.
+      const result = await handler(peakHourEvent({ sendAt: '2099-01-15T09:30:00.000Z' }));
+
+      expect(result).toMatchObject({
+        sent: false,
+        localSend: true,
+        mode: 'peak-hour',
+        groups: 3,
+        immediate: 0,
+        scheduled: 3
+      });
+      expect(sesInstance.send).not.toHaveBeenCalled();
+
+      const schedules = schedulerCalls();
+      // 3 hour groups + 1 catch-all.
+      expect(schedules).toHaveLength(4);
+
+      const byGroup = new Map(schedules.map((cmd) => {
+        const group = parseScheduleDetail(cmd).localSendGroup;
+        return ['peakHour' in group ? group.peakHour : group.timeZone, cmd];
+      }));
+
+      // Hour 14 fires the same day at the base's minute.
+      expect(byGroup.get(14).ScheduleExpression).toBe('at(2099-01-15T14:30:00)');
+      // Hour 2 has passed at fan-out time — next-day wrap.
+      expect(byGroup.get(2).ScheduleExpression).toBe('at(2099-01-16T02:30:00)');
+      // Insufficient-data subscribers fire at the base instant.
+      expect(byGroup.get(null).ScheduleExpression).toBe('at(2099-01-15T09:30:00)');
+      // Catch-all 30 minutes after the latest group (next-day 02:30 + 0:30).
+      expect(byGroup.get('__catch_all__').ScheduleExpression).toBe('at(2099-01-16T03:00:00)');
+
+      // Group payloads must not carry the fan-out drivers.
+      const groupPayload = parseScheduleDetail(byGroup.get(14));
+      expect(groupPayload.localSend).toBeUndefined();
+      expect(groupPayload.sendAt).toBeUndefined();
+      expect(groupPayload.referenceNumber).toBe('tenant-123_42');
+    });
+
+    test('emits the default group immediately when no sendAt is given', async () => {
+      mockVerifiedSender();
+      listSubscribers.mockResolvedValue({
+        subscribers: [{ email: 'nodata@example.com', openHours: null, openHourTotal: null }],
+        lastEvaluatedKey: undefined
+      });
+
+      const result = await handler(peakHourEvent());
+
+      // base = now → the default group is due immediately.
+      expect(result).toMatchObject({ localSend: true, mode: 'peak-hour', groups: 1, immediate: 1, scheduled: 0 });
+
+      const events = eventBridgeCalls().filter((cmd) => cmd.__type === 'PutEvents');
+      expect(events).toHaveLength(1);
+      expect(parseEventDetail(events[0]).localSendGroup).toEqual({ peakHour: null });
+
+      // Catch-all is still scheduled and keeps the timezone-shaped key.
+      const schedules = schedulerCalls();
+      expect(schedules).toHaveLength(1);
+      expect(parseScheduleDetail(schedules[0]).localSendGroup).toEqual({ timeZone: '__catch_all__' });
+    });
+
+    test('re-entry with a peakHour filters to that hour group', async () => {
+      mockVerifiedSender();
+      listSubscribers.mockResolvedValue({ subscribers: peakHourPool, lastEvaluatedKey: undefined });
+
+      const result = await handler(baseEvent({
+        localSend: undefined,
+        localSendGroup: { peakHour: 14 }
+      }));
+
+      expect(result.sent).toBe(true);
+      expect(result.recipients).toBe(2);
+      const sentTo = sesInstance.send.mock.calls.map(([cmd]) => cmd.Destination.ToAddresses[0]);
+      expect(sentTo.sort()).toEqual(['p14a@example.com', 'p14b@example.com']);
+    });
+
+    test('re-entry with peakHour null takes the insufficient-data subscribers', async () => {
+      mockVerifiedSender();
+      listSubscribers.mockResolvedValue({ subscribers: peakHourPool, lastEvaluatedKey: undefined });
+
+      const result = await handler(baseEvent({
+        localSend: undefined,
+        localSendGroup: { peakHour: null }
+      }));
+
+      expect(result.recipients).toBe(1);
+      expect(sesInstance.send.mock.calls[0][0].Destination.ToAddresses[0]).toBe('nodata@example.com');
+    });
+
+    test('re-entry still applies the lastIssueSent idempotency filter', async () => {
+      mockVerifiedSender();
+      listSubscribers.mockResolvedValue({
+        subscribers: [
+          { email: 'p14a@example.com', openHours: { 14: 7 }, openHourTotal: 7, lastIssueSent: 'tenant-123_42' },
+          { email: 'p14b@example.com', openHours: { 14: 6 }, openHourTotal: 6, lastIssueSent: null }
+        ],
+        lastEvaluatedKey: undefined
+      });
+
+      const result = await handler(baseEvent({
+        localSend: undefined,
+        localSendGroup: { peakHour: 14 }
+      }));
+
+      expect(result.recipients).toBe(1);
+      expect(result.skipped).toBe(1);
+      expect(sesInstance.send.mock.calls[0][0].Destination.ToAddresses[0]).toBe('p14b@example.com');
+    });
+
+    test('timezone mode is unaffected by histogram data (regression)', async () => {
+      mockVerifiedSender();
+
+      const sendAt = '2099-01-15T14:00:00.000Z';
+      listSubscribers.mockResolvedValue({
+        subscribers: [
+          // Carries a strong histogram, but timezone mode must ignore it.
+          { email: 'ny@example.com', timeZone: 'America/New_York', openHours: { 2: 50 }, openHourTotal: 50 },
+          { email: 'la@example.com', timeZone: 'America/Los_Angeles', openHours: { 3: 50 }, openHourTotal: 50 }
+        ],
+        lastEvaluatedKey: undefined
+      });
+
+      const result = await handler(baseEvent({
+        sendAt,
+        localSend: { enabled: true, defaultTimeZone: 'America/New_York', mode: 'timezone' }
+      }));
+
+      expect(result).toMatchObject({ localSend: true, mode: 'timezone', groups: 2 });
+
+      const schedules = schedulerCalls();
+      expect(schedules).toHaveLength(3);
+      const byDetailZone = new Map(
+        schedules.map((cmd) => [parseScheduleDetail(cmd).localSendGroup.timeZone, cmd])
+      );
+      expect(byDetailZone.get('America/New_York').ScheduleExpression).toBe('at(2099-01-15T14:00:00)');
+      expect(byDetailZone.get('America/Los_Angeles').ScheduleExpression).toBe('at(2099-01-15T17:00:00)');
+      expect(byDetailZone.get('__catch_all__').ScheduleExpression).toBe('at(2099-01-15T17:30:00)');
+    });
+  });
 });

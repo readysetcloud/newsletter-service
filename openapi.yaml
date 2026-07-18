@@ -3719,6 +3719,18 @@ components:
           description: >-
             IANA timezone (e.g. "America/New_York") whose wall clock defines
             the target send time. Required when enabled is true.
+        mode:
+          type: string
+          enum:
+            - timezone
+            - peak-hour
+          default: timezone
+          description: >-
+            Delivery strategy. "timezone" (default) delivers at the scheduled
+            wall-clock time in each subscriber's timezone. "peak-hour"
+            delivers at each subscriber's personal peak open hour (from their
+            open-hour histogram); subscribers without enough recorded opens
+            fall back to the default send time.
 
     IssueStats:
       type: object

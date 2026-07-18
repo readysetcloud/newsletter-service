@@ -11,6 +11,10 @@ import {
   groupSubscribersByTimeZone,
   computeGroupSendTimes,
   filterSubscribersForGroup,
+  groupSubscribersByPeakHour,
+  nextOccurrenceOfUtcHour,
+  filterSubscribersForPeakHourGroup,
+  DEFAULT_GROUP,
   CATCH_ALL_GROUP
 } from './utils/local-send.mjs';
 
@@ -223,9 +227,10 @@ const retrieveSubscribersPhase = async (tenantId) => {
 /**
  * Validate an incoming localSend config. Returns the config when usable,
  * otherwise null (with a warning) so the send falls back to a plain send —
- * a bad timezone must never block an issue from going out.
- * @param {Object|undefined} localSend - { enabled, defaultTimeZone } from the event
- * @returns {{enabled: true, defaultTimeZone: string}|null}
+ * a bad timezone must never block an issue from going out. An unknown mode
+ * falls back to 'timezone' (the original behavior) for the same reason.
+ * @param {Object|undefined} localSend - { enabled, defaultTimeZone, mode } from the event
+ * @returns {{enabled: true, defaultTimeZone: string, mode: 'timezone'|'peak-hour'}|null}
  */
 const normalizeLocalSend = (localSend) => {
   if (!localSend?.enabled) {
@@ -237,7 +242,13 @@ const normalizeLocalSend = (localSend) => {
     });
     return null;
   }
-  return { enabled: true, defaultTimeZone: localSend.defaultTimeZone };
+  const mode = localSend.mode === 'peak-hour' ? 'peak-hour' : 'timezone';
+  if (localSend.mode && localSend.mode !== 'peak-hour' && localSend.mode !== 'timezone') {
+    console.warn('[LOCAL SEND] Unknown mode - falling back to timezone mode', {
+      mode: localSend.mode
+    });
+  }
+  return { enabled: true, defaultTimeZone: localSend.defaultTimeZone, mode };
 };
 
 /**
@@ -290,36 +301,82 @@ const createLocalSendSchedule = async (payload, sendTime, referenceNumber, label
 };
 
 /**
- * Fan a local-send issue out into per-timezone group sends.
+ * Fan a local-send issue out into per-group sends.
  *
- * The issue's send instant (sendAt, or now) is read as a wall-clock time in
- * localSend.defaultTimeZone; each timezone group with confirmed subscribers is
- * scheduled for that wall-clock time in its own zone. Groups whose local time
- * has already passed are re-emitted immediately. Subscribers without a
- * confirmed timezone fire with the default group at the original instant.
+ * Group semantics depend on localSend.mode:
  *
- * A final catch-all send runs 30 minutes after the last group. It carries no
- * timezone filter, so anyone missed by group filtering (e.g. a timezone
- * confirmed mid-send) still receives the issue; the lastIssueSent idempotency
- * filter makes it a no-op for everyone already sent.
+ * - 'timezone' (default): the issue's send instant (sendAt, or now) is read as
+ *   a wall-clock time in localSend.defaultTimeZone; each timezone group with
+ *   confirmed subscribers is scheduled for that wall-clock time in its own
+ *   zone. Subscribers without a confirmed timezone fire with the default group
+ *   at the original instant. Re-entry payloads carry
+ *   `localSendGroup: { timeZone: '<zone>' | '__default__' }`.
  *
- * Each re-entry event carries `localSendGroup` and re-derives its member list
- * at fire time — recipient lists are never embedded in payloads.
+ * - 'peak-hour': subscribers are grouped by the peak UTC hour of their
+ *   open-hour histogram; each hour group is scheduled for the next occurrence
+ *   of that UTC hour at or after the base instant (preserving the base's
+ *   minute). Subscribers without enough open data fire with the default group
+ *   at the base instant. Re-entry payloads carry
+ *   `localSendGroup: { peakHour: <0-23> }` for hour groups and
+ *   `localSendGroup: { peakHour: null }` for the insufficient-data default
+ *   group — the presence of the `peakHour` key (vs `timeZone`) is what tells
+ *   re-entry which filter to apply.
+ *
+ * In both modes, groups whose target time has already passed are re-emitted
+ * immediately, and a final catch-all send runs 30 minutes after the last
+ * group. The catch-all always carries `localSendGroup: { timeZone:
+ * '__catch_all__' }` (both modes): it takes everyone, and the lastIssueSent
+ * idempotency filter makes it a no-op for subscribers already sent.
+ *
+ * Each re-entry event re-derives its member list at fire time — recipient
+ * lists are never embedded in payloads.
  *
  * @param {Object} params
  * @param {Object} params.data - The original Send Email v2 event detail
- * @param {{defaultTimeZone: string}} params.localSend - Normalized config
+ * @param {{defaultTimeZone: string, mode: 'timezone'|'peak-hour'}} params.localSend - Normalized config
  * @returns {Promise<Object>} Fan-out summary
  */
 const fanOutLocalSendGroups = async ({ data, localSend }) => {
   const subscribers = await retrieveSubscribersPhase(data.tenantId);
-  const groups = groupSubscribersByTimeZone(subscribers);
 
   const now = new Date();
   const sendAtDate = data.sendAt ? new Date(data.sendAt) : null;
   const base = sendAtDate && sendAtDate > now ? sendAtDate : now;
 
-  const sendTimes = computeGroupSendTimes(base, localSend.defaultTimeZone, groups.keys());
+  // Plan the groups: label -> { sendTime, localSendGroup payload, size }.
+  const plans = [];
+  if (localSend.mode === 'peak-hour') {
+    const groups = groupSubscribersByPeakHour(subscribers);
+    for (const [key, members] of groups) {
+      if (key === DEFAULT_GROUP) {
+        // Not enough open data yet — fall back to the issue's own send time.
+        plans.push({
+          label: 'default',
+          sendTime: base,
+          localSendGroup: { peakHour: null },
+          size: members.length
+        });
+      } else {
+        plans.push({
+          label: `hour-${key}`,
+          sendTime: nextOccurrenceOfUtcHour(base, key),
+          localSendGroup: { peakHour: key },
+          size: members.length
+        });
+      }
+    }
+  } else {
+    const groups = groupSubscribersByTimeZone(subscribers);
+    const sendTimes = computeGroupSendTimes(base, localSend.defaultTimeZone, groups.keys());
+    for (const [zone, sendTime] of sendTimes) {
+      plans.push({
+        label: zone,
+        sendTime,
+        localSendGroup: { timeZone: zone },
+        size: groups.get(zone).length
+      });
+    }
+  }
 
   // The re-entry payload must not carry the fan-out drivers, or each group
   // event would fan out (or future-schedule) again.
@@ -331,8 +388,8 @@ const fanOutLocalSendGroups = async ({ data, localSend }) => {
   let immediate = 0;
   let latestMs = base.getTime();
 
-  for (const [zone, sendTime] of sendTimes) {
-    const payload = { ...template, localSendGroup: { timeZone: zone } };
+  for (const { label, sendTime, localSendGroup, size } of plans) {
+    const payload = { ...template, localSendGroup };
     latestMs = Math.max(latestMs, sendTime.getTime());
 
     // Anything due within the next minute is sent now; Scheduler rejects
@@ -340,11 +397,11 @@ const fanOutLocalSendGroups = async ({ data, localSend }) => {
     if (sendTime.getTime() <= now.getTime() + 60 * 1000) {
       await emitSendEvent(payload);
       immediate++;
-      console.log(`[LOCAL SEND] Group ${zone} (${groups.get(zone).length} subscribers) sending now`);
+      console.log(`[LOCAL SEND] Group ${label} (${size} subscribers) sending now`);
     } else {
-      await createLocalSendSchedule(payload, sendTime, data.referenceNumber, zone);
+      await createLocalSendSchedule(payload, sendTime, data.referenceNumber, label);
       scheduled++;
-      console.log(`[LOCAL SEND] Group ${zone} (${groups.get(zone).length} subscribers) scheduled for ${sendTime.toISOString()}`);
+      console.log(`[LOCAL SEND] Group ${label} (${size} subscribers) scheduled for ${sendTime.toISOString()}`);
     }
   }
 
@@ -356,12 +413,13 @@ const fanOutLocalSendGroups = async ({ data, localSend }) => {
     'catch-all'
   );
 
-  console.log(`[LOCAL SEND] Fan-out complete - ${sendTimes.size} groups (${immediate} immediate, ${scheduled} scheduled), catch-all at ${catchAllAt.toISOString()}`);
+  console.log(`[LOCAL SEND] Fan-out complete (${localSend.mode}) - ${plans.length} groups (${immediate} immediate, ${scheduled} scheduled), catch-all at ${catchAllAt.toISOString()}`);
 
   return {
     sent: false,
     localSend: true,
-    groups: sendTimes.size,
+    mode: localSend.mode,
+    groups: plans.length,
     immediate,
     scheduled,
     catchAllAt: catchAllAt.toISOString()
@@ -822,9 +880,17 @@ export const handler = async (event) => {
 
       // Local-send group re-entry: narrow to this group's members. Membership
       // is derived at fire time (not embedded in the event) so timezone
-      // confirmations landing between fan-out and fire are respected; the
-      // catch-all group takes everyone and relies on the idempotency filter.
-      if (data.localSendGroup?.timeZone) {
+      // confirmations / new opens landing between fan-out and fire are
+      // respected; the catch-all group takes everyone and relies on the
+      // idempotency filter. The payload shape disambiguates the mode: a
+      // `peakHour` key (number 0-23, or null for the insufficient-data default
+      // group) means peak-hour filtering, a `timeZone` key (zone name,
+      // '__default__', or '__catch_all__') means timezone filtering.
+      if (data.localSendGroup && 'peakHour' in data.localSendGroup) {
+        const peakHour = data.localSendGroup.peakHour;
+        subscribers = filterSubscribersForPeakHourGroup(subscribers, peakHour);
+        console.log(`[LOCAL SEND] Peak-hour group ${peakHour ?? 'default'}: ${subscribers.length} subscribers after filtering`);
+      } else if (data.localSendGroup?.timeZone) {
         const groupKey = data.localSendGroup.timeZone;
         subscribers = filterSubscribersForGroup(subscribers, groupKey);
         console.log(`[LOCAL SEND] Group ${groupKey}: ${subscribers.length} subscribers after filtering`);

@@ -232,7 +232,7 @@ describe('IssueFormPage local send', () => {
     await waitFor(() => {
       expect(issuesService.createIssue).toHaveBeenCalledWith(
         expect.objectContaining({
-          localSend: { enabled: true, defaultTimeZone: 'America/Chicago' },
+          localSend: { enabled: true, defaultTimeZone: 'America/Chicago', mode: 'timezone' },
         })
       );
     });
@@ -244,5 +244,60 @@ describe('IssueFormPage local send', () => {
     expect(screen.queryByRole('combobox', { name: 'Default timezone' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('checkbox', { name: /local send/i }));
     expect(screen.getByRole('combobox', { name: 'Default timezone' })).toBeInTheDocument();
+  });
+
+  it('hides the delivery-time mode radios until local send is enabled', () => {
+    render(<IssueFormPage />);
+
+    expect(
+      screen.queryByRole('radio', { name: /at the scheduled time in their timezone/i })
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /local send/i }));
+
+    // Timezone mode is preselected.
+    expect(
+      screen.getByRole('radio', { name: /at the scheduled time in their timezone/i })
+    ).toBeChecked();
+    expect(
+      screen.getByRole('radio', { name: /personal best hour/i })
+    ).not.toBeChecked();
+  });
+
+  it('persists peak-hour mode when the personal best hour option is selected', async () => {
+    render(<IssueFormPage />);
+    fillRequiredFields();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /local send/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /personal best hour/i }));
+
+    fireEvent.click(screen.getByRole('button', { name: /create new issue/i }));
+
+    await waitFor(() => {
+      expect(issuesService.createIssue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          localSend: expect.objectContaining({ enabled: true, mode: 'peak-hour' }),
+        })
+      );
+    });
+  });
+
+  it('switching back to timezone mode persists mode timezone', async () => {
+    render(<IssueFormPage />);
+    fillRequiredFields();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /local send/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /personal best hour/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /at the scheduled time in their timezone/i }));
+
+    fireEvent.click(screen.getByRole('button', { name: /create new issue/i }));
+
+    await waitFor(() => {
+      expect(issuesService.createIssue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          localSend: expect.objectContaining({ mode: 'timezone' }),
+        })
+      );
+    });
   });
 });

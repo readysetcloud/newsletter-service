@@ -137,3 +137,6 @@ dist
 **/*.rs.bk
 **/Cargo.lock
 *.pdb
+
+# Claude Code agent worktrees (session infrastructure, not source)
+.claude/worktrees/

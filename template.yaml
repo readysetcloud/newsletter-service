@@ -4291,7 +4291,7 @@ Resources:
     Type: AWS::Serverless::LayerVersion
     Properties:
       LayerName: geolocation-maxmind
-      Description: MaxMind GeoLite2 Country database
+      Description: MaxMind GeoLite2 Country + City databases
       ContentUri: functions/layers/geolocation-layer.zip
       CompatibleRuntimes:
         - nodejs22.x

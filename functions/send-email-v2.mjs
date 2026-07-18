@@ -6,6 +6,18 @@ import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { encrypt, sendWithRetry } from './utils/helpers.mjs';
 import { listSubscribers, getSubscriberByEmail, updateSubscriberSendMetadata } from './utils/subscriber.mjs';
 import { splitRecipients, selectHoldoutSample } from './utils/ab-variants.mjs';
+import {
+  isValidTimeZone,
+  groupSubscribersByTimeZone,
+  computeGroupSendTimes,
+  filterSubscribersForGroup,
+  groupSubscribersByPeakHour,
+  nextOccurrenceOfUtcHour,
+  filterSubscribersForPeakHourGroup,
+  DEFAULT_GROUP,
+  CATCH_ALL_GROUP
+} from './utils/local-send.mjs';
+import { extractSections, prepareAssembly, assembleForSubscriber } from './utils/interest-assembly.mjs';
 
 // Key patterns for DynamoDB (previously from ./senders/types.mjs)
 const KEY_PATTERNS = {
@@ -213,6 +225,215 @@ const retrieveSubscribersPhase = async (tenantId) => {
   return subscribers;
 };
 
+/**
+ * Validate an incoming localSend config. Returns the config when usable,
+ * otherwise null (with a warning) so the send falls back to a plain send —
+ * a bad timezone must never block an issue from going out. An unknown mode
+ * falls back to 'timezone' (the original behavior) for the same reason.
+ * @param {Object|undefined} localSend - { enabled, defaultTimeZone, mode } from the event
+ * @returns {{enabled: true, defaultTimeZone: string, mode: 'timezone'|'peak-hour'}|null}
+ */
+const normalizeLocalSend = (localSend) => {
+  if (!localSend?.enabled) {
+    return null;
+  }
+  if (!isValidTimeZone(localSend.defaultTimeZone)) {
+    console.warn('[LOCAL SEND] Invalid defaultTimeZone - falling back to plain send', {
+      defaultTimeZone: localSend.defaultTimeZone ?? null
+    });
+    return null;
+  }
+  const mode = localSend.mode === 'peak-hour' ? 'peak-hour' : 'timezone';
+  if (localSend.mode && localSend.mode !== 'peak-hour' && localSend.mode !== 'timezone') {
+    console.warn('[LOCAL SEND] Unknown mode - falling back to timezone mode', {
+      mode: localSend.mode
+    });
+  }
+  return { enabled: true, defaultTimeZone: localSend.defaultTimeZone, mode };
+};
+
+/**
+ * Re-emit a Send Email v2 event immediately (used for local-send groups whose
+ * local target time has already passed).
+ */
+const emitSendEvent = async (payload) => {
+  await sendWithRetry(async () => {
+    return await eventBridge.send(new PutEventsCommand({
+      Entries: [{
+        EventBusName: 'default',
+        Source: 'newsletter-service',
+        DetailType: 'Send Email v2',
+        Detail: JSON.stringify(payload)
+      }]
+    }));
+  }, 'Emit local-send group event');
+};
+
+/**
+ * Create a one-shot EventBridge Scheduler entry that re-emits the Send Email
+ * v2 event at the group's local target time (same mechanism as future sends).
+ */
+const createLocalSendSchedule = async (payload, sendTime, referenceNumber, label) => {
+  // The unique token and the group label come right after the prefix so the
+  // 64-character Scheduler name limit can never truncate them away — a long
+  // referenceNumber previously pushed the timestamp (and part of the label)
+  // off the end, letting same-prefix groups collide on the schedule name.
+  // Only the referenceNumber (kept last, for operator readability) is at risk
+  // of truncation.
+  const uniqueToken = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const scheduleName = `local-${uniqueToken}-${label}-${referenceNumber || 'send'}`
+    .replace(/[^0-9a-zA-Z-_.]/g, '-')
+    .slice(0, 64);
+
+  await sendWithRetry(async () => {
+    return await scheduler.send(new CreateScheduleCommand({
+      ActionAfterCompletion: 'DELETE',
+      FlexibleTimeWindow: { Mode: 'OFF' },
+      GroupName: 'newsletter',
+      Name: scheduleName,
+      ScheduleExpression: `at(${sendTime.toISOString().slice(0, 19)})`,
+      Target: {
+        Arn: 'arn:aws:scheduler:::aws-sdk:eventbridge:putEvents',
+        RoleArn: process.env.SCHEDULER_ROLE_ARN,
+        Input: JSON.stringify({
+          Entries: [{
+            EventBusName: 'default',
+            Detail: JSON.stringify(payload),
+            DetailType: 'Send Email v2',
+            Source: 'newsletter-service'
+          }]
+        })
+      }
+    }));
+  }, `Schedule local-send group ${label}`);
+};
+
+/**
+ * Fan a local-send issue out into per-group sends.
+ *
+ * Group semantics depend on localSend.mode:
+ *
+ * - 'timezone' (default): the issue's send instant (sendAt, or now) is read as
+ *   a wall-clock time in localSend.defaultTimeZone; each timezone group with
+ *   confirmed subscribers is scheduled for that wall-clock time in its own
+ *   zone. Subscribers without a confirmed timezone fire with the default group
+ *   at the original instant. Re-entry payloads carry
+ *   `localSendGroup: { timeZone: '<zone>' | '__default__' }`.
+ *
+ * - 'peak-hour': subscribers are grouped by the peak UTC hour of their
+ *   open-hour histogram; each hour group is scheduled for the next occurrence
+ *   of that UTC hour at or after the base instant (preserving the base's
+ *   minute). Subscribers without enough open data fire with the default group
+ *   at the base instant. Re-entry payloads carry
+ *   `localSendGroup: { peakHour: <0-23> }` for hour groups and
+ *   `localSendGroup: { peakHour: null }` for the insufficient-data default
+ *   group — the presence of the `peakHour` key (vs `timeZone`) is what tells
+ *   re-entry which filter to apply.
+ *
+ * In both modes, groups whose target time has already passed are re-emitted
+ * immediately, and a final catch-all send runs 30 minutes after the last
+ * group. The catch-all always carries `localSendGroup: { timeZone:
+ * '__catch_all__' }` (both modes): it takes everyone, and the lastIssueSent
+ * idempotency filter makes it a no-op for subscribers already sent.
+ *
+ * Each re-entry event re-derives its member list at fire time — recipient
+ * lists are never embedded in payloads.
+ *
+ * @param {Object} params
+ * @param {Object} params.data - The original Send Email v2 event detail
+ * @param {{defaultTimeZone: string, mode: 'timezone'|'peak-hour'}} params.localSend - Normalized config
+ * @returns {Promise<Object>} Fan-out summary
+ */
+const fanOutLocalSendGroups = async ({ data, localSend }) => {
+  const subscribers = await retrieveSubscribersPhase(data.tenantId);
+
+  const now = new Date();
+  const sendAtDate = data.sendAt ? new Date(data.sendAt) : null;
+  const base = sendAtDate && sendAtDate > now ? sendAtDate : now;
+
+  // Plan the groups: label -> { sendTime, localSendGroup payload, size }.
+  const plans = [];
+  if (localSend.mode === 'peak-hour') {
+    const groups = groupSubscribersByPeakHour(subscribers);
+    for (const [key, members] of groups) {
+      if (key === DEFAULT_GROUP) {
+        // Not enough open data yet — fall back to the issue's own send time.
+        plans.push({
+          label: 'default',
+          sendTime: base,
+          localSendGroup: { peakHour: null },
+          size: members.length
+        });
+      } else {
+        plans.push({
+          label: `hour-${key}`,
+          sendTime: nextOccurrenceOfUtcHour(base, key),
+          localSendGroup: { peakHour: key },
+          size: members.length
+        });
+      }
+    }
+  } else {
+    const groups = groupSubscribersByTimeZone(subscribers);
+    const sendTimes = computeGroupSendTimes(base, localSend.defaultTimeZone, groups.keys());
+    for (const [zone, sendTime] of sendTimes) {
+      plans.push({
+        label: zone,
+        sendTime,
+        localSendGroup: { timeZone: zone },
+        size: groups.get(zone).length
+      });
+    }
+  }
+
+  // The re-entry payload must not carry the fan-out drivers, or each group
+  // event would fan out (or future-schedule) again.
+  const template = { ...data };
+  delete template.sendAt;
+  delete template.localSend;
+
+  let scheduled = 0;
+  let immediate = 0;
+  let latestMs = base.getTime();
+
+  for (const { label, sendTime, localSendGroup, size } of plans) {
+    const payload = { ...template, localSendGroup };
+    latestMs = Math.max(latestMs, sendTime.getTime());
+
+    // Anything due within the next minute is sent now; Scheduler rejects
+    // schedule times in the past.
+    if (sendTime.getTime() <= now.getTime() + 60 * 1000) {
+      await emitSendEvent(payload);
+      immediate++;
+      console.log(`[LOCAL SEND] Group ${label} (${size} subscribers) sending now`);
+    } else {
+      await createLocalSendSchedule(payload, sendTime, data.referenceNumber, label);
+      scheduled++;
+      console.log(`[LOCAL SEND] Group ${label} (${size} subscribers) scheduled for ${sendTime.toISOString()}`);
+    }
+  }
+
+  const catchAllAt = new Date(latestMs + 30 * 60 * 1000);
+  await createLocalSendSchedule(
+    { ...template, localSendGroup: { timeZone: CATCH_ALL_GROUP } },
+    catchAllAt,
+    data.referenceNumber,
+    'catch-all'
+  );
+
+  console.log(`[LOCAL SEND] Fan-out complete (${localSend.mode}) - ${plans.length} groups (${immediate} immediate, ${scheduled} scheduled), catch-all at ${catchAllAt.toISOString()}`);
+
+  return {
+    sent: false,
+    localSend: true,
+    mode: localSend.mode,
+    groups: plans.length,
+    immediate,
+    scheduled,
+    catchAllAt: catchAllAt.toISOString()
+  };
+};
+
 
 
 /**
@@ -237,6 +458,87 @@ const filterIdempotentRecipientsPhase = async (tenantId, subscribers, issueIdent
   return { recipients, skippedCount };
 };
 /**
+ * Prepares interest-aware assembly (contentAssembly) for a send. Runs ONCE per
+ * send: extracts the marker-delimited sections from the rendered HTML, batch
+ * loads the issue's LLM-classified `link#` records to assign each section a
+ * topic (majority of primaryTopic among the section's links), and indexes the
+ * already-in-memory subscriber list's interest data by email. Per-recipient
+ * work later is pure string reassembly.
+ *
+ * Fail-open by design: returns null (canonical HTML for everyone) when markers
+ * are absent/malformed (e.g. JSON-template issues, custom templates without
+ * markers), when no section has classified links, or on any error. Assembly
+ * must never break or block a send.
+ *
+ * @param {string} html - Rendered email HTML (potentially marker-tagged)
+ * @param {object[]} subscribers - Subscriber records already loaded for this send
+ * @param {string|undefined} referenceNumber - `${tenantId}_${issueNumber}`
+ * @returns {Promise<{prepared: object, interestByEmail: Map}|null>}
+ */
+const prepareAssemblyPhase = async (html, subscribers, referenceNumber) => {
+  try {
+    // Cheap early exit before any I/O: JSON-template issues and custom
+    // templates are rendered without markers, so there is nothing to reorder.
+    if (!extractSections(html)) {
+      console.warn('[ASSEMBLY] No section markers in rendered HTML (JSON-template issue or custom template) - sending canonical order');
+      return null;
+    }
+
+    if (!referenceNumber || !referenceNumber.includes('_')) {
+      console.warn('[ASSEMBLY] Skipping - missing referenceNumber to locate link records');
+      return null;
+    }
+
+    const separatorIndex = referenceNumber.lastIndexOf('_');
+    const issuePk = `${referenceNumber.slice(0, separatorIndex)}#${referenceNumber.slice(separatorIndex + 1)}`;
+
+    // Batch-read the issue's link# records once for the whole send.
+    const linkRecords = [];
+    let lastEvaluatedKey;
+    do {
+      const result = await sendWithRetry(async () => {
+        return await ddb.send(new QueryCommand({
+          TableName: process.env.TABLE_NAME,
+          KeyConditionExpression: 'pk = :pk AND begins_with(sk, :linkPrefix)',
+          ExpressionAttributeValues: marshall({
+            ':pk': issuePk,
+            ':linkPrefix': 'link#'
+          }),
+          ...lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey }
+        }));
+      }, 'Query issue link records');
+
+      linkRecords.push(...(result.Items ?? []).map(item => unmarshall(item)));
+      lastEvaluatedKey = result.LastEvaluatedKey;
+    } while (lastEvaluatedKey);
+
+    const prepared = prepareAssembly(html, linkRecords);
+    if (!prepared) {
+      // No markers (JSON-template issue or custom template without markers) or
+      // no classified links matched any section.
+      console.warn('[ASSEMBLY] No reorderable sections with classified topics - sending canonical order');
+      return null;
+    }
+
+    const interestByEmail = new Map();
+    for (const subscriber of subscribers) {
+      if (subscriber?.email && (subscriber.interestScores || subscriber.excludedTopics)) {
+        interestByEmail.set(subscriber.email, {
+          interestScores: subscriber.interestScores,
+          excludedTopics: subscriber.excludedTopics
+        });
+      }
+    }
+
+    console.log(`[ASSEMBLY] Prepared ${prepared.sections.length} sections (${prepared.sections.filter(s => s.topic).length} with topics), interest data for ${interestByEmail.size}/${subscribers.length} subscribers`);
+    return { prepared, interestByEmail };
+  } catch (error) {
+    console.error('[ASSEMBLY] Preparation failed - sending canonical order', error);
+    return null;
+  }
+};
+
+/**
  * Send emails to recipients with personalization and TPS throttling
  * @param {string[]} emailAddresses - Array of recipient email addresses
  * @param {Object} emailConfig - Email configuration object
@@ -245,6 +547,7 @@ const filterIdempotentRecipientsPhase = async (tenantId, subscribers, issueIdent
  * @param {Object} emailConfig.replacements - Replacement tokens for personalization
  * @param {string} emailConfig.referenceNumber - Optional reference number for tracking
  * @param {string} [emailConfig.variant] - Optional A/B variant id ("a"/"b") tagged on the send
+ * @param {Object} [emailConfig.assembly] - Optional prepared interest assembly ({ prepared, interestByEmail }) from prepareAssemblyPhase
  * @param {string} senderEmail - Sender email address
  * @returns {Promise<{sentCount: number, sentRecipients: string[]}>} Send stats and sent recipients
  */
@@ -262,6 +565,18 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
     await sendWithRetry(async () => {
       // Apply personalization replacements
       let personalizedHtml = emailConfig.html;
+
+      // Interest-aware assembly: reorder the marker-delimited sections for this
+      // recipient. Pure string reassembly, O(sections) per recipient — the
+      // section extraction and topic lookup already happened once per send in
+      // prepareAssemblyPhase. Recipients without interest data receive the
+      // canonical order.
+      if (emailConfig.assembly) {
+        personalizedHtml = assembleForSubscriber(
+          emailConfig.assembly.prepared,
+          emailConfig.assembly.interestByEmail.get(email)
+        );
+      }
 
       if (emailConfig.replacements?.emailAddress) {
         personalizedHtml = personalizedHtml.replace(
@@ -584,6 +899,21 @@ export const handler = async (event) => {
 
     console.log(`Using sender email: ${senderEmail} for tenant: ${tenantId}`);
 
+    // Local send: fan the list out into per-timezone group sends instead of
+    // one absolute-time send. Runs before the generic sendAt scheduling
+    // because localSend reinterprets sendAt as a per-zone wall-clock target
+    // (zones east of the default would otherwise fire late). Skipped when an
+    // A/B test is active (the two both control send timing) and on group
+    // re-entry events.
+    if (to.list && !data.localSendGroup && !data.abTest) {
+      const localSend = normalizeLocalSend(data.localSend);
+      if (localSend) {
+        return await executePhase('Local Send Fan-Out', async () => {
+          return await fanOutLocalSendGroups({ data, localSend });
+        });
+      }
+    }
+
     if (sendAt) {
       const sendAtDate = new Date(sendAt);
       const now = new Date();
@@ -649,6 +979,24 @@ export const handler = async (event) => {
       subscribers = await executePhase('Subscriber Retrieval', async () => {
         return await retrieveSubscribersPhase(tenantId);
       });
+
+      // Local-send group re-entry: narrow to this group's members. Membership
+      // is derived at fire time (not embedded in the event) so timezone
+      // confirmations / new opens landing between fan-out and fire are
+      // respected; the catch-all group takes everyone and relies on the
+      // idempotency filter. The payload shape disambiguates the mode: a
+      // `peakHour` key (number 0-23, or null for the insufficient-data default
+      // group) means peak-hour filtering, a `timeZone` key (zone name,
+      // '__default__', or '__catch_all__') means timezone filtering.
+      if (data.localSendGroup && 'peakHour' in data.localSendGroup) {
+        const peakHour = data.localSendGroup.peakHour;
+        subscribers = filterSubscribersForPeakHourGroup(subscribers, peakHour);
+        console.log(`[LOCAL SEND] Peak-hour group ${peakHour ?? 'default'}: ${subscribers.length} subscribers after filtering`);
+      } else if (data.localSendGroup?.timeZone) {
+        const groupKey = data.localSendGroup.timeZone;
+        subscribers = filterSubscribersForGroup(subscribers, groupKey);
+        console.log(`[LOCAL SEND] Group ${groupKey}: ${subscribers.length} subscribers after filtering`);
+      }
     }
 
     const { recipients: emailAddresses, skippedCount } = await executePhase('Idempotency Filter', async () => {
@@ -664,6 +1012,20 @@ export const handler = async (event) => {
         senderEmail,
         senderId: senderRecord?.senderId
       };
+    }
+
+    // Phase 2.5: Interest Assembly Preparation (opt-in per issue, list sends
+    // only). Skipped whenever a managed A/B test is active — variants must be
+    // byte-identical for measurement (publish-issue already refuses to flag
+    // both, this is defense in depth). Uses the subscriber list already in
+    // memory; never throws — a null result means everyone gets the event HTML.
+    let assembly = null;
+    if (data.contentAssembly?.enabled === true && to.list && !abTest) {
+      assembly = await executePhase('Interest Assembly Preparation', async () => {
+        return await prepareAssemblyPhase(html, subscribers, data.referenceNumber);
+      });
+    } else if (data.contentAssembly?.enabled === true) {
+      console.warn('[ASSEMBLY] Skipping personalized section order - ' + (abTest ? 'A/B test active' : 'not a list send'));
     }
 
     // Phase 3: Email Sending
@@ -712,7 +1074,8 @@ export const handler = async (event) => {
             html,
             replacements,
             referenceNumber: data.referenceNumber,
-            variant: variantId
+            variant: variantId,
+            ...assembly && { assembly }
           }, senderEmail);
 
           total += result.sentCount;
@@ -726,7 +1089,8 @@ export const handler = async (event) => {
         subject,
         html,
         replacements,
-        referenceNumber: data.referenceNumber
+        referenceNumber: data.referenceNumber,
+        ...assembly && { assembly }
       }, senderEmail);
     });
 

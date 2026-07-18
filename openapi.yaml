@@ -1883,6 +1883,9 @@ paths:
                     type: object
                     nullable: true
                     description: The latest pricing record (null if no pricing exists)
+                    properties:
+                      interestComposition:
+                        $ref: "#/components/schemas/InterestComposition"
                   hasPricing:
                     type: boolean
                     description: Whether any pricing data exists
@@ -1912,6 +1915,9 @@ paths:
                     type: array
                     items:
                       type: object
+                      properties:
+                        interestComposition:
+                          $ref: "#/components/schemas/InterestComposition"
                     description: List of historical pricing records (most recent first)
                   count:
                     type: integer
@@ -2055,6 +2061,9 @@ paths:
                     type: object
                     nullable: true
                     description: The pricing record (present when status is completed)
+                    properties:
+                      interestComposition:
+                        $ref: "#/components/schemas/InterestComposition"
                   error:
                     type: string
                     nullable: true
@@ -2174,6 +2183,12 @@ paths:
                               type: integer
                               nullable: true
                               description: Number of distinct issues this subscriber has opened or clicked
+                            timeZone:
+                              type: string
+                              nullable: true
+                              description: >-
+                                IANA timezone confirmed from open/click geolocation across 3 consecutive
+                                issues (e.g. "America/New_York"). Omitted until confirmed.
                             interestScores:
                               type: object
                               nullable: true
@@ -2337,6 +2352,193 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /subscribers/at-risk:
+    get:
+      summary: Get subscribers at risk of churning, with reasons
+      description: >-
+        Classifies subscribers with leading indicators of disengagement (not just
+        recency). Each at-risk subscriber carries one or more reasons: `fading`
+        (recently active but slipping, with a real engagement history),
+        `interest_stale` (a strong topic interest has not been scored in over 45
+        days), and `streak_break` (historically strong but silent for 3+ issues).
+        Subscribers who are already plain-dormant (last engaged more than 10
+        issues ago, or never) are excluded — those are handled by the sunset flow.
+        The `atRisk` list is sorted by number of reasons (desc) then
+        lastEngagedIssue (asc) and capped at 100 entries; the summary counts
+        reflect the full population.
+      tags:
+        - Subscribers
+      parameters:
+        - name: latestIssueNumber
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: The most recently published issue number
+      responses:
+        "200":
+          description: At-risk subscribers with reasons and a summary by reason
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  atRisk:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        email:
+                          type: string
+                        lastEngagedIssue:
+                          type: integer
+                          nullable: true
+                        engagementCount:
+                          type: integer
+                        reasons:
+                          type: array
+                          items:
+                            type: string
+                            enum: [fading, interest_stale, streak_break]
+                        topTopic:
+                          type: string
+                          description: The stalest qualifying topic (present only when interest_stale fired)
+                      required:
+                        - email
+                        - engagementCount
+                        - reasons
+                  summary:
+                    type: object
+                    properties:
+                      total:
+                        type: integer
+                        description: Total number of at-risk subscribers (not capped)
+                      byReason:
+                        type: object
+                        properties:
+                          fading:
+                            type: integer
+                          interestStale:
+                            type: integer
+                          streakBreak:
+                            type: integer
+                        required:
+                          - fading
+                          - interestStale
+                          - streakBreak
+                    required:
+                      - total
+                      - byReason
+                required:
+                  - atRisk
+                  - summary
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /subscribers/{email}:
+    get:
+      summary: Get subscriber detail
+      description: >
+        Returns full detail for a single subscriber, including their rolling
+        recent-activity timeline (opens and clicks, newest-first) and open-hour
+        histogram total, alongside engagement, interest, and timezone data.
+      tags:
+        - Subscribers
+      parameters:
+        - name: email
+          in: path
+          required: true
+          schema:
+            type: string
+          description: URL-encoded subscriber email address
+      responses:
+        "200":
+          description: Subscriber detail
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  email:
+                    type: string
+                    description: Subscriber email address
+                  firstName:
+                    type: string
+                    description: Subscriber first name
+                  lastName:
+                    type: string
+                    description: Subscriber last name
+                  addedAt:
+                    type: string
+                    nullable: true
+                    format: date-time
+                    description: ISO 8601 date when the subscriber was added
+                  lastEngagedIssue:
+                    type: integer
+                    nullable: true
+                    description: Issue number of the subscriber's most recent engagement, or null if never engaged
+                  engagementCount:
+                    type: integer
+                    nullable: true
+                    description: Number of distinct issues this subscriber has opened or clicked
+                  interestScores:
+                    type: object
+                    nullable: true
+                    description: >-
+                      Per-topic interest scores accumulated from link clicks. Keyed by topic
+                      label (e.g. "ai", "serverless"). Omitted when the subscriber has no scores.
+                    additionalProperties:
+                      type: object
+                      properties:
+                        score:
+                          type: number
+                          description: Accumulated interest score for the topic
+                        lastScoredAt:
+                          type: string
+                          format: date-time
+                          description: ISO 8601 timestamp of the most recent scoring event
+                  timeZone:
+                    type: string
+                    nullable: true
+                    description: >-
+                      IANA timezone confirmed from open/click geolocation across 3 consecutive
+                      issues (e.g. "America/New_York"). Omitted until confirmed.
+                  recentActivity:
+                    type: array
+                    description: Rolling list of recent opens and clicks, newest-first, capped at 20 entries.
+                    items:
+                      type: object
+                      properties:
+                        type:
+                          type: string
+                          enum: [open, click]
+                          description: The kind of activity
+                        issue:
+                          type: integer
+                          description: Issue number the activity occurred on
+                        ts:
+                          type: string
+                          format: date-time
+                          description: ISO 8601 timestamp of the event
+                        url:
+                          type: string
+                          description: The clicked URL (present only for clicks)
+                  openHourTotal:
+                    type: integer
+                    description: Total opens counted into the open-hour histogram
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/UnknownError"
 
@@ -3339,6 +3541,10 @@ components:
             removed within roughly an hour of expiry.
         abTest:
           $ref: "#/components/schemas/AbTest"
+        localSend:
+          $ref: "#/components/schemas/LocalSend"
+        contentAssembly:
+          $ref: "#/components/schemas/ContentAssembly"
 
     CreateIssueResponse:
       type: object
@@ -3453,6 +3659,10 @@ components:
           description: Per-variant engagement statistics (present only for A/B test issues)
           items:
             $ref: "#/components/schemas/VariantStats"
+        localSend:
+          $ref: "#/components/schemas/LocalSend"
+        contentAssembly:
+          $ref: "#/components/schemas/ContentAssembly"
 
     UpdateIssueRequest:
       type: object
@@ -3488,6 +3698,45 @@ components:
           description: Set to 'published' to manually mark an in-progress or failed issue as published
         abTest:
           $ref: "#/components/schemas/AbTest"
+        localSend:
+          $ref: "#/components/schemas/LocalSend"
+
+    LocalSend:
+      type: object
+      nullable: true
+      description: >-
+        Optional local-send configuration. When enabled, the issue's scheduled
+        send time is interpreted as a wall-clock time in defaultTimeZone, and
+        each subscriber with a confirmed timezone receives the issue at that
+        wall-clock time in their own zone. Subscribers without a confirmed
+        timezone are sent at the default time. Set to null (or enabled: false)
+        on update to clear a previously-saved config. Ignored when the issue
+        has an active A/B test.
+      required:
+        - enabled
+      properties:
+        enabled:
+          type: boolean
+          description: Whether local send is active for this issue
+        defaultTimeZone:
+          type: string
+          description: >-
+            IANA timezone (e.g. "America/New_York") whose wall clock defines
+            the target send time. Required when enabled is true.
+        mode:
+          type: string
+          enum:
+            - timezone
+            - peak-hour
+          default: timezone
+          description: >-
+            Delivery strategy. "timezone" (default) delivers at the scheduled
+            wall-clock time in each subscriber's timezone. "peak-hour"
+            delivers at each subscriber's personal peak open hour (from their
+            open-hour histogram); subscribers without enough recorded opens
+            fall back to the default send time.
+        contentAssembly:
+          $ref: "#/components/schemas/ContentAssembly"
 
     IssueStats:
       type: object
@@ -3969,6 +4218,44 @@ components:
           nullable: true
           description: Available options (for single-select and multi-select types)
 
+    InterestCompositionTopic:
+      type: object
+      description: Audience interest breakdown for a single taxonomy topic
+      properties:
+        topic:
+          type: string
+          description: Topic label from the platform taxonomy (e.g. ai, serverless)
+        displayName:
+          type: string
+          description: Human-readable topic name (e.g. AI)
+        confirmed:
+          type: integer
+          description: Subscribers with a confirmed interest score (score >= the auto-segment threshold) for this topic
+        confirmedPct:
+          type: number
+          description: Percentage of all subscribers with confirmed interest in this topic, rounded to 1 decimal
+        engaged:
+          type: integer
+          description: Subscribers with any positive interest score for this topic
+        engagedPct:
+          type: number
+          description: Percentage of all subscribers with any positive interest score for this topic, rounded to 1 decimal
+
+    InterestComposition:
+      type: object
+      description: >-
+        Audience interest composition derived from subscriber interest scores, computed
+        during pricing calculation for sponsor-facing reporting. Topics with zero engaged
+        subscribers are omitted; the list is sorted by confirmed count descending.
+      properties:
+        totalSubscribers:
+          type: integer
+          description: Total subscriber count used to compute the percentages
+        topics:
+          type: array
+          items:
+            $ref: "#/components/schemas/InterestCompositionTopic"
+
     RecalculateResponse:
       type: object
       required:
@@ -4442,6 +4729,24 @@ components:
         complaints:
           type: integer
           description: Number of spam complaints for this variant
+
+    ContentAssembly:
+      type: object
+      required:
+        - enabled
+      description: >-
+        Interest-aware issue assembly configuration. When enabled, the
+        reorderable content sections of the rendered email are re-ordered per
+        recipient so each subscriber's highest-interest sections come first
+        (same content for everyone, only the order changes). Requires
+        topic-classified links; recipients without interest data receive the
+        original order. Ignored while an A/B test is active and for
+        JSON-template issues. Set to null on update to clear a previously
+        saved configuration.
+      properties:
+        enabled:
+          type: boolean
+          description: Whether personalized section ordering is enabled for this issue
 
     DeclareWinnerRequest:
       type: object

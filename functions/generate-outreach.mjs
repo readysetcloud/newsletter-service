@@ -2,6 +2,7 @@ import { DynamoDBClient, QueryCommand, UpdateItemCommand, PutItemCommand, GetIte
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { z } from 'zod';
 import { converse } from './utils/agents.mjs';
+import { buildInterestCompositionLines } from './utils/interest-composition.mjs';
 
 const ddb = new DynamoDBClient();
 
@@ -296,7 +297,7 @@ async function computeSponsorClickTotals(fulfilledEntries) {
 // LLM Prompt and Bedrock Call
 // ---------------------------------------------------------------------------
 
-function buildOutreachPrompt(sponsor, pricing, history, cadence, clickTotals) {
+export function buildOutreachPrompt(sponsor, pricing, history, cadence, clickTotals) {
   const metrics = pricing.metrics || {};
   const { formattedSubscribers, formattedRate, formattedPrice } = formatMetrics(
     metrics.subscriberCount || pricing.subscriberCount || 0,
@@ -345,6 +346,14 @@ function buildOutreachPrompt(sponsor, pricing, history, cadence, clickTotals) {
     lines.push('');
   }
 
+  const interestCompositionLines = buildInterestCompositionLines(pricing.interestComposition);
+  const hasInterestComposition = interestCompositionLines.length > 0;
+  if (hasInterestComposition) {
+    lines.push('## Audience Interest Composition (derived from subscriber link-click behavior)');
+    lines.push(...interestCompositionLines);
+    lines.push('');
+  }
+
   const upcomingDates = cadence
     ? computeNextPublicationDates(cadence.publishingDayOfWeek, cadence.publishingInterval)
     : [];
@@ -364,6 +373,7 @@ function buildOutreachPrompt(sponsor, pricing, history, cadence, clickTotals) {
     '- Address the contact by name',
     '- Reference the newsletter\'s performance metrics (subscriber count, open rate, click-through rate)',
     hasClickData ? '- Highlight sponsor-specific click performance from their past sponsorships' : '',
+    hasInterestComposition ? '- Optionally cite one or two audience interest composition percentages above (e.g. "34% of the audience has demonstrated interest in AI") to make the pitch concrete' : '',
     fulfilledEntries.length > 0 ? '- Reference their past sponsorship history (number of sponsorships, not internal pricing details)' : '',
     '- Present the current recommended sponsorship rate',
     upcomingDates.length > 0 ? '- Mention upcoming likely publication dates' : '',

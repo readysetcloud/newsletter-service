@@ -1854,6 +1854,52 @@ Resources:
             Path: /{tenant}/unsubscribe
             Method: POST
 
+  PreferencesFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - subscribers/preferences.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: subscribers/preferences.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+                - dynamodb:PutItem
+                - dynamodb:DeleteItem
+              Resource: !GetAtt SubscribersTable.Arn
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          EMAIL_ENCRYPTION_KEY: !Ref EncryptionKey
+          SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
+      Events:
+        FromApiGet:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /{tenant}/preferences
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        FromApiPost:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /{tenant}/preferences
+            Method: POST
+            Auth:
+              Authorizer: NONE
+
   BuildReportDataFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -1964,9 +2010,16 @@ Resources:
               Resource:
                 - !GetAtt NewsletterTable.Arn
                 - !Sub "${NewsletterTable.Arn}/index/GSI1"
+            # Read-only subscriber query for the additive churn-risk summary.
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource:
+                - !GetAtt SubscribersTable.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
 
   GenerateMonthlyInsightsFunction:
     Type: AWS::Serverless::Function

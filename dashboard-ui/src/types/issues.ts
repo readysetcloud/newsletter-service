@@ -42,6 +42,40 @@ export interface Issue extends IssueListItem {
   insightsV2?: InsightV2[];
   abTest?: AbTest;
   variantStats?: VariantStats[];
+  localSend?: LocalSendConfig;
+  contentAssembly?: ContentAssembly;
+}
+
+/**
+ * Local-send configuration: when enabled, the issue's scheduled time is read
+ * as a wall-clock time in defaultTimeZone and each subscriber with a confirmed
+ * timezone receives the issue at that time in their own zone.
+ */
+export interface LocalSendConfig {
+  enabled: boolean;
+  /** IANA timezone whose wall clock defines the target send time. */
+  defaultTimeZone?: string;
+  /**
+   * Delivery strategy: 'timezone' (default) sends at the scheduled wall-clock
+   * time in each subscriber's timezone; 'peak-hour' sends at each
+   * subscriber's personal peak open hour, falling back to the default time
+   * for subscribers without enough recorded opens.
+   */
+  mode?: 'timezone' | 'peak-hour';
+}
+
+// ---------------------------------------------------------------------------
+// Interest-aware assembly (personalized section order)
+// ---------------------------------------------------------------------------
+
+/**
+ * Interest-aware issue assembly configuration. When enabled, the reorderable
+ * content sections of the rendered email are re-ordered per recipient so each
+ * subscriber's highest-interest sections come first. Same content pool for
+ * everyone - only the order changes.
+ */
+export interface ContentAssembly {
+  enabled: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +231,8 @@ export interface CreateIssueRequest {
   templateId?: string;
   contentType?: IssueContentType;
   abTest?: AbTest;
+  localSend?: LocalSendConfig;
+  contentAssembly?: ContentAssembly;
 }
 
 export interface UpdateIssueRequest {
@@ -209,6 +245,10 @@ export interface UpdateIssueRequest {
   contentType?: IssueContentType;
   /** An explicit `null` clears a previously-saved A/B test. */
   abTest?: AbTest | null;
+  /** An explicit `null` clears a previously-saved local-send config. */
+  localSend?: LocalSendConfig | null;
+  /** An explicit `null` clears a previously-saved content assembly config. */
+  contentAssembly?: ContentAssembly | null;
 }
 
 export interface ListIssuesParams {

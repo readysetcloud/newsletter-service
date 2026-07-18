@@ -3,9 +3,11 @@ import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { hash } from './utils/helpers.mjs';
 import { hashEmail } from './utils/hash-email.mjs';
 import { detectDevice } from './utils/detect-device.mjs';
-import { lookupCountry } from './utils/geolocation.mjs';
+import { lookupCountry, lookupGeo } from './utils/geolocation.mjs';
 import { updateSubscriberEngagement } from './utils/subscriber-engagement.mjs';
 import { processInterestScoring } from './utils/interest-scoring.mjs';
+import { recordTimeZoneObservation } from './utils/timezone-tracking.mjs';
+import { recordActivity, recordOpenHour } from './utils/activity-timeline.mjs';
 import { ulid } from 'ulid';
 import crypto from 'crypto';
 
@@ -57,6 +59,8 @@ export const handler = async (event) => {
         } catch (err) {
           console.error('Subscriber engagement update failed on open', { issueId, error: err.message });
         }
+        await recordTimeZoneFromIp(tenantId, detail.mail.destination[0], parseInt(issueNumber, 10), detail.open?.ipAddress, 'open');
+        await recordOpenActivity(tenantId, detail.mail.destination[0], parseInt(issueNumber, 10), detail.open);
         break;
       case 'click':
         stat = 'clicks';
@@ -80,6 +84,8 @@ export const handler = async (event) => {
         } catch (err) {
           console.error('Interest scoring failed on click', { issueId, error: err.message });
         }
+        await recordTimeZoneFromIp(tenantId, detail.mail.destination[0], parseInt(issueNumber, 10), detail.click?.ipAddress, 'click');
+        await recordClickActivity(tenantId, detail.mail.destination[0], parseInt(issueNumber, 10), detail.click);
         break;
       default:
         console.warn(`Unsupported stat ${detail.eventType} was provided`);
@@ -119,6 +125,68 @@ export const handler = async (event) => {
   } catch (err) {
     console.error(err);
     return false;
+  }
+};
+
+/**
+ * Resolve the event IP to an IANA timezone (requires the GeoLite2 City DB in
+ * the geolocation layer) and record it as a per-issue observation on the
+ * subscriber. After the same zone is seen for 3 distinct issues (including at
+ * least one click observation) the subscriber's timeZone is confirmed, which
+ * powers the local-send feature. The source ('open'|'click') is stored so a
+ * click can supersede an Apple Mail Privacy Protection-proxied open.
+ * Never throws — timezone tracking must not affect stat aggregation.
+ */
+const recordTimeZoneFromIp = async (tenantId, email, issueNumber, ipAddress, source) => {
+  if (!ipAddress) {
+    return;
+  }
+
+  try {
+    const geo = await lookupGeo(ipAddress);
+    if (geo?.timeZone) {
+      await recordTimeZoneObservation(tenantId, email, issueNumber, geo.timeZone, source);
+    }
+  } catch (err) {
+    console.error('Timezone observation failed', { tenantId, issueNumber, error: err.message });
+  }
+};
+
+/**
+ * Append an 'open' entry to the subscriber's rolling recentActivity list and
+ * bump their open-hour histogram (a data foundation for a future peak-hour send
+ * feature). Defensive — a failure here must never affect stat aggregation.
+ */
+const recordOpenActivity = async (tenantId, email, issueNumber, openEvent) => {
+  try {
+    const openedAt = openEvent?.timestamp ? new Date(openEvent.timestamp) : new Date();
+    await recordActivity(tenantId, email, {
+      type: 'open',
+      issue: issueNumber,
+      ts: openedAt.toISOString()
+    });
+    await recordOpenHour(tenantId, email, openedAt.getUTCHours());
+  } catch (err) {
+    console.error('Failed to record open activity', { tenantId, issueNumber, error: err.message });
+  }
+};
+
+/**
+ * Append a 'click' entry (with the clicked URL) to the subscriber's rolling
+ * recentActivity list. Defensive — a failure here must never affect stat
+ * aggregation.
+ */
+const recordClickActivity = async (tenantId, email, issueNumber, clickEvent) => {
+  try {
+    const clickedAt = clickEvent?.timestamp ? new Date(clickEvent.timestamp) : new Date();
+    await recordActivity(tenantId, email, {
+      type: 'click',
+      issue: issueNumber,
+      ts: clickedAt.toISOString(),
+      url: clickEvent?.link
+    });
+  } catch (err) {
+    console.error('Failed to record click activity', { tenantId, issueNumber, error: err.message });
   }
 };
 

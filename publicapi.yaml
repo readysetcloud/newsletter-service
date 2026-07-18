@@ -349,6 +349,84 @@ paths:
         httpMethod: POST
         type: aws_proxy
 
+  /{tenant}/preferences:
+    parameters:
+      - $ref: "#/components/parameters/Tenant"
+    get:
+      summary: View and manage inferred interest preferences
+      parameters:
+        - name: email
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Encrypted email token identifying the subscriber
+      tags:
+        - Subscription
+      responses:
+        200:
+          description: Preference center page
+          content:
+            text/html:
+              schema:
+                type: string
+        400:
+          $ref: "#/components/responses/BadRequest"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-request-validator: Validate All
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PreferencesFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+    post:
+      summary: Submit interest preference corrections
+      tags:
+        - Subscription
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  description: Encrypted email token identifying the subscriber
+                prefer:
+                  type: array
+                  items:
+                    type: string
+                  description: Topics the subscriber is interested in
+                exclude:
+                  type: array
+                  items:
+                    type: string
+                  description: Topics the subscriber is not interested in
+              required: [email]
+      responses:
+        200:
+          description: Preferences saved confirmation page
+          content:
+            text/html:
+              schema:
+                type: string
+        400:
+          $ref: "#/components/responses/BadRequest"
+        404:
+          $ref: "#/components/responses/NotFound"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-request-validator: Validate All
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PreferencesFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
   /{tenant}/{issueId}/votes:
     parameters:
       - $ref: "#/components/parameters/Tenant"

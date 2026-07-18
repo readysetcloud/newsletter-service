@@ -5,6 +5,7 @@ import { DynamoDBClient, GetItemCommand, QueryCommand } from '@aws-sdk/client-dy
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { renderWithSnippets } from './utils/render-template.mjs';
 import { resolveParameters } from './utils/snippet-parameters.mjs';
+import { sectionStartMarker, sectionEndMarker } from './utils/interest-assembly.mjs';
 
 const ddb = new DynamoDBClient();
 const converter = new showdown.Converter();
@@ -86,6 +87,31 @@ export const handler = async (state) => {
       text: ps.html
     };
   });
+
+  // Interest-aware assembly (contentAssembly): when the issue opts in, tag each
+  // generic content section with start/end markers that the template emits
+  // around the whole section block (header + body). This is the injection
+  // point because it is the only place that knows which blocks are the
+  // reorderable middle sections — tip of the week, last words, sponsor, voting
+  // and the header/footer chrome are all rendered outside `content.sections`
+  // and therefore stay fixed. The config is read from the issue record (like
+  // publish-issue reads abTest) instead of being threaded through the state
+  // machine, so every state-machine entry point stays unchanged. Markers carry
+  // NO topic hint: link classification runs in a parallel state-machine branch
+  // and may not have finished yet — topics are derived at send time from the
+  // issue's link# records. Fail-open: any error just skips marker injection.
+  try {
+    const contentAssembly = await getContentAssemblyConfig(state.tenantId, issueNumber);
+    if (contentAssembly?.enabled === true) {
+      dataTemplate.content.sections = dataTemplate.content.sections.map(section => ({
+        ...section,
+        markerStart: sectionStartMarker(),
+        markerEnd: sectionEndMarker()
+      }));
+    }
+  } catch (err) {
+    console.error('Failed to apply content assembly markers, sending canonical order', { error: err.message });
+  }
 
   newsletterDate.setHours(14);
 
@@ -272,6 +298,41 @@ const formatSponsorAd = (ad) => {
   <i>Sponsored</i>
   </p>
 </div>`;
+};
+
+/**
+ * Loads the issue's persisted contentAssembly config (JSON string on the issue
+ * record, sk 'newsletter', mirroring how abTest is stored by the API). Returns
+ * null when unset, unreadable, or when no tenant is supplied.
+ * @param {string} [tenantId] - Tenant identifier.
+ * @param {number} issueNumber - Issue number.
+ * @returns {Promise<{enabled?: boolean}|null>}
+ */
+const getContentAssemblyConfig = async (tenantId, issueNumber) => {
+  if (!tenantId) return null;
+
+  try {
+    const result = await ddb.send(new GetItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({
+        pk: `${tenantId}#${issueNumber}`,
+        sk: 'newsletter'
+      }),
+      ProjectionExpression: 'contentAssembly'
+    }));
+
+    if (!result?.Item) return null;
+
+    const record = unmarshall(result.Item);
+    if (!record.contentAssembly) return null;
+
+    return typeof record.contentAssembly === 'string'
+      ? JSON.parse(record.contentAssembly)
+      : record.contentAssembly;
+  } catch (err) {
+    console.error('Failed to load contentAssembly config', { tenantId, issueNumber, error: err.message });
+    return null;
+  }
 };
 
 const getAuthor = async (metadataAuthor) => {

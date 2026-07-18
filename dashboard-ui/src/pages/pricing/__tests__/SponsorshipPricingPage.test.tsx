@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SponsorshipPricingPage } from '../SponsorshipPricingPage';
-import type { PricingData, PricingHistoryData, Questionnaire } from '@/types';
+import type { PricingData, PricingHistoryData, Questionnaire, InterestCompositionTopic } from '@/types';
 import type { ApiResponse } from '@/types/api';
 
 // ---------------------------------------------------------------------------
@@ -113,6 +113,25 @@ function makeHistoryData(): ApiResponse<PricingHistoryData> {
   return { success: true, data: { history: [], count: 0 } };
 }
 
+function makePricingDataWithComposition(
+  topics: InterestCompositionTopic[],
+): ApiResponse<PricingData> {
+  const base = makePricingData();
+  return {
+    ...base,
+    data: {
+      ...base.data!,
+      current: {
+        ...base.data!.current!,
+        interestComposition: {
+          totalSubscribers: 500,
+          topics,
+        },
+      },
+    },
+  };
+}
+
 function makeQuestionnaireData(): ApiResponse<Questionnaire> {
   return { success: true, data: { version: '1', questions: [] } };
 }
@@ -193,5 +212,79 @@ describe('SponsorshipPricingPage - Export Button', () => {
 
     // Button should be re-enabled after error
     expect(screen.getByRole('button', { name: /export sponsor report/i })).not.toBeDisabled();
+  });
+});
+
+describe('SponsorshipPricingPage - Audience Interest Composition', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetPricingHistory.mockResolvedValue(makeHistoryData());
+    mockGetQuestionnaire.mockResolvedValue(makeQuestionnaireData());
+  });
+
+  const topics: InterestCompositionTopic[] = [
+    { topic: 'ai', displayName: 'AI', confirmed: 170, confirmedPct: 34.0, engaged: 250, engagedPct: 50.0 },
+    { topic: 'serverless', displayName: 'Serverless', confirmed: 100, confirmedPct: 20.0, engaged: 150, engagedPct: 30.0 },
+  ];
+
+  it('renders the card with top topics and confirmed percentages when interestComposition is present', async () => {
+    mockGetPricing.mockResolvedValue(makePricingDataWithComposition(topics));
+
+    render(<SponsorshipPricingPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Audience Interest Composition')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('AI')).toBeInTheDocument();
+    expect(screen.getByText('34.0%')).toBeInTheDocument();
+    expect(screen.getByText('Serverless')).toBeInTheDocument();
+    expect(screen.getByText('20.0%')).toBeInTheDocument();
+  });
+
+  it('does not render the card when interestComposition is absent', async () => {
+    mockGetPricing.mockResolvedValue(makePricingData());
+
+    render(<SponsorshipPricingPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Recommended Sponsorship Price/i)).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('Audience Interest Composition')).not.toBeInTheDocument();
+  });
+
+  it('does not render the card when interestComposition has no topics', async () => {
+    mockGetPricing.mockResolvedValue(makePricingDataWithComposition([]));
+
+    render(<SponsorshipPricingPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Recommended Sponsorship Price/i)).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('Audience Interest Composition')).not.toBeInTheDocument();
+  });
+
+  it('caps the number of topics shown at 5', async () => {
+    const manyTopics: InterestCompositionTopic[] = Array.from({ length: 8 }, (_, i) => ({
+      topic: `topic${i}`,
+      displayName: `Topic ${i}`,
+      confirmed: 8 - i,
+      confirmedPct: 8 - i,
+      engaged: 8 - i,
+      engagedPct: 8 - i,
+    }));
+    mockGetPricing.mockResolvedValue(makePricingDataWithComposition(manyTopics));
+
+    render(<SponsorshipPricingPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Audience Interest Composition')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('Topic 0')).toBeInTheDocument();
+    expect(screen.getByText('Topic 4')).toBeInTheDocument();
+    expect(screen.queryByText('Topic 5')).not.toBeInTheDocument();
   });
 });

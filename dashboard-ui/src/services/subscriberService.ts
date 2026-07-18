@@ -1,6 +1,6 @@
 import { apiClient } from './api';
 import { validateSubscriberCountResponse, validateSubscriberTrendsResponse } from '@/utils/dataValidation';
-import type { ApiResponse, SubscriberCountResponse, SubscriberTrendsResponse, SubscriberListResponse } from '@/types';
+import type { ApiResponse, SubscriberCountResponse, SubscriberTrendsResponse, SubscriberListResponse, SubscriberDetail } from '@/types';
 
 export class SubscriberService {
   async getCount(): Promise<ApiResponse<SubscriberCountResponse>> {
@@ -31,6 +31,10 @@ export class SubscriberService {
 
   async getList(): Promise<ApiResponse<SubscriberListResponse>> {
     return apiClient.get<SubscriberListResponse>('/subscribers');
+  }
+
+  async getSubscriber(email: string): Promise<ApiResponse<SubscriberDetail>> {
+    return apiClient.get<SubscriberDetail>(`/subscribers/${encodeURIComponent(email)}`);
   }
 
   async unsubscribe(email: string): Promise<ApiResponse<void>> {

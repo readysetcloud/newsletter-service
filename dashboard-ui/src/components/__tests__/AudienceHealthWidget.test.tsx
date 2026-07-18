@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { AudienceHealthWidget } from '../AudienceHealthWidget';
 import { apiClient } from '@/services/api';
+import { churnService } from '@/services/churnService';
 
 // Mock the API client
 vi.mock('@/services/api', () => ({
@@ -9,6 +11,27 @@ vi.mock('@/services/api', () => ({
     get: vi.fn(),
   },
 }));
+
+// Mock the churn service — keep the real reason labels/types, stub the network.
+vi.mock('@/services/churnService', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/churnService')>();
+  return {
+    ...actual,
+    churnService: { getAtRisk: vi.fn() },
+  };
+});
+
+const cohortsResponse = {
+  success: true,
+  data: {
+    cohorts: {
+      highlyEngaged: { count: 5, percentage: 50.0 },
+      occasional: { count: 3, percentage: 30.0 },
+      dormant: { count: 2, percentage: 20.0 },
+      total: 10,
+    },
+  },
+};
 
 // Mock recharts to avoid rendering issues in jsdom
 vi.mock('recharts', () => ({
@@ -23,6 +46,8 @@ vi.mock('recharts', () => ({
 describe('AudienceHealthWidget', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: no at-risk data so the section stays hidden unless a test opts in.
+    vi.mocked(churnService.getAtRisk).mockResolvedValue({ success: false, error: 'no data' });
   });
 
   it('shows loading state initially', () => {
@@ -137,6 +162,95 @@ describe('AudienceHealthWidget', () => {
       expect(chartContainer).toHaveAttribute('aria-label',
         'Audience health: 5 highly engaged, 3 occasional, 2 dormant out of 10 total subscribers'
       );
+    });
+  });
+
+  describe('At Risk section', () => {
+    const atRiskResponse = {
+      success: true,
+      data: {
+        atRisk: [
+          {
+            email: 'fader@example.com',
+            lastEngagedIssue: 15,
+            engagementCount: 4,
+            reasons: ['fading'],
+          },
+          {
+            email: 'lapsed@example.com',
+            lastEngagedIssue: 12,
+            engagementCount: 6,
+            reasons: ['streak_break', 'interest_stale'],
+            topTopic: 'ai',
+          },
+        ],
+        summary: {
+          total: 2,
+          byReason: { fading: 1, interestStale: 1, streakBreak: 1 },
+        },
+      },
+    };
+
+    it('shows the at-risk count badge when data is present', async () => {
+      vi.mocked(apiClient.get).mockResolvedValue(cohortsResponse);
+      vi.mocked(churnService.getAtRisk).mockResolvedValue(atRiskResponse);
+
+      render(<AudienceHealthWidget latestIssueNumber={20} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('At Risk')).toBeInTheDocument();
+      });
+      // The count badge reflects the summary total.
+      expect(screen.getByText('2')).toBeInTheDocument();
+      // Collapsed by default — subscriber emails not rendered yet.
+      expect(screen.queryByText('fader@example.com')).not.toBeInTheDocument();
+    });
+
+    it('expands to reveal subscribers and human-readable reason chips', async () => {
+      const user = userEvent.setup();
+      vi.mocked(apiClient.get).mockResolvedValue(cohortsResponse);
+      vi.mocked(churnService.getAtRisk).mockResolvedValue(atRiskResponse);
+
+      render(<AudienceHealthWidget latestIssueNumber={20} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('At Risk')).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole('button', { name: /At Risk/i }));
+
+      expect(screen.getByText('fader@example.com')).toBeInTheDocument();
+      expect(screen.getByText('lapsed@example.com')).toBeInTheDocument();
+      expect(screen.getByText('Fading')).toBeInTheDocument();
+      expect(screen.getByText('Streak broken')).toBeInTheDocument();
+      expect(screen.getByText('Interests gone stale (AI)')).toBeInTheDocument();
+    });
+
+    it('hides the section when the churn endpoint fails', async () => {
+      vi.mocked(apiClient.get).mockResolvedValue(cohortsResponse);
+      vi.mocked(churnService.getAtRisk).mockResolvedValue({ success: false, error: 'boom' });
+
+      render(<AudienceHealthWidget latestIssueNumber={20} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Audience Health')).toBeInTheDocument();
+      });
+      expect(screen.queryByText('At Risk')).not.toBeInTheDocument();
+    });
+
+    it('hides the section when nobody is at risk', async () => {
+      vi.mocked(apiClient.get).mockResolvedValue(cohortsResponse);
+      vi.mocked(churnService.getAtRisk).mockResolvedValue({
+        success: true,
+        data: { atRisk: [], summary: { total: 0, byReason: { fading: 0, interestStale: 0, streakBreak: 0 } } },
+      });
+
+      render(<AudienceHealthWidget latestIssueNumber={20} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Audience Health')).toBeInTheDocument();
+      });
+      expect(screen.queryByText('At Risk')).not.toBeInTheDocument();
     });
   });
 });

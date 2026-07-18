@@ -121,6 +121,10 @@ struct SubscriberListItem {
     /// is visible per subscriber, not just inside a segment's member list.
     #[serde(skip_serializing_if = "Option::is_none")]
     interest_scores: Option<HashMap<String, InterestScoreEntry>>,
+    /// IANA timezone confirmed from open/click geolocation across 3 consecutive
+    /// issues. Absent until confirmed. Used by the local-send feature.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    time_zone: Option<String>,
     suspected_bot: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     bot_flags: Option<BotFlags>,
@@ -141,6 +145,44 @@ struct BotFlags {
     suspicious_user_agent: bool,
     fast_submission: bool,
     suspicious_email_pattern: bool,
+}
+
+/// A single behavioral activity entry (an open or a click) from the
+/// subscriber's rolling recentActivity list, newest-first.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ActivityEntry {
+    #[serde(rename = "type")]
+    activity_type: String,
+    issue: i64,
+    ts: String,
+    /// Present only for clicks — the clicked URL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+}
+
+/// GET /subscribers/{email} — full subscriber detail, including the rolling
+/// activity timeline and open-hour histogram total.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SubscriberDetailResponse {
+    email: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    first_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_name: Option<String>,
+    added_at: Option<String>,
+    last_engaged_issue: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    engagement_count: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interest_scores: Option<HashMap<String, InterestScoreEntry>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    time_zone: Option<String>,
+    /// Newest-first list of recent opens/clicks, capped at 20 by the writer.
+    recent_activity: Vec<ActivityEntry>,
+    /// Total opens counted into the open-hour histogram. Zero when unseen.
+    open_hour_total: i64,
 }
 
 // ── Public endpoint handlers ───────────────────────────────────────────
@@ -321,6 +363,52 @@ async fn handle_get_subscriber_list(event: Request) -> Result<Response<Body>, Ap
     let total = subscribers.len() as i64;
 
     response::format_response(200, SubscriberListResponse { subscribers, total })
+}
+
+/// GET /subscribers/:email — full subscriber detail
+pub async fn get_subscriber(
+    event: Request,
+    email: Option<String>,
+) -> Result<Response<Body>, Error> {
+    match handle_get_subscriber(event, email).await {
+        Ok(resp) => Ok(resp),
+        Err(e) => Ok(response::format_error_response(&e)),
+    }
+}
+
+async fn handle_get_subscriber(
+    event: Request,
+    email: Option<String>,
+) -> Result<Response<Body>, AppError> {
+    let user_context = auth::get_user_context(&event)?;
+    let tenant_id = user_context
+        .tenant_id
+        .ok_or_else(|| AppError::Forbidden("Tenant access required".to_string()))?;
+
+    let email = email.ok_or_else(|| AppError::BadRequest("Email is required".to_string()))?;
+
+    let decoded_email = percent_decode_str(&email)
+        .decode_utf8()
+        .map_err(|e| AppError::BadRequest(format!("Invalid email encoding: {}", e)))?
+        .to_lowercase();
+
+    let subscribers_table = get_subscribers_table_name()?;
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+
+    let result = ddb_client
+        .get_item()
+        .table_name(&subscribers_table)
+        .key("tenantId", AttributeValue::S(tenant_id))
+        .key("email", AttributeValue::S(decoded_email))
+        .send()
+        .await
+        .map_err(|e| AppError::AwsError(format!("DynamoDB GetItem failed: {}", e)))?;
+
+    let item = result
+        .item()
+        .ok_or_else(|| AppError::NotFound("Subscriber not found".to_string()))?;
+
+    response::format_response(200, parse_subscriber_detail(item))
 }
 
 /// DELETE /subscribers/:email — remove a subscriber
@@ -585,6 +673,101 @@ fn parse_interest_scores(
     Some(result)
 }
 
+/// Parse the `recentActivity` list (newest-first opens/clicks) off a subscriber
+/// record. Malformed entries (missing type/issue/ts) are skipped. Returns an
+/// empty vec when the attribute is absent.
+fn parse_recent_activity(item: &HashMap<String, AttributeValue>) -> Vec<ActivityEntry> {
+    let list = match item.get("recentActivity").and_then(|v| v.as_l().ok()) {
+        Some(list) => list,
+        None => return Vec::new(),
+    };
+
+    let mut result = Vec::new();
+    for entry_val in list {
+        if let Ok(entry_map) = entry_val.as_m() {
+            let activity_type = entry_map.get("type").and_then(|v| v.as_s().ok()).cloned();
+            let issue = entry_map
+                .get("issue")
+                .and_then(|v| v.as_n().ok())
+                .and_then(|n| n.parse::<i64>().ok());
+            let ts = entry_map.get("ts").and_then(|v| v.as_s().ok()).cloned();
+            let url = entry_map.get("url").and_then(|v| v.as_s().ok()).cloned();
+
+            if let (Some(activity_type), Some(issue), Some(ts)) = (activity_type, issue, ts) {
+                result.push(ActivityEntry {
+                    activity_type,
+                    issue,
+                    ts,
+                    url,
+                });
+            }
+        }
+    }
+    result
+}
+
+/// Build the full subscriber detail response from a subscriber record.
+fn parse_subscriber_detail(item: &HashMap<String, AttributeValue>) -> SubscriberDetailResponse {
+    let email = item
+        .get("email")
+        .and_then(|v| v.as_s().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+
+    let first_name = item
+        .get("firstName")
+        .and_then(|v| v.as_s().ok())
+        .map(|s| s.to_string());
+
+    let last_name = item
+        .get("lastName")
+        .and_then(|v| v.as_s().ok())
+        .map(|s| s.to_string());
+
+    let added_at = item
+        .get("addedAt")
+        .and_then(|v| v.as_s().ok())
+        .map(|s| s.to_string());
+
+    let last_engaged_issue = item
+        .get("lastEngagedIssue")
+        .and_then(|v| v.as_n().ok())
+        .and_then(|n| n.parse::<i64>().ok());
+
+    let engagement_count = item
+        .get("engagementCount")
+        .and_then(|v| v.as_n().ok())
+        .and_then(|n| n.parse::<i64>().ok());
+
+    let interest_scores = parse_interest_scores(item).filter(|m| !m.is_empty());
+
+    let time_zone = item
+        .get("timeZone")
+        .and_then(|v| v.as_s().ok())
+        .map(|s| s.to_string());
+
+    let recent_activity = parse_recent_activity(item);
+
+    let open_hour_total = item
+        .get("openHourTotal")
+        .and_then(|v| v.as_n().ok())
+        .and_then(|n| n.parse::<i64>().ok())
+        .unwrap_or(0);
+
+    SubscriberDetailResponse {
+        email,
+        first_name,
+        last_name,
+        added_at,
+        last_engaged_issue,
+        engagement_count,
+        interest_scores,
+        time_zone,
+        recent_activity,
+        open_hour_total,
+    }
+}
+
 async fn query_current_subscriber_count(
     ddb_client: &aws_sdk_dynamodb::Client,
     table_name: &str,
@@ -743,6 +926,11 @@ async fn query_all_subscribers(
 
             let interest_scores = parse_interest_scores(item).filter(|m| !m.is_empty());
 
+            let time_zone = item
+                .get("timeZone")
+                .and_then(|v| v.as_s().ok())
+                .map(|s| s.to_string());
+
             let get_bool_flag = |key: &str| -> bool {
                 item.get(key)
                     .and_then(|v| v.as_bool().ok())
@@ -782,6 +970,7 @@ async fn query_all_subscribers(
                 last_engaged_issue,
                 engagement_count,
                 interest_scores,
+                time_zone,
                 suspected_bot,
                 bot_flags,
             });
@@ -1221,6 +1410,172 @@ mod tests {
     fn test_parse_interest_scores_absent_returns_none() {
         let item = make_subscriber_item("a@b.com", Some(1), None);
         assert!(parse_interest_scores(&item).is_none());
+    }
+
+    // ── Subscriber detail parsing tests ────────────────────────────────
+
+    fn make_activity_entry(
+        activity_type: &str,
+        issue: i64,
+        ts: &str,
+        url: Option<&str>,
+    ) -> AttributeValue {
+        let mut entry = HashMap::new();
+        entry.insert(
+            "type".to_string(),
+            AttributeValue::S(activity_type.to_string()),
+        );
+        entry.insert("issue".to_string(), AttributeValue::N(issue.to_string()));
+        entry.insert("ts".to_string(), AttributeValue::S(ts.to_string()));
+        if let Some(u) = url {
+            entry.insert("url".to_string(), AttributeValue::S(u.to_string()));
+        }
+        AttributeValue::M(entry)
+    }
+
+    #[test]
+    fn test_parse_recent_activity_reads_entries_newest_first() {
+        let mut item = HashMap::new();
+        item.insert(
+            "recentActivity".to_string(),
+            AttributeValue::L(vec![
+                make_activity_entry(
+                    "click",
+                    42,
+                    "2026-01-02T00:00:00Z",
+                    Some("https://x.test/a"),
+                ),
+                make_activity_entry("open", 41, "2026-01-01T00:00:00Z", None),
+            ]),
+        );
+
+        let activity = parse_recent_activity(&item);
+        assert_eq!(activity.len(), 2);
+        assert_eq!(activity[0].activity_type, "click");
+        assert_eq!(activity[0].issue, 42);
+        assert_eq!(activity[0].url.as_deref(), Some("https://x.test/a"));
+        assert_eq!(activity[1].activity_type, "open");
+        assert_eq!(activity[1].url, None);
+    }
+
+    #[test]
+    fn test_parse_recent_activity_absent_is_empty() {
+        let item = make_subscriber_item("a@b.com", Some(1), None);
+        assert!(parse_recent_activity(&item).is_empty());
+    }
+
+    #[test]
+    fn test_parse_recent_activity_skips_malformed_entries() {
+        let mut missing_issue = HashMap::new();
+        missing_issue.insert("type".to_string(), AttributeValue::S("open".to_string()));
+        missing_issue.insert(
+            "ts".to_string(),
+            AttributeValue::S("2026-01-01T00:00:00Z".to_string()),
+        );
+
+        let mut item = HashMap::new();
+        item.insert(
+            "recentActivity".to_string(),
+            AttributeValue::L(vec![
+                AttributeValue::M(missing_issue),
+                make_activity_entry("open", 5, "2026-01-01T00:00:00Z", None),
+            ]),
+        );
+
+        let activity = parse_recent_activity(&item);
+        assert_eq!(activity.len(), 1);
+        assert_eq!(activity[0].issue, 5);
+    }
+
+    #[test]
+    fn test_parse_subscriber_detail_full() {
+        let mut ai_entry = HashMap::new();
+        ai_entry.insert("score".to_string(), AttributeValue::N("3.5".to_string()));
+        ai_entry.insert(
+            "lastScoredAt".to_string(),
+            AttributeValue::S("2026-01-01T00:00:00Z".to_string()),
+        );
+        let mut scores = HashMap::new();
+        scores.insert("ai".to_string(), AttributeValue::M(ai_entry));
+
+        let mut item = HashMap::new();
+        item.insert(
+            "email".to_string(),
+            AttributeValue::S("reader@example.com".to_string()),
+        );
+        item.insert(
+            "firstName".to_string(),
+            AttributeValue::S("Ada".to_string()),
+        );
+        item.insert(
+            "lastName".to_string(),
+            AttributeValue::S("Lovelace".to_string()),
+        );
+        item.insert(
+            "addedAt".to_string(),
+            AttributeValue::S("2025-01-01T00:00:00Z".to_string()),
+        );
+        item.insert(
+            "lastEngagedIssue".to_string(),
+            AttributeValue::N("42".to_string()),
+        );
+        item.insert(
+            "engagementCount".to_string(),
+            AttributeValue::N("7".to_string()),
+        );
+        item.insert("interestScores".to_string(), AttributeValue::M(scores));
+        item.insert(
+            "timeZone".to_string(),
+            AttributeValue::S("America/Chicago".to_string()),
+        );
+        item.insert(
+            "openHourTotal".to_string(),
+            AttributeValue::N("12".to_string()),
+        );
+        item.insert(
+            "recentActivity".to_string(),
+            AttributeValue::L(vec![make_activity_entry(
+                "click",
+                42,
+                "2026-01-02T00:00:00Z",
+                Some("https://x.test/a"),
+            )]),
+        );
+
+        let detail = parse_subscriber_detail(&item);
+        let json = serde_json::to_value(&detail).unwrap();
+
+        assert_eq!(json["email"], "reader@example.com");
+        assert_eq!(json["firstName"], "Ada");
+        assert_eq!(json["lastName"], "Lovelace");
+        assert_eq!(json["addedAt"], "2025-01-01T00:00:00Z");
+        assert_eq!(json["lastEngagedIssue"], 42);
+        assert_eq!(json["engagementCount"], 7);
+        assert_eq!(json["interestScores"]["ai"]["score"], 3.5);
+        assert_eq!(json["timeZone"], "America/Chicago");
+        assert_eq!(json["openHourTotal"], 12);
+        assert_eq!(json["recentActivity"][0]["type"], "click");
+        assert_eq!(json["recentActivity"][0]["issue"], 42);
+        assert_eq!(json["recentActivity"][0]["url"], "https://x.test/a");
+    }
+
+    #[test]
+    fn test_parse_subscriber_detail_minimal_omits_optionals() {
+        let item = make_subscriber_item("bare@example.com", None, None);
+        let detail = parse_subscriber_detail(&item);
+        let json = serde_json::to_value(&detail).unwrap();
+
+        assert_eq!(json["email"], "bare@example.com");
+        // Optional fields are omitted, not null.
+        assert!(json.get("firstName").is_none());
+        assert!(json.get("interestScores").is_none());
+        assert!(json.get("timeZone").is_none());
+        // addedAt and lastEngagedIssue serialize as null (Option without skip).
+        assert_eq!(json["addedAt"], serde_json::Value::Null);
+        assert_eq!(json["lastEngagedIssue"], serde_json::Value::Null);
+        // recentActivity is an empty array; openHourTotal defaults to 0.
+        assert_eq!(json["recentActivity"], serde_json::json!([]));
+        assert_eq!(json["openHourTotal"], 0);
     }
 
     #[test]

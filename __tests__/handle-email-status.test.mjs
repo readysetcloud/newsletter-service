@@ -5,6 +5,10 @@ let ddbSend;
 let PutItemCommand;
 let UpdateItemCommand;
 let GetItemCommand;
+let lookupGeoMock;
+let recordTimeZoneObservationMock;
+let recordActivityMock;
+let recordOpenHourMock;
 
 const loadIsolated = async () => {
   await jest.isolateModulesAsync(async () => {
@@ -66,6 +70,30 @@ const loadIsolated = async () => {
     jest.unstable_mockModule('../functions/utils/interest-scoring.mjs', () => ({
       processInterestScoring: jest.fn().mockResolvedValue(undefined),
       findOrCreateInterestSegment: jest.fn().mockResolvedValue(undefined),
+    }));
+
+    // Default: no geo resolution (matches a layer without the City DB). Tests
+    // that exercise timezone wiring override lookupGeoMock per-case.
+    lookupGeoMock = jest.fn().mockResolvedValue(null);
+    recordTimeZoneObservationMock = jest.fn().mockResolvedValue(undefined);
+
+    jest.unstable_mockModule('../functions/utils/geolocation.mjs', () => ({
+      lookupGeo: lookupGeoMock,
+      lookupCountry: jest.fn().mockResolvedValue(null),
+    }));
+
+    jest.unstable_mockModule('../functions/utils/timezone-tracking.mjs', () => ({
+      recordTimeZoneObservation: recordTimeZoneObservationMock,
+      getConfirmedTimeZone: jest.fn(),
+      TZ_CONFIRMATION_STREAK: 3,
+    }));
+
+    recordActivityMock = jest.fn().mockResolvedValue(undefined);
+    recordOpenHourMock = jest.fn().mockResolvedValue(undefined);
+
+    jest.unstable_mockModule('../functions/utils/activity-timeline.mjs', () => ({
+      recordActivity: recordActivityMock,
+      recordOpenHour: recordOpenHourMock,
     }));
 
     ({ handler } = await import('../functions/handle-email-status.mjs'));
@@ -1355,6 +1383,18 @@ describe('handle-email-status', () => {
 
       jest.unstable_mockModule('../functions/utils/geolocation.mjs', () => ({
         lookupCountry: mockLookupCountry,
+        lookupGeo: jest.fn().mockResolvedValue(null),
+      }));
+
+      jest.unstable_mockModule('../functions/utils/timezone-tracking.mjs', () => ({
+        recordTimeZoneObservation: jest.fn().mockResolvedValue(undefined),
+        getConfirmedTimeZone: jest.fn(),
+        TZ_CONFIRMATION_STREAK: 3,
+      }));
+
+      jest.unstable_mockModule('../functions/utils/activity-timeline.mjs', () => ({
+        recordActivity: jest.fn().mockResolvedValue(undefined),
+        recordOpenHour: jest.fn().mockResolvedValue(undefined),
       }));
 
       jest.unstable_mockModule('../functions/utils/hash-email.mjs', () => ({
@@ -1630,6 +1670,184 @@ describe('handle-email-status', () => {
         .filter((command) => command.__type === 'UpdateItem');
       expect(updateCalls).toHaveLength(1);
       expect(updateCalls[0].Key.sk.S).toBe('stats');
+    });
+  });
+
+  describe('Timezone observation wiring', () => {
+    const openEvent = (ipAddress) => ({
+      detail: {
+        eventType: 'Open',
+        mail: {
+          tags: { referenceNumber: ['tenant123_42'] },
+          destination: ['subscriber@example.com'],
+          commonHeaders: {}
+        },
+        open: {
+          timestamp: '2025-01-21T10:30:00.000Z',
+          ...(ipAddress && { ipAddress })
+        }
+      }
+    });
+
+    it('records a timezone observation on open when the IP resolves to a zone', async () => {
+      ddbSend.mockResolvedValue({});
+      lookupGeoMock.mockResolvedValue({
+        countryCode: 'US',
+        countryName: 'United States',
+        timeZone: 'America/Chicago'
+      });
+
+      await handler(openEvent('203.0.113.9'));
+
+      expect(lookupGeoMock).toHaveBeenCalledWith('203.0.113.9');
+      expect(recordTimeZoneObservationMock).toHaveBeenCalledWith(
+        'tenant123',
+        'subscriber@example.com',
+        42,
+        'America/Chicago',
+        'open'
+      );
+    });
+
+    it('records a timezone observation on click when the IP resolves to a zone', async () => {
+      ddbSend.mockResolvedValue({ Item: null });
+      lookupGeoMock.mockResolvedValue({
+        countryCode: 'GB',
+        countryName: 'United Kingdom',
+        timeZone: 'Europe/London'
+      });
+
+      await handler({
+        detail: {
+          eventType: 'Click',
+          mail: {
+            tags: { referenceNumber: ['tenant123_42'] },
+            destination: ['subscriber@example.com']
+          },
+          click: {
+            link: 'https://example.com/article',
+            timestamp: '2025-01-21T10:30:00.000Z',
+            ipAddress: '203.0.113.9'
+          }
+        }
+      });
+
+      expect(recordTimeZoneObservationMock).toHaveBeenCalledWith(
+        'tenant123',
+        'subscriber@example.com',
+        42,
+        'Europe/London',
+        'click'
+      );
+    });
+
+    it('skips observation when geo lookup has no timezone', async () => {
+      ddbSend.mockResolvedValue({});
+      lookupGeoMock.mockResolvedValue({
+        countryCode: 'US',
+        countryName: 'United States',
+        timeZone: null
+      });
+
+      await handler(openEvent('203.0.113.9'));
+
+      expect(recordTimeZoneObservationMock).not.toHaveBeenCalled();
+    });
+
+    it('skips observation when the event has no IP address', async () => {
+      ddbSend.mockResolvedValue({});
+
+      await handler(openEvent(null));
+
+      expect(lookupGeoMock).not.toHaveBeenCalled();
+      expect(recordTimeZoneObservationMock).not.toHaveBeenCalled();
+    });
+
+    it('still succeeds when timezone recording throws', async () => {
+      ddbSend.mockResolvedValue({});
+      lookupGeoMock.mockResolvedValue({ countryCode: 'US', countryName: 'US', timeZone: 'America/Denver' });
+      recordTimeZoneObservationMock.mockRejectedValue(new Error('boom'));
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      const result = await handler(openEvent('203.0.113.9'));
+
+      expect(result).toBe(true);
+      consoleSpy.mockRestore();
+    });
+  });
+
+  describe('Activity timeline wiring', () => {
+    it('records an open activity entry and the open-hour histogram on open', async () => {
+      ddbSend.mockResolvedValue({});
+
+      await handler({
+        detail: {
+          eventType: 'Open',
+          mail: {
+            tags: { referenceNumber: ['tenant123_42'] },
+            destination: ['subscriber@example.com'],
+            commonHeaders: {}
+          },
+          open: { timestamp: '2025-01-21T10:30:00.000Z' }
+        }
+      });
+
+      expect(recordActivityMock).toHaveBeenCalledWith('tenant123', 'subscriber@example.com', {
+        type: 'open',
+        issue: 42,
+        ts: '2025-01-21T10:30:00.000Z'
+      });
+      // 10:30 UTC → hour 10
+      expect(recordOpenHourMock).toHaveBeenCalledWith('tenant123', 'subscriber@example.com', 10);
+    });
+
+    it('records a click activity entry with the clicked url on click', async () => {
+      ddbSend.mockResolvedValue({ Item: null });
+
+      await handler({
+        detail: {
+          eventType: 'Click',
+          mail: {
+            tags: { referenceNumber: ['tenant123_42'] },
+            destination: ['subscriber@example.com']
+          },
+          click: {
+            link: 'https://example.com/article',
+            timestamp: '2025-01-21T10:30:00.000Z',
+            ipAddress: '203.0.113.9'
+          }
+        }
+      });
+
+      expect(recordActivityMock).toHaveBeenCalledWith('tenant123', 'subscriber@example.com', {
+        type: 'click',
+        issue: 42,
+        ts: '2025-01-21T10:30:00.000Z',
+        url: 'https://example.com/article'
+      });
+      // The open-hour histogram is an open-only signal.
+      expect(recordOpenHourMock).not.toHaveBeenCalled();
+    });
+
+    it('still succeeds when activity recording throws', async () => {
+      ddbSend.mockResolvedValue({});
+      recordActivityMock.mockRejectedValue(new Error('boom'));
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      const result = await handler({
+        detail: {
+          eventType: 'Open',
+          mail: {
+            tags: { referenceNumber: ['tenant123_42'] },
+            destination: ['subscriber@example.com'],
+            commonHeaders: {}
+          },
+          open: { timestamp: '2025-01-21T10:30:00.000Z' }
+        }
+      });
+
+      expect(result).toBe(true);
+      consoleSpy.mockRestore();
     });
   });
 });

@@ -240,6 +240,7 @@ const sendEmail = async (params) => {
         ...params.referenceNumber && { referenceNumber: params.referenceNumber },
         ...params.tenantId && { tenantId: params.tenantId },
         ...params.abTest && { abTest: params.abTest },
+        ...params.localSend && { localSend: params.localSend },
         ...params.contentAssembly && { contentAssembly: params.contentAssembly },
         replacements: {
           emailAddress: "__EMAIL__",

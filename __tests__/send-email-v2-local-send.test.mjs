@@ -170,6 +170,38 @@ describe('send-email-v2 local send', () => {
       expect(parseScheduleDetail(schedules[0]).localSendGroup.timeZone).toBe('__catch_all__');
     });
 
+    test('schedule names stay unique and within 64 chars for long reference numbers', async () => {
+      mockVerifiedSender();
+
+      // A reference number long enough that a name built as
+      // local-<ref>-<label>-<timestamp> would truncate away both the label and
+      // the timestamp, colliding same-prefix groups.
+      const longRef = `tenant-${'x'.repeat(70)}_42`;
+      listSubscribers.mockResolvedValue({
+        subscribers: [
+          { email: 'in1@example.com', timeZone: 'America/Indiana/Indianapolis' },
+          { email: 'in2@example.com', timeZone: 'America/Indiana/Vincennes' },
+          { email: 'ny@example.com', timeZone: 'America/New_York' }
+        ],
+        lastEvaluatedKey: undefined
+      });
+
+      await handler(baseEvent({
+        sendAt: '2099-01-15T14:00:00.000Z',
+        referenceNumber: longRef
+      }));
+
+      const names = schedulerCalls().map((cmd) => cmd.Name);
+      // 3 zone groups + catch-all, every name unique and within the limit.
+      expect(names).toHaveLength(4);
+      expect(new Set(names).size).toBe(names.length);
+      for (const name of names) {
+        expect(name.length).toBeLessThanOrEqual(64);
+        expect(name).toMatch(/^local-[0-9a-z]+/);
+        expect(name).toMatch(/^[0-9a-zA-Z-_.]+$/);
+      }
+    });
+
     test('falls back to a plain send when the default timezone is invalid', async () => {
       mockVerifiedSender();
       listSubscribers.mockResolvedValue({

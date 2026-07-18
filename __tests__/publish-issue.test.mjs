@@ -312,6 +312,57 @@ describe('publish-issue', () => {
       expect(getSentDetail().contentAssembly).toBeUndefined();
     });
 
+    it('passes localSend on the send event when enabled on the issue record', async () => {
+      // Regression: a merge once dropped localSend from the serialized event
+      // detail while the handler still computed it, silently turning every
+      // local send into a single absolute-time send.
+      mockIssueRecord({
+        localSend: JSON.stringify({ enabled: true, defaultTimeZone: 'America/New_York', mode: 'timezone' })
+      });
+
+      await handler(publishEvent);
+
+      expect(getSentDetail().localSend).toEqual({
+        enabled: true,
+        defaultTimeZone: 'America/New_York',
+        mode: 'timezone'
+      });
+    });
+
+    it('drops localSend (with a warning) when an A/B test is active', async () => {
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      mockIssueRecord({
+        localSend: JSON.stringify({ enabled: true, defaultTimeZone: 'America/New_York' }),
+        abTest: JSON.stringify({
+          dimension: 'subject',
+          variants: [
+            { variantId: 'a', subject: 'A' },
+            { variantId: 'b', subject: 'B' }
+          ]
+        })
+      });
+
+      await handler(publishEvent);
+
+      const detail = getSentDetail();
+      expect(detail.abTest).toBeDefined();
+      expect(detail.localSend).toBeUndefined();
+      warnSpy.mockRestore();
+    });
+
+    it('carries localSend and contentAssembly together when both are enabled', async () => {
+      mockIssueRecord({
+        localSend: JSON.stringify({ enabled: true, defaultTimeZone: 'America/New_York', mode: 'peak-hour' }),
+        contentAssembly: JSON.stringify({ enabled: true })
+      });
+
+      await handler(publishEvent);
+
+      const detail = getSentDetail();
+      expect(detail.localSend).toMatchObject({ enabled: true, mode: 'peak-hour' });
+      expect(detail.contentAssembly).toEqual({ enabled: true });
+    });
+
     it('warns and disables assembly when an A/B test is active', async () => {
       const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
       mockIssueRecord({

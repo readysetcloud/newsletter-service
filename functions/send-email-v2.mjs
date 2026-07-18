@@ -274,7 +274,14 @@ const emitSendEvent = async (payload) => {
  * v2 event at the group's local target time (same mechanism as future sends).
  */
 const createLocalSendSchedule = async (payload, sendTime, referenceNumber, label) => {
-  const scheduleName = `local-${referenceNumber || 'send'}-${label}-${Date.now()}`
+  // The unique token and the group label come right after the prefix so the
+  // 64-character Scheduler name limit can never truncate them away — a long
+  // referenceNumber previously pushed the timestamp (and part of the label)
+  // off the end, letting same-prefix groups collide on the schedule name.
+  // Only the referenceNumber (kept last, for operator readability) is at risk
+  // of truncation.
+  const uniqueToken = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const scheduleName = `local-${uniqueToken}-${label}-${referenceNumber || 'send'}`
     .replace(/[^0-9a-zA-Z-_.]/g, '-')
     .slice(0, 64);
 

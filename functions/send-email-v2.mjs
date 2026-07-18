@@ -6,6 +6,7 @@ import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { encrypt, sendWithRetry } from './utils/helpers.mjs';
 import { listSubscribers, getSubscriberByEmail, updateSubscriberSendMetadata } from './utils/subscriber.mjs';
 import { splitRecipients, selectHoldoutSample } from './utils/ab-variants.mjs';
+import { extractSections, prepareAssembly, assembleForSubscriber } from './utils/interest-assembly.mjs';
 
 // Key patterns for DynamoDB (previously from ./senders/types.mjs)
 const KEY_PATTERNS = {
@@ -237,6 +238,87 @@ const filterIdempotentRecipientsPhase = async (tenantId, subscribers, issueIdent
   return { recipients, skippedCount };
 };
 /**
+ * Prepares interest-aware assembly (contentAssembly) for a send. Runs ONCE per
+ * send: extracts the marker-delimited sections from the rendered HTML, batch
+ * loads the issue's LLM-classified `link#` records to assign each section a
+ * topic (majority of primaryTopic among the section's links), and indexes the
+ * already-in-memory subscriber list's interest data by email. Per-recipient
+ * work later is pure string reassembly.
+ *
+ * Fail-open by design: returns null (canonical HTML for everyone) when markers
+ * are absent/malformed (e.g. JSON-template issues, custom templates without
+ * markers), when no section has classified links, or on any error. Assembly
+ * must never break or block a send.
+ *
+ * @param {string} html - Rendered email HTML (potentially marker-tagged)
+ * @param {object[]} subscribers - Subscriber records already loaded for this send
+ * @param {string|undefined} referenceNumber - `${tenantId}_${issueNumber}`
+ * @returns {Promise<{prepared: object, interestByEmail: Map}|null>}
+ */
+const prepareAssemblyPhase = async (html, subscribers, referenceNumber) => {
+  try {
+    // Cheap early exit before any I/O: JSON-template issues and custom
+    // templates are rendered without markers, so there is nothing to reorder.
+    if (!extractSections(html)) {
+      console.warn('[ASSEMBLY] No section markers in rendered HTML (JSON-template issue or custom template) - sending canonical order');
+      return null;
+    }
+
+    if (!referenceNumber || !referenceNumber.includes('_')) {
+      console.warn('[ASSEMBLY] Skipping - missing referenceNumber to locate link records');
+      return null;
+    }
+
+    const separatorIndex = referenceNumber.lastIndexOf('_');
+    const issuePk = `${referenceNumber.slice(0, separatorIndex)}#${referenceNumber.slice(separatorIndex + 1)}`;
+
+    // Batch-read the issue's link# records once for the whole send.
+    const linkRecords = [];
+    let lastEvaluatedKey;
+    do {
+      const result = await sendWithRetry(async () => {
+        return await ddb.send(new QueryCommand({
+          TableName: process.env.TABLE_NAME,
+          KeyConditionExpression: 'pk = :pk AND begins_with(sk, :linkPrefix)',
+          ExpressionAttributeValues: marshall({
+            ':pk': issuePk,
+            ':linkPrefix': 'link#'
+          }),
+          ...lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey }
+        }));
+      }, 'Query issue link records');
+
+      linkRecords.push(...(result.Items ?? []).map(item => unmarshall(item)));
+      lastEvaluatedKey = result.LastEvaluatedKey;
+    } while (lastEvaluatedKey);
+
+    const prepared = prepareAssembly(html, linkRecords);
+    if (!prepared) {
+      // No markers (JSON-template issue or custom template without markers) or
+      // no classified links matched any section.
+      console.warn('[ASSEMBLY] No reorderable sections with classified topics - sending canonical order');
+      return null;
+    }
+
+    const interestByEmail = new Map();
+    for (const subscriber of subscribers) {
+      if (subscriber?.email && (subscriber.interestScores || subscriber.excludedTopics)) {
+        interestByEmail.set(subscriber.email, {
+          interestScores: subscriber.interestScores,
+          excludedTopics: subscriber.excludedTopics
+        });
+      }
+    }
+
+    console.log(`[ASSEMBLY] Prepared ${prepared.sections.length} sections (${prepared.sections.filter(s => s.topic).length} with topics), interest data for ${interestByEmail.size}/${subscribers.length} subscribers`);
+    return { prepared, interestByEmail };
+  } catch (error) {
+    console.error('[ASSEMBLY] Preparation failed - sending canonical order', error);
+    return null;
+  }
+};
+
+/**
  * Send emails to recipients with personalization and TPS throttling
  * @param {string[]} emailAddresses - Array of recipient email addresses
  * @param {Object} emailConfig - Email configuration object
@@ -245,6 +327,7 @@ const filterIdempotentRecipientsPhase = async (tenantId, subscribers, issueIdent
  * @param {Object} emailConfig.replacements - Replacement tokens for personalization
  * @param {string} emailConfig.referenceNumber - Optional reference number for tracking
  * @param {string} [emailConfig.variant] - Optional A/B variant id ("a"/"b") tagged on the send
+ * @param {Object} [emailConfig.assembly] - Optional prepared interest assembly ({ prepared, interestByEmail }) from prepareAssemblyPhase
  * @param {string} senderEmail - Sender email address
  * @returns {Promise<{sentCount: number, sentRecipients: string[]}>} Send stats and sent recipients
  */
@@ -262,6 +345,18 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
     await sendWithRetry(async () => {
       // Apply personalization replacements
       let personalizedHtml = emailConfig.html;
+
+      // Interest-aware assembly: reorder the marker-delimited sections for this
+      // recipient. Pure string reassembly, O(sections) per recipient — the
+      // section extraction and topic lookup already happened once per send in
+      // prepareAssemblyPhase. Recipients without interest data receive the
+      // canonical order.
+      if (emailConfig.assembly) {
+        personalizedHtml = assembleForSubscriber(
+          emailConfig.assembly.prepared,
+          emailConfig.assembly.interestByEmail.get(email)
+        );
+      }
 
       if (emailConfig.replacements?.emailAddress) {
         personalizedHtml = personalizedHtml.replace(
@@ -666,6 +761,20 @@ export const handler = async (event) => {
       };
     }
 
+    // Phase 2.5: Interest Assembly Preparation (opt-in per issue, list sends
+    // only). Skipped whenever a managed A/B test is active — variants must be
+    // byte-identical for measurement (publish-issue already refuses to flag
+    // both, this is defense in depth). Uses the subscriber list already in
+    // memory; never throws — a null result means everyone gets the event HTML.
+    let assembly = null;
+    if (data.contentAssembly?.enabled === true && to.list && !abTest) {
+      assembly = await executePhase('Interest Assembly Preparation', async () => {
+        return await prepareAssemblyPhase(html, subscribers, data.referenceNumber);
+      });
+    } else if (data.contentAssembly?.enabled === true) {
+      console.warn('[ASSEMBLY] Skipping personalized section order - ' + (abTest ? 'A/B test active' : 'not a list send'));
+    }
+
     // Phase 3: Email Sending
     // For a managed A/B test, only a deterministic hold-out *sample* receives the
     // variants; the winner is sent to the remainder later by evaluate-ab-winner.
@@ -712,7 +821,8 @@ export const handler = async (event) => {
             html,
             replacements,
             referenceNumber: data.referenceNumber,
-            variant: variantId
+            variant: variantId,
+            ...assembly && { assembly }
           }, senderEmail);
 
           total += result.sentCount;
@@ -726,7 +836,8 @@ export const handler = async (event) => {
         subject,
         html,
         replacements,
-        referenceNumber: data.referenceNumber
+        referenceNumber: data.referenceNumber,
+        ...assembly && { assembly }
       }, senderEmail);
     });
 

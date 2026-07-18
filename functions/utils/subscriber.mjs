@@ -61,7 +61,12 @@ export const listSubscribers = async (tenantId, options = {}) => {
         lastName: subscriber.lastName || null,
         addedAt: subscriber.addedAt,
         lastSentAt: subscriber.lastSentAt || null,
-        lastIssueSent: subscriber.lastIssueSent || null
+        lastIssueSent: subscriber.lastIssueSent || null,
+        // Interest data used by the send path for interest-aware issue
+        // assembly (contentAssembly). Omitted when absent so consumers can
+        // cheaply distinguish "no data" subscribers.
+        ...(subscriber.interestScores && { interestScores: subscriber.interestScores }),
+        ...(subscriber.excludedTopics && { excludedTopics: subscriber.excludedTopics })
       };
     });
 

@@ -3339,6 +3339,8 @@ components:
             removed within roughly an hour of expiry.
         abTest:
           $ref: "#/components/schemas/AbTest"
+        contentAssembly:
+          $ref: "#/components/schemas/ContentAssembly"
 
     CreateIssueResponse:
       type: object
@@ -3453,6 +3455,8 @@ components:
           description: Per-variant engagement statistics (present only for A/B test issues)
           items:
             $ref: "#/components/schemas/VariantStats"
+        contentAssembly:
+          $ref: "#/components/schemas/ContentAssembly"
 
     UpdateIssueRequest:
       type: object
@@ -3488,6 +3492,8 @@ components:
           description: Set to 'published' to manually mark an in-progress or failed issue as published
         abTest:
           $ref: "#/components/schemas/AbTest"
+        contentAssembly:
+          $ref: "#/components/schemas/ContentAssembly"
 
     IssueStats:
       type: object
@@ -4442,6 +4448,24 @@ components:
         complaints:
           type: integer
           description: Number of spam complaints for this variant
+
+    ContentAssembly:
+      type: object
+      required:
+        - enabled
+      description: >-
+        Interest-aware issue assembly configuration. When enabled, the
+        reorderable content sections of the rendered email are re-ordered per
+        recipient so each subscriber's highest-interest sections come first
+        (same content for everyone, only the order changes). Requires
+        topic-classified links; recipients without interest data receive the
+        original order. Ignored while an A/B test is active and for
+        JSON-template issues. Set to null on update to clear a previously
+        saved configuration.
+      properties:
+        enabled:
+          type: boolean
+          description: Whether personalized section ordering is enabled for this issue
 
     DeclareWinnerRequest:
       type: object

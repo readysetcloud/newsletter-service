@@ -42,6 +42,21 @@ export interface Issue extends IssueListItem {
   insightsV2?: InsightV2[];
   abTest?: AbTest;
   variantStats?: VariantStats[];
+  contentAssembly?: ContentAssembly;
+}
+
+// ---------------------------------------------------------------------------
+// Interest-aware assembly (personalized section order)
+// ---------------------------------------------------------------------------
+
+/**
+ * Interest-aware issue assembly configuration. When enabled, the reorderable
+ * content sections of the rendered email are re-ordered per recipient so each
+ * subscriber's highest-interest sections come first. Same content pool for
+ * everyone - only the order changes.
+ */
+export interface ContentAssembly {
+  enabled: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +212,7 @@ export interface CreateIssueRequest {
   templateId?: string;
   contentType?: IssueContentType;
   abTest?: AbTest;
+  contentAssembly?: ContentAssembly;
 }
 
 export interface UpdateIssueRequest {
@@ -209,6 +225,8 @@ export interface UpdateIssueRequest {
   contentType?: IssueContentType;
   /** An explicit `null` clears a previously-saved A/B test. */
   abTest?: AbTest | null;
+  /** An explicit `null` clears a previously-saved content assembly config. */
+  contentAssembly?: ContentAssembly | null;
 }
 
 export interface ListIssuesParams {

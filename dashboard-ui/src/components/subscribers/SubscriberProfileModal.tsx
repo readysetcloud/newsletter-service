@@ -79,9 +79,11 @@ export const SubscriberProfileModal: React.FC<SubscriberProfileModalProps> = ({
   const [activityLoading, setActivityLoading] = useState(false);
   const email = subscriber?.email;
 
-  // Fetch the full detail (activity timeline) when the modal opens for a
-  // subscriber. On failure we silently fall back to what the list already
-  // provided — the rest of the modal renders regardless.
+  // Load the activity timeline when the modal opens. subscriberService caches
+  // detail per email and coalesces in-flight requests, so when the row was
+  // prefetched on hover this resolves from cache and renders with no spinner.
+  // On failure we keep whatever the list already gave us — the rest of the
+  // modal renders regardless.
   useEffect(() => {
     if (!email) return;
 
@@ -115,12 +117,15 @@ export const SubscriberProfileModal: React.FC<SubscriberProfileModalProps> = ({
   const engagement = getEngagementStatus(subscriber.lastEngagedIssue, latestIssueNumber);
   const profile = getSortedInterestProfile(subscriber.interestScores);
   const autoSegmentTopics = profile.filter((entry) => entry.score >= AUTO_SEGMENT_THRESHOLD);
+  const recentActivity = detail?.recentActivity ?? [];
 
   return (
     <Modal isOpen={!!subscriber} onClose={onClose} size="md">
       <ModalHeader onClose={onClose}>
-        <ModalTitle>{name || subscriber.email}</ModalTitle>
-        {name && <ModalDescription>{subscriber.email}</ModalDescription>}
+        {/* When a subscriber never gave a name we show a neutral label rather
+            than surfacing their raw email address as if it were their name. */}
+        <ModalTitle>{name || 'Unnamed subscriber'}</ModalTitle>
+        <ModalDescription>{subscriber.email}</ModalDescription>
       </ModalHeader>
       <ModalContent className="space-y-6">
         {/* Engagement */}
@@ -200,9 +205,9 @@ export const SubscriberProfileModal: React.FC<SubscriberProfileModalProps> = ({
           </h3>
           {activityLoading ? (
             <p className="text-sm text-muted-foreground">Loading activity…</p>
-          ) : detail && detail.recentActivity.length > 0 ? (
+          ) : recentActivity.length > 0 ? (
             <ul className="space-y-1.5">
-              {detail.recentActivity.map((entry, index) => (
+              {recentActivity.map((entry, index) => (
                 <li
                   key={`${entry.type}-${entry.issue}-${entry.ts}-${index}`}
                   className="flex items-center gap-2 text-sm text-muted-foreground"

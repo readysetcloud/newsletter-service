@@ -169,4 +169,19 @@ describe('SubscriberProfileModal', () => {
       expect(screen.getByText(/No recent activity recorded yet/)).toBeInTheDocument()
     );
   });
+
+  it('shows a neutral label instead of the raw email when no name was given', () => {
+    render(
+      <SubscriberProfileModal
+        subscriber={{ ...base, firstName: undefined, lastName: undefined }}
+        latestIssueNumber={20}
+        onClose={() => {}}
+      />
+    );
+    // Title falls back to a neutral label rather than surfacing the raw email
+    // as if it were the subscriber's name.
+    expect(screen.getByRole('heading', { name: 'Unnamed subscriber' })).toBeInTheDocument();
+    // The email is still shown (as the secondary description line).
+    expect(screen.getByText('reader@example.com')).toBeInTheDocument();
+  });
 });

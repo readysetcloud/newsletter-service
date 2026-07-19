@@ -1,9 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen } from '@testing-library/react';
 import { SubscriberProfileModal } from '../SubscriberProfileModal';
 import { getEngagementStatus } from '@/utils/engagement';
-import { subscriberService } from '@/services/subscriberService';
-import type { SubscriberListItem, SubscriberDetail } from '@/types';
+import type { SubscriberListItem } from '@/types';
 
 // Render the modal shell as plain markup so the native <dialog> (showModal) is
 // not required in jsdom; we only care about the content the modal renders.
@@ -15,14 +14,6 @@ vi.mock('@/components/ui/Modal', () => ({
   ModalDescription: ({ children }: { children: React.ReactNode }) => <p>{children}</p>,
   ModalContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
-
-vi.mock('@/services/subscriberService', () => ({
-  subscriberService: {
-    getSubscriber: vi.fn(),
-  },
-}));
-
-const mockGetSubscriber = vi.mocked(subscriberService.getSubscriber);
 
 const recent = new Date().toISOString();
 
@@ -61,12 +52,6 @@ describe('SubscriberProfileModal', () => {
     },
     suspectedBot: false,
   };
-
-  beforeEach(() => {
-    // Default: detail fetch yields nothing so activity falls back to empty state.
-    mockGetSubscriber.mockReset();
-    mockGetSubscriber.mockResolvedValue({ success: false, error: 'nope' });
-  });
 
   it('renders nothing when no subscriber is selected', () => {
     const { container } = render(
@@ -126,47 +111,54 @@ describe('SubscriberProfileModal', () => {
     ).toBeInTheDocument();
   });
 
-  it('fetches and renders the recent activity timeline when the modal opens', async () => {
-    const detail: SubscriberDetail = {
-      email: 'reader@example.com',
-      addedAt: '2025-01-01T00:00:00Z',
-      lastEngagedIssue: 19,
-      recentActivity: [
-        { type: 'click', issue: 42, ts: recent, url: 'https://example.com/deep/article-path' },
-        { type: 'open', issue: 41, ts: recent },
-      ],
-      openHourTotal: 5,
-    };
-    mockGetSubscriber.mockResolvedValue({ success: true, data: detail });
-
+  it('renders the recent activity timeline straight from the list payload', () => {
     render(
-      <SubscriberProfileModal subscriber={base} latestIssueNumber={20} onClose={() => {}} />
+      <SubscriberProfileModal
+        subscriber={{
+          ...base,
+          recentActivity: [
+            { type: 'click', issue: 42, ts: recent, url: 'https://example.com/deep/article-path' },
+            { type: 'open', issue: 41, ts: recent },
+          ],
+        }}
+        latestIssueNumber={20}
+        onClose={() => {}}
+      />
     );
 
-    expect(mockGetSubscriber).toHaveBeenCalledWith('reader@example.com');
-    expect(await screen.findByText('Opened issue #41')).toBeInTheDocument();
+    // No fetch/loading state — activity is present immediately.
+    expect(screen.queryByText(/Loading activity/)).not.toBeInTheDocument();
+    expect(screen.getByText('Opened issue #41')).toBeInTheDocument();
     // Click entries render a shortened URL with the full URL in a title attribute.
     const clickLabel = screen.getByText('example.com/deep/article-path');
     expect(clickLabel).toHaveAttribute('title', 'https://example.com/deep/article-path');
   });
 
-  it('shows a loading state while the activity fetch is in flight', () => {
-    mockGetSubscriber.mockReturnValue(new Promise(() => {}));
+  it('shows an empty activity state when there is no recorded activity', () => {
     render(
-      <SubscriberProfileModal subscriber={base} latestIssueNumber={20} onClose={() => {}} />
-    );
-    expect(screen.getByText(/Loading activity/)).toBeInTheDocument();
-  });
-
-  it('falls back to an empty activity state when the detail fetch fails', async () => {
-    mockGetSubscriber.mockRejectedValue(new Error('boom'));
-    render(
-      <SubscriberProfileModal subscriber={base} latestIssueNumber={20} onClose={() => {}} />
+      <SubscriberProfileModal
+        subscriber={{ ...base, recentActivity: [] }}
+        latestIssueNumber={20}
+        onClose={() => {}}
+      />
     );
     // The rest of the modal (from list data) still renders.
     expect(screen.getByText('Highly Engaged')).toBeInTheDocument();
-    await waitFor(() =>
-      expect(screen.getByText(/No recent activity recorded yet/)).toBeInTheDocument()
+    expect(screen.getByText(/No recent activity recorded yet/)).toBeInTheDocument();
+  });
+
+  it('shows a neutral label instead of the raw email when no name was given', () => {
+    render(
+      <SubscriberProfileModal
+        subscriber={{ ...base, firstName: undefined, lastName: undefined }}
+        latestIssueNumber={20}
+        onClose={() => {}}
+      />
     );
+    // Title falls back to a neutral label rather than surfacing the raw email
+    // as if it were the subscriber's name.
+    expect(screen.getByRole('heading', { name: 'Unnamed subscriber' })).toBeInTheDocument();
+    // The email is still shown (as the secondary description line).
+    expect(screen.getByText('reader@example.com')).toBeInTheDocument();
   });
 });

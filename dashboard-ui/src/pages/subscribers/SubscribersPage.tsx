@@ -16,6 +16,7 @@ import { InterestChips } from '@/components/subscribers/InterestChips';
 import { SubscriberProfileModal } from '@/components/subscribers/SubscriberProfileModal';
 import { subscriberService } from '@/services/subscriberService';
 import { segmentService } from '@/services/segmentService';
+import { useMediaQuery } from '@/hooks/useMediaQuery';
 import type { Segment } from '@/services/segmentService';
 import type { SubscriberTrendsResponse, SubscriberListItem } from '@/types';
 
@@ -89,6 +90,9 @@ const SectionError: React.FC<{ message: string; onRetry: () => void }> = ({ mess
 export const SubscribersPage: React.FC = () => {
   const navigate = useNavigate();
   const { addToast } = useToast();
+  // Below Tailwind's `sm` breakpoint we swap the multi-column table for a
+  // compact stacked layout so the list stays legible on phones.
+  const isMobile = useMediaQuery('(max-width: 639px)');
 
   const [trendsData, setTrendsData] = useState<SubscriberTrendsResponse | null>(null);
   const [subscriberCount, setSubscriberCount] = useState(0);
@@ -236,6 +240,99 @@ export const SubscribersPage: React.FC = () => {
     [latestIssueNumber]
   );
 
+  const renderBotBadge = useCallback((sub: SubscriberListItem): React.ReactNode => {
+    if (!sub.suspectedBot) return null;
+    const reasons: string[] = [];
+    if (sub.botFlags?.honeypotTriggered) reasons.push('Honeypot triggered');
+    if (sub.botFlags?.disposableDomain) reasons.push('Disposable email domain');
+    if (sub.botFlags?.suspiciousUserAgent) reasons.push('Suspicious user agent');
+    if (sub.botFlags?.fastSubmission) reasons.push('Fast form submission');
+    if (sub.botFlags?.suspiciousEmailPattern) reasons.push('Suspicious email pattern (dot-trick)');
+    const tooltip = reasons.length > 0
+      ? `Flagged for: ${reasons.join(', ')}`
+      : 'One or more bot detection flags were triggered';
+    return (
+      <span
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800 dark:bg-orange-900/20 dark:text-orange-400 cursor-help"
+        role="status"
+        title={tooltip}
+      >
+        <Bot className="w-3 h-3" aria-hidden="true" />
+        Suspected
+      </span>
+    );
+  }, []);
+
+  // Compact single-column layout for phones: email + a secondary line carrying
+  // the bot flag, engagement status and subscribe date, plus row actions. Keeps
+  // the most useful signals visible without a horizontally cramped table.
+  const mobileSubscriberColumns: VirtualTableColumn<SubscriberListItem>[] = useMemo(
+    () => [
+      {
+        key: 'subscriber',
+        header: (
+          <button
+            type="button"
+            onClick={toggleSortDirection}
+            className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
+            aria-label={`Sort by subscription date, currently ${sortDirection === 'asc' ? 'ascending' : 'descending'}`}
+          >
+            Subscriber
+            <SortIcon className="w-3.5 h-3.5" aria-hidden="true" />
+          </button>
+        ),
+        className: 'whitespace-normal py-2',
+        render: (sub) => {
+          const label = getEngagementLabel(sub.lastEngagedIssue);
+          return (
+            <div className="flex h-full min-w-0 flex-col justify-center gap-1">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="truncate text-foreground">{sub.email}</span>
+                {renderBotBadge(sub)}
+              </div>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span
+                  className={`inline-flex px-1.5 py-0.5 rounded-full font-medium ${label.className}`}
+                  role="status"
+                >
+                  {label.text}
+                </span>
+                <span>{sub.addedAt ? formatDate(sub.addedAt) : '—'}</span>
+              </div>
+            </div>
+          );
+        },
+      },
+      {
+        key: 'actions',
+        header: '',
+        width: '6.5rem',
+        className: 'px-2',
+        render: (sub) => (
+          <div className="flex h-full items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setSelectedSubscriber(sub)}
+              className="text-xs text-primary-600 hover:text-primary-800 dark:text-primary-400 dark:hover:text-primary-300 transition-colors"
+              aria-label={`View profile for ${sub.email}`}
+            >
+              View
+            </button>
+            <button
+              type="button"
+              onClick={() => handleUnsubscribe(sub.email)}
+              className="text-xs text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 transition-colors"
+              aria-label={`Unsubscribe ${sub.email}`}
+            >
+              Remove
+            </button>
+          </div>
+        ),
+      },
+    ],
+    [sortDirection, toggleSortDirection, SortIcon, getEngagementLabel, renderBotBadge, handleUnsubscribe]
+  );
+
   const subscriberColumns: VirtualTableColumn<SubscriberListItem>[] = useMemo(
     () => [
       {
@@ -246,28 +343,7 @@ export const SubscribersPage: React.FC = () => {
       {
         key: 'bot',
         header: 'Bot',
-        render: (sub) => {
-          if (!sub.suspectedBot) return null;
-          const reasons: string[] = [];
-          if (sub.botFlags?.honeypotTriggered) reasons.push('Honeypot triggered');
-          if (sub.botFlags?.disposableDomain) reasons.push('Disposable email domain');
-          if (sub.botFlags?.suspiciousUserAgent) reasons.push('Suspicious user agent');
-          if (sub.botFlags?.fastSubmission) reasons.push('Fast form submission');
-          if (sub.botFlags?.suspiciousEmailPattern) reasons.push('Suspicious email pattern (dot-trick)');
-          const tooltip = reasons.length > 0
-            ? `Flagged for: ${reasons.join(', ')}`
-            : 'One or more bot detection flags were triggered';
-          return (
-            <span
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800 dark:bg-orange-900/20 dark:text-orange-400 cursor-help"
-              role="status"
-              title={tooltip}
-            >
-              <Bot className="w-3 h-3" aria-hidden="true" />
-              Suspected
-            </span>
-          );
-        },
+        render: (sub) => renderBotBadge(sub),
       },
       {
         key: 'name',
@@ -353,7 +429,7 @@ export const SubscribersPage: React.FC = () => {
         ),
       },
     ],
-    [sortDirection, toggleSortDirection, SortIcon, getEngagementLabel, handleUnsubscribe]
+    [sortDirection, toggleSortDirection, SortIcon, getEngagementLabel, renderBotBadge, handleUnsubscribe]
   );
 
   const segmentColumns: DataListColumn<Segment>[] = useMemo(
@@ -532,9 +608,9 @@ export const SubscribersPage: React.FC = () => {
             items={sortedSubscribers}
             getKey={(sub) => sub.email}
             ariaLabel="Subscribers list"
-            rowHeight={44}
+            rowHeight={isMobile ? 60 : 44}
             maxHeight={440}
-            columns={subscriberColumns}
+            columns={isMobile ? mobileSubscriberColumns : subscriberColumns}
           />
         </Card>
       )}

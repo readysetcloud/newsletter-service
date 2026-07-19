@@ -65,7 +65,7 @@ export function VirtualTable<T>({
             role="columnheader"
             style={col.width ? { width: col.width, flexShrink: 0 } : { flex: 1 }}
             className={cn(
-              'px-4 py-3 text-left text-sm font-medium text-muted-foreground',
+              'px-3 sm:px-4 py-3 text-left text-sm font-medium text-muted-foreground',
               col.headerClassName
             )}
           >
@@ -96,7 +96,7 @@ export function VirtualTable<T>({
                   key={col.key}
                   role="cell"
                   style={col.width ? { width: col.width, flexShrink: 0 } : { flex: 1 }}
-                  className={cn('px-4 py-3 text-sm truncate', col.className)}
+                  className={cn('px-3 sm:px-4 py-3 text-sm truncate', col.className)}
                 >
                   {col.render(item)}
                 </div>

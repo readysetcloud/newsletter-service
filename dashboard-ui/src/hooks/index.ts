@@ -6,3 +6,4 @@ export * from './useRealTimeValidation';
 export * from './useSenderStatus';
 export * from './useScrollTracking';
 export * from './useKeyboardShortcuts';
+export * from './useMediaQuery';

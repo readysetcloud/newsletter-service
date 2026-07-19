@@ -2223,6 +2223,29 @@ paths:
                                   type: boolean
                                 suspiciousEmailPattern:
                                   type: boolean
+                            recentActivity:
+                              type: array
+                              description: >-
+                                Rolling list of recent opens and clicks, newest-first, capped at 20
+                                entries. Included in the list payload so the dashboard can render a
+                                subscriber's activity timeline without a second request.
+                              items:
+                                type: object
+                                properties:
+                                  type:
+                                    type: string
+                                    enum: [open, click]
+                                    description: The kind of activity
+                                  issue:
+                                    type: integer
+                                    description: Issue number the activity occurred on
+                                  ts:
+                                    type: string
+                                    format: date-time
+                                    description: ISO 8601 timestamp of the event
+                                  url:
+                                    type: string
+                                    description: The clicked URL (present only for clicks)
                       total:
                         type: integer
                         description: Total number of subscribers returned

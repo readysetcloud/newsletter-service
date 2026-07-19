@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Sparkles, MailOpen, MousePointerClick } from 'lucide-react';
 import { Modal, ModalHeader, ModalTitle, ModalDescription, ModalContent } from '@/components/ui/Modal';
 import {
@@ -7,7 +7,8 @@ import {
   AUTO_SEGMENT_THRESHOLD,
 } from '@/utils/interestProfile';
 import { getEngagementStatus } from '@/utils/engagement';
-import type { SubscriberListItem, ActivityEntry } from '@/types';
+import { subscriberService } from '@/services/subscriberService';
+import type { SubscriberListItem, SubscriberDetail, ActivityEntry } from '@/types';
 
 interface SubscriberProfileModalProps {
   subscriber: SubscriberListItem | null;
@@ -74,15 +75,49 @@ export const SubscriberProfileModal: React.FC<SubscriberProfileModalProps> = ({
   latestIssueNumber,
   onClose,
 }) => {
+  const [detail, setDetail] = useState<SubscriberDetail | null>(null);
+  const [activityLoading, setActivityLoading] = useState(false);
+  const email = subscriber?.email;
+
+  // Load the activity timeline when the modal opens. subscriberService caches
+  // detail per email and coalesces in-flight requests, so when the row was
+  // prefetched on hover this resolves from cache and renders with no spinner.
+  // On failure we keep whatever the list already gave us — the rest of the
+  // modal renders regardless.
+  useEffect(() => {
+    if (!email) return;
+
+    let cancelled = false;
+
+    async function loadDetail(subscriberEmail: string) {
+      setDetail(null);
+      setActivityLoading(true);
+      try {
+        const res = await subscriberService.getSubscriber(subscriberEmail);
+        if (!cancelled && res.success && res.data) {
+          setDetail(res.data);
+        }
+      } catch {
+        // Silent fallback — keep whatever the list already provided.
+      } finally {
+        if (!cancelled) setActivityLoading(false);
+      }
+    }
+
+    loadDetail(email);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [email]);
+
   if (!subscriber) return null;
 
   const name = [subscriber.firstName, subscriber.lastName].filter(Boolean).join(' ');
   const engagement = getEngagementStatus(subscriber.lastEngagedIssue, latestIssueNumber);
   const profile = getSortedInterestProfile(subscriber.interestScores);
   const autoSegmentTopics = profile.filter((entry) => entry.score >= AUTO_SEGMENT_THRESHOLD);
-  // The activity timeline now ships with the list payload, so the modal renders
-  // it immediately — no per-subscriber fetch on open.
-  const recentActivity = subscriber.recentActivity ?? [];
+  const recentActivity = detail?.recentActivity ?? [];
 
   return (
     <Modal isOpen={!!subscriber} onClose={onClose} size="md">
@@ -168,7 +203,9 @@ export const SubscriberProfileModal: React.FC<SubscriberProfileModalProps> = ({
           <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
             Recent Activity
           </h3>
-          {recentActivity.length > 0 ? (
+          {activityLoading ? (
+            <p className="text-sm text-muted-foreground">Loading activity…</p>
+          ) : recentActivity.length > 0 ? (
             <ul className="space-y-1.5">
               {recentActivity.map((entry, index) => (
                 <li

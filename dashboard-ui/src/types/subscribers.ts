@@ -46,12 +46,6 @@ export interface SubscriberListItem {
   interestScores?: Record<string, InterestScoreEntry> | null;
   /** IANA timezone confirmed from engagement geolocation over 3 consecutive issues. */
   timeZone?: string | null;
-  /**
-   * Newest-first list of recent opens/clicks, capped at 20 by the writer.
-   * Included in the list payload so the profile modal renders the activity
-   * timeline instantly, with no per-row fetch to GET /subscribers/{email}.
-   */
-  recentActivity?: ActivityEntry[];
   suspectedBot?: boolean;
   botFlags?: BotFlags;
 }

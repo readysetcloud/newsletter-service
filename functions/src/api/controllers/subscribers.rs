@@ -125,12 +125,6 @@ struct SubscriberListItem {
     /// issues. Absent until confirmed. Used by the local-send feature.
     #[serde(skip_serializing_if = "Option::is_none")]
     time_zone: Option<String>,
-    /// Newest-first list of recent opens/clicks, capped at 20 by the writer.
-    /// Included in the list response so the dashboard can render a subscriber's
-    /// activity timeline instantly on row-click, without a second round-trip to
-    /// GET /subscribers/{email}. The list query already reads the full item, so
-    /// surfacing this field adds no extra DynamoDB cost.
-    recent_activity: Vec<ActivityEntry>,
     suspected_bot: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     bot_flags: Option<BotFlags>,
@@ -712,96 +706,6 @@ fn parse_recent_activity(item: &HashMap<String, AttributeValue>) -> Vec<Activity
     result
 }
 
-/// Build a subscriber list-row from a subscriber record. Includes the rolling
-/// `recentActivity` timeline so the dashboard can render a subscriber's activity
-/// on row-click without a follow-up GET /subscribers/{email} round-trip.
-fn parse_subscriber_list_item(item: &HashMap<String, AttributeValue>) -> SubscriberListItem {
-    let email = item
-        .get("email")
-        .and_then(|v| v.as_s().ok())
-        .map(|s| s.to_string())
-        .unwrap_or_default();
-
-    let added_at = item
-        .get("addedAt")
-        .and_then(|v| v.as_s().ok())
-        .map(|s| s.to_string());
-
-    let first_name = item
-        .get("firstName")
-        .and_then(|v| v.as_s().ok())
-        .map(|s| s.to_string());
-
-    let last_name = item
-        .get("lastName")
-        .and_then(|v| v.as_s().ok())
-        .map(|s| s.to_string());
-
-    let last_engaged_issue = item
-        .get("lastEngagedIssue")
-        .and_then(|v| v.as_n().ok())
-        .and_then(|n| n.parse::<i64>().ok());
-
-    let engagement_count = item
-        .get("engagementCount")
-        .and_then(|v| v.as_n().ok())
-        .and_then(|n| n.parse::<i64>().ok());
-
-    let interest_scores = parse_interest_scores(item).filter(|m| !m.is_empty());
-
-    let time_zone = item
-        .get("timeZone")
-        .and_then(|v| v.as_s().ok())
-        .map(|s| s.to_string());
-
-    let recent_activity = parse_recent_activity(item);
-
-    let get_bool_flag = |key: &str| -> bool {
-        item.get(key)
-            .and_then(|v| v.as_bool().ok())
-            .copied()
-            .unwrap_or(false)
-    };
-
-    let honeypot_triggered = get_bool_flag("honeypotTriggered");
-    let disposable_domain = get_bool_flag("disposableDomain");
-    let suspicious_user_agent = get_bool_flag("suspiciousUserAgent");
-    let fast_submission = get_bool_flag("fastSubmission");
-    let suspicious_email_pattern = get_bool_flag("suspiciousEmailPattern");
-
-    let suspected_bot = honeypot_triggered
-        || disposable_domain
-        || suspicious_user_agent
-        || fast_submission
-        || suspicious_email_pattern;
-
-    let bot_flags = if suspected_bot {
-        Some(BotFlags {
-            honeypot_triggered,
-            disposable_domain,
-            suspicious_user_agent,
-            fast_submission,
-            suspicious_email_pattern,
-        })
-    } else {
-        None
-    };
-
-    SubscriberListItem {
-        email,
-        added_at,
-        first_name,
-        last_name,
-        last_engaged_issue,
-        engagement_count,
-        interest_scores,
-        time_zone,
-        recent_activity,
-        suspected_bot,
-        bot_flags,
-    }
-}
-
 /// Build the full subscriber detail response from a subscriber record.
 fn parse_subscriber_detail(item: &HashMap<String, AttributeValue>) -> SubscriberDetailResponse {
     let email = item
@@ -989,7 +893,87 @@ async fn query_all_subscribers(
                 continue;
             }
 
-            subscribers.push(parse_subscriber_list_item(item));
+            let email = item
+                .get("email")
+                .and_then(|v| v.as_s().ok())
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+
+            let added_at = item
+                .get("addedAt")
+                .and_then(|v| v.as_s().ok())
+                .map(|s| s.to_string());
+
+            let first_name = item
+                .get("firstName")
+                .and_then(|v| v.as_s().ok())
+                .map(|s| s.to_string());
+
+            let last_name = item
+                .get("lastName")
+                .and_then(|v| v.as_s().ok())
+                .map(|s| s.to_string());
+
+            let last_engaged_issue = item
+                .get("lastEngagedIssue")
+                .and_then(|v| v.as_n().ok())
+                .and_then(|n| n.parse::<i64>().ok());
+
+            let engagement_count = item
+                .get("engagementCount")
+                .and_then(|v| v.as_n().ok())
+                .and_then(|n| n.parse::<i64>().ok());
+
+            let interest_scores = parse_interest_scores(item).filter(|m| !m.is_empty());
+
+            let time_zone = item
+                .get("timeZone")
+                .and_then(|v| v.as_s().ok())
+                .map(|s| s.to_string());
+
+            let get_bool_flag = |key: &str| -> bool {
+                item.get(key)
+                    .and_then(|v| v.as_bool().ok())
+                    .copied()
+                    .unwrap_or(false)
+            };
+
+            let honeypot_triggered = get_bool_flag("honeypotTriggered");
+            let disposable_domain = get_bool_flag("disposableDomain");
+            let suspicious_user_agent = get_bool_flag("suspiciousUserAgent");
+            let fast_submission = get_bool_flag("fastSubmission");
+            let suspicious_email_pattern = get_bool_flag("suspiciousEmailPattern");
+
+            let suspected_bot = honeypot_triggered
+                || disposable_domain
+                || suspicious_user_agent
+                || fast_submission
+                || suspicious_email_pattern;
+
+            let bot_flags = if suspected_bot {
+                Some(BotFlags {
+                    honeypot_triggered,
+                    disposable_domain,
+                    suspicious_user_agent,
+                    fast_submission,
+                    suspicious_email_pattern,
+                })
+            } else {
+                None
+            };
+
+            subscribers.push(SubscriberListItem {
+                email,
+                added_at,
+                first_name,
+                last_name,
+                last_engaged_issue,
+                engagement_count,
+                interest_scores,
+                time_zone,
+                suspected_bot,
+                bot_flags,
+            });
         }
 
         match result.last_evaluated_key() {
@@ -1501,43 +1485,6 @@ mod tests {
         let activity = parse_recent_activity(&item);
         assert_eq!(activity.len(), 1);
         assert_eq!(activity[0].issue, 5);
-    }
-
-    #[test]
-    fn test_parse_subscriber_list_item_includes_recent_activity() {
-        // The list row must carry the activity timeline so the dashboard modal
-        // renders it without a second GET /subscribers/{email} round-trip.
-        let mut item = HashMap::new();
-        item.insert(
-            "email".to_string(),
-            AttributeValue::S("reader@example.com".to_string()),
-        );
-        item.insert(
-            "recentActivity".to_string(),
-            AttributeValue::L(vec![
-                make_activity_entry("click", 42, "2026-01-02T00:00:00Z", Some("https://x.test/a")),
-                make_activity_entry("open", 41, "2026-01-01T00:00:00Z", None),
-            ]),
-        );
-
-        let list_item = parse_subscriber_list_item(&item);
-        let json = serde_json::to_value(&list_item).unwrap();
-
-        assert_eq!(json["email"], "reader@example.com");
-        // Serializes under the camelCase key the dashboard consumes.
-        assert_eq!(json["recentActivity"].as_array().unwrap().len(), 2);
-        assert_eq!(json["recentActivity"][0]["type"], "click");
-        assert_eq!(json["recentActivity"][0]["issue"], 42);
-        assert_eq!(json["recentActivity"][0]["url"], "https://x.test/a");
-        assert_eq!(json["recentActivity"][1]["type"], "open");
-    }
-
-    #[test]
-    fn test_parse_subscriber_list_item_absent_activity_is_empty_array() {
-        let item = make_subscriber_item("bare@example.com", None, None);
-        let list_item = parse_subscriber_list_item(&item);
-        let json = serde_json::to_value(&list_item).unwrap();
-        assert_eq!(json["recentActivity"], serde_json::json!([]));
     }
 
     #[test]

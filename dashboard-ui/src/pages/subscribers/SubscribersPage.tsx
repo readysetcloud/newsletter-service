@@ -313,6 +313,8 @@ export const SubscribersPage: React.FC = () => {
             <button
               type="button"
               onClick={() => setSelectedSubscriber(sub)}
+              onMouseEnter={() => subscriberService.prefetchSubscriber(sub.email)}
+              onFocus={() => subscriberService.prefetchSubscriber(sub.email)}
               className="text-xs text-primary-600 hover:text-primary-800 dark:text-primary-400 dark:hover:text-primary-300 transition-colors"
               aria-label={`View profile for ${sub.email}`}
             >
@@ -412,6 +414,8 @@ export const SubscribersPage: React.FC = () => {
             <button
               type="button"
               onClick={() => setSelectedSubscriber(sub)}
+              onMouseEnter={() => subscriberService.prefetchSubscriber(sub.email)}
+              onFocus={() => subscriberService.prefetchSubscriber(sub.email)}
               className="text-xs text-primary-600 hover:text-primary-800 dark:text-primary-400 dark:hover:text-primary-300 transition-colors"
               aria-label={`View profile for ${sub.email}`}
             >

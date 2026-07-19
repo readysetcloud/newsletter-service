@@ -1,0 +1,151 @@
+name: Update GeoLite2 Databases
+
+# Monthly refresh of the MaxMind GeoLite2 databases inside the geolocation
+# Lambda layer (functions/layers/geolocation-layer.zip). The layer carries:
+#   - GeoLite2-Country.mmdb  (~10 MB) — country analytics
+#   - GeoLite2-City.mmdb     (~60 MB) — IANA timezone for subscriber timezone
+#                                        detection and local send
+# plus the maxmind node module under nodejs/ (preserved as-is on rebuild).
+#
+# Requires the MAXMIND_LICENSE_KEY repository secret (free key from
+# maxmind.com — see docs/geolocation-database-updates.md). Deploy credentials
+# reuse the existing prod environment secrets.
+
+on:
+  schedule:
+    # 1st of every month at 02:00 UTC (MaxMind publishes weekly; monthly is
+    # the accuracy/operational-overhead balance recommended in the docs).
+    - cron: '0 2 1 * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-geolocation-db
+  cancel-in-progress: false
+
+jobs:
+  update-layer:
+    name: Rebuild geolocation layer
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      changed: ${{ steps.rebuild.outputs.changed }}
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download latest GeoLite2 databases
+        env:
+          LICENSE_KEY: ${{ secrets.MAXMIND_LICENSE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${LICENSE_KEY}" ]]; then
+            echo "::error::MAXMIND_LICENSE_KEY secret is not configured. Create a free license key at maxmind.com and add it to the repository secrets."
+            exit 1
+          fi
+
+          mkdir -p downloads
+          for edition in GeoLite2-Country GeoLite2-City; do
+            echo "Downloading ${edition}..."
+            curl -fsSL -o "downloads/${edition}.tar.gz" \
+              "https://download.maxmind.com/app/geoip_download?edition_id=${edition}&license_key=${LICENSE_KEY}&suffix=tar.gz"
+            tar -xzf "downloads/${edition}.tar.gz" -C downloads
+            find downloads -name "${edition}.mmdb" -exec mv {} "downloads/${edition}.mmdb" \;
+            test -f "downloads/${edition}.mmdb"
+          done
+
+          # Sanity bounds so a truncated download or an HTML error page can
+          # never ship into the layer.
+          country_size=$(stat -c%s downloads/GeoLite2-Country.mmdb)
+          city_size=$(stat -c%s downloads/GeoLite2-City.mmdb)
+          echo "Country: ${country_size} bytes, City: ${city_size} bytes"
+          [[ ${country_size} -gt 3000000 && ${country_size} -lt 40000000 ]] || { echo "::error::Country DB size out of expected bounds"; exit 1; }
+          [[ ${city_size} -gt 30000000 && ${city_size} -lt 200000000 ]] || { echo "::error::City DB size out of expected bounds"; exit 1; }
+
+      - name: Rebuild layer zip if databases changed
+        id: rebuild
+        run: |
+          set -euo pipefail
+          workdir=$(mktemp -d)
+          unzip -q functions/layers/geolocation-layer.zip -d "${workdir}"
+
+          # Compare mmdb contents, not zip bytes: zips embed timestamps, so a
+          # byte-compare of rebuilt zips would always differ.
+          changed=false
+          for edition in GeoLite2-Country GeoLite2-City; do
+            if [[ ! -f "${workdir}/${edition}.mmdb" ]] || ! cmp -s "downloads/${edition}.mmdb" "${workdir}/${edition}.mmdb"; then
+              changed=true
+            fi
+            cp "downloads/${edition}.mmdb" "${workdir}/${edition}.mmdb"
+          done
+
+          if [[ "${changed}" == "false" ]]; then
+            echo "Databases already up to date; nothing to do."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          (cd "${workdir}" && zip -qr "${RUNNER_TEMP}/geolocation-layer.zip" .)
+          mv "${RUNNER_TEMP}/geolocation-layer.zip" functions/layers/geolocation-layer.zip
+          unzip -l functions/layers/geolocation-layer.zip | head -6
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push updated layer
+        id: commit
+        if: steps.rebuild.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add functions/layers/geolocation-layer.zip
+          git commit -m "Update GeoLite2 Country + City databases in geolocation layer"
+          git push
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    # A push made with GITHUB_TOKEN does not trigger the "Deploy to
+    # Production" workflow (GitHub suppresses workflow runs caused by the
+    # workflow token), so the updated layer is deployed here directly,
+    # mirroring deploy.yaml's backend job. Data-only change: the pre-deploy
+    # validation suite is intentionally not repeated for a database refresh.
+    name: Deploy updated layer
+    needs: update-layer
+    if: needs.update-layer.outputs.changed == 'true'
+    environment: prod
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.update-layer.outputs.sha }}
+      - name: Install Rust toolchain with Cargo Lambda
+        uses: moonrepo/setup-rust@v1
+        with:
+          bins: cargo-lambda
+          targets: aarch64-unknown-linux-gnu
+      - name: Install Zig toolchain
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.0
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-region: us-east-1
+          aws-access-key-id: ${{ secrets.PROD_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.PROD_SECRET_KEY }}
+      - name: SAM Build and Deploy
+        run: |
+          npm install -g esbuild
+          npm install --no-fund --no-audit
+
+          sam --info
+          sam build --beta-features
+
+          sam deploy \
+          --stack-name newsletter-service \
+          --resolve-s3 \
+          --no-fail-on-empty-changeset \
+          --capabilities CAPABILITY_IAM \
+          --parameter-overrides Environment=production EncryptionKey=${{secrets.ENCRYPTION_KEY}} RedirectCustomDomain=rdyset.click VerifiedFromEmail=${{vars.VERIFIED_FROM_EMAIL}} FrontendCustomDomain=${{vars.FRONTEND_CUSTOM_DOMAIN}} FrontendHostedZoneId=${{vars.FRONTEND_HOSTED_ZONE_ID}}

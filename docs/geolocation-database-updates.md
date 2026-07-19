@@ -43,122 +43,64 @@ MaxMind updates these databases weekly, but we recommend monthly updates for a b
 
 ### Update Lambda Layer
 
-1. Replace the database files:
+The layer ships as a prebuilt zip committed to the repository
+(`functions/layers/geolocation-layer.zip`) with the `.mmdb` files at the zip
+root and the `maxmind` node module under `nodejs/`. To rebuild it:
+
+1. Unpack the current layer (preserves the bundled node module):
    ```bash
-   cp /path/to/downloaded/GeoLite2-Country.mmdb layers/geolocation/GeoLite2-Country.mmdb
-   cp /path/to/downloaded/GeoLite2-City.mmdb layers/geolocation/GeoLite2-City.mmdb
+   mkdir -p /tmp/geo-layer
+   unzip functions/layers/geolocation-layer.zip -d /tmp/geo-layer
    ```
 
-2. Verify file sizes (Country ~6-8 MB, City ~60 MB):
+2. Replace the database files and verify sizes (Country ~6-10 MB, City ~60 MB):
    ```bash
-   ls -lh layers/geolocation/GeoLite2-Country.mmdb layers/geolocation/GeoLite2-City.mmdb
+   cp /path/to/downloaded/GeoLite2-Country.mmdb /tmp/geo-layer/GeoLite2-Country.mmdb
+   cp /path/to/downloaded/GeoLite2-City.mmdb /tmp/geo-layer/GeoLite2-City.mmdb
+   ls -lh /tmp/geo-layer/*.mmdb
    ```
 
-3. Deploy the updated layer:
+3. Repack and deploy:
    ```bash
-   sam build
-   s
-Confirm country data is appearing correctly
+   (cd /tmp/geo-layer && zip -r geolocation-layer.zip .)
+   mv /tmp/geo-layer/geolocation-layer.zip functions/layers/geolocation-layer.zip
+   sam build && sam deploy
+   ```
+
+4. **Verify after deploy**:
+   - Confirm country data is appearing correctly
    - Verify no "unknown" countries for valid public IPs
+   - Check CloudWatch logs for geolocation errors and confirm no increase in
+     error rates after the update
 
-3. **Monitor errors**:
-   - Check CloudWatch logs for geolocation errors
-   - Verify no increase in error rates after update
+## Automated Monthly Updates (GitHub Actions)
 
-## Automated CI/CD Update Workflow (Optional)
+The repository ships a scheduled workflow that keeps both databases fresh:
+[`.github/workflows/update-geolocation-db.yml`](../.github/workflows/update-geolocation-db.yml).
 
-For automated monthly updates, set up a scheduled workflow:
+On the 1st of every month (or on manual dispatch) it:
 
-### Prerequisites
+1. Downloads the latest GeoLite2 Country and City databases from MaxMind
+2. Sanity-checks the file sizes so a truncated download or error page can never ship
+3. Rebuilds `functions/layers/geolocation-layer.zip` in place, preserving the bundled
+   `maxmind` node module — and skips everything if the database contents are unchanged
+4. Commits the updated layer zip to `main`
+5. Deploys the stack directly (a push made with the workflow token does not trigger
+   the regular Deploy to Production workflow, so this workflow runs the same
+   `sam build && sam deploy` itself)
 
-- MaxMind Account ID and License Key stored in AWS Secrets Manager
-- CI/CD pipeline with AWS access (GitHub Actions, GitLab CI, etc.)
+### One-time setup
 
-### Store Credentials in Secrets Manager
+1. Create a free MaxMind license key (see [Generate License Key](#generate-license-key) above)
+2. Add it as a repository secret named `MAXMIND_LICENSE_KEY`
+   (Settings → Secrets and variables → Actions)
+3. The deploy step reuses the existing `prod` environment credentials
+   (`PROD_ACCESS_KEY` / `PROD_SECRET_KEY`) — no additional AWS setup is needed
 
-```bash
-aws secretsmanager create-secret \
-  --name maxmind-credentials \
-  --secret-string '{"account_id":"YOUR_ACCOUNT_ID","license_key":"YOUR_LICENSE_KEY"}'
-```
+If branch protection on `main` blocks pushes from `github-actions[bot]`, add the
+bot (or a bypass rule for the workflow) to the branch protection allowances.
 
-### GitHub Actions Workflow Example
-
-Create `.github/workflows/update-geolocation-db.yml`:
-
-```yaml
-name: Update GeoLite2 Database
-
-on:
-  schedule:
-    # Run on the 1st of every month at 2 AM UTC
-    - cron: '0 2 1 * *'
-  workflow_dispatch: # Allow manual trigger
-
-jobs:
-  update-database:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
-
-      - name: Get MaxMind credentials
-        id: maxmind
-        run: |
-          SECRET=$(aws secretsmanager get-secret-value --secret-id maxmind-credentials --query SecretString --output text)
-          echo "ACCOUNT_ID=$(echo $SECRET | jq -r .account_id)" >> $GITHUB_OUTPUT
-          echo "LICENSE_KEY=$(echo $SECRET | jq -r .license_key)" >> $GITHUB_OUTPUT
-
-      - name: Download latest GeoLite2 database
-        run: |
-          curl -o GeoLite2-Country.tar.gz \
-            "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country&license_key=${{ steps.maxmind.outputs.LICENSE_KEY }}&suffix=tar.gz"
-          tar -xzf GeoLite2-Country.tar.gz
-          find . -name "GeoLite2-Country.mmdb" -exec cp {} layers/geolocation/GeoLite2-Country.mmdb \;
-
-      - name: Setup SAM CLI
-        uses: aws-actions/setup-sam@v2
-
-      - name: Build and deploy
-        run: |
-          sam build
-          sam deploy --no-confirm-changeset --no-fail-on-empty-changeset
-
-      - name: Verify deployment
-        run: |
-          echo "Deployment completed. Verify in AWS Console."
-          # Add verification steps here (e.g., invoke test Lambda)
-```
-
-### GitLab CI Example
-
-Create `.gitlab-ci.yml` job:
-
-```yaml
-update-geolocation-db:
-  stage: deploy
-  only:
-    - schedules
-  script:
-    - apt-get update && apt-get install -y curl jq
-    - SECRET=$(aws secretsmanager get-secret-value --secret-id maxmind-credentials --query SecretString --output text)
-    - ACCOUNT_ID=$(echo $SECRET | jq -r .account_id)
-    - LICENSE_KEY=$(echo $SECRET | jq -r .license_key)
-    - curl -o GeoLite2-Country.tar.gz "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country&license_key=$LICENSE_KEY&suffix=tar.gz"
-    - tar -xzf GeoLite2-Country.tar.gz
-    - find . -name "GeoLite2-Country.mmdb" -exec cp {} layers/geolocation/GeoLite2-Country.mmdb \;
-    - sam build
-    - sam deploy --no-confirm-changeset --no-fail-on-empty-changeset
-```
-
-Schedule the job to run monthly in GitLab CI/CD settings.
+To run an update immediately: Actions → "Update GeoLite2 Databases" → Run workflow.
 
 ## Update Frequency Recommendations
 
@@ -173,7 +115,7 @@ Schedule the job to run monthly in GitLab CI/CD settings.
 **Symptom**: CloudWatch logs show "db_missing" errors
 
 **Solution**:
-1. Verify file exists: `ls -lh layers/geolocation/GeoLite2-Country.mmdb`
+1. Verify the file is in the layer zip: `unzip -l functions/layers/geolocation-layer.zip`
 2. Check file permissions (should be readable)
 3. Redeploy layer: `sam build && sam deploy`
 

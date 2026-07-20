@@ -7,9 +7,14 @@ name: Update GeoLite2 Databases
 #                                        detection and local send
 # plus the maxmind node module under nodejs/ (preserved as-is on rebuild).
 #
+# main is a protected branch (pull requests required), so this workflow opens
+# a PR with the refreshed layer rather than pushing to main directly. Merging
+# the PR is a real-user push, which triggers the "Deploy to Production"
+# workflow (deploy.yaml) to build and deploy the updated layer — so this
+# workflow does not deploy the stack itself.
+#
 # Requires the MAXMIND_LICENSE_KEY repository secret (free key from
-# maxmind.com — see docs/geolocation-database-updates.md). Deploy credentials
-# reuse the existing prod environment secrets.
+# maxmind.com — see docs/geolocation-database-updates.md).
 
 on:
   schedule:
@@ -20,6 +25,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: update-geolocation-db
@@ -30,9 +36,6 @@ jobs:
     name: Rebuild geolocation layer
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    outputs:
-      changed: ${{ steps.rebuild.outputs.changed }}
-      sha: ${{ steps.commit.outputs.sha }}
     steps:
       - uses: actions/checkout@v7
 
@@ -92,60 +95,25 @@ jobs:
           unzip -l functions/layers/geolocation-layer.zip | head -6
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
-      - name: Commit and push updated layer
-        id: commit
+      - name: Open pull request with updated layer
+        # main requires PRs, so we branch + open a PR instead of pushing to
+        # main. Merging the PR is a real-user push that triggers deploy.yaml,
+        # which builds and deploys the refreshed layer to production.
         if: steps.rebuild.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          branch="geolite2-update-$(date -u +%Y%m%d)-${GITHUB_RUN_ID}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${branch}"
           git add functions/layers/geolocation-layer.zip
           git commit -m "Update GeoLite2 Country + City databases in geolocation layer"
-          git push
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          git push origin "${branch}"
 
-  deploy:
-    # A push made with GITHUB_TOKEN does not trigger the "Deploy to
-    # Production" workflow (GitHub suppresses workflow runs caused by the
-    # workflow token), so the updated layer is deployed here directly,
-    # mirroring deploy.yaml's backend job. Data-only change: the pre-deploy
-    # validation suite is intentionally not repeated for a database refresh.
-    name: Deploy updated layer
-    needs: update-layer
-    if: needs.update-layer.outputs.changed == 'true'
-    environment: prod
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.update-layer.outputs.sha }}
-      - name: Install Rust toolchain with Cargo Lambda
-        uses: moonrepo/setup-rust@v1
-        with:
-          bins: cargo-lambda
-          targets: aarch64-unknown-linux-gnu
-      - name: Install Zig toolchain
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.14.0
-      - name: Configure AWS
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          aws-region: us-east-1
-          aws-access-key-id: ${{ secrets.PROD_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.PROD_SECRET_KEY }}
-      - name: SAM Build and Deploy
-        run: |
-          npm install -g esbuild
-          npm install --no-fund --no-audit
-
-          sam --info
-          sam build --beta-features
-
-          sam deploy \
-          --stack-name newsletter-service \
-          --resolve-s3 \
-          --no-fail-on-empty-changeset \
-          --capabilities CAPABILITY_IAM \
-          --parameter-overrides Environment=production EncryptionKey=${{secrets.ENCRYPTION_KEY}} RedirectCustomDomain=rdyset.click VerifiedFromEmail=${{vars.VERIFIED_FROM_EMAIL}} FrontendCustomDomain=${{vars.FRONTEND_CUSTOM_DOMAIN}} FrontendHostedZoneId=${{vars.FRONTEND_HOSTED_ZONE_ID}}
+          gh pr create \
+            --base main \
+            --head "${branch}" \
+            --title "Update GeoLite2 Country + City databases" \
+            --body "Automated monthly refresh of the MaxMind GeoLite2 Country and City databases in \`functions/layers/geolocation-layer.zip\`. Merging this PR pushes to \`main\`, which triggers the Deploy to Production workflow to build and deploy the updated geolocation layer. Binary database bump — nothing to review beyond the layer zip itself."

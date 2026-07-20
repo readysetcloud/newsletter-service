@@ -84,23 +84,27 @@ On the 1st of every month (or on manual dispatch) it:
 2. Sanity-checks the file sizes so a truncated download or error page can never ship
 3. Rebuilds `functions/layers/geolocation-layer.zip` in place, preserving the bundled
    `maxmind` node module — and skips everything if the database contents are unchanged
-4. Commits the updated layer zip to `main`
-5. Deploys the stack directly (a push made with the workflow token does not trigger
-   the regular Deploy to Production workflow, so this workflow runs the same
-   `sam build && sam deploy` itself)
+4. Opens a pull request against `main` with the updated layer zip
+
+`main` is a protected branch (pull requests required), so the workflow opens a PR
+rather than committing directly. **Merging the PR** is what ships the update: your
+merge is a real-user push to `main`, which triggers the regular
+[Deploy to Production workflow](../.github/workflows/deploy.yaml) to build and
+deploy the refreshed layer. (A push made with the workflow's own token does not
+trigger downstream workflows, which is why a human merge is what drives the deploy.)
+It's a binary database bump, so there's nothing to review beyond the layer zip itself.
 
 ### One-time setup
 
 1. Create a free MaxMind license key (see [Generate License Key](#generate-license-key) above)
 2. Add it as a repository secret named `MAXMIND_LICENSE_KEY`
    (Settings → Secrets and variables → Actions)
-3. The deploy step reuses the existing `prod` environment credentials
-   (`PROD_ACCESS_KEY` / `PROD_SECRET_KEY`) — no additional AWS setup is needed
+3. No additional AWS setup is needed — deployment runs through the existing
+   Deploy to Production workflow when you merge the PR, using its `prod`
+   environment credentials (`PROD_ACCESS_KEY` / `PROD_SECRET_KEY`)
 
-If branch protection on `main` blocks pushes from `github-actions[bot]`, add the
-bot (or a bypass rule for the workflow) to the branch protection allowances.
-
-To run an update immediately: Actions → "Update GeoLite2 Databases" → Run workflow.
+To run an update immediately: Actions → "Update GeoLite2 Databases" → Run workflow,
+then merge the pull request it opens.
 
 ## Update Frequency Recommendations
 

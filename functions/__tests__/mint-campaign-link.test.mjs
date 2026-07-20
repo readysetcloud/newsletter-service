@@ -26,11 +26,22 @@ describe('mint-campaign-link', () => {
     jest.clearAllMocks();
   });
 
-  const invoke = (body) => handler({ body: typeof body === 'string' ? body : JSON.stringify(body) });
+  const invoke = (body, tenantId = 'tenant-1') => handler({
+    body: typeof body === 'string' ? body : JSON.stringify(body),
+    requestContext: { authorizer: { tenantId } },
+  });
+
+  describe('auth', () => {
+    test('returns 401 when tenant is missing from authorizer context', async () => {
+      const res = await handler({ body: JSON.stringify({ url: 'https://example.com' }) });
+      expect(res.statusCode).toBe(401);
+      expect(mockDdbSend).not.toHaveBeenCalled();
+    });
+  });
 
   describe('validation', () => {
     test('returns 400 when body is missing', async () => {
-      const res = await handler({});
+      const res = await handler({ requestContext: { authorizer: { tenantId: 'tenant-1' } } });
       expect(res.statusCode).toBe(400);
     });
 
@@ -105,6 +116,7 @@ describe('mint-campaign-link', () => {
       expect(item.pk).toBe(`CAMPAIGN_LINK_CODE#${body.code}`);
       expect(item.sk).toBe('METADATA');
       expect(item.entity).toBe('CampaignLink');
+      expect(item.tenantId).toBe('tenant-1');
       expect(item.url).toBe('https://readysetcloud.io/some-post');
       expect(item.src).toBe('linkedin');
       expect(item.GSI1PK).toBe('CAMPAIGN_LINK_CODE_EXPIRY');

@@ -3169,6 +3169,7 @@ Resources:
           Statement:
             - Effect: Allow
               Action:
+                - dynamodb:GetItem
                 - dynamodb:Query
                 - dynamodb:BatchWriteItem
               Resource: !GetAtt NewsletterTable.Arn

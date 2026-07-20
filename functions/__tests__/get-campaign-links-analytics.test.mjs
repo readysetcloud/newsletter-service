@@ -17,9 +17,20 @@ describe('get-campaign-links-analytics', () => {
     jest.clearAllMocks();
   });
 
+  const evt = (pathParameters, tenantId = 'tenant-1') => ({
+    pathParameters,
+    requestContext: { authorizer: { tenantId } },
+  });
+
+  test('returns 401 when tenant is missing from authorizer context', async () => {
+    const res = await handler({ pathParameters: { campaignId: 'issue-123' } });
+    expect(res.statusCode).toBe(401);
+    expect(mockDdbSend).not.toHaveBeenCalled();
+  });
+
   test('returns 400 when campaignId is missing or empty', async () => {
-    expect((await handler({})).statusCode).toBe(400);
-    expect((await handler({ pathParameters: { campaignId: '' } })).statusCode).toBe(400);
+    expect((await handler(evt(undefined))).statusCode).toBe(400);
+    expect((await handler(evt({ campaignId: '' }))).statusCode).toBe(400);
   });
 
   test('returns links with analytics and zeroes missing aggregates', async () => {
@@ -72,7 +83,7 @@ describe('get-campaign-links-analytics', () => {
       return Promise.resolve({});
     });
 
-    const res = await handler({ pathParameters: { campaignId: 'issue-123' } });
+    const res = await handler(evt({ campaignId: 'issue-123' }));
     expect(res.statusCode).toBe(200);
 
     const body = JSON.parse(res.body);
@@ -92,7 +103,10 @@ describe('get-campaign-links-analytics', () => {
     const query = mockDdbSend.mock.calls[0][0];
     expect(query).toBeInstanceOf(QueryCommand);
     expect(query.input.IndexName).toBe('GSI2');
+    // Results are scoped to the caller's tenant (legacy links still included).
+    expect(query.input.FilterExpression).toMatch(/tenantId = :tenantId/);
     const values = unmarshall(query.input.ExpressionAttributeValues);
     expect(values[':campaign']).toBe('CAMPAIGN_LINK_CAMPAIGN#issue-123');
+    expect(values[':tenantId']).toBe('tenant-1');
   });
 });

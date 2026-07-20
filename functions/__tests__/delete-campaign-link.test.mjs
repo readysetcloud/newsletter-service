@@ -1,7 +1,7 @@
 import { jest } from '@jest/globals';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 
-const { DynamoDBClient, QueryCommand, BatchWriteItemCommand } = await import('@aws-sdk/client-dynamodb');
+const { DynamoDBClient, QueryCommand, BatchWriteItemCommand, GetItemCommand } = await import('@aws-sdk/client-dynamodb');
 const {
   CloudFrontKeyValueStoreClient,
   DescribeKeyValueStoreCommand,
@@ -19,6 +19,15 @@ const partitionRows = (code) => [
   marshall({ pk: `CAMPAIGN_LINK_CODE#${code}`, sk: 'CLICK#2026-05-01T00:00:00.000Z#01HXYZ' }),
 ];
 
+const evt = (code, tenantId = 'tenant-1') => ({
+  pathParameters: code === undefined ? undefined : { code },
+  requestContext: { authorizer: { tenantId } },
+});
+
+// Metadata GetItem owned by the caller's tenant, so the ownership check passes.
+const ownedMetadata = (code, tenantId = 'tenant-1') =>
+  marshall({ pk: `CAMPAIGN_LINK_CODE#${code}`, sk: 'METADATA', tenantId });
+
 describe('delete-campaign-link', () => {
   let mockDdbSend;
   let mockKvsSend;
@@ -31,15 +40,40 @@ describe('delete-campaign-link', () => {
     jest.clearAllMocks();
   });
 
+  test('returns 401 when tenant is missing from authorizer context', async () => {
+    const res = await handler({ pathParameters: { code: 'aB3xKp' } });
+    expect(res.statusCode).toBe(401);
+    expect(mockDdbSend).not.toHaveBeenCalled();
+    expect(mockKvsSend).not.toHaveBeenCalled();
+  });
+
   test('returns 400 when code is missing or malformed', async () => {
-    const r1 = await handler({});
+    const r1 = await handler(evt(undefined));
     expect(r1.statusCode).toBe(400);
     for (const bad of ['abc', 'abc-de', 'ABCDEFG']) {
-      const r = await handler({ pathParameters: { code: bad } });
+      const r = await handler(evt(bad));
       expect(r.statusCode).toBe(400);
     }
     expect(mockKvsSend).not.toHaveBeenCalled();
     expect(mockDdbSend).not.toHaveBeenCalled();
+  });
+
+  test('returns 404 when the link belongs to another tenant', async () => {
+    mockDdbSend.mockImplementation((cmd) => {
+      if (cmd instanceof GetItemCommand) {
+        return Promise.resolve({ Item: ownedMetadata('aB3xKp', 'other-tenant') });
+      }
+      return Promise.resolve({});
+    });
+
+    const res = await handler(evt('aB3xKp'));
+    expect(res.statusCode).toBe(404);
+    // No destructive work when the caller doesn't own the link.
+    expect(mockKvsSend).not.toHaveBeenCalled();
+    const batches = mockDdbSend.mock.calls
+      .map((c) => c[0])
+      .filter((c) => c instanceof BatchWriteItemCommand);
+    expect(batches).toHaveLength(0);
   });
 
   test('happy path: deletes KVS then batch-deletes all partition items, returns 204', async () => {
@@ -47,13 +81,16 @@ describe('delete-campaign-link', () => {
       .mockResolvedValueOnce({ ETag: 'etag-current' })
       .mockResolvedValueOnce({});
     mockDdbSend.mockImplementation((cmd) => {
+      if (cmd instanceof GetItemCommand) {
+        return Promise.resolve({ Item: ownedMetadata('aB3xKp') });
+      }
       if (cmd instanceof QueryCommand) {
         return Promise.resolve({ Items: partitionRows('aB3xKp') });
       }
       return Promise.resolve({});
     });
 
-    const res = await handler({ pathParameters: { code: 'aB3xKp' } });
+    const res = await handler(evt('aB3xKp'));
     expect(res.statusCode).toBe(204);
 
     const kvsCmds = mockKvsSend.mock.calls.map((c) => c[0]);
@@ -84,6 +121,9 @@ describe('delete-campaign-link', () => {
       .mockResolvedValueOnce({});
     let queryCount = 0;
     mockDdbSend.mockImplementation((cmd) => {
+      if (cmd instanceof GetItemCommand) {
+        return Promise.resolve({ Item: ownedMetadata('aB3xKp') });
+      }
       if (cmd instanceof QueryCommand) {
         queryCount++;
         if (queryCount === 1) {
@@ -99,7 +139,7 @@ describe('delete-campaign-link', () => {
       return Promise.resolve({});
     });
 
-    await handler({ pathParameters: { code: 'aB3xKp' } });
+    await handler(evt('aB3xKp'));
     expect(queryCount).toBe(2);
   });
 
@@ -112,13 +152,16 @@ describe('delete-campaign-link', () => {
       .mockResolvedValueOnce({ ETag: 'etag-current' })
       .mockRejectedValueOnce(notFound);
     mockDdbSend.mockImplementation((cmd) => {
+      if (cmd instanceof GetItemCommand) {
+        return Promise.resolve({ Item: ownedMetadata('aB3xKp') });
+      }
       if (cmd instanceof QueryCommand) {
         return Promise.resolve({ Items: partitionRows('aB3xKp') });
       }
       return Promise.resolve({});
     });
 
-    const res = await handler({ pathParameters: { code: 'aB3xKp' } });
+    const res = await handler(evt('aB3xKp'));
     expect(res.statusCode).toBe(204);
 
     const batches = mockDdbSend.mock.calls
@@ -132,7 +175,13 @@ describe('delete-campaign-link', () => {
     mockKvsSend
       .mockResolvedValueOnce({ ETag: 'etag-current' })
       .mockRejectedValueOnce(fatal);
+    mockDdbSend.mockImplementation((cmd) => {
+      if (cmd instanceof GetItemCommand) {
+        return Promise.resolve({ Item: ownedMetadata('aB3xKp') });
+      }
+      return Promise.resolve({});
+    });
 
-    await expect(handler({ pathParameters: { code: 'aB3xKp' } })).rejects.toThrow('boom');
+    await expect(handler(evt('aB3xKp'))).rejects.toThrow('boom');
   });
 });

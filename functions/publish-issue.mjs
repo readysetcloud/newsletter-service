@@ -14,7 +14,12 @@ export const handler = async (state) => {
   try {
     // html-mode issues arrive pre-rendered (the master rides on data.__master)
     // and are sent verbatim; otherwise render the structured data via the template.
-    const html = state.data?.__master ?? await renderTemplate(state.data, state.tenantId, state.templateId);
+    // Gated on contentType (not the presence of __master) so a json template whose
+    // data legitimately includes a top-level __master field is never mistaken for
+    // a pre-rendered master.
+    const html = state.contentType === 'html'
+      ? (state.data?.__master ?? '')
+      : await renderTemplate(state.data, state.tenantId, state.templateId);
 
     if (state.isPreview) {
       await sendEmail({

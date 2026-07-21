@@ -4042,7 +4042,8 @@ mod tests {
         assert_eq!(normalize_content_type(None), "markdown");
         assert_eq!(normalize_content_type(Some("")), "markdown");
         assert_eq!(normalize_content_type(Some("   ")), "markdown");
-        assert_eq!(normalize_content_type(Some("html")), "markdown");
+        // Unknown values fall back to markdown.
+        assert_eq!(normalize_content_type(Some("xml")), "markdown");
     }
 
     #[test]
@@ -4050,6 +4051,13 @@ mod tests {
         assert_eq!(normalize_content_type(Some("json")), "json");
         assert_eq!(normalize_content_type(Some("JSON")), "json");
         assert_eq!(normalize_content_type(Some(" Json ")), "json");
+    }
+
+    #[test]
+    fn test_normalize_content_type_html() {
+        assert_eq!(normalize_content_type(Some("html")), "html");
+        assert_eq!(normalize_content_type(Some("HTML")), "html");
+        assert_eq!(normalize_content_type(Some(" Html ")), "html");
     }
 
     #[test]

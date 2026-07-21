@@ -117,6 +117,7 @@ describe('publish-issue', () => {
       const master = '<html><body>MY PRE-RENDERED NEWSLETTER __EMAIL_HASH__</body></html>';
       const result = await handler({
         data: { metadata: { number: 42 }, __master: master },
+        contentType: 'html',
         subject: 'Subject',
         tenantId: 'tenant-1',
         templateId: 'tmpl-should-be-ignored',
@@ -133,6 +134,26 @@ describe('publish-issue', () => {
         ([cmd]) => cmd.__type === 'GetItem' || cmd.__type === 'Query'
       );
       expect(templateReads).toHaveLength(0);
+    });
+
+    it('does NOT treat a json issue with a top-level __master as pre-rendered', async () => {
+      // A json template whose data legitimately includes a __master field must
+      // still be rendered through the template — the passthrough is gated on
+      // contentType === 'html', not the presence of __master.
+      const result = await handler({
+        data: { metadata: { number: 42, title: 'Test Issue' }, __master: 'SHOULD NOT BE SENT' },
+        contentType: 'json',
+        subject: 'Subject',
+        tenantId: 'tenant-1',
+        isPreview: true,
+        email: 'preview@example.com',
+        sendAtDate: 'now'
+      });
+
+      expect(result).toEqual({ success: true });
+      const html = getSentHtml();
+      expect(html).not.toBe('SHOULD NOT BE SENT');
+      expect(html).toContain('Test Issue');
     });
   });
 

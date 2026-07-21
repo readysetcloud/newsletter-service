@@ -526,7 +526,8 @@
           "email.$": "$$.Execution.Input.tenant.email",
           "isPreview": true,
           "tenantId.$": "$$.Execution.Input.tenant.id",
-          "templateId.$": "$$.Execution.Input.templateId"
+          "templateId.$": "$$.Execution.Input.templateId",
+          "contentType.$": "$$.Execution.Input.contentType"
         }
       },
       "Retry": [
@@ -554,7 +555,8 @@
           "sendAtDate.$": "$sendAtDate",
           "subject.$": "$.subject",
           "tenantId.$": "$$.Execution.Input.tenant.id",
-          "templateId.$": "$$.Execution.Input.templateId"
+          "templateId.$": "$$.Execution.Input.templateId",
+          "contentType.$": "$$.Execution.Input.contentType"
         },
         "FunctionName": "${PublishIssue}"
       },

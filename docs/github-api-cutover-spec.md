@@ -225,3 +225,56 @@ Remove the EventBridge publish code and AWS creds from the Action/workflows (§6
 - EventBridge publish in `.github/scripts/newsletter/stage-new-issue.js` + `@aws-sdk/client-eventbridge` (Phase 5)
 - `PROD_EVENTBRIDGE_*` / `AMPLIFY_*` EventBridge credentials if unused elsewhere (Phase 5)
 - **Add:** `layouts/_default/_markup/render-link.html` + `REDIRECT_BASE` param
+
+---
+
+## 11. Content model & rendering direction (post-cutover track)
+
+**Status:** direction, gated on a product decision. **Not** scheduled with Phases 1–5 — it's the layer *underneath* the ingress cutover, surfaced while doing this work.
+
+### 11.1 The observation
+
+The cutover relocates GitHub coupling but leaves the platform owning two things that overlap with what a site-owning tenant already does in its own renderer: **content structuring** (`parse-md-to-json.mjs`, markdown → the `data` object) and **templating** (`templates/newsletter.hbs` + the dashboard template/snippet editor + the Rust preview renderer + the snippet bridge). RSC renders this newsletter's design once for the web in Hugo, and the platform re-implements that design a second time for email — kept visually in sync by the render-conformance harness. Two tells that structuring is tenant code that leaked into the platform:
+- the subject is hardcoded to `"... | Ready, Set, Cloud Picks of the Week #<n>"` (`parse-md-to-json.mjs:131`);
+- section semantics are matched on English header strings — `"tip of the week"`, `"last words"` (`:42`, `:66`, `:74`).
+
+### 11.2 The decomposition
+
+Three layers are tangled: **structuring** → **templating** → **send-personalization**. Only send-personalization (per-recipient token fill, deliverability, tracking) is irreducibly the platform's. The send path *already* separates render-once from personalize-per-recipient: `publish-issue.mjs` renders the master once (Handlebars + template → HTML carrying `__EMAIL_HASH__`/unsubscribe placeholders), and `send-email-v2.mjs` fills those tokens per recipient. So **"who renders the master" is a swappable seam at `publish-issue`.**
+
+### 11.3 The fork (decision gate)
+
+Who is the platform for?
+
+- **(A) Creators without their own renderer** — the template system *is* the product. Keep it; make RSC conform: RSC's Action/Hugo emits the structured `data` object and posts `contentType: json` (the path `parse-json-issue.mjs` already serves — identical output contract). Drop only `parse-md-to-json` (RSC's bespoke markdown adapter).
+- **(B) Site-owning tenants (RSC-shaped)** — the platform accepts a **pre-rendered email master** and does token-fill + send + track. Hugo owns web *and* email presentation. Drop structuring **and** templating.
+
+**Gate:** settle who the platform serves before executing (B). (A) is safe regardless — it just relocates RSC's adapter to where the tenant-specific knowledge belongs. (B) removes product surface and must **not** happen if non-technical, site-less creators are the market.
+
+### 11.4 Recommended direction (only if the answer is RSC-shaped)
+
+Thin platform: Hugo emits a `newsletter.email.html` output format (CSS inlined, placeholder tokens); the Action posts that master; `publish-issue` takes it as-is instead of rendering a template; `send-email-v2` is unchanged. Web and email become one source of truth by construction, and the conformance harness is no longer needed.
+
+### 11.5 Inventory — what each branch touches
+
+| Component | ~LOC | (A) keep templates | (B) thin platform |
+|---|---|---|---|
+| `parse-md-to-json.mjs` (+ `showdown`) | 398 | remove | remove |
+| `parse-json-issue.mjs` | 63 | keep (becomes the ingress shape) | evolve → accept master |
+| `templates/newsletter.hbs` | 386 | keep | remove |
+| `render-template.mjs` / `snippet-parameters.mjs` | 171 | keep | remove |
+| `templates.rs` / `template_render.rs` / `snippets.rs` | 1,956 | keep | remove |
+| dashboard template/snippet editor | — | keep | remove |
+| render-conformance / render-parity tests | 104 | keep | remove |
+| `publish-issue.mjs` render step | — | keep | simplify → accept master |
+| **Always keep** | — | send-email-v2, `link#` tracking, scheduling, subscribers, reports, billing | same |
+
+Under (B), roughly **3,000+ LOC of backend** plus the dashboard editor retire.
+
+### 11.6 How it builds on the cutover
+
+The cutover makes this cheap: the Action is already the sole ingress, so the change is localized to what it POSTs — `contentType: markdown` → `json` (A), or a pre-rendered master (B). Not blocked by Phases 1–5; start after the REST switch is proven. Note this subsumes the account-settings default send-time item (§6.1.6) under (B): send time comes from the structured data / account default rather than `parse-md-to-json`'s `setHours(14)`.
+
+### 11.7 Next step
+
+Not code. Answer 11.3 (who's the platform for). Then, for whichever branch: pin the **structured `data` contract** as genuinely template-agnostic (A) or the **pre-rendered master + token spec** (B), so the coupling is removed rather than relocated.

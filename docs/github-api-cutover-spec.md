@@ -277,6 +277,13 @@ The contract is the personalization the platform injects per recipient — the t
 
 The Action is already the sole ingress, so this is localized: RSC's Action posts `contentType: html` with the Hugo-rendered master instead of markdown. Not blocked by Phases 1–5; start after the REST switch is proven. Supersedes the account-settings send-time item (§6.1.6) **for RSC** — send time comes from the issue request, not `parse-md-to-json`'s `setHours(14)` (the account-default still matters for renderer-less/dashboard creators).
 
-### 11.7 Open question before building
+### 11.7 Framing
 
-**Why did the current pipeline fail to send RSC's issue?** That failure is the concrete driver — confirming it (a parse error, a template mismatch, a broken shortcode, a size/format issue?) tells us whether the html ingress fully addresses it or there's a separate send-path bug to fix first. Then: pin the html personalization-placeholder contract and choose the link-tracking option (SES vs redirect-wrap).
+Sending is the platform's founding purpose — it exists to get a finished newsletter to a subscriber list (+ personalization, deliverability, tracking, list management). The structuring/templating layer is later scope creep, not the core. The html ingress isn't a new capability so much as realigning the ingress with what the platform is for: a tenant that already renders its own content hands over the finished HTML, and the platform does the job it was built to do.
+
+### 11.8 Next step
+
+Pin the small html-ingress contract, then build:
+1. **Personalization placeholders** the tenant's HTML must carry (`__EMAIL_HASH__`, `__UNSUBSCRIBE_URL__`) and what the platform injects (open pixel, standard footer if no unsubscribe placeholder).
+2. **Link tracking** — SES click tracking (simplest MVP) vs the renderer wrapping links with the redirect (`src=email`, `s=__EMAIL_HASH__`) for `link#` parity with the web hook.
+3. **Implement** — `contentType: html` validation, a state-machine branch that skips `parse-md-to-json` and the template render, and a `publish-issue` passthrough that uses `content` as the master.

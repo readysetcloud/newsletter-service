@@ -230,7 +230,7 @@ Remove the EventBridge publish code and AWS creds from the Action/workflows (§6
 
 ## 11. Content model & rendering direction (post-cutover track)
 
-**Status:** direction, gated on a product decision. **Not** scheduled with Phases 1–5 — it's the layer *underneath* the ingress cutover, surfaced while doing this work.
+**Status:** direction **resolved** (§11.3) — keep templates as the product, add a rendered-HTML ingress for renderer-having tenants like RSC. Design pending one diagnostic (§11.7). A separate track from Phases 1–5.
 
 ### 11.1 The observation
 
@@ -244,37 +244,39 @@ Three layers are tangled: **structuring** → **templating** → **send-personal
 
 ### 11.3 The fork (decision gate)
 
-Who is the platform for?
+**Resolved: the platform is for creators who do *not* have their own renderer** — so the template system *is* the product and stays. This is not the A-vs-B fork it first looked like; it resolves to **both**, because two different users are involved:
 
-- **(A) Creators without their own renderer** — the template system *is* the product. Keep it; make RSC conform: RSC's Action/Hugo emits the structured `data` object and posts `contentType: json` (the path `parse-json-issue.mjs` already serves — identical output contract). Drop only `parse-md-to-json` (RSC's bespoke markdown adapter).
-- **(B) Site-owning tenants (RSC-shaped)** — the platform accepts a **pre-rendered email master** and does token-fill + send + track. Hugo owns web *and* email presentation. Drop structuring **and** templating.
+- **Renderer-less creators (the product)** — author in the dashboard, pick a template, the platform renders + sends. Keep templates, the editor, snippets, and the `json` path.
+- **Renderer-having tenants (e.g. RSC)** — already produce a fully designed newsletter (Hugo) and just need it *sent* to their subscribers. They don't want the platform to structure or re-render their content; they want to hand over the finished HTML. The current markdown pipeline (`parse-md-to-json` → template) is exactly what blocked RSC from sending.
 
-**Gate:** settle who the platform serves before executing (B). (A) is safe regardless — it just relocates RSC's adapter to where the tenant-specific knowledge belongs. (B) removes product surface and must **not** happen if non-technical, site-less creators are the market.
+So the move is **not** "delete templates." It's **add a bring-your-own-rendered-HTML ingress** alongside them, and retire `parse-md-to-json` (RSC's bespoke adapter) in favor of it.
 
-### 11.4 Recommended direction (only if the answer is RSC-shaped)
+### 11.4 Design: rendered-HTML ingress (`contentType: html`)
 
-Thin platform: Hugo emits a `newsletter.email.html` output format (CSS inlined, placeholder tokens); the Action posts that master; `publish-issue` takes it as-is instead of rendering a template; `send-email-v2` is unchanged. Web and email become one source of truth by construction, and the conformance harness is no longer needed.
+A third content type beside `markdown` and `json`. `content` is the **final email HTML** from the tenant's own renderer (for RSC, a Hugo `newsletter.email.html` output format, CSS inlined). In `html` mode the state machine **skips `parse-md-to-json` and the `publish-issue` template render** — the content *is* the master. `send-email-v2` is unchanged: it fills per-recipient tokens and sends.
 
-### 11.5 Inventory — what each branch touches
+The contract is the personalization the platform injects per recipient — the tenant's HTML must carry the placeholders:
+- `__EMAIL_HASH__` — per-subscriber hash for tracking `s=` params / the open pixel (already the platform's convention);
+- an unsubscribe URL placeholder (`__UNSUBSCRIBE_URL__`), or the platform appends its standard footer;
+- the platform injects the open-tracking pixel.
 
-| Component | ~LOC | (A) keep templates | (B) thin platform |
-|---|---|---|---|
-| `parse-md-to-json.mjs` (+ `showdown`) | 398 | remove | remove |
-| `parse-json-issue.mjs` | 63 | keep (becomes the ingress shape) | evolve → accept master |
-| `templates/newsletter.hbs` | 386 | keep | remove |
-| `render-template.mjs` / `snippet-parameters.mjs` | 171 | keep | remove |
-| `templates.rs` / `template_render.rs` / `snippets.rs` | 1,956 | keep | remove |
-| dashboard template/snippet editor | — | keep | remove |
-| render-conformance / render-parity tests | 104 | keep | remove |
-| `publish-issue.mjs` render step | — | keep | simplify → accept master |
-| **Always keep** | — | send-email-v2, `link#` tracking, scheduling, subscribers, reports, billing | same |
+**Link/click tracking — one option to pick:** (a) rely on SES click tracking (SES wraps the raw links in the master), or (b) the tenant's renderer wraps links with the redirect (`src=email`, `s=__EMAIL_HASH__`) and the platform extracts them into `link#` records. (a) is the simpler MVP; (b) matches the web render hook and keeps a single tracking model.
 
-Under (B), roughly **3,000+ LOC of backend** plus the dashboard editor retire.
+### 11.5 Inventory — under the resolved design
+
+| Component | ~LOC | Disposition |
+|---|---|---|
+| `parse-md-to-json.mjs` (+ `showdown`) | 398 | **remove** — RSC → html ingress; renderer-less creators use `json` + templates |
+| `templates/*`, `templates.rs`, `template_render.rs`, `snippets.rs`, dashboard editor | ~4k | **keep** — the product for renderer-less creators |
+| `parse-json-issue.mjs` | 63 | keep |
+| new `contentType: html` handling | small | **add** — state-machine branch + `publish-issue` passthrough |
+| `publish-issue.mjs` | — | branch: `html` → use content as master; else render template |
+| send-email-v2, `link#` tracking, scheduling, subscribers, reports, billing | — | unchanged |
 
 ### 11.6 How it builds on the cutover
 
-The cutover makes this cheap: the Action is already the sole ingress, so the change is localized to what it POSTs — `contentType: markdown` → `json` (A), or a pre-rendered master (B). Not blocked by Phases 1–5; start after the REST switch is proven. Note this subsumes the account-settings default send-time item (§6.1.6) under (B): send time comes from the structured data / account default rather than `parse-md-to-json`'s `setHours(14)`.
+The Action is already the sole ingress, so this is localized: RSC's Action posts `contentType: html` with the Hugo-rendered master instead of markdown. Not blocked by Phases 1–5; start after the REST switch is proven. Supersedes the account-settings send-time item (§6.1.6) **for RSC** — send time comes from the issue request, not `parse-md-to-json`'s `setHours(14)` (the account-default still matters for renderer-less/dashboard creators).
 
-### 11.7 Next step
+### 11.7 Open question before building
 
-Not code. Answer 11.3 (who's the platform for). Then, for whichever branch: pin the **structured `data` contract** as genuinely template-agnostic (A) or the **pre-rendered master + token spec** (B), so the coupling is removed rather than relocated.
+**Why did the current pipeline fail to send RSC's issue?** That failure is the concrete driver — confirming it (a parse error, a template mismatch, a broken shortcode, a size/format issue?) tells us whether the html ingress fully addresses it or there's a separate send-path bug to fix first. Then: pin the html personalization-placeholder contract and choose the link-tracking option (SES vs redirect-wrap).

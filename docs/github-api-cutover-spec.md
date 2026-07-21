@@ -95,7 +95,7 @@ ${REDIRECT_BASE}?u=${encodeURIComponent(destinationUrl)}&cid=${tenant}_${issueNu
 
 - `u` — the **original** destination, `encodeURIComponent`-encoded (not `encodeURI`; see the cautionary history in `update-link-tracking.mjs:72–87`).
 - `cid` — `tenant#issue`, but with `#` written as `_` in the URL. The redirect function restores it (`cid.replace(/_/g, '#')`, `template.yaml:2859`).
-- `p` — 1-based link position (optional for resolution; click resolution is by `hash(u)`, position is metadata only).
+- `p` — 1-based link position, **emitted**. Click resolution is by `hash(u)`, so `p` is informational, but we keep it for position analytics parity. In the Hugo hook, number by the ordinal of **wrapped** links only (external, non-`mailto:`) so it matches the backend record's `position` (which is assigned the same way). Note Hugo's `.Ordinal` counts *all* links, so track a separate counter rather than using `.Ordinal` directly.
 - `s=__EMAIL_HASH__` — **email only**, substituted per recipient at send. The web hook omits `s`.
 - `src` — `web` for the Hugo hook; SES clicks arrive as `email`.
 
@@ -133,12 +133,17 @@ The Hugo hook never computes `hash()` — it only wraps `u=<original url>`. The 
 - After 6.1.3/6.1.4, `OWNER` / `REPO` / `/readysetcloud/secrets` (GitHub token) are referenced only by `SyncRepoDataFunction` — keep them for that; do not remove.
 - No `POST /issues` contract change is required. (The Action already sends everything.)
 
+**6.1.6 Apply the tenant default send time (schedule normalization).**
+Replaces legacy's hardcoded noon normalization with a per-account default. When the scheduled time carries no time-of-day — i.e. `scheduledAt` is exactly midnight UTC (`…T00:00:00Z`), the marker for a date-only frontmatter value — apply the tenant's configured default send time (hour + timezone) instead. This lives server-side in the schedule path (`normalize_scheduled_at` / `start_issue_schedule`, `functions/src/api/controllers/issues.rs`), since the API already resolves the tenant. The Action does **not** normalize; it forwards the frontmatter date as-is.
+- **New dependency:** an account-settings default send time (hour-of-day + timezone) per tenant.
+- **Phasing:** until that setting exists, fall back to a hardcoded default (noon UTC) to preserve current behavior; switch the fallback to read the account setting when it ships. Can land as its own phase, independent of the ingress cutover.
+
 ### 6.2 Website (`ready-set-cloud`)
 
 **6.2.1 Add a Hugo link render hook** at `layouts/_default/_markup/render-link.html`:
 - Wrap **external** links (skip internal/relative and `mailto:`) in newsletter content with the redirect URL from §5, using a site param for `REDIRECT_BASE` and the issue number for `cid`.
 - **Idempotent:** if the destination already points at `REDIRECT_BASE` (legacy issues whose markdown was committed pre-cutover with wrapped links), pass it through unchanged — do not double-wrap.
-- Scope: newsletter section only (guard on `.Page.Section`/path) unless site-wide web tracking is desired (open decision §9).
+- Scope: **newsletter section only for now** (guard on `.Page.Section`/path). Widen to site-wide later — campaign links are already used elsewhere on the site — so keep the hook logic generic and section-agnostic; broadening scope should be a guard change, not a rewrite.
 
 **6.2.2 Config:** expose `REDIRECT_BASE` (the redirect domain) as a Hugo param.
 
@@ -162,8 +167,8 @@ The Hugo hook never computes `hash()` — it only wraps `u=<original url>`. The 
 | Email click tracking | SES CLICK events (unchanged) | None |
 | Web click tracking (commit wrapped markdown to Git) | Hugo render hook at build | §6.2 |
 | `link#` records + classification | Backend record-only step (§6.1.1) | Must not be lost in the split |
-| Preview email to author | PR draft + dashboard deep-link | Confirm acceptable (§9) |
-| Schedule at noon for date-only frontmatter | Legacy normalized `T00:00Z`→`T12:00Z`; REST/script do not | Decide: normalize in `stage-new-issue.js` or accept 00:00 UTC (§9) |
+| Preview email to author | PR draft + dashboard deep-link | Confirmed — dashboard link |
+| Schedule at noon for date-only frontmatter | Legacy hardcoded `T00:00Z`→`T12:00Z` | Backend applies tenant default send time; noon fallback until the setting ships (§6.1.6) |
 | Double-create when secret set | N/A | Fixed by §6.3.1 (either/or) |
 | Idempotency | `Idempotency-Key` (better than legacy) | None |
 
@@ -192,12 +197,12 @@ Remove the EventBridge publish code and AWS creds from the Action/workflows (§6
 
 ---
 
-## 9. Open decisions
+## 9. Resolved decisions
 
-1. **Preview email vs dashboard link.** The REST PR flow creates a draft and comments a dashboard deep-link instead of emailing a preview. Accept as the replacement, or add a preview-send trigger for drafts?
-2. **Schedule-time normalization.** Replicate legacy's date-only → noon-UTC normalization in `stage-new-issue.js`, or accept `scheduledAt` at the literal frontmatter time? (Check whether RSC frontmatter uses full timestamps — if so, moot.)
-3. **Hugo hook scope.** Wrap only newsletter-section external links, or all external links site-wide (blog posts included)?
-4. **Position parity on web.** Should the Hugo hook emit `p=<position>`, or omit it (resolution is by `hash(u)`; position is metadata only)?
+1. **Preview flow — dashboard link.** No preview email; the PR draft + dashboard deep-link is the accepted replacement.
+2. **Schedule-time normalization — tenant default send time.** Introduce a per-account default send time (hour + timezone) and fall back to it when the frontmatter is date-only (midnight UTC). Applied server-side (§6.1.6). Noon-UTC fallback until the account setting ships; the account-settings work can proceed on its own track.
+3. **Hugo hook scope — newsletter only, for now.** Eventually site-wide (campaign links are used elsewhere), so the hook stays section-agnostic and is gated by a scope guard (§6.2.1).
+4. **Web position — emit `p`.** The hook emits the 1-based position of wrapped links (§5).
 
 ---
 

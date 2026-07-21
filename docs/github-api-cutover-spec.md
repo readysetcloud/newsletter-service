@@ -225,3 +225,80 @@ Remove the EventBridge publish code and AWS creds from the Action/workflows (§6
 - EventBridge publish in `.github/scripts/newsletter/stage-new-issue.js` + `@aws-sdk/client-eventbridge` (Phase 5)
 - `PROD_EVENTBRIDGE_*` / `AMPLIFY_*` EventBridge credentials if unused elsewhere (Phase 5)
 - **Add:** `layouts/_default/_markup/render-link.html` + `REDIRECT_BASE` param
+
+---
+
+## 11. Content model & rendering direction (post-cutover track)
+
+**Status:** direction **resolved** (§11.3) — keep templates as the product, add a rendered-HTML ingress for renderer-having tenants like RSC. Design pending one diagnostic (§11.7). A separate track from Phases 1–5.
+
+### 11.1 The observation
+
+The cutover relocates GitHub coupling but leaves the platform owning two things that overlap with what a site-owning tenant already does in its own renderer: **content structuring** (`parse-md-to-json.mjs`, markdown → the `data` object) and **templating** (`templates/newsletter.hbs` + the dashboard template/snippet editor + the Rust preview renderer + the snippet bridge). RSC renders this newsletter's design once for the web in Hugo, and the platform re-implements that design a second time for email — kept visually in sync by the render-conformance harness. Two tells that structuring is tenant code that leaked into the platform:
+- the subject is hardcoded to `"... | Ready, Set, Cloud Picks of the Week #<n>"` (`parse-md-to-json.mjs:131`);
+- section semantics are matched on English header strings — `"tip of the week"`, `"last words"` (`:42`, `:66`, `:74`).
+
+### 11.2 The decomposition
+
+Three layers are tangled: **structuring** → **templating** → **send-personalization**. Only send-personalization (per-recipient token fill, deliverability, tracking) is irreducibly the platform's. The send path *already* separates render-once from personalize-per-recipient: `publish-issue.mjs` renders the master once (Handlebars + template → HTML carrying `__EMAIL_HASH__`/unsubscribe placeholders), and `send-email-v2.mjs` fills those tokens per recipient. So **"who renders the master" is a swappable seam at `publish-issue`.**
+
+### 11.3 The fork (decision gate)
+
+**Resolved: the platform is for creators who do *not* have their own renderer** — so the template system *is* the product and stays. This is not the A-vs-B fork it first looked like; it resolves to **both**, because two different users are involved:
+
+- **Renderer-less creators (the product)** — author in the dashboard, pick a template, the platform renders + sends. Keep templates, the editor, snippets, and the `json` path.
+- **Renderer-having tenants (e.g. RSC)** — already produce a fully designed newsletter (Hugo) and just need it *sent* to their subscribers. They don't want the platform to structure or re-render their content; they want to hand over the finished HTML. The current markdown pipeline (`parse-md-to-json` → template) is exactly what blocked RSC from sending.
+
+So the move is **not** "delete templates." It's **add a bring-your-own-rendered-HTML ingress** alongside them, and retire `parse-md-to-json` (RSC's bespoke adapter) in favor of it.
+
+### 11.4 Design: rendered-HTML ingress (`contentType: html`)
+
+A third content type beside `markdown` and `json`. `content` is the **final email HTML** from the tenant's own renderer (for RSC, a Hugo `newsletter.email.html` output format, CSS inlined). In `html` mode the state machine **skips `parse-md-to-json` and the `publish-issue` template render** — the content *is* the master. `send-email-v2` is unchanged: it fills per-recipient tokens and sends.
+
+The contract is the personalization the platform injects per recipient — the tenant's HTML must carry the placeholders:
+- `__EMAIL_HASH__` — per-subscriber hash for tracking `s=` params / the open pixel (already the platform's convention);
+- an unsubscribe URL placeholder (`__UNSUBSCRIBE_URL__`), or the platform appends its standard footer;
+- the platform injects the open-tracking pixel.
+
+**Link/click tracking — one option to pick:** (a) rely on SES click tracking (SES wraps the raw links in the master), or (b) the tenant's renderer wraps links with the redirect (`src=email`, `s=__EMAIL_HASH__`) and the platform extracts them into `link#` records. (a) is the simpler MVP; (b) matches the web render hook and keeps a single tracking model.
+
+### 11.5 Inventory — under the resolved design
+
+| Component | ~LOC | Disposition |
+|---|---|---|
+| `parse-md-to-json.mjs` (+ `showdown`) | 398 | **remove** — RSC → html ingress; renderer-less creators use `json` + templates |
+| `templates/*`, `templates.rs`, `template_render.rs`, `snippets.rs`, dashboard editor | ~4k | **keep** — the product for renderer-less creators |
+| `parse-json-issue.mjs` | 63 | keep |
+| new `contentType: html` handling | small | **add** — state-machine branch + `publish-issue` passthrough |
+| `publish-issue.mjs` | — | branch: `html` → use content as master; else render template |
+| send-email-v2, `link#` tracking, scheduling, subscribers, reports, billing | — | unchanged |
+
+### 11.6 How it builds on the cutover
+
+The Action is already the sole ingress, so this is localized: RSC's Action posts `contentType: html` with the Hugo-rendered master instead of markdown. Not blocked by Phases 1–5; start after the REST switch is proven. Supersedes the account-settings send-time item (§6.1.6) **for RSC** — send time comes from the issue request, not `parse-md-to-json`'s `setHours(14)` (the account-default still matters for renderer-less/dashboard creators).
+
+### 11.7 Framing
+
+Sending is the platform's founding purpose — it exists to get a finished newsletter to a subscriber list (+ personalization, deliverability, tracking, list management). The structuring/templating layer is later scope creep, not the core. The html ingress isn't a new capability so much as realigning the ingress with what the platform is for: a tenant that already renders its own content hands over the finished HTML, and the platform does the job it was built to do.
+
+### 11.8 Next step
+
+Pin the small html-ingress contract, then build:
+1. **Personalization placeholders** the tenant's HTML must carry (`__EMAIL_HASH__`, `__UNSUBSCRIBE_URL__`) and what the platform injects (open pixel, standard footer if no unsubscribe placeholder).
+2. **Link tracking** — SES click tracking (simplest MVP) vs the renderer wrapping links with the redirect (`src=email`, `s=__EMAIL_HASH__`) for `link#` parity with the web hook.
+3. **Implement** — `contentType: html` validation, a state-machine branch that skips `parse-md-to-json` and the template render, and a `publish-issue` passthrough that uses `content` as the master. ✅ Shipped in newsletter-service #360 (the html path rides the JSON branch, carrying the master on `data.__master`).
+
+### 11.9 Shortcode parity for the email output format (do not lose)
+
+`parse-md-to-json` doesn't just structure markdown — it renders RSC's body shortcodes into **email-specific** HTML. Before RSC's Hugo email output format replaces it (and `parse-md-to-json` is deleted), each of these must be reproduced in an **email variant** of the shortcode. Good news: RSC's existing web shortcodes already share the base HTML, so the gap is narrow.
+
+| Shortcode | What the transform emits (email) | RSC web shortcode | Nuance to carry into the email variant |
+|---|---|---|---|
+| `robotVoice` | `formatRobotVoice`: the mono "robot voice" card **plus** `<!--[if mso]>` Outlook fallbacks and Gmail degradation for the negative-margin notch labels | same card HTML, **no** MSO/Gmail handling (notch clips in Outlook) | add the MSO conditional blocks + Gmail fallback |
+| `sponsor` (inline `{{< sponsor >}}`) | `formatSponsorAd`: bordered rounded card, ad markdown + *Sponsored* | near-identical bordered card | ~at parity; note the data source differs (transform reads the DDB sponsor record; Hugo reads `data/sponsors.json`) |
+| `social` (`{{< social url >}}`) | pulled out in tip-of-the-week → rendered as a **URL/card, no live embed** | `resources.GetRemote` **live oEmbed** (embeds tweet HTML + scripts) | email must **not** use live oEmbed (scripts don't run in mail); render the email-safe URL/card |
+| markdown paragraphs | `convertToHtml` inserts `</p><br><p>` (extra `<br>` between paragraphs) + optional outer-`<p>` strip | Hugo `markdownify` / `RenderString` → standard `<p>` | reproduce the email paragraph spacing (extra `<br>` or equivalent email CSS) |
+| `linkedin`, `bsky` | not handled by the transform (web-only embeds) | live embeds | if ever used in a newsletter body, needs an email-safe variant |
+| tenant snippets (`{{< name attr >}}`) | snippet bridge: param defaults/required/type coercion + `renderWithSnippets` | n/a — RSC uses Hugo shortcodes, not platform snippets | not needed for RSC; stays relevant only to dashboard/template tenants |
+
+**Net:** the email output format is mostly RSC's web shortcodes with (a) Outlook/Gmail hardening on `robotVoice`, (b) an email-safe (non-oEmbed) `social`, and (c) the paragraph-spacing treatment. Reproduce these three before `parse-md-to-json` is deleted, or those blocks silently break in email.

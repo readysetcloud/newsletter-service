@@ -90,11 +90,11 @@ The only cross-repo contract is the redirect URL shape (§5). The load-bearing `
 Web link wrapping (Hugo) must produce:
 
 ```
-${REDIRECT_BASE}?u=${encodeURIComponent(destinationUrl)}&cid=${tenant}_${issueNumber}&p=${position}&src=web
+${REDIRECT_BASE}?u=${encodeURIComponent(destinationUrl)}&cid=${encodeURIComponent(tenant + "#" + issueNumber)}&p=${position}&src=web
 ```
 
 - `u` — the **original** destination, `encodeURIComponent`-encoded (not `encodeURI`; see the cautionary history in `update-link-tracking.mjs:72–87`).
-- `cid` — `tenant#issue`, query-encoded so `#` becomes `%23` (e.g. `readysetcloud%23217`). This is the established form produced by `update-link-tracking.mjs` (`encodeURIComponent(cid)`) and already in the committed corpus; in Hugo use `urlquery "<tenant>#<issue>"`. (The redirect also accepts a `_`-for-`#` form via `cid.replace(/_/g, '#')`, `template.yaml:2859`, but `%23` is canonical.) On click, `process-link-click.mjs` uses the decoded `cid` **directly as the DynamoDB `pk`** — this is the sole issue-attribution mechanism.
+- `cid` — `tenant#issue`, query-encoded so `#` becomes `%23` (e.g. `readysetcloud%23217`). This is the established form produced by `update-link-tracking.mjs` (`encodeURIComponent(cid)`) and already in the committed corpus; in Hugo use `urlquery "<tenant>#<issue>"`. (The redirect also accepts a `_`-for-`#` form via `cid.replace(/_/g, '#')`, `template.yaml:2859`, but that form is **lossy for any tenant id containing `_`** — `tenant_name#42` would decode to `tenant#name#42` and miss the `link#` records — so always use the `%23` form. The Hugo hook does: `urlquery "<tenant>#<issue>"`.) On click, `process-link-click.mjs` uses the decoded `cid` **directly as the DynamoDB `pk`** — this is the sole issue-attribution mechanism.
 - `p` — 1-based link position, **emitted**. Click resolution is by `hash(u)`, so `p` is informational (stored as `linkPosition` on the click event), but we keep it for parity with the backend record's `position`. In the Hugo hook, increment a per-page counter (`.Page.Store`) **only for links actually wrapped** (external, non-`mailto:`), so numbering matches the backend (which counts the same set). Do **not** use `.Ordinal` — it counts every link (internal, `mailto:`) and would drift.
 - `s=__EMAIL_HASH__` — **email only**, substituted per recipient at send. The web hook omits `s`.
 - `src` — `web` for the Hugo hook; SES clicks arrive as `email`.

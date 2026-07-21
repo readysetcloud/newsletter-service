@@ -31,11 +31,6 @@ export const handler = async (state) => {
   data.metadata = { ...(data.metadata ?? {}) };
   data.metadata.number = issueNumber;
 
-  // Voting options are passed through from the state machine when present.
-  if (Array.isArray(state.votingOptions) && state.votingOptions.length) {
-    data.votingOptions = state.votingOptions;
-  }
-
   const now = new Date();
   const scheduled = state.futureDate ? new Date(state.futureDate) : null;
   const hasFutureSend = scheduled && !Number.isNaN(scheduled.getTime()) && scheduled > now;

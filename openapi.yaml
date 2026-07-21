@@ -2893,7 +2893,7 @@ components:
               message:
                 type: string
                 description: The requested entity was not found
-                example: Vote not found
+                example: Resource not found
     Conflict:
       description: The request conflicts with the current state of the resource
       content:

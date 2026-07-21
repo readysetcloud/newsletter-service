@@ -1700,69 +1700,6 @@ Resources:
               detail-type:
                 - Clean Bounced Subscribers
 
-  SetupVotingOptionsFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - setup-voting-options.mjs
-    Properties:
-      Runtime: nodejs24.x
-      CodeUri: functions
-      Handler: setup-voting-options.handler
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action: bedrock:InvokeModel
-              Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-pro-v1:0
-            - Effect: Allow
-              Action: dynamodb:PutItem
-              Resource: !GetAtt NewsletterTable.Arn
-      Environment:
-        Variables:
-          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
-          MODEL_ID: amazon.nova-pro-v1:0
-
-  VoteFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - vote.mjs
-    Properties:
-      Runtime: nodejs24.x
-      CodeUri: functions
-      Handler: vote.handler
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - dynamodb:PutItem
-                - dynamodb:UpdateItem
-                - dynamodb:GetItem
-              Resource: !GetAtt NewsletterTable.Arn
-      Environment:
-        Variables:
-          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
-          EMAIL_ENCRYPTION_KEY: !Ref EncryptionKey
-      Events:
-        FromApi:
-          Type: Api
-          Properties:
-            RestApiId: !Ref NewsletterApi
-            Path: /{tenant}/{issueId}/votes
-            Method: POST
-            Auth:
-              Authorizer: NONE
-
   UnsubscribeFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2664,7 +2601,6 @@ Resources:
         SchedulerCreateSchedule: !Sub arn:${AWS::Partition}:states:::aws-sdk:scheduler:createSchedule
         ReportStatsStateMachine: !Ref ReportStatsStateMachine
         ReportStatsRole: !GetAtt ReportStatsRole.Arn
-        SetupVotingOptions: !GetAtt SetupVotingOptionsFunction.Arn
         CleanupListRole: !GetAtt SchedulerExecutionRole.Arn
         GenerateSocialPost: !GetAtt GenerateSocialPostFunction.Arn
       Policies:
@@ -2683,7 +2619,6 @@ Resources:
                 - !GetAtt ParseMdToJsonFunction.Arn
                 - !GetAtt ParseJsonIssueFunction.Arn
                 - !GetAtt UpdateLinksWithTrackingDataFunction.Arn
-                - !GetAtt SetupVotingOptionsFunction.Arn
                 - !GetAtt GenerateSocialPostFunction.Arn
             - Effect: Allow
               Action: events:PutEvents

@@ -139,8 +139,12 @@ const getSubscriberCount = async (tenantId) => {
     const response = await sendWithRetry(() => ddb.send(new QueryCommand({
       TableName: process.env.SUBSCRIBERS_TABLE_NAME,
       KeyConditionExpression: 'tenantId = :tenantId',
+      // Exclude segment/infra rows that overload the `email` sort key so the
+      // recomputed subscriber count reflects real subscribers only.
+      FilterExpression: 'NOT begins_with(email, :segPrefix)',
       ExpressionAttributeValues: marshall({
-        ':tenantId': tenantId
+        ':tenantId': tenantId,
+        ':segPrefix': 'SEGMENT'
       }),
       Select: 'COUNT',
       ExclusiveStartKey: lastEvaluatedKey

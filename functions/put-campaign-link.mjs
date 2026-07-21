@@ -6,7 +6,7 @@ import {
   DescribeKeyValueStoreCommand,
   PutKeyCommand,
 } from '@aws-sdk/client-cloudfront-keyvaluestore';
-import { formatResponse } from './utils/helpers.mjs';
+import { formatResponse, getTenantId } from './utils/helpers.mjs';
 
 const ddb = new DynamoDBClient();
 const kvs = new CloudFrontKeyValueStoreClient();
@@ -14,6 +14,11 @@ const kvs = new CloudFrontKeyValueStoreClient();
 const CODE_PATTERN = /^[A-Za-z0-9]{6}$/;
 
 export const handler = async (event) => {
+  const tenantId = getTenantId(event);
+  if (!tenantId) {
+    return formatResponse(401, 'Unauthorized');
+  }
+
   const code = event.pathParameters?.code;
   if (!code || !CODE_PATTERN.test(code)) {
     return formatResponse(400, 'code must be 6 alphanumeric characters');
@@ -50,13 +55,17 @@ export const handler = async (event) => {
     const result = await ddb.send(new UpdateItemCommand({
       TableName: process.env.TABLE_NAME,
       Key: marshall({ pk: `CAMPAIGN_LINK_CODE#${code}`, sk: 'METADATA' }),
-      UpdateExpression: 'SET #url = :url, src = :src, updatedAt = :updatedAt',
-      ConditionExpression: 'attribute_exists(pk)',
+      // Stamp tenantId so legacy links are migrated on first write.
+      UpdateExpression: 'SET #url = :url, src = :src, updatedAt = :updatedAt, tenantId = :tenantId',
+      // Only the owning tenant may update; legacy links (no tenantId) are
+      // claimable. A mismatch fails the condition and returns 404.
+      ConditionExpression: 'attribute_exists(pk) AND (attribute_not_exists(tenantId) OR tenantId = :tenantId)',
       ExpressionAttributeNames: { '#url': 'url' },
       ExpressionAttributeValues: marshall({
         ':url': url,
         ':src': src ?? null,
         ':updatedAt': updatedAt,
+        ':tenantId': tenantId,
       }),
       ReturnValues: 'ALL_NEW',
     }));

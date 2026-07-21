@@ -22,8 +22,13 @@ export const handler = async (event) => {
       const queryParams = {
         TableName: process.env.SUBSCRIBERS_TABLE_NAME,
         KeyConditionExpression: 'tenantId = :tenantId',
+        // The segments feature overloads this table's `email` sort key with
+        // SEGMENT#/SEGMENT_NAME#/SEGMENT_JOB#/member rows under the same tenant
+        // partition; those must never be exported as subscribers.
+        FilterExpression: 'NOT begins_with(email, :segPrefix)',
         ExpressionAttributeValues: marshall({
-          ':tenantId': tenantId
+          ':tenantId': tenantId,
+          ':segPrefix': 'SEGMENT'
         })
       };
 

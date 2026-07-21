@@ -14,9 +14,10 @@ process.env.SHORT_LINK_BASE = 'https://rdyset.click/c';
 
 const { handler } = await import('../put-campaign-link.mjs');
 
-const validEvent = (body, code = 'aB3xKp') => ({
+const validEvent = (body, code = 'aB3xKp', tenantId = 'tenant-1') => ({
   pathParameters: { code },
   body: JSON.stringify(body),
+  requestContext: { authorizer: { tenantId } },
 });
 
 describe('put-campaign-link', () => {
@@ -31,14 +32,22 @@ describe('put-campaign-link', () => {
     jest.clearAllMocks();
   });
 
+  describe('auth', () => {
+    test('returns 401 when tenant is missing from authorizer context', async () => {
+      const res = await handler({ pathParameters: { code: 'aB3xKp' }, body: JSON.stringify({ url: 'https://x.com' }) });
+      expect(res.statusCode).toBe(401);
+      expect(mockDdbSend).not.toHaveBeenCalled();
+    });
+  });
+
   describe('validation', () => {
     test('returns 400 for malformed code', async () => {
-      const res = await handler({ pathParameters: { code: 'abc' }, body: JSON.stringify({ url: 'https://x.com' }) });
+      const res = await handler(validEvent({ url: 'https://x.com' }, 'abc'));
       expect(res.statusCode).toBe(400);
     });
 
     test('returns 400 for missing body', async () => {
-      const res = await handler({ pathParameters: { code: 'aB3xKp' } });
+      const res = await handler({ pathParameters: { code: 'aB3xKp' }, requestContext: { authorizer: { tenantId: 'tenant-1' } } });
       expect(res.statusCode).toBe(400);
     });
 
@@ -92,6 +101,12 @@ describe('put-campaign-link', () => {
       const updateCmd = mockDdbSend.mock.calls[0][0];
       expect(updateCmd).toBeInstanceOf(UpdateItemCommand);
       expect(updateCmd.input.ConditionExpression).toMatch(/attribute_exists/);
+      // Ownership is enforced by the condition and tenantId is stamped for
+      // legacy-link migration.
+      expect(updateCmd.input.ConditionExpression).toMatch(/tenantId = :tenantId/);
+      expect(updateCmd.input.UpdateExpression).toMatch(/tenantId = :tenantId/);
+      const values = unmarshall(updateCmd.input.ExpressionAttributeValues);
+      expect(values[':tenantId']).toBe('tenant-1');
       const key = unmarshall(updateCmd.input.Key);
       expect(key.sk).toBe('METADATA');
 

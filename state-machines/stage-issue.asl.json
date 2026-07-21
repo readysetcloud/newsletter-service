@@ -172,8 +172,16 @@
               "IsPresent": true
             },
             {
-              "Variable": "$$.Execution.Input.contentType",
-              "StringEquals": "json"
+              "Or": [
+                {
+                  "Variable": "$$.Execution.Input.contentType",
+                  "StringEquals": "json"
+                },
+                {
+                  "Variable": "$$.Execution.Input.contentType",
+                  "StringEquals": "html"
+                }
+              ]
             }
           ],
           "Next": "Parse JSON Issue"
@@ -462,7 +470,8 @@
         "Payload": {
           "content.$": "$$.Execution.Input.content",
           "issueId.$": "$$.Execution.Input.issueId",
-          "subject.$": "$$.Execution.Input.subject"
+          "subject.$": "$$.Execution.Input.subject",
+          "contentType.$": "$$.Execution.Input.contentType"
         }
       },
       "Retry": [

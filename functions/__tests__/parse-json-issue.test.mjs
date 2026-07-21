@@ -79,6 +79,35 @@ describe('parse-json-issue handler', () => {
     ).rejects.toThrow(/must be a JSON object/);
   });
 
+  describe('html mode', () => {
+    it('carries a pre-rendered master through on data.__master without parsing', async () => {
+      const master = '<html><body>hi __EMAIL_HASH__</body></html>';
+      const result = await handler({
+        content: master,
+        contentType: 'html',
+        issueId: 9,
+        subject: 'HTML Subject'
+      });
+
+      expect(result.data.__master).toBe(master);
+      expect(result.data.metadata.number).toBe(9);
+      expect(result.subject).toBe('HTML Subject');
+      expect(result.sendAtDate).toBe('now');
+    });
+
+    it('does not JSON-parse html content (non-JSON is fine)', async () => {
+      const result = await handler({
+        content: 'not json at all <b>ok</b>',
+        contentType: 'html',
+        issueId: 5,
+        subject: 'S'
+      });
+
+      expect(result.data.__master).toBe('not json at all <b>ok</b>');
+      expect(result.data.metadata.number).toBe(5);
+    });
+  });
+
   it('throws for an invalid issue id', async () => {
     await expect(
       handler({ content: JSON.stringify({ metadata: {} }), issueId: 'abc', subject: 'Subj' })

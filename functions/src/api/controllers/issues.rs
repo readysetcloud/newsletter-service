@@ -58,9 +58,10 @@ pub struct CreateIssueRequest {
     metadata: Option<serde_json::Value>,
     #[serde(rename = "templateId", skip_serializing_if = "Option::is_none")]
     template_id: Option<String>,
-    /// How `content` should be interpreted: "markdown" (default) or "json".
-    /// In "json" mode the content is the template data object (as a JSON
-    /// string) and a templateId is required.
+    /// How `content` should be interpreted: "markdown" (default), "json", or
+    /// "html". In "json" mode the content is the template data object (as a JSON
+    /// string) and a templateId is required. In "html" mode the content is a
+    /// pre-rendered email master, sent verbatim (no templateId, no structuring).
     #[serde(rename = "contentType", skip_serializing_if = "Option::is_none")]
     content_type: Option<String>,
     /// Optional time-to-live, in seconds, after which the draft is
@@ -81,17 +82,21 @@ enum CreateIssueAction {
 // Default value persisted/used when no contentType is supplied.
 const CONTENT_TYPE_MARKDOWN: &str = "markdown";
 const CONTENT_TYPE_JSON: &str = "json";
+const CONTENT_TYPE_HTML: &str = "html";
 
 // Upper bound for a draft's ttlSeconds (one year). Guards against absurd
 // far-future schedules while still allowing long-lived drafts.
 const MAX_TTL_SECONDS: i64 = 365 * 24 * 60 * 60;
 
-/// Normalizes a caller-supplied contentType into "markdown" or "json".
-/// Absent / empty / unknown values fall back to "markdown" for backwards
-/// compatibility with issues created before this field existed.
+/// Normalizes a caller-supplied contentType into "markdown", "json", or "html".
+/// In "html" mode `content` is a pre-rendered email master that the publish
+/// pipeline sends verbatim (no structuring, no template render). Absent / empty
+/// / unknown values fall back to "markdown" for backwards compatibility with
+/// issues created before this field existed.
 fn normalize_content_type(value: Option<&str>) -> String {
     match value.map(|v| v.trim().to_ascii_lowercase()) {
         Some(ref v) if v == CONTENT_TYPE_JSON => CONTENT_TYPE_JSON.to_string(),
+        Some(ref v) if v == CONTENT_TYPE_HTML => CONTENT_TYPE_HTML.to_string(),
         _ => CONTENT_TYPE_MARKDOWN.to_string(),
     }
 }

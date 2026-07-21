@@ -112,6 +112,30 @@ describe('publish-issue', () => {
     });
   });
 
+  describe('html master (pre-rendered, bring-your-own-renderer)', () => {
+    it('sends the master verbatim and never renders a template', async () => {
+      const master = '<html><body>MY PRE-RENDERED NEWSLETTER __EMAIL_HASH__</body></html>';
+      const result = await handler({
+        data: { metadata: { number: 42 }, __master: master },
+        subject: 'Subject',
+        tenantId: 'tenant-1',
+        templateId: 'tmpl-should-be-ignored',
+        isPreview: true,
+        email: 'preview@example.com',
+        sendAtDate: 'now'
+      });
+
+      expect(result).toEqual({ success: true });
+      // Master is sent as-is, not run through any template...
+      expect(getSentHtml()).toBe(master);
+      // ...and no template/snippet reads happen, even though a templateId was supplied.
+      const templateReads = ddbSend.mock.calls.filter(
+        ([cmd]) => cmd.__type === 'GetItem' || cmd.__type === 'Query'
+      );
+      expect(templateReads).toHaveLength(0);
+    });
+  });
+
   describe('render with template (templateId present)', () => {
     it('loads the template and snippets from DynamoDB and renders the content', async () => {
       const templateContent = 'Hello {{metadata.title}} #{{metadata.number}} {{> footer }}';

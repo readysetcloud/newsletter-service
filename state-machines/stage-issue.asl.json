@@ -172,8 +172,16 @@
               "IsPresent": true
             },
             {
-              "Variable": "$$.Execution.Input.contentType",
-              "StringEquals": "json"
+              "Or": [
+                {
+                  "Variable": "$$.Execution.Input.contentType",
+                  "StringEquals": "json"
+                },
+                {
+                  "Variable": "$$.Execution.Input.contentType",
+                  "StringEquals": "html"
+                }
+              ]
             }
           ],
           "Next": "Parse JSON Issue"
@@ -462,7 +470,8 @@
         "Payload": {
           "content.$": "$$.Execution.Input.content",
           "issueId.$": "$$.Execution.Input.issueId",
-          "subject.$": "$$.Execution.Input.subject"
+          "subject.$": "$$.Execution.Input.subject",
+          "contentType.$": "$$.Execution.Input.contentType"
         }
       },
       "Retry": [
@@ -517,7 +526,8 @@
           "email.$": "$$.Execution.Input.tenant.email",
           "isPreview": true,
           "tenantId.$": "$$.Execution.Input.tenant.id",
-          "templateId.$": "$$.Execution.Input.templateId"
+          "templateId.$": "$$.Execution.Input.templateId",
+          "contentType.$": "$$.Execution.Input.contentType"
         }
       },
       "Retry": [
@@ -545,7 +555,8 @@
           "sendAtDate.$": "$sendAtDate",
           "subject.$": "$.subject",
           "tenantId.$": "$$.Execution.Input.tenant.id",
-          "templateId.$": "$$.Execution.Input.templateId"
+          "templateId.$": "$$.Execution.Input.templateId",
+          "contentType.$": "$$.Execution.Input.contentType"
         },
         "FunctionName": "${PublishIssue}"
       },

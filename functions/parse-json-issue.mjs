@@ -1,11 +1,14 @@
 /**
- * Prepares a "json" mode issue for publishing.
+ * Prepares a non-markdown issue ("json" or "html") for publishing.
  *
- * In json mode the issue's `content` is not markdown but a JSON string holding
- * the template data object directly (the same shape `parse-md-to-json` derives
- * from markdown). This handler validates that payload, guarantees the metadata
- * the publish step relies on, and produces the identical output contract as
- * `parse-md-to-json` so the rest of the state machine is unchanged:
+ * - json: `content` is a JSON string holding the template data object directly
+ *   (the same shape `parse-md-to-json` derives from markdown); it is validated.
+ * - html: `content` is a pre-rendered email master; it is carried through on the
+ *   data object as `__master` and sent verbatim by publish-issue (no template
+ *   render). This is the bring-your-own-renderer path.
+ *
+ * Either way this produces the identical output contract as `parse-md-to-json`
+ * so the rest of the state machine is unchanged:
  *
  *   { data, sendAtDate, listCleanupDate, reportStatsDate, subject }
  */
@@ -16,20 +19,27 @@ export const handler = async (state) => {
   }
 
   let data;
-  try {
-    data = typeof state.content === 'string' ? JSON.parse(state.content) : state.content;
-  } catch (err) {
-    throw new Error(`Issue content is not valid JSON: ${err.message}`);
-  }
+  if (state.contentType === 'html') {
+    // html mode: `content` is a pre-rendered email master, not structured data.
+    // Carry it on the data object under `__master` so publish-issue sends it
+    // verbatim (skipping the template render). No parsing/validation of the HTML.
+    data = { metadata: { number: issueNumber }, __master: String(state.content ?? '') };
+  } else {
+    try {
+      data = typeof state.content === 'string' ? JSON.parse(state.content) : state.content;
+    } catch (err) {
+      throw new Error(`Issue content is not valid JSON: ${err.message}`);
+    }
 
-  if (!data || typeof data !== 'object' || Array.isArray(data)) {
-    throw new Error('Issue content must be a JSON object');
-  }
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      throw new Error('Issue content must be a JSON object');
+    }
 
-  // The publish step reads data.metadata.number, so guarantee it matches the
-  // issue regardless of what the author supplied.
-  data.metadata = { ...(data.metadata ?? {}) };
-  data.metadata.number = issueNumber;
+    // The publish step reads data.metadata.number, so guarantee it matches the
+    // issue regardless of what the author supplied.
+    data.metadata = { ...(data.metadata ?? {}) };
+    data.metadata.number = issueNumber;
+  }
 
   const now = new Date();
   const scheduled = state.futureDate ? new Date(state.futureDate) : null;

@@ -112,6 +112,51 @@ describe('publish-issue', () => {
     });
   });
 
+  describe('html master (pre-rendered, bring-your-own-renderer)', () => {
+    it('sends the master verbatim and never renders a template', async () => {
+      const master = '<html><body>MY PRE-RENDERED NEWSLETTER __EMAIL_HASH__</body></html>';
+      const result = await handler({
+        data: { metadata: { number: 42 }, __master: master },
+        contentType: 'html',
+        subject: 'Subject',
+        tenantId: 'tenant-1',
+        templateId: 'tmpl-should-be-ignored',
+        isPreview: true,
+        email: 'preview@example.com',
+        sendAtDate: 'now'
+      });
+
+      expect(result).toEqual({ success: true });
+      // Master is sent as-is, not run through any template...
+      expect(getSentHtml()).toBe(master);
+      // ...and no template/snippet reads happen, even though a templateId was supplied.
+      const templateReads = ddbSend.mock.calls.filter(
+        ([cmd]) => cmd.__type === 'GetItem' || cmd.__type === 'Query'
+      );
+      expect(templateReads).toHaveLength(0);
+    });
+
+    it('does NOT treat a json issue with a top-level __master as pre-rendered', async () => {
+      // A json template whose data legitimately includes a __master field must
+      // still be rendered through the template — the passthrough is gated on
+      // contentType === 'html', not the presence of __master.
+      const result = await handler({
+        data: { metadata: { number: 42, title: 'Test Issue' }, __master: 'SHOULD NOT BE SENT' },
+        contentType: 'json',
+        subject: 'Subject',
+        tenantId: 'tenant-1',
+        isPreview: true,
+        email: 'preview@example.com',
+        sendAtDate: 'now'
+      });
+
+      expect(result).toEqual({ success: true });
+      const html = getSentHtml();
+      expect(html).not.toBe('SHOULD NOT BE SENT');
+      expect(html).toContain('Test Issue');
+    });
+  });
+
   describe('render with template (templateId present)', () => {
     it('loads the template and snippets from DynamoDB and renders the content', async () => {
       const templateContent = 'Hello {{metadata.title}} #{{metadata.number}} {{> footer }}';

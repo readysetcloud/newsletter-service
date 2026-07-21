@@ -94,8 +94,8 @@ ${REDIRECT_BASE}?u=${encodeURIComponent(destinationUrl)}&cid=${tenant}_${issueNu
 ```
 
 - `u` — the **original** destination, `encodeURIComponent`-encoded (not `encodeURI`; see the cautionary history in `update-link-tracking.mjs:72–87`).
-- `cid` — `tenant#issue`, but with `#` written as `_` in the URL. The redirect function restores it (`cid.replace(/_/g, '#')`, `template.yaml:2859`).
-- `p` — 1-based link position, **emitted**. Click resolution is by `hash(u)`, so `p` is informational, but we keep it for position analytics parity. In the Hugo hook, number by the ordinal of **wrapped** links only (external, non-`mailto:`) so it matches the backend record's `position` (which is assigned the same way). Note Hugo's `.Ordinal` counts *all* links, so track a separate counter rather than using `.Ordinal` directly.
+- `cid` — `tenant#issue`, query-encoded so `#` becomes `%23` (e.g. `readysetcloud%23217`). This is the established form produced by `update-link-tracking.mjs` (`encodeURIComponent(cid)`) and already in the committed corpus; in Hugo use `urlquery "<tenant>#<issue>"`. (The redirect also accepts a `_`-for-`#` form via `cid.replace(/_/g, '#')`, `template.yaml:2859`, but `%23` is canonical.) On click, `process-link-click.mjs` uses the decoded `cid` **directly as the DynamoDB `pk`** — this is the sole issue-attribution mechanism.
+- `p` — 1-based link position, **emitted**. Click resolution is by `hash(u)`, so `p` is informational (stored as `linkPosition` on the click event), but we keep it for parity with the backend record's `position`. In the Hugo hook, increment a per-page counter (`.Page.Store`) **only for links actually wrapped** (external, non-`mailto:`), so numbering matches the backend (which counts the same set). Do **not** use `.Ordinal` — it counts every link (internal, `mailto:`) and would drift.
 - `s=__EMAIL_HASH__` — **email only**, substituted per recipient at send. The web hook omits `s`.
 - `src` — `web` for the Hugo hook; SES clicks arrive as `email`.
 
@@ -141,9 +141,12 @@ Replaces legacy's hardcoded noon normalization with a per-account default. When 
 ### 6.2 Website (`ready-set-cloud`)
 
 **6.2.1 Add a Hugo link render hook** at `layouts/_default/_markup/render-link.html`:
-- Wrap **external** links (skip internal/relative and `mailto:`) in newsletter content with the redirect URL from §5, using a site param for `REDIRECT_BASE` and the issue number for `cid`.
-- **Idempotent:** if the destination already points at `REDIRECT_BASE` (legacy issues whose markdown was committed pre-cutover with wrapped links), pass it through unchanged — do not double-wrap.
-- Scope: **newsletter section only for now** (guard on `.Page.Section`/path). Widen to site-wide later — campaign links are already used elsewhere on the site — so keep the hook logic generic and section-agnostic; broadening scope should be a guard change, not a rewrite.
+- **Attribution:** the issue number comes from the page's own frontmatter — `slug: /217` → digits (the same field `stage-new-issue.js` reads; fall back to the `Issue-<n>` filename). `tenant` is a site param. Together they form `cid` (§5), which is the whole attribution mechanism.
+- Wrap **external** links only (skip relative/anchor and `mailto:`) with the redirect URL from §5, using a site param for `REDIRECT_BASE`.
+- **Position:** increment a `.Page.Store` counter for each wrapped link (§5), not `.Ordinal`.
+- **Idempotent:** if the destination already starts with `REDIRECT_BASE`, pass it through unchanged. Required — legacy issues (e.g. `Issue-217`) already have wrapped links committed in Git from the old `Transform and Callback`; the hook must not double-wrap them.
+- **Scope:** newsletter only for now — guard on `.Page.Type == "newsletter"` (frontmatter has `type: newsletter`). Keep the logic section-agnostic so widening to site-wide later (campaign links are used elsewhere) is a guard change, not a rewrite.
+- **Link-class consistency:** wrap the same links the backend extracts (standard `[text](url)` markdown). Reference-style links or raw `<a>` HTML would be seen by Hugo but not the backend's regex extractor (or vice-versa), desyncing web `p`/records — keep newsletter links as plain markdown.
 
 **6.2.2 Config:** expose `REDIRECT_BASE` (the redirect domain) as a Hugo param.
 

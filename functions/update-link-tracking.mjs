@@ -64,47 +64,47 @@ function extractContext(content, matchIndex) {
 }
 
 export const handler = async (state) => {
-  const cid = `${state.tenantId}#${state.issueId}`;
   const linkRegex = /\[(.*?)\]\((.*?)\)/g;
   let linkPosition = 0;
   const linkTasks = [];
 
-  // Rewrite each markdown link in a single pass keyed on the link syntax itself.
-  // A previous implementation replaced the bare URL substring one link at a time
-  // (updatedContent.replace(url, ...)). That was doubly broken:
-  //   1. String.replace(url, ...) only touches the FIRST occurrence, and the
-  //      replacement embeds the original URL as the `u=` param. A later link whose
-  //      URL is a prefix of an earlier one (a bare domain / homepage reused across
-  //      the issue) then matched INSIDE the already-rewritten tracking URL, so it
-  //      was left un-tracked while corrupting the earlier link. Rewriting the whole
-  //      `[text](url)` match in place avoids matching text we just inserted.
-  //   2. encodeURI() leaves `&`, `?`, `=`, `#`, `+` unescaped. For any URL carrying
-  //      a query string (UTM tags, campaign params — common on the sponsor/CTA links
-  //      near the bottom of an issue) the extra `&`s split the redirect query string,
-  //      truncating the destination. The redirect then logged the truncated URL,
-  //      whose hash no longer matched the link record, so the click increment failed
-  //      its ConditionalCheck and was silently dropped. encodeURIComponent() keeps
-  //      the destination intact so it round-trips to the same `link#<hash>` record.
-  const updatedContent = state.content.replace(linkRegex, (match, anchorText, url, offset) => {
-    if (!url || url.indexOf('mailto:') !== -1) {
-      return match;
+  // This step creates the issue's `link#<hash(url)>` records (click counts +
+  // LLM topic classification). It no longer rewrites the content: web link
+  // wrapping happens at site-build time in the newsletter Hugo render hook, and
+  // email links are tracked by SES. Both surfaces resolve clicks back into these
+  // records, so record creation stays here (server-side) while the presentation
+  // wrapping moved out. See docs/github-api-cutover-spec.md.
+  //
+  // Only absolute http(s) links are tracked: this matches the render hook's
+  // wrapping set (so `position` stays aligned) and the redirect only accepts
+  // http(s) destinations. Relative and mailto: links are skipped. Each link is
+  // matched by its full `[text](url)` syntax so a URL that is a prefix of another
+  // (a homepage reused across the issue) is still counted at every occurrence.
+  let matches;
+  while ((matches = linkRegex.exec(state.content)) !== null) {
+    if (matches.index === linkRegex.lastIndex) {
+      linkRegex.lastIndex++;
+    }
+
+    const anchorText = matches[1];
+    const url = matches[2];
+    if (!url || !/^https?:\/\//i.test(url)) {
+      continue;
     }
 
     linkPosition += 1;
     linkTasks.push({
       url,
       anchorText,
-      context: extractContext(state.content, offset),
+      context: extractContext(state.content, matches.index),
       position: linkPosition
     });
-
-    const trackingUrl = `${process.env.REDIRECT_URL}?u=${encodeURIComponent(url)}&cid=${encodeURIComponent(cid)}&p=${encodeURIComponent(linkPosition)}&s=__EMAIL_HASH__`;
-    return `[${anchorText}](${trackingUrl})`;
-  });
+  }
 
   await processLinks(linkTasks, state.tenantId, state.issueId);
 
-  return { content: updatedContent };
+  // `success` gates the state machine's "Success?" choice (the $[0] web branch).
+  return { success: true, linkCount: linkPosition };
 };
 
 async function processLinks(links, tenantId, issueId) {

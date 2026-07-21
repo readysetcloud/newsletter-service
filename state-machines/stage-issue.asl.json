@@ -163,7 +163,7 @@
     },
     "Route By Content Type": {
       "Type": "Choice",
-      "Comment": "JSON issues skip the markdown-specific steps (voting options, link tracking, GitHub callback, social copy) and render the supplied data directly against the selected template.",
+      "Comment": "JSON issues skip the markdown-specific steps (link tracking, social copy) and render the supplied data directly against the selected template.",
       "Choices": [
         {
           "And": [
@@ -179,37 +179,7 @@
           "Next": "Parse JSON Issue"
         }
       ],
-      "Default": "Setup Voting Options"
-    },
-    "Setup Voting Options": {
-      "Type": "Task",
-      "Resource": "${LambdaInvoke}",
-      "Parameters": {
-        "FunctionName": "${SetupVotingOptions}",
-        "Payload": {
-          "content.$": "$$.Execution.Input.content",
-          "tenant.$": "$$.Execution.Input.tenant",
-          "issueId.$": "$$.Execution.Input.issueId"
-        }
-      },
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException",
-            "Lambda.TooManyRequestsException"
-          ],
-          "IntervalSeconds": 1,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ],
-      "ResultPath": null,
-      "Next": "Build Web and Email Versions",
-      "Assign": {
-        "votingOptions.$": "$.Payload"
-      }
+      "Default": "Build Web and Email Versions"
     },
     "Build Web and Email Versions": {
       "Type": "Parallel",
@@ -242,34 +212,6 @@
                   "BackoffRate": 2
                 }
               ],
-              "Next": "Transform and Callback",
-              "OutputPath": "$.Payload"
-            },
-            "Transform and Callback": {
-              "Type": "Task",
-              "Resource": "${LambdaInvoke}",
-              "Parameters": {
-                "Payload": {
-                  "content.$": "$.content",
-                  "isPreview.$": "$$.Execution.Input.isPreview",
-                  "votingOptions.$": "$votingOptions",
-                  "fileName.$": "$$.Execution.Input.fileName"
-                },
-                "FunctionName": "${TransformAndCallback}"
-              },
-              "Retry": [
-                {
-                  "ErrorEquals": [
-                    "Lambda.ServiceException",
-                    "Lambda.AWSLambdaException",
-                    "Lambda.SdkClientException",
-                    "Lambda.TooManyRequestsException"
-                  ],
-                  "IntervalSeconds": 1,
-                  "MaxAttempts": 3,
-                  "BackoffRate": 2
-                }
-              ],
               "OutputPath": "$.Payload",
               "End": true
             }
@@ -287,7 +229,6 @@
             "content.$": "$.content",
             "fileName.$": "$$.Execution.Input.fileName",
             "isPreview.$": "$$.Execution.Input.isPreview",
-            "votingOptions.$": "$votingOptions",
             "issueId.$": "$$.Execution.Input.issueId",
             "tenantId.$": "$$.Execution.Input.tenant.id"
           }

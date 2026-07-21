@@ -67,17 +67,6 @@ describe('parse-json-issue handler', () => {
     expect(result.subject).toBe('From Data');
   });
 
-  it('merges voting options into the data when provided', async () => {
-    const result = await handler({
-      content: JSON.stringify({ metadata: {} }),
-      issueId: 4,
-      subject: 'Subj',
-      votingOptions: [{ id: '4-0', description: 'Option A' }]
-    });
-
-    expect(result.data.votingOptions).toEqual([{ id: '4-0', description: 'Option A' }]);
-  });
-
   it('throws for invalid JSON content', async () => {
     await expect(
       handler({ content: 'not json', issueId: 1, subject: 'Subj' })

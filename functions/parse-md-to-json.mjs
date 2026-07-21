@@ -11,9 +11,9 @@ const ddb = new DynamoDBClient();
 const converter = new showdown.Converter();
 
 // Body shortcodes that are handled by their own bespoke transforms elsewhere
-// (sponsor inline, social in tip-of-the-week, vote injected upstream) are NOT
-// routed through the generic snippet bridge.
-const RESERVED_SHORTCODES = new Set(['sponsor', 'social', 'vote']);
+// (sponsor inline, social in tip-of-the-week) are NOT routed through the
+// generic snippet bridge.
+const RESERVED_SHORTCODES = new Set(['sponsor', 'social']);
 
 // Hardcoded body blocks that render even when a tenant has not defined a snippet
 // of the same name. A matching tenant snippet overrides these (see the decision
@@ -60,8 +60,7 @@ export const handler = async (state) => {
       ...(author && { author })
     },
     ...(sponsor && { sponsor }),
-    content: {},
-    ...state.votingOptions?.length && { votingOptions: state.votingOptions }
+    content: {}
   };
 
   const tipOfTheWeekIndex = sections.findIndex(ps => ps.header.toLowerCase().includes('tip of the week'));
@@ -92,7 +91,7 @@ export const handler = async (state) => {
   // generic content section with start/end markers that the template emits
   // around the whole section block (header + body). This is the injection
   // point because it is the only place that knows which blocks are the
-  // reorderable middle sections — tip of the week, last words, sponsor, voting
+  // reorderable middle sections — tip of the week, last words, sponsor
   // and the header/footer chrome are all rendered outside `content.sections`
   // and therefore stay fixed. The config is read from the issue record (like
   // publish-issue reads abTest) instead of being threaded through the state

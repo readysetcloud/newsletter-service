@@ -31,7 +31,7 @@ with `required`, `defaultValue`, `options`, `description`), CRUD API
 autocomplete, and a JS-send / Rust-preview parity harness
 (`__tests__/fixtures/render-conformance.json`).
 
-Shortcodes are the immature mechanism: each block type (sponsor, social, vote,
+Shortcodes are the immature mechanism: each block type (sponsor, social,
 and now `robotVoice`) is a bespoke transform compiled into the parser. Adding a
 block requires a code change and deploy.
 
@@ -155,7 +155,7 @@ These were settled on 2026-06-25 and define the v1 build:
 
 - **Surface area — general bridge.** Build the generic "any snippet usable in
   body" resolver in `parse-md-to-json` and migrate `robotVoice` onto it.
-  `sponsor` / `social` / `vote` remain as bespoke transforms for now but can be
+  `sponsor` / `social` remain as bespoke transforms for now but can be
   retired onto the bridge later. (Avoids a throwaway `robotVoice`-only path.)
 - **Override model — override with fallback.** A tenant snippet whose name
   matches a block overrides it; when no such snippet exists, the hardcoded block
@@ -171,5 +171,5 @@ These were settled on 2026-06-25 and define the v1 build:
 
 ## Still to decide (later)
 
-- Whether and when to retire `sponsor` / `social` / `vote` onto the bridge once
+- Whether and when to retire `sponsor` / `social` onto the bridge once
   the general resolver has proven out.

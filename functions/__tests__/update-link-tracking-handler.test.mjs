@@ -10,6 +10,15 @@ jest.unstable_mockModule('../utils/llm-link-classifier.mjs', () => ({
 
 const { handler } = await import('../update-link-tracking.mjs');
 
+// The handler no longer rewrites content (web link wrapping moved to the Hugo
+// render hook, email links are tracked by SES). Its job is to create the issue's
+// link# tracking records, so these tests assert on the DynamoDB writes.
+const putItems = (mockSend) =>
+  mockSend.mock.calls
+    .map(call => call[0])
+    .filter(cmd => cmd instanceof PutItemCommand)
+    .map(cmd => unmarshall(cmd.input.Item));
+
 describe('update-link-tracking handler', () => {
   let mockSend;
   let originalEnv;
@@ -17,11 +26,9 @@ describe('update-link-tracking handler', () => {
   beforeEach(() => {
     originalEnv = {
       TABLE_NAME: process.env.TABLE_NAME,
-      REDIRECT_URL: process.env.REDIRECT_URL,
       MODEL_ID: process.env.MODEL_ID
     };
     process.env.TABLE_NAME = 'test-table';
-    process.env.REDIRECT_URL = 'https://redirect.example.com';
     process.env.MODEL_ID = 'test-model';
 
     // No existing records by default; writes succeed.
@@ -32,49 +39,45 @@ describe('update-link-tracking handler', () => {
 
   afterEach(() => {
     process.env.TABLE_NAME = originalEnv.TABLE_NAME;
-    process.env.REDIRECT_URL = originalEnv.REDIRECT_URL;
     process.env.MODEL_ID = originalEnv.MODEL_ID;
     jest.clearAllMocks();
   });
 
-  test('rewrites links with issue cid and position parameters', async () => {
+  test('creates a link record per http(s) link with issue pk and position', async () => {
     const result = await handler({
       tenantId: 'tenant123',
       issueId: '42',
       content: 'One [first](https://example.com/first) and [second](https://example.com/second?x=1)'
     });
 
-    expect(result.content).toContain('cid=tenant123%2342');
-    expect(result.content).toContain('p=1');
-    expect(result.content).toContain('p=2');
-    expect(result.content).toContain('s=__EMAIL_HASH__');
+    expect(result).toEqual({ success: true, linkCount: 2 });
+
+    const records = putItems(mockSend);
+    expect(records).toHaveLength(2);
+    expect(records.every(r => r.pk === 'tenant123#42')).toBe(true);
+    const byUrl = Object.fromEntries(records.map(r => [r.url, r]));
+    expect(byUrl['https://example.com/first'].position).toBe(1);
+    expect(byUrl['https://example.com/second?x=1'].position).toBe(2);
   });
 
-  test('encodes the destination so query-string links round-trip to the same hash', async () => {
-    // A URL with query params (UTM tags) must be encoded such that its `&`/`?`
-    // do not leak out of the `u=` param and split the redirect query string.
-    // Otherwise the redirect truncates the destination and the logged click
-    // hashes to a different link record, so the increment is silently dropped.
-    const url = 'https://example.com/post?utm_source=newsletter&utm_medium=email';
+  test('skips mailto and relative links, tracking only absolute http(s) links', async () => {
     const result = await handler({
       tenantId: 'tenant123',
       issueId: '42',
-      content: `Read [the post](${url}) today.`
+      content: 'Email [us](mailto:hi@example.com), read the [post](https://example.com/post), or go [home](/index).'
     });
 
-    const expected = `u=${encodeURIComponent(url)}`;
-    expect(result.content).toContain(expected);
-    // The raw, unescaped ampersand must not appear inside the tracking link.
-    expect(result.content).not.toContain('utm_medium=email&cid=');
-    // The value under `u=` must decode back to the exact original URL.
-    const uValue = result.content.match(/u=([^&]+)&cid=/)[1];
-    expect(decodeURIComponent(uValue)).toBe(url);
+    expect(result.linkCount).toBe(1);
+    const records = putItems(mockSend);
+    expect(records).toHaveLength(1);
+    expect(records[0].url).toBe('https://example.com/post');
+    expect(records[0].position).toBe(1);
   });
 
-  test('tracks every occurrence when a URL is reused / is a prefix of others', async () => {
-    // The homepage URL is a prefix of the article URL and appears twice. The old
-    // first-occurrence substring replace left later occurrences un-tracked and
-    // corrupted earlier links; every link must now become a distinct tracking URL.
+  test('tracks each distinct URL when a URL is reused or is a prefix of others', async () => {
+    // The homepage URL is a prefix of the article URL and appears twice. Each
+    // `[text](url)` match is counted independently, so both distinct URLs get a
+    // record and the reused URL does not corrupt the others.
     const home = 'https://readysetcloud.io';
     const article = 'https://readysetcloud.io/serverless';
     const result = await handler({
@@ -83,16 +86,11 @@ describe('update-link-tracking handler', () => {
       content: `Welcome to [home](${home}). Read [serverless](${article}). Visit [home again](${home}).`
     });
 
-    // No original URL should remain as a bare markdown target (all rewritten).
-    expect(result.content).not.toContain(`](${home})`);
-    expect(result.content).not.toContain(`](${article})`);
-    // Positions 1, 2, 3 all present -> all three links tracked.
-    expect(result.content).toContain('p=1');
-    expect(result.content).toContain('p=2');
-    expect(result.content).toContain('p=3');
-    // No double-wrapped redirect (a symptom of the substring-collision bug).
-    expect(result.content).not.toMatch(/u=[^&]*r(?:edirect)?\.example\.com/);
-    expect(result.content).not.toContain(`u=${encodeURIComponent(process.env.REDIRECT_URL)}`);
+    // All three occurrences counted (positions 1, 2, 3).
+    expect(result.linkCount).toBe(3);
+    const urls = putItems(mockSend).map(r => r.url);
+    expect(urls).toContain(home);
+    expect(urls).toContain(article);
   });
 
   test('stores the LLM topic classification and summary on the link record', async () => {
@@ -133,15 +131,13 @@ describe('update-link-tracking handler', () => {
       return Promise.resolve({});
     });
 
-    const result = await handler({
+    await handler({
       tenantId: 'tenant123',
       issueId: '42',
       content: 'Already [tracked](https://example.com/tracked) link.'
     });
 
-    // Link is still rewritten...
-    expect(result.content).toContain('cid=tenant123%2342');
-    // ...but no LLM call and no write happen for an already-classified record.
+    // No LLM call and no write happen for an already-classified record.
     expect(mockClassifyLinkWithLlm).not.toHaveBeenCalled();
     const writes = mockSend.mock.calls.filter(
       call => call[0] instanceof PutItemCommand || call[0] instanceof UpdateItemCommand
@@ -255,7 +251,7 @@ describe('update-link-tracking handler', () => {
     resolveWrite({});
     const result = await handlerPromise;
 
-    expect(result.content).toContain('https://redirect.example.com');
+    expect(result).toEqual({ success: true, linkCount: 1 });
     expect(mockSend.mock.calls.some(([command]) => command instanceof PutItemCommand)).toBe(true);
   });
 });

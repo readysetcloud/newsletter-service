@@ -2406,32 +2406,6 @@ Resources:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
 
-  TransformAndCallbackFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - transform-and-callback.mjs
-    Properties:
-      Runtime: nodejs24.x
-      CodeUri: functions
-      Handler: transform-and-callback.handler
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
-      Environment:
-        Variables:
-          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
-          SECRET_ID: "{{resolve:ssm:/readysetcloud/secrets}}"
-          OWNER: "{{resolve:ssm:/readysetcloud/github-owner}}"
-          REPO: "{{resolve:ssm:/readysetcloud/github-repo}}"
-
   SyncRepoDataFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2692,7 +2666,6 @@ Resources:
         ReportStatsRole: !GetAtt ReportStatsRole.Arn
         SetupVotingOptions: !GetAtt SetupVotingOptionsFunction.Arn
         CleanupListRole: !GetAtt SchedulerExecutionRole.Arn
-        TransformAndCallback: !GetAtt TransformAndCallbackFunction.Arn
         GenerateSocialPost: !GetAtt GenerateSocialPostFunction.Arn
       Policies:
         - Version: 2012-10-17
@@ -2711,7 +2684,6 @@ Resources:
                 - !GetAtt ParseJsonIssueFunction.Arn
                 - !GetAtt UpdateLinksWithTrackingDataFunction.Arn
                 - !GetAtt SetupVotingOptionsFunction.Arn
-                - !GetAtt TransformAndCallbackFunction.Arn
                 - !GetAtt GenerateSocialPostFunction.Arn
             - Effect: Allow
               Action: events:PutEvents
@@ -3442,10 +3414,6 @@ Resources:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           TABLE_NAME: !Ref NewsletterTable
           MODEL_ID: us.amazon.nova-lite-v1:0
-          REDIRECT_URL: !If
-            - HasRedirectCustomDomain
-            - !Sub https://${RedirectCustomDomain}/r
-            - !Sub https://${RedirectCFDistribution.DomainName}/r
 
   ProcessLinkClickFunction:
     Type: AWS::Serverless::Function

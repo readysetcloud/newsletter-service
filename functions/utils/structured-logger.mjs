@@ -269,11 +269,3 @@ export class StructuredLogger {
 export const createLogger = (correlationId, tenantId = null, userId = null) => {
     return new StructuredLogger(correlationId, tenantId, userId);
 };
-
-/**
- * Legacy console.log wrapper for backward compatibility
- * @deprecated Use StructuredLogger instead
- */
-export const legacyLog = (message, context = {}) => {
-    console.log(message, context);
-};

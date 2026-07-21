@@ -286,4 +286,19 @@ Sending is the platform's founding purpose — it exists to get a finished newsl
 Pin the small html-ingress contract, then build:
 1. **Personalization placeholders** the tenant's HTML must carry (`__EMAIL_HASH__`, `__UNSUBSCRIBE_URL__`) and what the platform injects (open pixel, standard footer if no unsubscribe placeholder).
 2. **Link tracking** — SES click tracking (simplest MVP) vs the renderer wrapping links with the redirect (`src=email`, `s=__EMAIL_HASH__`) for `link#` parity with the web hook.
-3. **Implement** — `contentType: html` validation, a state-machine branch that skips `parse-md-to-json` and the template render, and a `publish-issue` passthrough that uses `content` as the master.
+3. **Implement** — `contentType: html` validation, a state-machine branch that skips `parse-md-to-json` and the template render, and a `publish-issue` passthrough that uses `content` as the master. ✅ Shipped in newsletter-service #360 (the html path rides the JSON branch, carrying the master on `data.__master`).
+
+### 11.9 Shortcode parity for the email output format (do not lose)
+
+`parse-md-to-json` doesn't just structure markdown — it renders RSC's body shortcodes into **email-specific** HTML. Before RSC's Hugo email output format replaces it (and `parse-md-to-json` is deleted), each of these must be reproduced in an **email variant** of the shortcode. Good news: RSC's existing web shortcodes already share the base HTML, so the gap is narrow.
+
+| Shortcode | What the transform emits (email) | RSC web shortcode | Nuance to carry into the email variant |
+|---|---|---|---|
+| `robotVoice` | `formatRobotVoice`: the mono "robot voice" card **plus** `<!--[if mso]>` Outlook fallbacks and Gmail degradation for the negative-margin notch labels | same card HTML, **no** MSO/Gmail handling (notch clips in Outlook) | add the MSO conditional blocks + Gmail fallback |
+| `sponsor` (inline `{{< sponsor >}}`) | `formatSponsorAd`: bordered rounded card, ad markdown + *Sponsored* | near-identical bordered card | ~at parity; note the data source differs (transform reads the DDB sponsor record; Hugo reads `data/sponsors.json`) |
+| `social` (`{{< social url >}}`) | pulled out in tip-of-the-week → rendered as a **URL/card, no live embed** | `resources.GetRemote` **live oEmbed** (embeds tweet HTML + scripts) | email must **not** use live oEmbed (scripts don't run in mail); render the email-safe URL/card |
+| markdown paragraphs | `convertToHtml` inserts `</p><br><p>` (extra `<br>` between paragraphs) + optional outer-`<p>` strip | Hugo `markdownify` / `RenderString` → standard `<p>` | reproduce the email paragraph spacing (extra `<br>` or equivalent email CSS) |
+| `linkedin`, `bsky` | not handled by the transform (web-only embeds) | live embeds | if ever used in a newsletter body, needs an email-safe variant |
+| tenant snippets (`{{< name attr >}}`) | snippet bridge: param defaults/required/type coercion + `renderWithSnippets` | n/a — RSC uses Hugo shortcodes, not platform snippets | not needed for RSC; stays relevant only to dashboard/template tenants |
+
+**Net:** the email output format is mostly RSC's web shortcodes with (a) Outlook/Gmail hardening on `robotVoice`, (b) an email-safe (non-oEmbed) `social`, and (c) the paragraph-spacing treatment. Reproduce these three before `parse-md-to-json` is deleted, or those blocks silently break in email.

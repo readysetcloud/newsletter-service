@@ -118,39 +118,3 @@ export const publishSubscriberEvent = async (tenantId, userId, eventType, data, 
     data
   }, correlationId);
 };
-
-/**
- * Publishes brand-related events
- * @param {string} tenantId - Tenant ID
- * @param {string} userId - User ID
- * @param {string} eventType - Event type from EVENT_TYPES
- * @param {Object} data - Brand data
- * @param {string} correlationId - Optional correlation ID for tracing
- * @returns {Promise<void>}
- */
-export const publishBrandEvent = async (tenantId, userId, eventType, data, correlationId = null) => {
-  await publishEvent('newsletter-service', eventType, {
-    tenantId,
-    userId,
-    type: eventType.replace(' ', '_').toUpperCase(),
-    data
-  }, correlationId);
-};
-
-/**
- * Publishes system-related events
- * @param {string} tenantId - Tenant ID (optional for system events)
- * @param {string} userId - User ID (optional for system events)
- * @param {string} eventType - Event type from EVENT_TYPES
- * @param {Object} data - System event data
- * @param {string} correlationId - Optional correlation ID for tracing
- * @returns {Promise<void>}
- */
-export const publishSystemEvent = async (tenantId, userId, eventType, data, correlationId = null) => {
-  await publishEvent('newsletter.system', eventType, {
-    tenantId,
-    userId,
-    type: eventType.replace(' ', '_').toUpperCase(),
-    data
-  }, correlationId);
-};

@@ -2392,51 +2392,6 @@ Resources:
                 jobStatus:
                   - SUCCEED
 
-  ImportFromGitHubFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - import-issue-from-github.mjs
-    Properties:
-      Runtime: nodejs24.x
-      CodeUri: functions
-      Handler: import-issue-from-github.handler
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action: ssm:GetParameter
-              Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/rsc/*
-            - Effect: Allow
-              Action: dynamodb:GetItem
-              Resource: !GetAtt NewsletterTable.Arn
-            - Effect: Allow
-              Action: states:StartExecution
-              Resource: !Ref StageIssueStateMachine
-            - Effect: Allow
-              Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
-      Environment:
-        Variables:
-          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
-          SECRET_ID: "{{resolve:ssm:/readysetcloud/secrets}}"
-          STATE_MACHINE_ARN: !Ref StageIssueStateMachine
-          IS_PREVIEW: !If [DeployStageResources, true, false]
-      Events:
-        AmplifyBuildSuccessful:
-          Type: EventBridgeRule
-          Properties:
-            Pattern:
-              detail-type:
-                - Create Newsletter Issue
-              detail:
-                source:
-                  - github
-
   ReportStatsRole:
     Type: AWS::IAM::Role
     Properties:

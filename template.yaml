@@ -1242,6 +1242,7 @@ Resources:
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
             - Effect: Allow
               Action:
+                - dynamodb:GetItem
                 - dynamodb:PutItem
                 - dynamodb:DeleteItem
                 - dynamodb:UpdateItem

@@ -1614,6 +1614,39 @@ paths:
         "500":
           $ref: "#/components/responses/UnknownError"
 
+  /issues/review:
+    post:
+      summary: AI editorial review of an issue
+      description: >-
+        Runs a single Bedrock Nova editorial review over the supplied issue
+        content and metadata, returning an overall grade, A/B subject-line
+        suggestions, a title/description (meta) assessment, and grammar and
+        spelling notes. Advisory only — it does not create or modify an issue.
+        Broken-link checking is handled separately by the caller. Consumed by
+        the newsletter publish Action, which renders the response as a PR
+        comment.
+      tags:
+        - Issues
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewIssueRequest"
+      responses:
+        "200":
+          description: Editorial review of the issue
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewIssueResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
   /issues/{id}:
     parameters:
       - name: id
@@ -5054,3 +5087,112 @@ components:
           minimum: 0
           maximum: 23
           description: Hour of day in UTC (0-23)
+
+    ReviewIssueRequest:
+      type: object
+      required:
+        - content
+      properties:
+        content:
+          type: string
+          description: The issue body to review (markdown or plain text)
+        subject:
+          type: string
+          description: The current or draft subject line, used as context
+        title:
+          type: string
+          description: The frontmatter title, assessed against the content
+        description:
+          type: string
+          description: The frontmatter description, assessed against the content
+        issueNumber:
+          type: integer
+          description: Optional issue number, echoed back on the response
+      additionalProperties: false
+
+    ReviewIssueResponse:
+      type: object
+      required:
+        - grade
+        - gradeRationale
+        - summary
+        - subjectSuggestions
+        - metaAssessment
+        - grammar
+        - spelling
+      properties:
+        grade:
+          type: string
+          description: Overall letter grade (A+, A, A-, B+, ..., D, F, or N/A)
+        gradeRationale:
+          type: string
+          description: One or two sentences explaining the grade
+        summary:
+          type: string
+          description: A short overall impression of the issue
+        subjectSuggestions:
+          type: array
+          description: A/B subject-line pairs to test
+          items:
+            type: object
+            required: [a, b, rationale]
+            properties:
+              a:
+                type: string
+                description: Subject line variant A
+              b:
+                type: string
+                description: Subject line variant B
+              rationale:
+                type: string
+                description: The contrast being tested
+        metaAssessment:
+          type: object
+          required: [titleFit, descriptionFit, suggestions]
+          properties:
+            titleFit:
+              type: string
+              description: How well the title previews the content
+            descriptionFit:
+              type: string
+              description: How well the description previews the content
+            suggestions:
+              type: array
+              items:
+                type: string
+              description: Optional suggested rewrites for title/description
+        grammar:
+          type: array
+          description: Grammar and clarity issues (empty when none)
+          items:
+            type: object
+            required: [quote, issue, suggestion]
+            properties:
+              quote:
+                type: string
+                description: The exact phrase with the issue
+              issue:
+                type: string
+                description: What is wrong
+              suggestion:
+                type: string
+                description: The corrected phrasing
+        spelling:
+          type: array
+          description: Misspellings (empty when none)
+          items:
+            type: object
+            required: [word, suggestion, context]
+            properties:
+              word:
+                type: string
+                description: The misspelled word as it appears
+              suggestion:
+                type: string
+                description: The correct spelling
+              context:
+                type: string
+                description: A few surrounding words for context
+        issueNumber:
+          type: integer
+          description: The issue number, echoed from the request when provided

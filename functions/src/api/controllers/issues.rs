@@ -438,6 +438,13 @@ pub async fn create_issue(event: Request) -> Result<Response<Body>, Error> {
     }
 }
 
+pub async fn review_issue(event: Request) -> Result<Response<Body>, Error> {
+    match handle_review_issue(event).await {
+        Ok(response) => Ok(response),
+        Err(e) => Ok(response::format_error_response(&e)),
+    }
+}
+
 pub async fn update_issue(
     event: Request,
     issue_id: Option<String>,
@@ -1437,6 +1444,267 @@ fn extract_json_object(text: &str) -> Option<&str> {
     let start = text.find('{')?;
     let end = text.rfind('}')?;
     (end > start).then(|| &text[start..=end])
+}
+
+// ---------------------------------------------------------------------------
+// AI editorial review (POST /issues/review)
+//
+// A single Bedrock Nova call that grades an issue and returns structured
+// editorial feedback: an overall grade, A/B subject-line ideas, a title /
+// description (meta) assessment, and grammar + spelling notes. Consumed by the
+// newsletter publish Action, which turns the response into a PR comment. Dead
+// links are checked by the Action itself (a plain HTTP check, not the model).
+// ---------------------------------------------------------------------------
+
+// Cap the content sent to the model so a very long issue can't blow the API
+// Lambda's 30s timeout or the model's context. Newsletter issues are a few KB.
+const REVIEW_MAX_CONTENT_CHARS: usize = 24000;
+
+#[derive(Deserialize)]
+pub struct ReviewIssueRequest {
+    #[serde(default)]
+    subject: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    content: String,
+    #[serde(rename = "issueNumber", default)]
+    issue_number: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct SubjectSuggestion {
+    a: String,
+    b: String,
+    rationale: String,
+}
+
+#[derive(Serialize)]
+pub struct MetaAssessment {
+    #[serde(rename = "titleFit")]
+    title_fit: String,
+    #[serde(rename = "descriptionFit")]
+    description_fit: String,
+    suggestions: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct GrammarIssue {
+    quote: String,
+    issue: String,
+    suggestion: String,
+}
+
+#[derive(Serialize)]
+pub struct SpellingIssue {
+    word: String,
+    suggestion: String,
+    context: String,
+}
+
+#[derive(Serialize)]
+pub struct ReviewIssueResponse {
+    grade: String,
+    #[serde(rename = "gradeRationale")]
+    grade_rationale: String,
+    summary: String,
+    #[serde(rename = "subjectSuggestions")]
+    subject_suggestions: Vec<SubjectSuggestion>,
+    #[serde(rename = "metaAssessment")]
+    meta_assessment: MetaAssessment,
+    grammar: Vec<GrammarIssue>,
+    spelling: Vec<SpellingIssue>,
+    #[serde(rename = "issueNumber", skip_serializing_if = "Option::is_none")]
+    issue_number: Option<i64>,
+}
+
+async fn handle_review_issue(event: Request) -> Result<Response<Body>, AppError> {
+    let user_context = auth::get_user_context(&event)?;
+    let tenant_id = user_context
+        .tenant_id
+        .ok_or_else(|| AppError::Unauthorized("Tenant access required".to_string()))?;
+
+    let body: ReviewIssueRequest = serde_json::from_slice(event.body())
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
+
+    if body.content.trim().is_empty() {
+        return Err(AppError::BadRequest(
+            "content is required to review an issue".to_string(),
+        ));
+    }
+
+    let model_id = std::env::var("MODEL_ID")
+        .map_err(|_| AppError::InternalError("MODEL_ID not set".to_string()))?;
+
+    let (system_prompt, user_prompt) = build_review_prompt(&body);
+
+    // No tools => a single model call (bounded cost).
+    let raw = converse(
+        &model_id,
+        &system_prompt,
+        &user_prompt,
+        Vec::new(),
+        ConverseOptions {
+            tenant_id: tenant_id.clone(),
+            user_id: None,
+        },
+    )
+    .await
+    .map_err(|e| AppError::InternalError(format!("Review generation failed: {}", e)))?;
+
+    let mut review = parse_review_response(&raw)?;
+    review.issue_number = body.issue_number;
+
+    response::format_response(200, review)
+}
+
+/// Builds (system, user) prompts instructing Nova to return strict review JSON.
+fn build_review_prompt(body: &ReviewIssueRequest) -> (String, String) {
+    let system = "You are the editorial assistant for a developer newsletter read by professional cloud and software engineers. \
+Review the issue and respond with ONLY a JSON object of exactly this shape, and no text outside the JSON:\n\
+{\n\
+  \"grade\": \"one of A+, A, A-, B+, B, B-, C+, C, C-, D, F\",\n\
+  \"gradeRationale\": \"one or two sentences explaining the grade\",\n\
+  \"summary\": \"a friendly 1-2 sentence overall impression\",\n\
+  \"subjectSuggestions\": [{\"a\": \"subject variant A\", \"b\": \"subject variant B\", \"rationale\": \"the contrast being tested\"}],\n\
+  \"metaAssessment\": {\"titleFit\": \"how well the title previews the content\", \"descriptionFit\": \"how well the description previews the content\", \"suggestions\": [\"optional rewrite\"]},\n\
+  \"grammar\": [{\"quote\": \"exact phrase from the content\", \"issue\": \"what is wrong\", \"suggestion\": \"the fix\"}],\n\
+  \"spelling\": [{\"word\": \"misspelled word\", \"suggestion\": \"correct spelling\", \"context\": \"a few surrounding words\"}]\n\
+}\n\
+Guidance: keep the voice warm, curious, and practical. Provide 2-3 subjectSuggestions pairs, each testing a genuine contrast, under ~60 characters, no clickbait. \
+For metaAssessment, judge whether the title and description accurately preview the actual content and only suggest rewrites if they improve it. \
+For grammar, flag real grammar/clarity problems (not stylistic preferences) and quote the exact phrase. \
+For spelling, ignore proper nouns, product names, code, and technical jargon unless clearly misspelled. \
+Do NOT report broken links; a separate automated checker handles those. \
+Return empty arrays for grammar and spelling when there are no issues.";
+
+    let content: String = body
+        .content
+        .trim()
+        .chars()
+        .take(REVIEW_MAX_CONTENT_CHARS)
+        .collect();
+
+    let mut user = String::new();
+    user.push_str("Frontmatter metadata:\n");
+    user.push_str(&format!(
+        "- subject: {}\n",
+        body.subject.as_deref().unwrap_or("(none)")
+    ));
+    user.push_str(&format!(
+        "- title: {}\n",
+        body.title.as_deref().unwrap_or("(none)")
+    ));
+    user.push_str(&format!(
+        "- description: {}\n",
+        body.description.as_deref().unwrap_or("(none)")
+    ));
+    user.push_str("\nNewsletter content (markdown):\n");
+    user.push_str(&content);
+    user.push_str("\n\nReturn the JSON now.");
+
+    (system.to_string(), user)
+}
+
+/// Parses Nova's JSON response into a typed review, tolerating missing fields.
+fn parse_review_response(raw: &str) -> Result<ReviewIssueResponse, AppError> {
+    let json_text = extract_json_object(raw)
+        .ok_or_else(|| AppError::InternalError("Model did not return JSON".to_string()))?;
+    let value: serde_json::Value = serde_json::from_str(json_text)
+        .map_err(|e| AppError::InternalError(format!("Failed to parse model JSON: {}", e)))?;
+
+    let get_str = |v: &serde_json::Value, key: &str| -> String {
+        v.get(key)
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+
+    let grade = {
+        let g = get_str(&value, "grade");
+        if g.is_empty() {
+            "N/A".to_string()
+        } else {
+            g
+        }
+    };
+
+    let subject_suggestions = value
+        .get("subjectSuggestions")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|item| SubjectSuggestion {
+                    a: get_str(item, "a"),
+                    b: get_str(item, "b"),
+                    rationale: get_str(item, "rationale"),
+                })
+                .filter(|s| !s.a.is_empty() || !s.b.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let meta = value.get("metaAssessment");
+    let meta_assessment = MetaAssessment {
+        title_fit: meta.map(|m| get_str(m, "titleFit")).unwrap_or_default(),
+        description_fit: meta
+            .map(|m| get_str(m, "descriptionFit"))
+            .unwrap_or_default(),
+        suggestions: meta
+            .and_then(|m| m.get("suggestions"))
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|s| s.as_str())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default(),
+    };
+
+    let grammar = value
+        .get("grammar")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|item| GrammarIssue {
+                    quote: get_str(item, "quote"),
+                    issue: get_str(item, "issue"),
+                    suggestion: get_str(item, "suggestion"),
+                })
+                .filter(|g| !g.quote.is_empty() || !g.issue.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let spelling = value
+        .get("spelling")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|item| SpellingIssue {
+                    word: get_str(item, "word"),
+                    suggestion: get_str(item, "suggestion"),
+                    context: get_str(item, "context"),
+                })
+                .filter(|s| !s.word.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(ReviewIssueResponse {
+        grade,
+        grade_rationale: get_str(&value, "gradeRationale"),
+        summary: get_str(&value, "summary"),
+        subject_suggestions,
+        meta_assessment,
+        grammar,
+        spelling,
+        issue_number: None,
+    })
 }
 
 async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError> {
@@ -3868,6 +4136,56 @@ async fn get_variant_stats(tenant_id: &str, issue_id: &str) -> Vec<VariantStats>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── AI editorial review parsing ─────────────────────────────────────
+
+    #[test]
+    fn test_parse_review_response_full() {
+        let raw = r#"Here is the review:
+{
+  "grade": "A-",
+  "gradeRationale": "Clear and engaging.",
+  "summary": "A strong issue.",
+  "subjectSuggestions": [
+    {"a": "Show your work", "b": "Show me the receipts", "rationale": "curiosity vs specificity"}
+  ],
+  "metaAssessment": {"titleFit": "Good fit.", "descriptionFit": "Accurate.", "suggestions": ["Try X", ""]},
+  "grammar": [{"quote": "their are", "issue": "subject-verb", "suggestion": "there are"}],
+  "spelling": [{"word": "teh", "suggestion": "the", "context": "in teh cloud"}]
+}
+Thanks!"#;
+        let review = parse_review_response(raw).unwrap();
+        assert_eq!(review.grade, "A-");
+        assert_eq!(review.summary, "A strong issue.");
+        assert_eq!(review.subject_suggestions.len(), 1);
+        assert_eq!(review.subject_suggestions[0].b, "Show me the receipts");
+        assert_eq!(review.meta_assessment.suggestions, vec!["Try X"]); // empty dropped
+        assert_eq!(review.grammar.len(), 1);
+        assert_eq!(review.spelling[0].suggestion, "the");
+    }
+
+    #[test]
+    fn test_parse_review_response_missing_fields_default() {
+        let raw = r#"{"grade": "B"}"#;
+        let review = parse_review_response(raw).unwrap();
+        assert_eq!(review.grade, "B");
+        assert!(review.subject_suggestions.is_empty());
+        assert!(review.grammar.is_empty());
+        assert!(review.spelling.is_empty());
+        assert_eq!(review.meta_assessment.title_fit, "");
+    }
+
+    #[test]
+    fn test_parse_review_response_empty_grade_becomes_na() {
+        let raw = r#"{"grade": "", "grammar": []}"#;
+        let review = parse_review_response(raw).unwrap();
+        assert_eq!(review.grade, "N/A");
+    }
+
+    #[test]
+    fn test_parse_review_response_non_json_errors() {
+        assert!(parse_review_response("no json here").is_err());
+    }
 
     // ── Local-send config validation ────────────────────────────────────
 

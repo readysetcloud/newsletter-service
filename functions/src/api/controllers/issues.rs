@@ -1675,7 +1675,10 @@ fn parse_review_response(raw: &str) -> Result<ReviewIssueResponse, AppError> {
                     issue: get_str(item, "issue"),
                     suggestion: get_str(item, "suggestion"),
                 })
-                .filter(|g| !g.quote.is_empty() || !g.issue.is_empty())
+                // A grammar entry is only usable with an exact quote (to map the
+                // fix back to the text) and a suggestion (the fix itself); drop
+                // malformed model items that omit either.
+                .filter(|g| !g.quote.is_empty() && !g.suggestion.is_empty())
                 .collect()
         })
         .unwrap_or_default();
@@ -1690,7 +1693,9 @@ fn parse_review_response(raw: &str) -> Result<ReviewIssueResponse, AppError> {
                     suggestion: get_str(item, "suggestion"),
                     context: get_str(item, "context"),
                 })
-                .filter(|s| !s.word.is_empty())
+                // Likewise, a spelling entry needs the misspelled word and its
+                // correction to be actionable.
+                .filter(|s| !s.word.is_empty() && !s.suggestion.is_empty())
                 .collect()
         })
         .unwrap_or_default();
@@ -4180,6 +4185,29 @@ Thanks!"#;
         let raw = r#"{"grade": "", "grammar": []}"#;
         let review = parse_review_response(raw).unwrap();
         assert_eq!(review.grade, "N/A");
+    }
+
+    #[test]
+    fn test_parse_review_response_drops_unusable_grammar_and_spelling() {
+        // Entries missing a quote/word or a suggestion are unusable — the caller
+        // can't map them back to the text or apply a fix — so they're dropped.
+        let raw = r#"{
+  "grade": "B",
+  "grammar": [
+    {"quote": "their are", "issue": "sv", "suggestion": "there are"},
+    {"issue": "awkward phrasing", "suggestion": "reword this"},
+    {"quote": "the the", "issue": "dup word", "suggestion": ""}
+  ],
+  "spelling": [
+    {"word": "teh", "suggestion": "the", "context": "in teh cloud"},
+    {"word": "recieve", "context": "recieve it", "suggestion": ""}
+  ]
+}"#;
+        let review = parse_review_response(raw).unwrap();
+        assert_eq!(review.grammar.len(), 1, "only the fully-formed grammar item survives");
+        assert_eq!(review.grammar[0].quote, "their are");
+        assert_eq!(review.spelling.len(), 1, "only the fully-formed spelling item survives");
+        assert_eq!(review.spelling[0].word, "teh");
     }
 
     #[test]

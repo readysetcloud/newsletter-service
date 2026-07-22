@@ -86,6 +86,7 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
         (&Method::GET, "/ab-test/history") => issues::get_ab_history(event).await,
         (&Method::GET, "/ab-test/active") => issues::get_active_ab_tests(event).await,
         (&Method::POST, "/ab-test/suggestions") => issues::suggest_ab_test(event).await,
+        (&Method::POST, "/issues/review") => issues::review_issue(event).await,
         (&Method::POST, "/issues") => issues::create_issue(event).await,
         (&Method::POST, path)
             if path.starts_with("/issues/") && path.ends_with("/analytics/rebuild") =>

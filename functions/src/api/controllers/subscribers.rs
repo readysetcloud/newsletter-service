@@ -1,4 +1,5 @@
 use aws_sdk_dynamodb::types::AttributeValue;
+use aws_smithy_types::error::display::DisplayErrorContext;
 use lambda_http::{Body, Error, Request, RequestExt, Response};
 use newsletter::admin::{auth, aws_clients, error::AppError, response};
 use percent_encoding::percent_decode_str;
@@ -402,7 +403,14 @@ async fn handle_get_subscriber(
         .key("email", AttributeValue::S(decoded_email))
         .send()
         .await
-        .map_err(|e| AppError::AwsError(format!("DynamoDB GetItem failed: {}", e)))?;
+        // DisplayErrorContext walks the SdkError source chain so the log carries
+        // the real cause (e.g. an AccessDenied/ValidationException from DynamoDB)
+        // rather than the bare "service error" that `{}` on SdkError renders. The
+        // end user still only ever sees the obscured "Something went wrong" that
+        // format_error_response returns for AwsError.
+        .map_err(|e| {
+            AppError::AwsError(format!("DynamoDB GetItem failed: {}", DisplayErrorContext(&e)))
+        })?;
 
     let item = result
         .item()

@@ -74,7 +74,7 @@ export default function IssuePerformanceChart({ trendsData }: IssuePerformanceCh
   const rightMax = Math.max(Math.ceil(Math.max(...lowScaleValues, 1) * 1.3), 5);
 
   return (
-    <div className="bg-surface rounded-lg shadow p-6">
+    <div className="bg-surface rounded-xl border border-border shadow-soft p-6">
       <div className="flex justify-between items-center mb-4">
         <h3 className="text-lg font-medium text-foreground flex items-center gap-2">
           Issue Performance Trends

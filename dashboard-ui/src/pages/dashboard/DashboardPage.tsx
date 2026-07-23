@@ -111,6 +111,22 @@ export function DashboardPage() {
     };
   }, [trendsData]);
 
+  // Per-metric history (oldest first) so the overview tiles can render trend
+  // sparklines from the same window the aggregates cover.
+  const metricSparklines = useMemo(() => {
+    if (!trendsData?.issues || trendsData.issues.length < 2) {
+      return null;
+    }
+
+    const chronological = [...trendsData.issues].sort((a, b) => parseInt(a.id) - parseInt(b.id));
+
+    return {
+      openRate: chronological.map(issue => issue.metrics.openRate),
+      clickToOpenRate: chronological.map(issue => issue.metrics.clickToOpenRate),
+      delivered: chronological.map(issue => issue.metrics.delivered),
+    };
+  }, [trendsData]);
+
   const deliverabilityMetrics = useMemo(() => {
     if (!trendsData?.aggregates) {
       return null;
@@ -309,9 +325,14 @@ export function DashboardPage() {
       <main className="max-w-7xl mx-auto py-2 sm:px-6 lg:px-8">
         <div className="px-4 py-4 sm:px-0">
           {/* Dashboard Controls */}
-          <div className="mb-4 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
+          <div className="relative overflow-hidden rounded-xl border border-border bg-gradient-to-br from-surface via-surface to-primary-50/70 shadow-soft mb-4">
+            <div
+              className="pointer-events-none absolute -top-24 -right-16 w-72 h-72 rounded-full bg-primary-500/10 blur-3xl"
+              aria-hidden="true"
+            />
+            <div className="relative p-4 sm:p-6 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
             <div className="min-w-0">
-              <h2 className="text-xl sm:text-2xl font-bold text-foreground">
+              <h2 className="text-xl sm:text-2xl font-bold font-display text-foreground">
                 {user?.firstName ? `${greeting}, ${user.firstName}` : greeting}!
               </h2>
               <p className="text-muted-foreground mt-1 text-sm sm:text-base truncate">
@@ -342,6 +363,7 @@ export function DashboardPage() {
                 <span className="hidden sm:inline">{refreshing ? 'Refreshing...' : 'Refresh'}</span>
                 <span className="sm:hidden">{refreshing ? '...' : 'Refresh'}</span>
               </button>
+            </div>
             </div>
           </div>
           {error ? (
@@ -388,6 +410,7 @@ export function DashboardPage() {
                   icon={TrendingUp}
                   trendComparison={trendComparisons?.openRate}
                   healthStatus={healthStatuses?.openRate}
+                  sparkline={metricSparklines?.openRate}
                 />
                 <MetricsCard
                   title="Avg Click-to-Open Rate"
@@ -396,6 +419,7 @@ export function DashboardPage() {
                   icon={MousePointer}
                   trendComparison={trendComparisons?.clickToOpenRate}
                   healthStatus={healthStatuses?.clickToOpenRate}
+                  sparkline={metricSparklines?.clickToOpenRate}
                 />
                 <MetricsCard
                   title="Total Delivered"
@@ -403,6 +427,7 @@ export function DashboardPage() {
                   format="number"
                   icon={Mail}
                   trendComparison={trendComparisons?.delivered}
+                  sparkline={metricSparklines?.delivered}
                 />
               </div>
 
@@ -410,7 +435,7 @@ export function DashboardPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
                 {/* Consolidated Sending Health Widget */}
                 {deliverabilityMetrics && (
-                  <Suspense fallback={<div className="bg-surface rounded-lg shadow p-4 animate-pulse h-32" />}>
+                  <Suspense fallback={<div className="bg-surface rounded-xl border border-border shadow-soft p-4 animate-pulse h-32" />}>
                     <SendingHealthWidget
                       totalComplaints={deliverabilityMetrics.totalComplaints}
                       complaintRate={deliverabilityMetrics.complaintRate}
@@ -421,7 +446,7 @@ export function DashboardPage() {
                 )}
 
                 {/* Actionable Insights */}
-                <Suspense fallback={<div className="bg-surface rounded-lg shadow p-4 animate-pulse h-32" />}>
+                <Suspense fallback={<div className="bg-surface rounded-xl border border-border shadow-soft p-4 animate-pulse h-32" />}>
                   <ActionableInsights trendsData={trendsData} />
                 </Suspense>
               </div>
@@ -435,7 +460,7 @@ export function DashboardPage() {
 
                   {/* Latest Issue Performance (moved up) */}
                   {trendsData.issues.length > 0 && (
-                    <div className="bg-surface rounded-lg shadow p-3 sm:p-4">
+                    <div className="bg-surface rounded-xl border border-border shadow-soft p-3 sm:p-4">
                       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-3 gap-1">
                         <h3 className="text-sm sm:text-base font-medium text-foreground flex items-center gap-2">
                           Latest Issue Performance
@@ -449,29 +474,29 @@ export function DashboardPage() {
                       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-3">
                         <div>
                           <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Opens</div>
-                          <div className="text-lg sm:text-xl font-semibold text-foreground">{formatNumber(trendsData.issues[0].metrics.opens)}</div>
+                          <div className="text-lg sm:text-xl font-bold font-display text-foreground tabular-nums">{formatNumber(trendsData.issues[0].metrics.opens)}</div>
                           <div className="text-xs text-muted-foreground">{formatPercentage(trendsData.issues[0].metrics.openRate)}</div>
                         </div>
                         <div>
                           <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Clicks</div>
-                          <div className="text-lg sm:text-xl font-semibold text-foreground">{formatNumber(trendsData.issues[0].metrics.clicks)}</div>
+                          <div className="text-lg sm:text-xl font-bold font-display text-foreground tabular-nums">{formatNumber(trendsData.issues[0].metrics.clicks)}</div>
                           <div className="text-xs text-muted-foreground">
                             CTR {formatPercentage(trendsData.issues[0].metrics.clickRate)} · CTOR {formatPercentage(trendsData.issues[0].metrics.clickToOpenRate)}
                           </div>
                         </div>
                         <div>
                           <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Bounces</div>
-                          <div className="text-lg sm:text-xl font-semibold text-foreground">{formatNumber(trendsData.issues[0].metrics.bounces)}</div>
+                          <div className="text-lg sm:text-xl font-bold font-display text-foreground tabular-nums">{formatNumber(trendsData.issues[0].metrics.bounces)}</div>
                           <div className="text-xs text-muted-foreground">{formatPercentage(trendsData.issues[0].metrics.bounceRate)}</div>
                         </div>
                         <div>
                           <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Delivered</div>
-                          <div className="text-lg sm:text-xl font-semibold text-foreground">{formatNumber(trendsData.issues[0].metrics.delivered)}</div>
+                          <div className="text-lg sm:text-xl font-bold font-display text-foreground tabular-nums">{formatNumber(trendsData.issues[0].metrics.delivered)}</div>
                           <div className="text-xs text-muted-foreground">Total sent</div>
                         </div>
                         <div>
                           <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Subscribers</div>
-                          <div className="text-lg sm:text-xl font-semibold text-foreground">{formatNumber(trendsData.issues[0].metrics.subscribers)}</div>
+                          <div className="text-lg sm:text-xl font-bold font-display text-foreground tabular-nums">{formatNumber(trendsData.issues[0].metrics.subscribers)}</div>
                           <div className="text-xs text-muted-foreground">List size</div>
                         </div>
                       </div>
@@ -488,11 +513,11 @@ export function DashboardPage() {
                   )}
 
                   {trendsData.issues.length > 0 ? (
-                    <Suspense fallback={<div className="bg-surface rounded-lg shadow p-6 animate-pulse h-64" />}>
+                    <Suspense fallback={<div className="bg-surface rounded-xl border border-border shadow-soft p-6 animate-pulse h-64" />}>
                       <IssuePerformanceChart trendsData={trendsData} />
                     </Suspense>
                   ) : (
-                    <div className="bg-surface rounded-lg shadow p-6">
+                    <div className="bg-surface rounded-xl border border-border shadow-soft p-6">
                       <h3 className="text-lg font-medium text-foreground mb-4">Newsletter Issue Performance</h3>
                       <div className="text-center py-12">
                         <BarChart3 className="mx-auto h-12 w-12 text-muted-foreground" />
@@ -515,7 +540,7 @@ export function DashboardPage() {
 
                   {/* Recent Issues */}
                   {trendsData.issues.length > 0 && (
-                    <div className="bg-surface rounded-lg shadow overflow-hidden">
+                    <div className="bg-surface rounded-xl border border-border shadow-soft overflow-hidden">
                       <div className="px-3 sm:px-4 py-3 border-b border-border flex items-center justify-between">
                         <h3 className="text-sm sm:text-base font-medium text-foreground flex items-center gap-2">
                           Recent Issues
@@ -604,7 +629,7 @@ export function DashboardPage() {
                   </div>
                   {/* Subscriber Growth */}
                   {trendsData.issues.length > 0 && (
-                    <div className="bg-surface rounded-lg shadow p-3 sm:p-4">
+                    <div className="bg-surface rounded-xl border border-border shadow-soft p-3 sm:p-4">
                       <div className="mb-3">
                         <h3 className="text-sm sm:text-base font-medium text-foreground flex items-center gap-2">
                           Subscriber Growth
@@ -621,12 +646,12 @@ export function DashboardPage() {
 
                   {/* Top Regions */}
                   {trendsData.issues.length > 0 && (
-                    <Suspense fallback={<div className="bg-surface rounded-lg shadow p-4 animate-pulse h-32" />}>
+                    <Suspense fallback={<div className="bg-surface rounded-xl border border-border shadow-soft p-4 animate-pulse h-32" />}>
                       <TopRegionsWidget latestIssueId={trendsData.issues[0].id} />
                     </Suspense>
                   )}
 
-                  <div className="bg-surface rounded-lg shadow p-3 sm:p-4">
+                  <div className="bg-surface rounded-xl border border-border shadow-soft p-3 sm:p-4">
                     <div className="flex items-center justify-between mb-3">
                       <h3 className="text-sm sm:text-base font-medium text-foreground flex items-center gap-2">
                         {rightPanelTab === 'quality'
@@ -649,13 +674,18 @@ export function DashboardPage() {
                         <option value="engagement">Engagement</option>
                         <option value="traffic">Traffic</option>
                       </select>
-                      <div className="hidden sm:inline-flex rounded-lg border border-border overflow-hidden">
+                      <div
+                        className="hidden sm:inline-flex rounded-lg border border-border bg-muted/30 p-0.5"
+                        role="group"
+                        aria-label="Insights panel view"
+                      >
                         <button
                           onClick={() => setRightPanelTab('quality')}
-                          className={`px-3 py-1.5 text-xs sm:text-sm font-medium ${
+                          aria-pressed={rightPanelTab === 'quality'}
+                          className={`px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition-colors ${
                             rightPanelTab === 'quality'
-                              ? 'bg-primary-600 text-white'
-                              : 'bg-surface text-muted-foreground hover:text-foreground'
+                              ? 'bg-background text-foreground shadow-sm'
+                              : 'text-muted-foreground hover:text-foreground'
                           }`}
                           aria-label="Show quality signals"
                         >
@@ -663,10 +693,11 @@ export function DashboardPage() {
                         </button>
                         <button
                           onClick={() => setRightPanelTab('engagement')}
-                          className={`px-3 py-1.5 text-xs sm:text-sm font-medium ${
+                          aria-pressed={rightPanelTab === 'engagement'}
+                          className={`px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition-colors ${
                             rightPanelTab === 'engagement'
-                              ? 'bg-primary-600 text-white'
-                              : 'bg-surface text-muted-foreground hover:text-foreground'
+                              ? 'bg-background text-foreground shadow-sm'
+                              : 'text-muted-foreground hover:text-foreground'
                           }`}
                           aria-label="Show engagement trends"
                         >
@@ -674,10 +705,11 @@ export function DashboardPage() {
                         </button>
                         <button
                           onClick={() => setRightPanelTab('traffic')}
-                          className={`px-3 py-1.5 text-xs sm:text-sm font-medium ${
+                          aria-pressed={rightPanelTab === 'traffic'}
+                          className={`px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition-colors ${
                             rightPanelTab === 'traffic'
-                              ? 'bg-primary-600 text-white'
-                              : 'bg-surface text-muted-foreground hover:text-foreground'
+                              ? 'bg-background text-foreground shadow-sm'
+                              : 'text-muted-foreground hover:text-foreground'
                           }`}
                           aria-label="Show traffic source trends"
                         >
@@ -710,7 +742,7 @@ export function DashboardPage() {
                 </div>
                 {/* In-progress tests (running now) surface above the completed history. */}
                 {(activeAbLoading || activeAbError || activeAbTests.length > 0) && (
-                  <Suspense fallback={<div className="bg-surface rounded-lg shadow p-6 animate-pulse h-32" />}>
+                  <Suspense fallback={<div className="bg-surface rounded-xl border border-border shadow-soft p-6 animate-pulse h-32" />}>
                     <AbTestInProgress
                       tests={activeAbTests}
                       loading={activeAbLoading}
@@ -719,7 +751,7 @@ export function DashboardPage() {
                     />
                   </Suspense>
                 )}
-                <Suspense fallback={<div className="bg-surface rounded-lg shadow p-6 animate-pulse h-48" />}>
+                <Suspense fallback={<div className="bg-surface rounded-xl border border-border shadow-soft p-6 animate-pulse h-48" />}>
                   <AbTestHistory
                     data={abHistory}
                     loading={abHistoryLoading}

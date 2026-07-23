@@ -46,7 +46,10 @@ export { InsightsHeroSection } from './InsightsHeroSection';
 export type { InsightsHeroSectionProps } from './InsightsHeroSection';
 
 export { KeyMetricsSummary } from './KeyMetricsSummary';
-export type { KeyMetricsSummaryProps } from './KeyMetricsSummary';
+export type { KeyMetricsSummaryProps, ComparisonMode, MetricSparklines } from './KeyMetricsSummary';
+
+export { EngagementFunnel } from './EngagementFunnel';
+export type { EngagementFunnelProps } from './EngagementFunnel';
 
 export { CollapsibleSection } from './CollapsibleSection';
 export type { CollapsibleSectionProps } from './CollapsibleSection';

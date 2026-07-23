@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Pencil, Trash, RefreshCw, AlertCircle, TrendingUp, Users, Shield, FileText, CheckCircle, Flame } from 'lucide-react';
+import { ArrowLeft, Pencil, Trash, RefreshCw, AlertCircle, TrendingUp, Users, Shield, FileText, CheckCircle, Flame, Hash, CalendarDays, Clock, Send } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { useToast } from '../../components/ui/Toast';
@@ -18,7 +18,6 @@ import {
   GeoMapSkeleton,
   LinkPerformanceSkeleton,
   DecayChartSkeleton,
-  ComparisonCardSkeleton,
   ChartSkeleton
 } from '../../components/ui/SkeletonLoader';
 import { MaxMindAttribution } from '../../components/analytics';
@@ -29,6 +28,7 @@ import { CollapsibleSection } from '../../components/issues/CollapsibleSection';
 import { DeliverabilityHealthCard } from '../../components/issues/DeliverabilityHealthCard';
 import { AsyncErrorBoundary } from '../../components/error/AsyncErrorBoundary';
 import { FadeIn } from '../../components/ui/FadeIn';
+import type { ComparisonMode, MetricSparklines } from '../../components/issues/KeyMetricsSummary';
 import { issuesService } from '../../services/issuesService';
 import { dashboardService } from '../../services/dashboardService';
 import { calculateComplaintRate } from '../../utils/analyticsCalculations';
@@ -54,9 +54,8 @@ const AudienceInsightsPanel = lazy(() => import('../../components/issues/Audienc
 const ComplaintDetailsTable = lazy(() => import('../../components/issues/ComplaintDetailsTable').then(m => ({ default: m.ComplaintDetailsTable })));
 const BounceReasonsChart = lazy(() => import('../../components/issues/BounceReasonsChart').then(m => ({ default: m.BounceReasonsChart })));
 const EngagementTypeIndicator = lazy(() => import('../../components/issues/EngagementTypeIndicator').then(m => ({ default: m.EngagementTypeIndicator })));
-const IssueComparisonCard = lazy(() => import('../../components/issues/IssueComparisonCard').then(m => ({ default: m.IssueComparisonCard })));
 const TrafficSourceChart = lazy(() => import('../../components/issues/TrafficSourceChart').then(m => ({ default: m.TrafficSourceChart })));
-const DeliveryBreakdownChart = lazy(() => import('../../components/issues/DeliveryBreakdownChart').then(m => ({ default: m.DeliveryBreakdownChart })));
+const EngagementFunnel = lazy(() => import('../../components/issues/EngagementFunnel').then(m => ({ default: m.EngagementFunnel })));
 const TimingMetricsChart = lazy(() => import('../../components/issues/TimingMetricsChart').then(m => ({ default: m.TimingMetricsChart })));
 const GeoMap = lazy(() => import('../../components/analytics/GeoMap').then(m => ({ default: m.GeoMap })));
 const LinkSelector = lazy(() => import('../../components/analytics/LinkSelector').then(m => ({ default: m.LinkSelector })));
@@ -124,7 +123,7 @@ export const IssueDetailPage: React.FC = () => {
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
   const [stickyNavVisible, setStickyNavVisible] = useState(false);
   const [activeSection, setActiveSection] = useState<string | null>(null);
-  const [comparisonMode, setComparisonMode] = useState<'average' | 'last' | 'best'>('average');
+  const [comparisonMode, setComparisonMode] = useState<ComparisonMode>('average');
   const [userPreferences] = useState<UserPreferences['issueDetail']>(() => loadPreferences());
 
   // Ref for skip link target
@@ -364,6 +363,12 @@ export const IssueDetailPage: React.FC = () => {
     };
   }, [issue, analytics]);
 
+  // Handler for the comparison-baseline toggle in the key metrics band
+  const handleComparisonModeChange = useCallback((mode: ComparisonMode) => {
+    setComparisonMode(mode);
+    updatePreference('defaultComparison', mode);
+  }, []);
+
   // Handler for section toggle
   const handleSectionToggle = useCallback((sectionId: string) => {
     setExpandedSections(prev => {
@@ -526,27 +531,6 @@ export const IssueDetailPage: React.FC = () => {
     return calculateComplaintRate(issue.stats.complaints, issue.stats.deliveries);
   }, [issue?.stats]);
 
-  const currentMetrics = useMemo<IssueMetrics | null>(() => {
-    if (!issue?.stats) return null;
-
-    return {
-      openRate: issue.stats.deliveries > 0 ? (issue.stats.opens / issue.stats.deliveries) * 100 : 0,
-      clickRate: issue.stats.deliveries > 0 ? (issue.stats.clicks / issue.stats.deliveries) * 100 : 0,
-      clickToOpenRate: issue.stats.opens > 0 ? (issue.stats.clicks / issue.stats.opens) * 100 : 0,
-      bounceRate: issue.stats.deliveries > 0 ? (issue.stats.bounces / issue.stats.deliveries) * 100 : 0,
-      delivered: issue.stats.deliveries,
-      opens: issue.stats.opens,
-      clicks: issue.stats.clicks,
-      bounces: issue.stats.bounces,
-      complaints: issue.stats.complaints,
-      subscribers: issue.stats.subscribers,
-      subscribes: issue.stats.subscribes ?? 0,
-      unsubscribes: issue.stats.unsubscribes ?? 0,
-      cleaned: issue.stats.cleaned ?? 0,
-      manualRemovals: issue.stats.manualRemovals ?? 0,
-    };
-  }, [issue]);
-
   const averageMetrics = useMemo<IssueMetrics | null>(() => {
     if (!trendsData?.aggregates) return null;
     const issueCount = trendsData.issues.length || 1;
@@ -609,6 +593,37 @@ export const IssueDetailPage: React.FC = () => {
       unsubscribeRate: issue.stats.deliveries > 0 ? ((issue.stats.unsubscribes ?? 0) / issue.stats.deliveries) * 100 : 0,
     };
   }, [issue?.stats, complaintRate]);
+
+  // Per-metric history across recent issues (oldest first, this issue last)
+  // so each metric tile can render a trend sparkline.
+  const metricSparklines = useMemo<MetricSparklines | undefined>(() => {
+    if (!keyMetrics || !trendsData?.issues || trendsData.issues.length === 0) return undefined;
+
+    const history = [...trendsData.issues]
+      .filter(item => item.id !== id)
+      .sort((a, b) => parseInt(a.id) - parseInt(b.id))
+      .slice(-11);
+
+    if (history.length === 0) return undefined;
+
+    const series = (extract: (metrics: IssueMetrics) => number, current: number) =>
+      [...history.map(item => extract(item.metrics)), current];
+
+    return {
+      openRate: series(m => m.openRate, keyMetrics.openRate),
+      clickRate: series(m => m.clickRate, keyMetrics.clickRate),
+      clickToOpenRate: series(m => m.clickToOpenRate, keyMetrics.clickToOpenRate),
+      bounceRate: series(m => m.bounceRate, keyMetrics.bounceRate),
+      complaintRate: series(
+        m => (m.delivered > 0 ? (m.complaints / m.delivered) * 100 : 0),
+        keyMetrics.complaintRate
+      ),
+      unsubscribeRate: series(
+        m => (m.delivered > 0 ? ((m.unsubscribes ?? 0) / m.delivered) * 100 : 0),
+        keyMetrics.unsubscribeRate
+      ),
+    };
+  }, [keyMetrics, trendsData, id]);
 
   const bestIssueMetrics = useMemo<IssueMetrics | null>(() => {
     if (!trendsData?.issues || trendsData.issues.length === 0) return null;
@@ -728,29 +743,44 @@ export const IssueDetailPage: React.FC = () => {
         </div>
 
         {/* Issue Header */}
-        <Card className="mb-4 sm:mb-6 shadow-sm hover:shadow-md transition-shadow">
-          <CardContent className="py-4 sm:py-6">
+        <div className="relative overflow-hidden rounded-xl border border-border bg-gradient-to-br from-surface via-surface to-primary-50/70 shadow-soft mb-4 sm:mb-6">
+          <div
+            className="pointer-events-none absolute -top-24 -right-16 w-72 h-72 rounded-full bg-primary-500/10 blur-3xl"
+            aria-hidden="true"
+          />
+          <div className="relative p-4 sm:p-6">
             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-3 mb-2 flex-wrap">
-                  <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-foreground break-words">{issue.subject}</h1>
+                <div className="flex items-center gap-3 mb-3 flex-wrap">
+                  <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold font-display text-foreground break-words">{issue.subject}</h1>
                   <IssueStatusBadge status={issue.status} />
                 </div>
-                <div className="flex flex-wrap gap-2 sm:gap-4 text-xs sm:text-sm text-muted-foreground">
-                  <span className="font-medium">Issue #{issue.issueNumber}</span>
-                  <span className="hidden sm:inline">•</span>
-                  <span>Created {formatDate(issue.createdAt)}</span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface/80 px-2.5 py-1 text-xs font-medium text-muted-foreground">
+                    <Hash className="w-3.5 h-3.5" aria-hidden="true" />
+                    Issue #{issue.issueNumber}
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface/80 px-2.5 py-1 text-xs font-medium text-muted-foreground">
+                    <CalendarDays className="w-3.5 h-3.5" aria-hidden="true" />
+                    Created {formatDate(issue.createdAt)}
+                  </span>
                   {issue.publishedAt && (
-                    <>
-                      <span className="hidden sm:inline">•</span>
-                      <span className="text-success-600 dark:text-success-400 font-medium">Sent {formatDate(issue.publishedAt)}</span>
-                    </>
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-success-200 bg-success-50 px-2.5 py-1 text-xs font-medium text-success-700">
+                      <Send className="w-3.5 h-3.5" aria-hidden="true" />
+                      Sent {formatDate(issue.publishedAt)}
+                    </span>
                   )}
                   {issue.scheduledAt && !issue.publishedAt && (
-                    <>
-                      <span className="hidden sm:inline">•</span>
-                      <span className="text-blue-600 dark:text-blue-400 font-medium">Scheduled for {formatDate(issue.scheduledAt)}</span>
-                    </>
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-primary-200 bg-primary-50 px-2.5 py-1 text-xs font-medium text-primary-700">
+                      <Clock className="w-3.5 h-3.5" aria-hidden="true" />
+                      Scheduled for {formatDate(issue.scheduledAt)}
+                    </span>
+                  )}
+                  {isPublished && issue.stats && issue.stats.subscribers > 0 && (
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface/80 px-2.5 py-1 text-xs font-medium text-muted-foreground">
+                      <Users className="w-3.5 h-3.5" aria-hidden="true" />
+                      {issue.stats.subscribers.toLocaleString('en-US')} recipients
+                    </span>
                   )}
                 </div>
               </div>
@@ -811,8 +841,8 @@ export const IssueDetailPage: React.FC = () => {
                 )}
               </div>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
 
         {/* InsightsHeroSection - Show at top if insights exist */}
         {isPublished && issue.insightsV2 && issue.insightsV2.length > 0 && (
@@ -831,15 +861,17 @@ export const IssueDetailPage: React.FC = () => {
           </div>
         )}
 
-        {/* DeliveryBreakdownChart - Visual delivery overview (delivered vs bounced of total sent) */}
+        {/* EngagementFunnel - How the audience moved from sent through delivered, opened, and clicked */}
         {isPublished && issue.stats && (issue.stats.deliveries + issue.stats.bounces) > 0 && (
           <div className="mb-4 sm:mb-6">
             <Suspense fallback={<ChartSkeleton />}>
               <FadeIn variant="slideUp" speed="normal" delay={50}>
                 <AsyncErrorBoundary onRetry={loadIssue}>
-                  <DeliveryBreakdownChart
+                  <EngagementFunnel
                     delivered={issue.stats.deliveries}
                     bounced={issue.stats.bounces}
+                    opens={issue.stats.opens}
+                    clicks={issue.stats.clicks}
                   />
                 </AsyncErrorBoundary>
               </FadeIn>
@@ -857,6 +889,8 @@ export const IssueDetailPage: React.FC = () => {
                     metrics={keyMetrics}
                     comparisons={comparisons}
                     highlightMode={comparisonMode}
+                    sparklines={metricSparklines}
+                    onHighlightModeChange={handleComparisonModeChange}
                   />
                 </AsyncErrorBoundary>
               </FadeIn>
@@ -875,24 +909,6 @@ export const IssueDetailPage: React.FC = () => {
               className="mb-4 sm:mb-6"
             />
           </Suspense>
-        )}
-
-        {/* PerformanceComparisonSection */}
-        {isPublished && currentMetrics && (
-          <div className="mb-4 sm:mb-6">
-            <Suspense fallback={<ComparisonCardSkeleton />}>
-              <FadeIn variant="fade" speed="normal">
-                <AsyncErrorBoundary onRetry={loadIssue}>
-                  <IssueComparisonCard
-                    current={currentMetrics}
-                    average={averageMetrics || undefined}
-                    lastIssue={lastIssueMetrics || undefined}
-                    bestIssue={bestIssueMetrics || undefined}
-                  />
-                </AsyncErrorBoundary>
-              </FadeIn>
-            </Suspense>
-          </div>
         )}
 
         {/* Subscriber Metrics Panel - Show for published issues only */}

@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { KeyMetricsSummary } from '../KeyMetricsSummary';
 import type { IssueMetrics } from '@/types/issues';
 
@@ -151,6 +152,107 @@ describe('KeyMetricsSummary', () => {
       render(<KeyMetricsSummary metrics={highComplaintMetrics} />);
 
       expect(screen.getByText('0.15%')).toBeInTheDocument();
+    });
+  });
+
+  describe('Status badges', () => {
+    it('should flag metrics above critical thresholds', () => {
+      const riskyMetrics = {
+        ...mockMetrics,
+        bounceRate: 12.0,
+        complaintRate: 0.15,
+      };
+
+      render(<KeyMetricsSummary metrics={riskyMetrics} />);
+
+      expect(screen.getAllByText('Critical')).toHaveLength(2);
+    });
+
+    it('should flag metrics in the warning band as high', () => {
+      const warningMetrics = {
+        ...mockMetrics,
+        bounceRate: 6.0,
+        unsubscribeRate: 0.7,
+      };
+
+      render(<KeyMetricsSummary metrics={warningMetrics} />);
+
+      expect(screen.getAllByText('High')).toHaveLength(2);
+    });
+
+    it('should not show status badges for healthy metrics', () => {
+      render(<KeyMetricsSummary metrics={mockMetrics} />);
+
+      expect(screen.queryByText('Critical')).not.toBeInTheDocument();
+      expect(screen.queryByText('High')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('Comparison baseline toggle', () => {
+    const multiComparisons = {
+      ...mockComparisons,
+      lastIssue: { ...mockComparisons.average, openRate: 42.0 },
+      bestIssue: { ...mockComparisons.average, openRate: 50.0 },
+    };
+
+    it('should render the toggle when a change handler and multiple baselines exist', () => {
+      render(
+        <KeyMetricsSummary
+          metrics={mockMetrics}
+          comparisons={multiComparisons}
+          onHighlightModeChange={vi.fn()}
+        />
+      );
+
+      const group = screen.getByRole('group', { name: 'Comparison baseline' });
+      expect(group).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Average' })).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByRole('button', { name: 'Last issue' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Best issue' })).toBeInTheDocument();
+    });
+
+    it('should call the handler with the selected mode', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+
+      render(
+        <KeyMetricsSummary
+          metrics={mockMetrics}
+          comparisons={multiComparisons}
+          onHighlightModeChange={onChange}
+        />
+      );
+
+      await user.click(screen.getByRole('button', { name: 'Best issue' }));
+
+      expect(onChange).toHaveBeenCalledWith('best');
+    });
+
+    it('should not render the toggle without a change handler', () => {
+      render(<KeyMetricsSummary metrics={mockMetrics} comparisons={multiComparisons} />);
+
+      expect(screen.queryByRole('group', { name: 'Comparison baseline' })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('Sparklines', () => {
+    it('should render a sparkline when history is provided', () => {
+      const { container } = render(
+        <KeyMetricsSummary
+          metrics={mockMetrics}
+          sparklines={{ openRate: [38.2, 41.0, 39.5, 45.5] }}
+        />
+      );
+
+      expect(container.querySelectorAll('svg polyline').length).toBe(1);
+    });
+
+    it('should not render sparklines for single-point history', () => {
+      const { container } = render(
+        <KeyMetricsSummary metrics={mockMetrics} sparklines={{ openRate: [45.5] }} />
+      );
+
+      expect(container.querySelectorAll('svg polyline').length).toBe(0);
     });
   });
 });

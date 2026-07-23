@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { dashboardService } from '@/services/dashboardService';
 import { profileService } from '@/services/profileService';
 import { issuesService } from '@/services/issuesService';
+import { PageHero, PageHeroTitle, PageHeroSubtitle, SegmentedControl } from '@readysetcloud/ui';
 import { DashboardSkeleton } from '@/components/ui/SkeletonLoader';
 import { InfoTooltip } from '@/components/ui/InfoTooltip';
 import MetricsCard from '@/components/MetricsCard';
@@ -325,19 +326,15 @@ export function DashboardPage() {
       <main className="max-w-7xl mx-auto py-2 sm:px-6 lg:px-8">
         <div className="px-4 py-4 sm:px-0">
           {/* Dashboard Controls */}
-          <div className="relative overflow-hidden rounded-xl border border-border bg-gradient-to-br from-surface via-surface to-primary-50/70 shadow-soft mb-4">
-            <div
-              className="pointer-events-none absolute -top-24 -right-16 w-72 h-72 rounded-full bg-primary-500/10 blur-3xl"
-              aria-hidden="true"
-            />
-            <div className="relative p-4 sm:p-6 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
+          <PageHero className="mb-4">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
             <div className="min-w-0">
-              <h2 className="text-xl sm:text-2xl font-bold font-display text-foreground">
+              <PageHeroTitle className="text-xl sm:text-2xl">
                 {user?.firstName ? `${greeting}, ${user.firstName}` : greeting}!
-              </h2>
-              <p className="text-muted-foreground mt-1 text-sm sm:text-base truncate">
+              </PageHeroTitle>
+              <PageHeroSubtitle className="truncate">
                 {profile?.brand?.brandName ? `${profile.brand.brandName} Analytics` : 'Newsletter Analytics'}
-              </p>
+              </PageHeroSubtitle>
             </div>
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4">
               {/* Issue Count Selector */}
@@ -365,7 +362,7 @@ export function DashboardPage() {
               </button>
             </div>
             </div>
-          </div>
+          </PageHero>
           {error ? (
             <div className="bg-error-50 border border-error-200 rounded-md p-4 mb-6" role="alert" aria-live="assertive">
               <div className="flex">
@@ -674,48 +671,17 @@ export function DashboardPage() {
                         <option value="engagement">Engagement</option>
                         <option value="traffic">Traffic</option>
                       </select>
-                      <div
-                        className="hidden sm:inline-flex rounded-lg border border-border bg-muted/30 p-0.5"
-                        role="group"
+                      <SegmentedControl
+                        className="hidden sm:inline-flex"
+                        options={[
+                          { value: 'quality', label: 'Quality' },
+                          { value: 'engagement', label: 'Engagement' },
+                          { value: 'traffic', label: 'Traffic' },
+                        ]}
+                        value={rightPanelTab}
+                        onChange={setRightPanelTab}
                         aria-label="Insights panel view"
-                      >
-                        <button
-                          onClick={() => setRightPanelTab('quality')}
-                          aria-pressed={rightPanelTab === 'quality'}
-                          className={`px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition-colors ${
-                            rightPanelTab === 'quality'
-                              ? 'bg-background text-foreground shadow-sm'
-                              : 'text-muted-foreground hover:text-foreground'
-                          }`}
-                          aria-label="Show quality signals"
-                        >
-                          Quality
-                        </button>
-                        <button
-                          onClick={() => setRightPanelTab('engagement')}
-                          aria-pressed={rightPanelTab === 'engagement'}
-                          className={`px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition-colors ${
-                            rightPanelTab === 'engagement'
-                              ? 'bg-background text-foreground shadow-sm'
-                              : 'text-muted-foreground hover:text-foreground'
-                          }`}
-                          aria-label="Show engagement trends"
-                        >
-                          Engagement
-                        </button>
-                        <button
-                          onClick={() => setRightPanelTab('traffic')}
-                          aria-pressed={rightPanelTab === 'traffic'}
-                          className={`px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition-colors ${
-                            rightPanelTab === 'traffic'
-                              ? 'bg-background text-foreground shadow-sm'
-                              : 'text-muted-foreground hover:text-foreground'
-                          }`}
-                          aria-label="Show traffic source trends"
-                        >
-                          Traffic
-                        </button>
-                      </div>
+                      />
                     </div>
 
                     {rightPanelTab === 'quality' ? (

@@ -1,8 +1,6 @@
 import React, { useMemo } from 'react';
-import { TrendingUp, TrendingDown, Minus, AlertTriangle } from 'lucide-react';
+import { StatTile, SegmentedControl } from '@readysetcloud/ui';
 import { InfoTooltip } from '../ui/InfoTooltip';
-import { TrendSparkline } from '../ui/TrendSparkline';
-import { cn } from '../../utils/cn';
 import { calculateComparison, formatPercentageValue, formatNumber } from '../../utils/issueDetailUtils';
 import type { IssueMetrics } from '../../types/issues';
 
@@ -60,6 +58,8 @@ interface MetricCardProps {
   comparisonLabel?: string;
   sparkline?: number[];
   status?: MetricStatus;
+  /** Set when a falling metric is good (bounce rate, complaints, unsubscribes). */
+  invertDelta?: boolean;
 }
 
 const MetricCard: React.FC<MetricCardProps> = React.memo(({
@@ -72,75 +72,33 @@ const MetricCard: React.FC<MetricCardProps> = React.memo(({
   comparisonLabel,
   sparkline,
   status,
-}) => {
-  const TrendIcon = comparison?.direction === 'up' ? TrendingUp : TrendingDown;
-
-  return (
-    <div className="flex flex-col bg-surface rounded-xl p-3 sm:p-4 border border-border shadow-soft hover:shadow-md hover:border-primary-200 hover:-translate-y-0.5 transition-all min-h-[110px]">
-      <div className="flex items-start justify-between gap-1 mb-2">
-        <div className="text-[11px] sm:text-xs uppercase tracking-wide text-muted-foreground font-semibold">
-          {label}
-        </div>
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          {status && (
-            <span
-              className={cn(
-                'inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
-                status.level === 'critical'
-                  ? 'bg-error-100 text-error-700'
-                  : 'bg-warning-100 text-warning-700'
-              )}
-              role="status"
-            >
-              <AlertTriangle className="w-3 h-3" aria-hidden="true" />
-              {status.label}
-            </span>
-          )}
-          <InfoTooltip label={tooltipLabel} description={tooltipDescription} />
-        </div>
-      </div>
-
-      <div className="flex items-center gap-2 flex-wrap mb-0.5">
-        <div className="text-xl sm:text-2xl lg:text-3xl font-bold font-display text-foreground tabular-nums leading-none">
-          {value}
-        </div>
-        {comparison && comparison.direction !== 'neutral' && (
-          <span
-            className={cn(
-              'inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-xs font-semibold tabular-nums',
-              comparison.isPositive
-                ? 'bg-success-100 text-success-700'
-                : 'bg-error-100 text-error-700'
-            )}
-          >
-            <TrendIcon className="w-3 h-3" aria-hidden="true" />
-            {comparison.difference > 0 ? '+' : ''}
-            {formatPercentageValue(comparison.difference, 1)}
-          </span>
-        )}
-      </div>
-
-      <div className="flex items-center gap-1.5 flex-wrap text-xs text-muted-foreground">
+  invertDelta,
+}) => (
+  <StatTile
+    label={
+      <span className="inline-flex items-center gap-1.5">
+        {label}
+        <InfoTooltip label={tooltipLabel} description={tooltipDescription} />
+      </span>
+    }
+    value={value}
+    delta={comparison && comparison.direction !== 'neutral' ? comparison.difference : undefined}
+    invertDelta={invertDelta}
+    status={status ? { tone: status.level === 'critical' ? 'error' : 'warning', label: status.label } : undefined}
+    meta={
+      <span className="inline-flex items-center gap-1.5 flex-wrap">
         {percentage && <span className="whitespace-nowrap">{percentage}</span>}
         {comparison && comparison.direction !== 'neutral' && comparisonLabel && (
           <span className="whitespace-nowrap">{comparisonLabel}</span>
         )}
         {comparison && comparison.direction === 'neutral' && comparisonLabel && (
-          <span className="inline-flex items-center gap-1">
-            <Minus className="w-3 h-3" aria-hidden="true" />
-            No change {comparisonLabel}
-          </span>
+          <span className="whitespace-nowrap">No change {comparisonLabel}</span>
         )}
-      </div>
-
-      {sparkline && sparkline.length >= 2 && (
-        <div className="mt-auto">
-          <TrendSparkline values={sparkline} className="mt-2" />
-        </div>
-      )}
-    </div>
-  );
-});
+      </span>
+    }
+    sparkline={sparkline && sparkline.length >= 2 ? sparkline : undefined}
+  />
+));
 
 MetricCard.displayName = 'MetricCard';
 
@@ -258,28 +216,12 @@ export const KeyMetricsSummary: React.FC<KeyMetricsSummaryProps> = React.memo(({
           </h2>
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-foreground hidden sm:inline">Compare to</span>
-            <div
-              className="inline-flex rounded-lg border border-border bg-muted/30 p-0.5"
-              role="group"
+            <SegmentedControl
+              options={availableModes.map(option => ({ value: option.mode, label: option.label }))}
+              value={highlightMode}
+              onChange={mode => onHighlightModeChange?.(mode)}
               aria-label="Comparison baseline"
-            >
-              {availableModes.map(option => (
-                <button
-                  key={option.mode}
-                  type="button"
-                  onClick={() => onHighlightModeChange?.(option.mode)}
-                  aria-pressed={highlightMode === option.mode}
-                  className={cn(
-                    'px-2.5 py-1 text-xs font-medium rounded-md transition-colors min-h-[28px]',
-                    highlightMode === option.mode
-                      ? 'bg-background text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground'
-                  )}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
+            />
           </div>
         </div>
       )}
@@ -330,6 +272,7 @@ export const KeyMetricsSummary: React.FC<KeyMetricsSummaryProps> = React.memo(({
           comparisonLabel={comparisonLabel}
           sparkline={sparklines?.bounceRate}
           status={getBounceStatus(metrics.bounceRate)}
+          invertDelta
           tooltipLabel="Bounce Rate"
           tooltipDescription="Percentage of emails that could not be delivered. Keep this below 5% to maintain good sender reputation."
         />
@@ -342,6 +285,7 @@ export const KeyMetricsSummary: React.FC<KeyMetricsSummaryProps> = React.memo(({
           comparisonLabel={comparisonLabel}
           sparkline={sparklines?.complaintRate}
           status={getComplaintStatus(metrics.complaintRate)}
+          invertDelta
           tooltipLabel="Complaint Rate"
           tooltipDescription="Percentage of recipients who marked your email as spam. Keep this below 0.1% to avoid deliverability issues."
         />
@@ -354,6 +298,7 @@ export const KeyMetricsSummary: React.FC<KeyMetricsSummaryProps> = React.memo(({
           comparisonLabel={comparisonLabel}
           sparkline={sparklines?.unsubscribeRate}
           status={getUnsubscribeStatus(metrics.unsubscribeRate)}
+          invertDelta
           tooltipLabel="Unsubscribe Rate"
           tooltipDescription="Percentage of delivered recipients who opted out after this issue. Keep this below 0.5% — a healthy list typically sees 0.1-0.3%."
         />

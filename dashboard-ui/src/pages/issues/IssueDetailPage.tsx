@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Pencil, Trash, RefreshCw, AlertCircle, TrendingUp, Users, Shield, FileText, CheckCircle, Flame, Hash, CalendarDays, Clock, Send } from 'lucide-react';
+import { PageHero, PageHeroTitle, PageHeroChips, PageHeroChip, SegmentedControl } from '@readysetcloud/ui';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { useToast } from '../../components/ui/Toast';
@@ -743,46 +744,36 @@ export const IssueDetailPage: React.FC = () => {
         </div>
 
         {/* Issue Header */}
-        <div className="relative overflow-hidden rounded-xl border border-border bg-gradient-to-br from-surface via-surface to-primary-50/70 shadow-soft mb-4 sm:mb-6">
-          <div
-            className="pointer-events-none absolute -top-24 -right-16 w-72 h-72 rounded-full bg-primary-500/10 blur-3xl"
-            aria-hidden="true"
-          />
-          <div className="relative p-4 sm:p-6">
+        <PageHero className="mb-4 sm:mb-6">
             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-3 mb-3 flex-wrap">
-                  <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold font-display text-foreground break-words">{issue.subject}</h1>
+                  <PageHeroTitle className="break-words">{issue.subject}</PageHeroTitle>
                   <IssueStatusBadge status={issue.status} />
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface/80 px-2.5 py-1 text-xs font-medium text-muted-foreground">
-                    <Hash className="w-3.5 h-3.5" aria-hidden="true" />
+                <PageHeroChips>
+                  <PageHeroChip icon={<Hash className="w-3.5 h-3.5" />}>
                     Issue #{issue.issueNumber}
-                  </span>
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface/80 px-2.5 py-1 text-xs font-medium text-muted-foreground">
-                    <CalendarDays className="w-3.5 h-3.5" aria-hidden="true" />
+                  </PageHeroChip>
+                  <PageHeroChip icon={<CalendarDays className="w-3.5 h-3.5" />}>
                     Created {formatDate(issue.createdAt)}
-                  </span>
+                  </PageHeroChip>
                   {issue.publishedAt && (
-                    <span className="inline-flex items-center gap-1.5 rounded-full border border-success-200 bg-success-50 px-2.5 py-1 text-xs font-medium text-success-700">
-                      <Send className="w-3.5 h-3.5" aria-hidden="true" />
+                    <PageHeroChip tone="success" icon={<Send className="w-3.5 h-3.5" />}>
                       Sent {formatDate(issue.publishedAt)}
-                    </span>
+                    </PageHeroChip>
                   )}
                   {issue.scheduledAt && !issue.publishedAt && (
-                    <span className="inline-flex items-center gap-1.5 rounded-full border border-primary-200 bg-primary-50 px-2.5 py-1 text-xs font-medium text-primary-700">
-                      <Clock className="w-3.5 h-3.5" aria-hidden="true" />
+                    <PageHeroChip tone="primary" icon={<Clock className="w-3.5 h-3.5" />}>
                       Scheduled for {formatDate(issue.scheduledAt)}
-                    </span>
+                    </PageHeroChip>
                   )}
                   {isPublished && issue.stats && issue.stats.subscribers > 0 && (
-                    <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface/80 px-2.5 py-1 text-xs font-medium text-muted-foreground">
-                      <Users className="w-3.5 h-3.5" aria-hidden="true" />
+                    <PageHeroChip icon={<Users className="w-3.5 h-3.5" />}>
                       {issue.stats.subscribers.toLocaleString('en-US')} recipients
-                    </span>
+                    </PageHeroChip>
                   )}
-                </div>
+                </PageHeroChips>
               </div>
 
               {/* Action Buttons */}
@@ -841,8 +832,7 @@ export const IssueDetailPage: React.FC = () => {
                 )}
               </div>
             </div>
-          </div>
-        </div>
+        </PageHero>
 
         {/* InsightsHeroSection - Show at top if insights exist */}
         {isPublished && issue.insightsV2 && issue.insightsV2.length > 0 && (
@@ -1182,37 +1172,24 @@ export const IssueDetailPage: React.FC = () => {
                 Content
               </CardTitle>
               {canShowHeatmap && (
-                <div
-                  className="inline-flex rounded-lg border border-border bg-muted/30 p-0.5 self-start"
-                  role="group"
+                <SegmentedControl
+                  className="self-start"
+                  options={[
+                    { value: 'preview', label: 'Preview' },
+                    {
+                      value: 'heatmap',
+                      label: (
+                        <span className="inline-flex items-center gap-1">
+                          <Flame className="w-3.5 h-3.5" aria-hidden="true" />
+                          Heatmap
+                        </span>
+                      ),
+                    },
+                  ]}
+                  value={contentView}
+                  onChange={setContentView}
                   aria-label="Content view mode"
-                >
-                  <button
-                    type="button"
-                    onClick={() => setContentView('preview')}
-                    aria-pressed={contentView === 'preview'}
-                    className={`px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition-colors min-h-[36px] ${
-                      contentView === 'preview'
-                        ? 'bg-background text-foreground shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    Preview
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setContentView('heatmap')}
-                    aria-pressed={contentView === 'heatmap'}
-                    className={`inline-flex items-center gap-1 px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition-colors min-h-[36px] ${
-                      contentView === 'heatmap'
-                        ? 'bg-background text-foreground shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    <Flame className="w-3.5 h-3.5" aria-hidden="true" />
-                    Heatmap
-                  </button>
-                </div>
+                />
               )}
             </div>
           </CardHeader>

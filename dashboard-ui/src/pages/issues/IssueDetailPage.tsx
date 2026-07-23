@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Pencil, Trash, RefreshCw, AlertCircle, TrendingUp, Users, Shield, FileText, CheckCircle, Flame } from 'lucide-react';
+import { ArrowLeft, Pencil, Trash, RefreshCw, AlertCircle, TrendingUp, Users, Shield, FileText, CheckCircle, Flame, Hash, CalendarDays, Clock, Send } from 'lucide-react';
+import { PageHero, PageHeroTitle, PageHeroChips, PageHeroChip, SegmentedControl } from '@readysetcloud/ui';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { useToast } from '../../components/ui/Toast';
@@ -18,7 +19,6 @@ import {
   GeoMapSkeleton,
   LinkPerformanceSkeleton,
   DecayChartSkeleton,
-  ComparisonCardSkeleton,
   ChartSkeleton
 } from '../../components/ui/SkeletonLoader';
 import { MaxMindAttribution } from '../../components/analytics';
@@ -29,6 +29,7 @@ import { CollapsibleSection } from '../../components/issues/CollapsibleSection';
 import { DeliverabilityHealthCard } from '../../components/issues/DeliverabilityHealthCard';
 import { AsyncErrorBoundary } from '../../components/error/AsyncErrorBoundary';
 import { FadeIn } from '../../components/ui/FadeIn';
+import type { ComparisonMode, MetricSparklines } from '../../components/issues/KeyMetricsSummary';
 import { issuesService } from '../../services/issuesService';
 import { dashboardService } from '../../services/dashboardService';
 import { calculateComplaintRate } from '../../utils/analyticsCalculations';
@@ -54,9 +55,8 @@ const AudienceInsightsPanel = lazy(() => import('../../components/issues/Audienc
 const ComplaintDetailsTable = lazy(() => import('../../components/issues/ComplaintDetailsTable').then(m => ({ default: m.ComplaintDetailsTable })));
 const BounceReasonsChart = lazy(() => import('../../components/issues/BounceReasonsChart').then(m => ({ default: m.BounceReasonsChart })));
 const EngagementTypeIndicator = lazy(() => import('../../components/issues/EngagementTypeIndicator').then(m => ({ default: m.EngagementTypeIndicator })));
-const IssueComparisonCard = lazy(() => import('../../components/issues/IssueComparisonCard').then(m => ({ default: m.IssueComparisonCard })));
 const TrafficSourceChart = lazy(() => import('../../components/issues/TrafficSourceChart').then(m => ({ default: m.TrafficSourceChart })));
-const DeliveryBreakdownChart = lazy(() => import('../../components/issues/DeliveryBreakdownChart').then(m => ({ default: m.DeliveryBreakdownChart })));
+const EngagementFunnel = lazy(() => import('../../components/issues/EngagementFunnel').then(m => ({ default: m.EngagementFunnel })));
 const TimingMetricsChart = lazy(() => import('../../components/issues/TimingMetricsChart').then(m => ({ default: m.TimingMetricsChart })));
 const GeoMap = lazy(() => import('../../components/analytics/GeoMap').then(m => ({ default: m.GeoMap })));
 const LinkSelector = lazy(() => import('../../components/analytics/LinkSelector').then(m => ({ default: m.LinkSelector })));
@@ -124,7 +124,7 @@ export const IssueDetailPage: React.FC = () => {
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
   const [stickyNavVisible, setStickyNavVisible] = useState(false);
   const [activeSection, setActiveSection] = useState<string | null>(null);
-  const [comparisonMode, setComparisonMode] = useState<'average' | 'last' | 'best'>('average');
+  const [comparisonMode, setComparisonMode] = useState<ComparisonMode>('average');
   const [userPreferences] = useState<UserPreferences['issueDetail']>(() => loadPreferences());
 
   // Ref for skip link target
@@ -364,6 +364,12 @@ export const IssueDetailPage: React.FC = () => {
     };
   }, [issue, analytics]);
 
+  // Handler for the comparison-baseline toggle in the key metrics band
+  const handleComparisonModeChange = useCallback((mode: ComparisonMode) => {
+    setComparisonMode(mode);
+    updatePreference('defaultComparison', mode);
+  }, []);
+
   // Handler for section toggle
   const handleSectionToggle = useCallback((sectionId: string) => {
     setExpandedSections(prev => {
@@ -526,27 +532,6 @@ export const IssueDetailPage: React.FC = () => {
     return calculateComplaintRate(issue.stats.complaints, issue.stats.deliveries);
   }, [issue?.stats]);
 
-  const currentMetrics = useMemo<IssueMetrics | null>(() => {
-    if (!issue?.stats) return null;
-
-    return {
-      openRate: issue.stats.deliveries > 0 ? (issue.stats.opens / issue.stats.deliveries) * 100 : 0,
-      clickRate: issue.stats.deliveries > 0 ? (issue.stats.clicks / issue.stats.deliveries) * 100 : 0,
-      clickToOpenRate: issue.stats.opens > 0 ? (issue.stats.clicks / issue.stats.opens) * 100 : 0,
-      bounceRate: issue.stats.deliveries > 0 ? (issue.stats.bounces / issue.stats.deliveries) * 100 : 0,
-      delivered: issue.stats.deliveries,
-      opens: issue.stats.opens,
-      clicks: issue.stats.clicks,
-      bounces: issue.stats.bounces,
-      complaints: issue.stats.complaints,
-      subscribers: issue.stats.subscribers,
-      subscribes: issue.stats.subscribes ?? 0,
-      unsubscribes: issue.stats.unsubscribes ?? 0,
-      cleaned: issue.stats.cleaned ?? 0,
-      manualRemovals: issue.stats.manualRemovals ?? 0,
-    };
-  }, [issue]);
-
   const averageMetrics = useMemo<IssueMetrics | null>(() => {
     if (!trendsData?.aggregates) return null;
     const issueCount = trendsData.issues.length || 1;
@@ -609,6 +594,37 @@ export const IssueDetailPage: React.FC = () => {
       unsubscribeRate: issue.stats.deliveries > 0 ? ((issue.stats.unsubscribes ?? 0) / issue.stats.deliveries) * 100 : 0,
     };
   }, [issue?.stats, complaintRate]);
+
+  // Per-metric history across recent issues (oldest first, this issue last)
+  // so each metric tile can render a trend sparkline.
+  const metricSparklines = useMemo<MetricSparklines | undefined>(() => {
+    if (!keyMetrics || !trendsData?.issues || trendsData.issues.length === 0) return undefined;
+
+    const history = [...trendsData.issues]
+      .filter(item => item.id !== id)
+      .sort((a, b) => parseInt(a.id) - parseInt(b.id))
+      .slice(-11);
+
+    if (history.length === 0) return undefined;
+
+    const series = (extract: (metrics: IssueMetrics) => number, current: number) =>
+      [...history.map(item => extract(item.metrics)), current];
+
+    return {
+      openRate: series(m => m.openRate, keyMetrics.openRate),
+      clickRate: series(m => m.clickRate, keyMetrics.clickRate),
+      clickToOpenRate: series(m => m.clickToOpenRate, keyMetrics.clickToOpenRate),
+      bounceRate: series(m => m.bounceRate, keyMetrics.bounceRate),
+      complaintRate: series(
+        m => (m.delivered > 0 ? (m.complaints / m.delivered) * 100 : 0),
+        keyMetrics.complaintRate
+      ),
+      unsubscribeRate: series(
+        m => (m.delivered > 0 ? ((m.unsubscribes ?? 0) / m.delivered) * 100 : 0),
+        keyMetrics.unsubscribeRate
+      ),
+    };
+  }, [keyMetrics, trendsData, id]);
 
   const bestIssueMetrics = useMemo<IssueMetrics | null>(() => {
     if (!trendsData?.issues || trendsData.issues.length === 0) return null;
@@ -728,31 +744,36 @@ export const IssueDetailPage: React.FC = () => {
         </div>
 
         {/* Issue Header */}
-        <Card className="mb-4 sm:mb-6 shadow-sm hover:shadow-md transition-shadow">
-          <CardContent className="py-4 sm:py-6">
+        <PageHero className="mb-4 sm:mb-6">
             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-3 mb-2 flex-wrap">
-                  <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-foreground break-words">{issue.subject}</h1>
+                <div className="flex items-center gap-3 mb-3 flex-wrap">
+                  <PageHeroTitle className="break-words">{issue.subject}</PageHeroTitle>
                   <IssueStatusBadge status={issue.status} />
                 </div>
-                <div className="flex flex-wrap gap-2 sm:gap-4 text-xs sm:text-sm text-muted-foreground">
-                  <span className="font-medium">Issue #{issue.issueNumber}</span>
-                  <span className="hidden sm:inline">•</span>
-                  <span>Created {formatDate(issue.createdAt)}</span>
+                <PageHeroChips>
+                  <PageHeroChip icon={<Hash className="w-3.5 h-3.5" />}>
+                    Issue #{issue.issueNumber}
+                  </PageHeroChip>
+                  <PageHeroChip icon={<CalendarDays className="w-3.5 h-3.5" />}>
+                    Created {formatDate(issue.createdAt)}
+                  </PageHeroChip>
                   {issue.publishedAt && (
-                    <>
-                      <span className="hidden sm:inline">•</span>
-                      <span className="text-success-600 dark:text-success-400 font-medium">Sent {formatDate(issue.publishedAt)}</span>
-                    </>
+                    <PageHeroChip tone="success" icon={<Send className="w-3.5 h-3.5" />}>
+                      Sent {formatDate(issue.publishedAt)}
+                    </PageHeroChip>
                   )}
                   {issue.scheduledAt && !issue.publishedAt && (
-                    <>
-                      <span className="hidden sm:inline">•</span>
-                      <span className="text-blue-600 dark:text-blue-400 font-medium">Scheduled for {formatDate(issue.scheduledAt)}</span>
-                    </>
+                    <PageHeroChip tone="primary" icon={<Clock className="w-3.5 h-3.5" />}>
+                      Scheduled for {formatDate(issue.scheduledAt)}
+                    </PageHeroChip>
                   )}
-                </div>
+                  {isPublished && issue.stats && issue.stats.subscribers > 0 && (
+                    <PageHeroChip icon={<Users className="w-3.5 h-3.5" />}>
+                      {issue.stats.subscribers.toLocaleString('en-US')} recipients
+                    </PageHeroChip>
+                  )}
+                </PageHeroChips>
               </div>
 
               {/* Action Buttons */}
@@ -811,8 +832,7 @@ export const IssueDetailPage: React.FC = () => {
                 )}
               </div>
             </div>
-          </CardContent>
-        </Card>
+        </PageHero>
 
         {/* InsightsHeroSection - Show at top if insights exist */}
         {isPublished && issue.insightsV2 && issue.insightsV2.length > 0 && (
@@ -831,15 +851,17 @@ export const IssueDetailPage: React.FC = () => {
           </div>
         )}
 
-        {/* DeliveryBreakdownChart - Visual delivery overview (delivered vs bounced of total sent) */}
+        {/* EngagementFunnel - How the audience moved from sent through delivered, opened, and clicked */}
         {isPublished && issue.stats && (issue.stats.deliveries + issue.stats.bounces) > 0 && (
           <div className="mb-4 sm:mb-6">
             <Suspense fallback={<ChartSkeleton />}>
               <FadeIn variant="slideUp" speed="normal" delay={50}>
                 <AsyncErrorBoundary onRetry={loadIssue}>
-                  <DeliveryBreakdownChart
+                  <EngagementFunnel
                     delivered={issue.stats.deliveries}
                     bounced={issue.stats.bounces}
+                    opens={issue.stats.opens}
+                    clicks={issue.stats.clicks}
                   />
                 </AsyncErrorBoundary>
               </FadeIn>
@@ -857,6 +879,8 @@ export const IssueDetailPage: React.FC = () => {
                     metrics={keyMetrics}
                     comparisons={comparisons}
                     highlightMode={comparisonMode}
+                    sparklines={metricSparklines}
+                    onHighlightModeChange={handleComparisonModeChange}
                   />
                 </AsyncErrorBoundary>
               </FadeIn>
@@ -875,24 +899,6 @@ export const IssueDetailPage: React.FC = () => {
               className="mb-4 sm:mb-6"
             />
           </Suspense>
-        )}
-
-        {/* PerformanceComparisonSection */}
-        {isPublished && currentMetrics && (
-          <div className="mb-4 sm:mb-6">
-            <Suspense fallback={<ComparisonCardSkeleton />}>
-              <FadeIn variant="fade" speed="normal">
-                <AsyncErrorBoundary onRetry={loadIssue}>
-                  <IssueComparisonCard
-                    current={currentMetrics}
-                    average={averageMetrics || undefined}
-                    lastIssue={lastIssueMetrics || undefined}
-                    bestIssue={bestIssueMetrics || undefined}
-                  />
-                </AsyncErrorBoundary>
-              </FadeIn>
-            </Suspense>
-          </div>
         )}
 
         {/* Subscriber Metrics Panel - Show for published issues only */}
@@ -1166,37 +1172,24 @@ export const IssueDetailPage: React.FC = () => {
                 Content
               </CardTitle>
               {canShowHeatmap && (
-                <div
-                  className="inline-flex rounded-lg border border-border bg-muted/30 p-0.5 self-start"
-                  role="group"
+                <SegmentedControl
+                  className="self-start"
+                  options={[
+                    { value: 'preview', label: 'Preview' },
+                    {
+                      value: 'heatmap',
+                      label: (
+                        <span className="inline-flex items-center gap-1">
+                          <Flame className="w-3.5 h-3.5" aria-hidden="true" />
+                          Heatmap
+                        </span>
+                      ),
+                    },
+                  ]}
+                  value={contentView}
+                  onChange={setContentView}
                   aria-label="Content view mode"
-                >
-                  <button
-                    type="button"
-                    onClick={() => setContentView('preview')}
-                    aria-pressed={contentView === 'preview'}
-                    className={`px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition-colors min-h-[36px] ${
-                      contentView === 'preview'
-                        ? 'bg-background text-foreground shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    Preview
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setContentView('heatmap')}
-                    aria-pressed={contentView === 'heatmap'}
-                    className={`inline-flex items-center gap-1 px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition-colors min-h-[36px] ${
-                      contentView === 'heatmap'
-                        ? 'bg-background text-foreground shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    <Flame className="w-3.5 h-3.5" aria-hidden="true" />
-                    Heatmap
-                  </button>
-                </div>
+                />
               )}
             </div>
           </CardHeader>

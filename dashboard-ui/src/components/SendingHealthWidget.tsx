@@ -62,7 +62,7 @@ export const SendingHealthWidget: React.FC<SendingHealthWidgetProps> = ({
   const isHighComplaint = complaintRate > 0.1;
 
   return (
-    <div className="bg-surface rounded-lg shadow p-4 sm:p-6">
+    <div className="bg-surface rounded-xl border border-border shadow-soft p-4 sm:p-6">
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-base sm:text-lg font-medium text-foreground">Sending Health</h3>
         <div className={`p-1.5 rounded-full ${config.bg}`}>

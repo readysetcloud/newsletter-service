@@ -148,7 +148,7 @@ export const ActionableInsights: React.FC<ActionableInsightsProps> = ({ trendsDa
   }, [trendsData]);
 
   return (
-    <div className="bg-surface rounded-lg shadow p-4 sm:p-6">
+    <div className="bg-surface rounded-xl border border-border shadow-soft p-4 sm:p-6">
       <h3 className="text-base sm:text-lg font-medium text-foreground mb-3">Insights</h3>
       <div className="space-y-3">
         {insights.map((insight) => {

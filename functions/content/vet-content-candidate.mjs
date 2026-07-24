@@ -4,6 +4,7 @@ import { Agent, BedrockModel } from '@strands-agents/sdk';
 import { httpRequest } from '@strands-agents/sdk/vended-tools/http-request';
 import { z } from 'zod';
 import { getTenant } from '../utils/helpers.mjs';
+import { loadContentProfile, formatProfileForPrompt } from '../utils/content-profile.mjs';
 
 const ddb = new DynamoDBClient();
 
@@ -22,7 +23,8 @@ const verdictSchema = z.object({
   score: z.number().min(0).max(1),
   title: z.string(),
   summary: z.string(),
-  reasons: z.array(z.string()).max(MAX_REASONS)
+  reasons: z.array(z.string()).max(MAX_REASONS),
+  evidence: z.array(z.string()).max(MAX_REASONS).optional()
 });
 
 /**
@@ -59,7 +61,11 @@ export const handler = async (event) => {
   }
 
   const resolvedUrl = await resolveRedirects(candidate.originalUrl ?? candidate.url);
-  const verdict = await vetCandidate(candidate, resolvedUrl, await getNewsletterProfile(tenantId));
+  const [brandProfile, learnedProfile] = await Promise.all([
+    getNewsletterProfile(tenantId),
+    loadContentProfile(tenantId)
+  ]);
+  const verdict = await vetCandidate(candidate, resolvedUrl, brandProfile, learnedProfile);
 
   await ddb.send(new UpdateItemCommand({
     TableName: process.env.TABLE_NAME,
@@ -129,23 +135,34 @@ const getNewsletterProfile = async (tenantId) => {
   }
 };
 
-const buildSystemPrompt = (profile) => [
+const buildSystemPrompt = (profile, learnedProfileText) => [
   'Role: You vet links saved from social media as candidate content for a curated newsletter.',
   'The curator highlights great content from their community, so judge each link as a newsletter editor would.',
   profile.name ? `The newsletter is "${profile.name}".` : null,
   profile.description ? `Newsletter focus: ${profile.description}` : null,
   profile.industry ? `Industry: ${profile.industry}` : null,
+  ...learnedProfileText ? [
+    'Evidence of what this newsletter actually features, learned from past issues:',
+    learnedProfileText,
+    'Weigh this evidence above the stated focus when they disagree - it reflects real editorial decisions and reader engagement.'
+  ] : [],
   'You may use httpRequest to fetch the candidate URL and inspect its content. Do not request unrelated URLs.',
   'Evaluate:',
   '1. Relevance - does the content fit the newsletter focus and interest its readers?',
-  '2. Quality - is it substantive (article, video, tool, open-source project, talk) rather than engagement bait, a job post, or pure marketing?',
-  '3. Freshness - prefer content that is current or evergreen.',
+  learnedProfileText
+    ? '2. Track record - does it resemble content the newsletter has actually featured, especially content readers clicked?'
+    : null,
+  '3. Quality - is it substantive (article, video, tool, open-source project, talk) rather than engagement bait, a job post, or pure marketing?',
+  '4. Freshness - prefer content that is current or evergreen.',
   'Return the structured verdict:',
   '- recommendation: "include" for strong fits, "maybe" for borderline, "skip" for poor fits.',
   '- score: 0 to 1 reflecting overall newsletter fit.',
   '- title: the content\'s actual title (fetch the page if needed; fall back to a descriptive title).',
   '- summary: 1-2 sentences (max ~60 words) a newsletter editor could adapt when featuring the link.',
-  `- reasons: up to ${MAX_REASONS} short phrases explaining the recommendation.`
+  `- reasons: up to ${MAX_REASONS} short phrases explaining the recommendation.`,
+  ...learnedProfileText ? [
+    `- evidence: up to ${MAX_REASONS} references to the past-issue evidence supporting the verdict (e.g. "similar to <featured link summary> from issue #12"). Cite only evidence listed above; omit when nothing applies.`
+  ] : []
 ].filter(Boolean).join('\n');
 
 const buildUserPrompt = (candidate, resolvedUrl) => [
@@ -160,7 +177,7 @@ const buildUserPrompt = (candidate, resolvedUrl) => [
  * Runs the vetting agent. Best-effort: returns null on any model, tool, or
  * validation failure so the candidate is marked failed rather than lost.
  */
-const vetCandidate = async (candidate, resolvedUrl, profile) => {
+const vetCandidate = async (candidate, resolvedUrl, profile, learnedProfile) => {
   try {
     const agent = new Agent({
       model: new BedrockModel({
@@ -169,7 +186,7 @@ const vetCandidate = async (candidate, resolvedUrl, profile) => {
         temperature: 0.1,
         stream: false
       }),
-      systemPrompt: buildSystemPrompt(profile),
+      systemPrompt: buildSystemPrompt(profile, formatProfileForPrompt(learnedProfile)),
       tools: [httpRequest],
       structuredOutputSchema: verdictSchema,
       toolExecutor: 'sequential',
@@ -197,6 +214,11 @@ const normalizeVerdict = (output) => {
     return null;
   }
 
+  const evidence = (output.evidence ?? [])
+    .filter(item => typeof item === 'string' && item.trim())
+    .map(item => item.trim())
+    .slice(0, MAX_REASONS);
+
   return {
     recommendation: output.recommendation,
     score: Math.min(1, Math.max(0, typeof output.score === 'number' ? output.score : 0)),
@@ -205,6 +227,7 @@ const normalizeVerdict = (output) => {
     reasons: (output.reasons ?? [])
       .filter(reason => typeof reason === 'string' && reason.trim())
       .map(reason => reason.trim())
-      .slice(0, MAX_REASONS)
+      .slice(0, MAX_REASONS),
+    ...evidence.length && { evidence }
   };
 };

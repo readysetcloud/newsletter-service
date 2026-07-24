@@ -34,9 +34,11 @@ LinkedIn post ──► Chrome extension ──► POST /content-candidates (pub
    `VetContentCandidateFunction`, which resolves redirect wrappers (e.g.
    `lnkd.in` short links), fetches the content, and asks Bedrock (Amazon Nova
    via the Strands SDK) to judge it against the tenant's name, brand
-   description, and industry. The verdict includes a recommendation
+   description, and industry — plus the **learned content profile** built
+   from past issues (see below). The verdict includes a recommendation
    (`include` / `maybe` / `skip`), a 0–1 score, the content's title, a short
-   editor-ready summary, and reasons.
+   editor-ready summary, reasons, and — when a profile exists — `evidence`
+   citations pointing at the past featured links the candidate resembles.
 4. **Serve** — `GET /content-candidates/feed` returns the trailing window
    (default 7 days, so Friday's feed covers the whole week):
    - **RSS (default)** — only vetted `include`/`maybe` items, best first.
@@ -99,11 +101,52 @@ Candidates live in the main `NewsletterTable`:
 
 The feed queries `GSI1` by tenant partition with a `GSI1SK >= <since>` range.
 
+## Learned content profile
+
+Vetting does not rely solely on the author-written brand description. A
+learning loop builds an evidence-backed editorial profile from what past
+issues actually featured:
+
+- **Source of truth** — every published issue already stores `link#<hash>`
+  tracking records (`pk = <tenantId>#<issueNumber>`) with an LLM topic
+  classification, a summary, and click counts. These are the proof of what
+  gets featured and what readers engage with.
+- **Learner** — `LearnContentProfileFunction` runs on every `ISSUE_PUBLISHED`
+  event (and can be invoked directly with `{ "tenantId": "...", "backfill": true }`
+  to build from history). It digests each recent issue's link records into a
+  compact per-issue summary (topic counts + top links by clicks), merges them
+  into the profile record, recomputes cumulative topic weights and the top
+  exemplar links, and asks the model to distill the evidence into a 2–3
+  sentence editorial summary plus concrete selection patterns.
+- **Durable memory** — link records expire after 90 days, but the per-issue
+  digests stored on the profile do not, so the profile accumulates roughly
+  six months of editorial history (last 26 issues) that the raw records lose.
+  Re-running the learner refreshes click counts for issues still within the
+  TTL window.
+- **Profile record** — `pk = <tenantId>`, `sk = content-profile`, holding
+  `issueDigests`, `topicWeights` (`{ topic: { featured, clicks } }`),
+  `exemplars`, and `editorialProfile { summary, patterns, issuesAnalyzed, linksAnalyzed }`.
+- **Applied at vetting time** — the vetting prompt includes the learned
+  summary, patterns, topic distribution, and exemplar links, and instructs
+  the model to weigh this evidence *above* the stated brand focus when they
+  disagree, and to cite the supporting evidence in the verdict. Citations
+  surface in the RSS feed as "Backed by: …".
+
+Run a backfill once after deploying so the first vetting calls already have
+history to lean on:
+
+```
+aws lambda invoke --function-name <stack>-LearnContentProfileFunction-... \
+  --payload '{"tenantId":"<tenantId>","backfill":true}' /dev/null
+```
+
 ## Vetting notes
 
 - The vetting prompt is grounded in the tenant record's `name`,
   `brandDescription`, and `industry`, so keep the brand description accurate —
   it is effectively the editorial policy the AI applies.
+- When a learned content profile exists, it takes precedence: the model is
+  told real editorial decisions and reader clicks outweigh the stated focus.
 - Vetting is best-effort: if the model call fails, the candidate is marked
   `failed` and still appears in the JSON view so nothing silently disappears.
 - Model: `MODEL_ID` env var on `VetContentCandidateFunction`

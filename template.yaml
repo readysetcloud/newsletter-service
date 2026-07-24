@@ -2941,6 +2941,50 @@ Resources:
               detail-type:
                 - Content Candidate Submitted
 
+  LearnContentProfileFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - content/learn-content-profile.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: content/learn-content-profile.handler
+      Timeout: 120
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          MODEL_ID: us.amazon.nova-pro-v1:0
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt NewsletterTable.Arn
+                - !Sub "${NewsletterTable.Arn}/index/GSI1"
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - arn:aws:bedrock:*::foundation-model/amazon.nova-*
+                - !Sub arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/us.amazon.nova-*
+      Events:
+        IssuePublished:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - newsletter-service
+              detail-type:
+                - ISSUE_PUBLISHED
+
   GetContentFeedFunction:
     Type: AWS::Serverless::Function
     Metadata:

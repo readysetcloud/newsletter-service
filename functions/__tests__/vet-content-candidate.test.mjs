@@ -5,6 +5,7 @@ process.env.TABLE_NAME = 'test-newsletter-table';
 const ddbInstance = { send: jest.fn() };
 const mockAgentInvoke = jest.fn();
 const mockGetTenant = jest.fn();
+const mockLoadContentProfile = jest.fn();
 let capturedAgentConfig;
 
 jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
@@ -32,6 +33,11 @@ jest.unstable_mockModule('@strands-agents/sdk/vended-tools/http-request', () => 
 
 jest.unstable_mockModule('../../functions/utils/helpers.mjs', () => ({
   getTenant: mockGetTenant
+}));
+
+jest.unstable_mockModule('../../functions/utils/content-profile.mjs', () => ({
+  loadContentProfile: mockLoadContentProfile,
+  formatProfileForPrompt: (profile) => (profile ? profile.promptText : null)
 }));
 
 const { handler } = await import('../../functions/content/vet-content-candidate.mjs');
@@ -74,6 +80,7 @@ describe('vet-content-candidate', () => {
     });
 
     mockAgentInvoke.mockResolvedValue({ structuredOutput: goodVerdict });
+    mockLoadContentProfile.mockResolvedValue(null);
 
     mockGetTenant.mockResolvedValue({
       name: 'Ready, Set, Cloud!',
@@ -115,6 +122,45 @@ describe('vet-content-candidate', () => {
     expect(mockGetTenant).toHaveBeenCalledWith('tenant1');
     expect(capturedAgentConfig.systemPrompt).toContain('Ready, Set, Cloud!');
     expect(capturedAgentConfig.systemPrompt).toContain('Serverless and cloud content for builders');
+  });
+
+  test('omits the evidence section when no content profile has been learned', async () => {
+    await invoke();
+
+    expect(mockLoadContentProfile).toHaveBeenCalledWith('tenant1');
+    expect(capturedAgentConfig.systemPrompt).not.toContain('learned from past issues');
+    expect(capturedAgentConfig.systemPrompt).not.toContain('- evidence:');
+  });
+
+  test('grounds the system prompt in the learned content profile when present', async () => {
+    mockLoadContentProfile.mockResolvedValue({
+      promptText: 'Topics actually featured: serverless 24x/310 clicks'
+    });
+
+    await invoke();
+
+    expect(capturedAgentConfig.systemPrompt).toContain('learned from past issues');
+    expect(capturedAgentConfig.systemPrompt).toContain('Topics actually featured: serverless 24x/310 clicks');
+    expect(capturedAgentConfig.systemPrompt).toContain('- evidence:');
+    expect(capturedAgentConfig.systemPrompt).toContain('Track record');
+  });
+
+  test('stores evidence citations from the verdict', async () => {
+    mockLoadContentProfile.mockResolvedValue({ promptText: 'evidence text' });
+    mockAgentInvoke.mockResolvedValue({
+      structuredOutput: {
+        ...goodVerdict,
+        evidence: ['similar to Lambda tutorial from issue #40', '  ', 'matches top topic serverless']
+      }
+    });
+
+    await invoke();
+
+    const updateCall = ddbInstance.send.mock.calls[1][0];
+    expect(updateCall.ExpressionAttributeValues[':verdict'].evidence).toEqual([
+      'similar to Lambda tutorial from issue #40',
+      'matches top topic serverless'
+    ]);
   });
 
   test('passes post context and resolved URL to the agent prompt', async () => {

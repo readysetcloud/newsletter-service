@@ -130,6 +130,7 @@ const buildRss = (tenantName, since, candidates) => {
     const descriptionParts = [
       verdict.summary,
       verdict.reasons?.length ? `Why: ${verdict.reasons.join('; ')}` : null,
+      verdict.evidence?.length ? `Backed by: ${verdict.evidence.join('; ')}` : null,
       `Recommendation: ${verdict.recommendation} (score ${(verdict.score ?? 0).toFixed(2)})`,
       candidate.post?.author ? `Shared by ${candidate.post.author}` : null,
       candidate.post?.url ? `Original post: ${candidate.post.url}` : null

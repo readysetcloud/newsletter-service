@@ -139,6 +139,16 @@ describe('get-content-feed', () => {
       expect(order.every(index => index >= 0)).toBe(true);
     });
 
+    test('includes evidence citations in item descriptions', async () => {
+      queryResults = [candidate({
+        verdict: { ...candidate().verdict, evidence: ['similar to Lambda tutorial from issue #40'] }
+      })];
+
+      const res = await invoke({ query: { key: apiKey } });
+
+      expect(res.body).toContain('Backed by: similar to Lambda tutorial from issue #40');
+    });
+
     test('escapes XML entities', async () => {
       queryResults = [candidate({
         url: 'https://example.com/a?b=1&c=2',

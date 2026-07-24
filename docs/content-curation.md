@@ -152,6 +152,34 @@ aws lambda invoke --function-name <stack>-LearnContentProfileFunction-... \
 - Model: `MODEL_ID` env var on `VetContentCandidateFunction`
   (default `us.amazon.nova-pro-v1:0`).
 
+## Relationship to rsc-core (abstraction assessment)
+
+The learner intentionally mirrors the shape of the voice-learning loop in
+Booked (content-tracking): app-specific evidence → periodic digest with
+durable memory → LLM-distilled profile → profile injected into downstream
+agent prompts with citations. Whether that loop should live in
+`readysetcloud/rsc-core` was evaluated against what core actually provides:
+
+- **Badge chest** — core's cross-app pattern is *apps emit contract events,
+  core aggregates by Cognito `sub`*. Booked follows it for voice today
+  (`voice.sample.captured` / `voice.composed` activity → badges), but keeps
+  the actual voice learning in-app. Content profiles are keyed by *tenant*
+  and built from this service's own link-tracking records, so the same
+  division applies: learning stays here.
+- **AgentCore Memory** — core's managed facts/preferences memory is
+  per-user and chat-turn driven; it is not a batch evidence-aggregation
+  pipeline and is not a fit for this.
+- **`@readysetcloud/agent`** — its `runAgent({ outputSchema })` one-shot is
+  the *right* seam to share: the "distill evidence into a structured
+  profile" step (and the vetting call itself) duplicates what that package
+  already offers. Adopting it here, and eventually lifting the shared
+  digest/merge/distill contract into a package (not a deployed core
+  service), is the recommended abstraction path once both Booked's voice
+  loop and this content loop can consume the same interface.
+
+Until a cross-app consumer needs to *read* another app's profile, keep the
+learner in-service and abstract the primitives, not the pipeline.
+
 ## Chrome extension setup
 
 See [`chrome-extension/README.md`](../chrome-extension/README.md) for install

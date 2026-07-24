@@ -3,10 +3,9 @@ import { jest } from '@jest/globals';
 process.env.TABLE_NAME = 'test-newsletter-table';
 
 const ddbInstance = { send: jest.fn() };
-const mockAgentInvoke = jest.fn();
+const mockRunAgent = jest.fn();
 const mockGetTenant = jest.fn();
 const mockLoadContentProfile = jest.fn();
-let capturedAgentConfig;
 
 jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
   DynamoDBClient: jest.fn(() => ddbInstance),
@@ -19,15 +18,8 @@ jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
   unmarshall: jest.fn((value) => value)
 }));
 
-jest.unstable_mockModule('@strands-agents/sdk', () => ({
-  Agent: jest.fn((config) => {
-    capturedAgentConfig = config;
-    return { invoke: mockAgentInvoke };
-  }),
-  BedrockModel: jest.fn((config) => config)
-}));
-
-jest.unstable_mockModule('@strands-agents/sdk/vended-tools/http-request', () => ({
+jest.unstable_mockModule('@readysetcloud/agent', () => ({
+  runAgent: mockRunAgent,
   httpRequest: { name: 'httpRequest' }
 }));
 
@@ -69,7 +61,6 @@ describe('vet-content-candidate', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    capturedAgentConfig = undefined;
     currentItem = candidateItem();
 
     ddbInstance.send.mockImplementation((command) => {
@@ -79,7 +70,7 @@ describe('vet-content-candidate', () => {
       return Promise.resolve({});
     });
 
-    mockAgentInvoke.mockResolvedValue({ structuredOutput: goodVerdict });
+    mockRunAgent.mockResolvedValue({ output: goodVerdict, structured: true });
     mockLoadContentProfile.mockResolvedValue(null);
 
     mockGetTenant.mockResolvedValue({
@@ -120,16 +111,18 @@ describe('vet-content-candidate', () => {
     await invoke();
 
     expect(mockGetTenant).toHaveBeenCalledWith('tenant1');
-    expect(capturedAgentConfig.systemPrompt).toContain('Ready, Set, Cloud!');
-    expect(capturedAgentConfig.systemPrompt).toContain('Serverless and cloud content for builders');
+    const options = mockRunAgent.mock.calls[0][0];
+    expect(options.systemPrompt).toContain('Ready, Set, Cloud!');
+    expect(options.systemPrompt).toContain('Serverless and cloud content for builders');
   });
 
   test('omits the evidence section when no content profile has been learned', async () => {
     await invoke();
 
     expect(mockLoadContentProfile).toHaveBeenCalledWith('tenant1');
-    expect(capturedAgentConfig.systemPrompt).not.toContain('learned from past issues');
-    expect(capturedAgentConfig.systemPrompt).not.toContain('- evidence:');
+    const options = mockRunAgent.mock.calls[0][0];
+    expect(options.systemPrompt).not.toContain('learned from past issues');
+    expect(options.systemPrompt).not.toContain('- evidence:');
   });
 
   test('grounds the system prompt in the learned content profile when present', async () => {
@@ -139,19 +132,21 @@ describe('vet-content-candidate', () => {
 
     await invoke();
 
-    expect(capturedAgentConfig.systemPrompt).toContain('learned from past issues');
-    expect(capturedAgentConfig.systemPrompt).toContain('Topics actually featured: serverless 24x/310 clicks');
-    expect(capturedAgentConfig.systemPrompt).toContain('- evidence:');
-    expect(capturedAgentConfig.systemPrompt).toContain('Track record');
+    const options = mockRunAgent.mock.calls[0][0];
+    expect(options.systemPrompt).toContain('learned from past issues');
+    expect(options.systemPrompt).toContain('Topics actually featured: serverless 24x/310 clicks');
+    expect(options.systemPrompt).toContain('- evidence:');
+    expect(options.systemPrompt).toContain('Track record');
   });
 
   test('stores evidence citations from the verdict', async () => {
     mockLoadContentProfile.mockResolvedValue({ promptText: 'evidence text' });
-    mockAgentInvoke.mockResolvedValue({
-      structuredOutput: {
+    mockRunAgent.mockResolvedValue({
+      output: {
         ...goodVerdict,
         evidence: ['similar to Lambda tutorial from issue #40', '  ', 'matches top topic serverless']
-      }
+      },
+      structured: true
     });
 
     await invoke();
@@ -166,7 +161,7 @@ describe('vet-content-candidate', () => {
   test('passes post context and resolved URL to the agent prompt', async () => {
     await invoke();
 
-    const prompt = mockAgentInvoke.mock.calls[0][0];
+    const prompt = mockRunAgent.mock.calls[0][0].input;
     expect(prompt).toContain('URL: https://realblog.com/serverless-patterns');
     expect(prompt).toContain('Originally shared as: https://lnkd.in/xyz');
     expect(prompt).toContain('Shared by: Jane Doe');
@@ -174,7 +169,7 @@ describe('vet-content-candidate', () => {
   });
 
   test('marks the candidate failed when the agent errors', async () => {
-    mockAgentInvoke.mockRejectedValue(new Error('model unavailable'));
+    mockRunAgent.mockRejectedValue(new Error('model unavailable'));
     await invoke();
 
     const updateCall = ddbInstance.send.mock.calls[1][0];
@@ -183,7 +178,7 @@ describe('vet-content-candidate', () => {
   });
 
   test('marks the candidate failed on an invalid recommendation', async () => {
-    mockAgentInvoke.mockResolvedValue({ structuredOutput: { ...goodVerdict, recommendation: 'definitely' } });
+    mockRunAgent.mockResolvedValue({ output: { ...goodVerdict, recommendation: 'definitely' }, structured: true });
     await invoke();
 
     const updateCall = ddbInstance.send.mock.calls[1][0];
@@ -191,7 +186,7 @@ describe('vet-content-candidate', () => {
   });
 
   test('clamps out-of-range scores', async () => {
-    mockAgentInvoke.mockResolvedValue({ structuredOutput: { ...goodVerdict, score: 4.2 } });
+    mockRunAgent.mockResolvedValue({ output: { ...goodVerdict, score: 4.2 }, structured: true });
     await invoke();
 
     const updateCall = ddbInstance.send.mock.calls[1][0];
@@ -225,6 +220,6 @@ describe('vet-content-candidate', () => {
     const updateCall = ddbInstance.send.mock.calls[1][0];
     expect(updateCall.UpdateExpression).not.toContain('resolvedUrl');
     expect(updateCall.ExpressionAttributeValues[':status']).toBe('vetted');
-    expect(mockAgentInvoke.mock.calls[0][0]).toContain('URL: https://lnkd.in/xyz');
+    expect(mockRunAgent.mock.calls[0][0].input).toContain('URL: https://lnkd.in/xyz');
   });
 });

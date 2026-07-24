@@ -33,7 +33,7 @@ LinkedIn post ──► Chrome extension ──► POST /content-candidates (pub
 3. **Vet** — a `Content Candidate Submitted` event triggers
    `VetContentCandidateFunction`, which resolves redirect wrappers (e.g.
    `lnkd.in` short links), fetches the content, and asks Bedrock (Amazon Nova
-   via the Strands SDK) to judge it against the tenant's name, brand
+   via `@readysetcloud/agent`'s `runAgent`) to judge it against the tenant's name, brand
    description, and industry — plus the **learned content profile** built
    from past issues (see below). The verdict includes a recommendation
    (`include` / `maybe` / `skip`), a 0–1 score, the content's title, a short
@@ -170,12 +170,15 @@ agent prompts with citations. Whether that loop should live in
   per-user and chat-turn driven; it is not a batch evidence-aggregation
   pipeline and is not a fit for this.
 - **`@readysetcloud/agent`** — its `runAgent({ outputSchema })` one-shot is
-  the *right* seam to share: the "distill evidence into a structured
-  profile" step (and the vetting call itself) duplicates what that package
-  already offers. Adopting it here, and eventually lifting the shared
-  digest/merge/distill contract into a package (not a deployed core
-  service), is the recommended abstraction path once both Booked's voice
-  loop and this content loop can consume the same interface.
+  the *right* seam to share, and this service now uses it: both the vetting
+  call and the profile distillation go through `runAgent` (with the
+  package's vended `httpRequest` tool for page inspection) instead of
+  hand-rolled Strands `Agent` construction. The remaining direct Strands
+  usage in this repo (`utils/llm-link-classifier.mjs`, `utils/agents.mjs`)
+  is a candidate for the same migration. The eventual next step is lifting
+  the shared digest/merge/distill contract into a package (not a deployed
+  core service) once both Booked's voice loop and this content loop can
+  consume the same interface.
 
 Until a cross-app consumer needs to *read* another app's profile, keep the
 learner in-service and abstract the primitives, not the pipeline.

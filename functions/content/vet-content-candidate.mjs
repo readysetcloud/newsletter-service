@@ -1,7 +1,6 @@
 import { DynamoDBClient, GetItemCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
-import { Agent, BedrockModel } from '@strands-agents/sdk';
-import { httpRequest } from '@strands-agents/sdk/vended-tools/http-request';
+import { runAgent, httpRequest } from '@readysetcloud/agent';
 import { z } from 'zod';
 import { getTenant } from '../utils/helpers.mjs';
 import { loadContentProfile, formatProfileForPrompt } from '../utils/content-profile.mjs';
@@ -179,30 +178,19 @@ const buildUserPrompt = (candidate, resolvedUrl) => [
  */
 const vetCandidate = async (candidate, resolvedUrl, profile, learnedProfile) => {
   try {
-    const agent = new Agent({
-      model: new BedrockModel({
-        modelId: MODEL_ID,
-        maxTokens: 1500,
-        temperature: 0.1,
-        stream: false
-      }),
+    const result = await runAgent({
+      input: buildUserPrompt(candidate, resolvedUrl),
       systemPrompt: buildSystemPrompt(profile, formatProfileForPrompt(learnedProfile)),
+      modelId: MODEL_ID,
+      temperature: 0.1,
+      maxTokens: 1500,
       tools: [httpRequest],
-      structuredOutputSchema: verdictSchema,
-      toolExecutor: 'sequential',
-      printer: false
-    });
-
-    const result = await agent.invoke(buildUserPrompt(candidate, resolvedUrl), {
-      structuredOutputSchema: verdictSchema,
-      limits: {
-        turns: 4,
-        totalTokens: 12000
-      },
+      outputSchema: verdictSchema,
+      maxIterations: 4,
       cancelSignal: AbortSignal.timeout(AGENT_TIMEOUT_MS)
     });
 
-    return normalizeVerdict(result.structuredOutput);
+    return normalizeVerdict(result.output);
   } catch (err) {
     console.error('Content vetting failed', { url: candidate.url, error: err.message });
     return null;

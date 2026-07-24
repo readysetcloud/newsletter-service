@@ -1,6 +1,6 @@
 import { DynamoDBClient, QueryCommand, PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
-import { Agent, BedrockModel } from '@strands-agents/sdk';
+import { runAgent } from '@readysetcloud/agent';
 import { z } from 'zod';
 import {
   PROFILE_SK,
@@ -156,13 +156,8 @@ const buildLearningPrompt = (issueDigests, topicWeights, exemplars) => {
  */
 const generateEditorialProfile = async (issueDigests, topicWeights, exemplars) => {
   try {
-    const agent = new Agent({
-      model: new BedrockModel({
-        modelId: MODEL_ID,
-        maxTokens: 1200,
-        temperature: 0.2,
-        stream: false
-      }),
+    const result = await runAgent({
+      input: buildLearningPrompt(issueDigests, topicWeights, exemplars),
       systemPrompt: [
         'Role: You analyze what a newsletter has actually featured to describe its editorial profile.',
         'You will receive the topic distribution and most-clicked links from recent issues.',
@@ -172,21 +167,15 @@ const generateEditorialProfile = async (issueDigests, topicWeights, exemplars) =
         'Do not invent topics or preferences the evidence does not support.',
         'Return only the structured profile.'
       ].join('\n'),
-      structuredOutputSchema: editorialSchema,
-      toolExecutor: 'sequential',
-      printer: false
-    });
-
-    const result = await agent.invoke(buildLearningPrompt(issueDigests, topicWeights, exemplars), {
-      structuredOutputSchema: editorialSchema,
-      limits: {
-        turns: 2,
-        totalTokens: 8000
-      },
+      modelId: MODEL_ID,
+      temperature: 0.2,
+      maxTokens: 1200,
+      outputSchema: editorialSchema,
+      maxIterations: 2,
       cancelSignal: AbortSignal.timeout(AGENT_TIMEOUT_MS)
     });
 
-    return normalizeEditorialProfile(result.structuredOutput, issueDigests);
+    return normalizeEditorialProfile(result.output, issueDigests);
   } catch (err) {
     console.error('Editorial profile generation failed', { error: err.message });
     return null;

@@ -3,7 +3,7 @@ import { jest } from '@jest/globals';
 process.env.TABLE_NAME = 'test-newsletter-table';
 
 const ddbInstance = { send: jest.fn() };
-const mockAgentInvoke = jest.fn();
+const mockRunAgent = jest.fn();
 
 jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
   DynamoDBClient: jest.fn(() => ddbInstance),
@@ -17,9 +17,8 @@ jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
   unmarshall: jest.fn((value) => value)
 }));
 
-jest.unstable_mockModule('@strands-agents/sdk', () => ({
-  Agent: jest.fn(() => ({ invoke: mockAgentInvoke })),
-  BedrockModel: jest.fn((config) => config)
+jest.unstable_mockModule('@readysetcloud/agent', () => ({
+  runAgent: mockRunAgent
 }));
 
 const { handler } = await import('../../functions/content/learn-content-profile.mjs');
@@ -74,7 +73,7 @@ describe('learn-content-profile', () => {
       return Promise.resolve({});
     });
 
-    mockAgentInvoke.mockResolvedValue({ structuredOutput: editorialOutput });
+    mockRunAgent.mockResolvedValue({ output: editorialOutput, structured: true });
   });
 
   const putCall = () => ddbInstance.send.mock.calls.map(call => call[0]).find(cmd => cmd.__type === 'PutItem');
@@ -103,7 +102,7 @@ describe('learn-content-profile', () => {
   test('feeds the aggregated evidence to the learning agent', async () => {
     await handler({ detail: { tenantId: 'tenant1' } });
 
-    const prompt = mockAgentInvoke.mock.calls[0][0];
+    const prompt = mockRunAgent.mock.calls[0][0].input;
     expect(prompt).toContain('Issues analyzed: 2');
     expect(prompt).toContain('serverless: featured 2 times, 35 reader clicks');
     expect(prompt).toContain('Article a from issue 42');
@@ -138,7 +137,7 @@ describe('learn-content-profile', () => {
       issueDigests: {},
       editorialProfile: { summary: 'Previous summary', patterns: [], issuesAnalyzed: 1, linksAnalyzed: 2 }
     };
-    mockAgentInvoke.mockRejectedValue(new Error('model down'));
+    mockRunAgent.mockRejectedValue(new Error('model down'));
 
     await handler({ detail: { tenantId: 'tenant1' } });
 

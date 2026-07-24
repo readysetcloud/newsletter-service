@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Newsletter Content Curator",
+  "version": "1.0.0",
+  "description": "Save links from LinkedIn posts to your newsletter content feed. Vetted candidates show up in an RSS feed ready for Friday writing sessions.",
+  "permissions": ["storage"],
+  "host_permissions": ["https://www.linkedin.com/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.linkedin.com/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Newsletter Content Curator"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

@@ -1,0 +1,38 @@
+.nlc-save-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 16px;
+  padding: 6px 12px;
+  border: 1px solid #0a66c2;
+  border-radius: 16px;
+  background: #ffffff;
+  color: #0a66c2;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.nlc-save-button:hover {
+  background: #eef3f8;
+}
+
+.nlc-save-button[data-state="saving"] {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.nlc-save-button[data-state="saved"] {
+  background: #057642;
+  border-color: #057642;
+  color: #ffffff;
+  cursor: default;
+}
+
+.nlc-save-button[data-state="error"] {
+  background: #fdf2f2;
+  border-color: #b74700;
+  color: #b74700;
+}

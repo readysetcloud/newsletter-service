@@ -12,7 +12,8 @@ export const EVENT_TYPES = {
   SUBSCRIBER_ADDED: 'Subscriber Added',
   SUBSCRIBER_REMOVED: 'Subscriber Removed',
   BRAND_UPDATED: 'Brand Updated',
-  SYSTEM_ALERT: 'System Alert'
+  SYSTEM_ALERT: 'System Alert',
+  CONTENT_CANDIDATE_SUBMITTED: 'Content Candidate Submitted'
 };
 
 /**

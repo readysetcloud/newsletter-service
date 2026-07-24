@@ -23,7 +23,114 @@ tags:
   - name: Tracking
   - name: Engagement
   - name: Links
+  - name: Content
 paths:
+  /content-candidates:
+    post:
+      summary: Submit content candidates for newsletter vetting
+      description: |
+        Accepts links captured in the wild (e.g. by the LinkedIn Chrome
+        extension) along with the social post context they were found in.
+        Each link is normalized and deduped per tenant, stored as a pending
+        candidate, and vetted asynchronously by an AI agent against the
+        tenant's newsletter focus.
+      tags:
+        - Content
+      security:
+        - ApiKeyHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitContentCandidatesRequest"
+      responses:
+        201:
+          description: At least one new candidate accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubmitContentCandidatesResponse"
+        200:
+          description: Nothing new accepted (all duplicates or invalid)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubmitContentCandidatesResponse"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-request-validator: Validate All
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SubmitContentCandidateFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
+  /content-candidates/feed:
+    get:
+      summary: Get the vetted content candidate feed
+      description: |
+        Returns content candidates from the trailing window (default 7 days)
+        as an RSS 2.0 feed of vetted, recommended links — ready for a Friday
+        writing session — or as JSON including pending/failed/skipped items.
+        Because RSS readers often cannot set headers, the tenant API key may
+        be supplied via the `key` query parameter instead of the
+        Authorization header; the handler validates it directly.
+      tags:
+        - Content
+      parameters:
+        - name: key
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Tenant API key (alternative to the Authorization header)
+        - name: days
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 31
+          description: Trailing window in days (default 7)
+        - name: format
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [rss, json]
+          description: Response format (default rss)
+      responses:
+        200:
+          description: Content candidate feed
+          content:
+            application/rss+xml:
+              schema:
+                type: string
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContentFeedResponse"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        403:
+          description: Missing or invalid API key
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        500:
+          $ref: "#/components/responses/UnknownError"
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetContentFeedFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+
   /links:
     post:
       summary: Mint a tracked short link
@@ -477,6 +584,133 @@ components:
           type: integer
           minimum: 0
           description: Client-reported time between form render and submit (ms)
+
+    SubmitContentCandidatesRequest:
+      description: Body for POST /content-candidates
+      type: object
+      required:
+        - links
+      properties:
+        links:
+          type: array
+          minItems: 1
+          maxItems: 10
+          description: Links found in the post
+          items:
+            type: object
+            required:
+              - url
+            properties:
+              url:
+                type: string
+                minLength: 1
+                maxLength: 2048
+                pattern: '^https?://'
+              anchorText:
+                type: string
+                maxLength: 300
+        source:
+          type: string
+          enum: [linkedin, manual, other]
+          description: Where the links were captured
+        post:
+          type: object
+          description: Context about the social post the links came from
+          properties:
+            author:
+              type: string
+              maxLength: 200
+            text:
+              type: string
+              maxLength: 2000
+            url:
+              type: string
+              maxLength: 2048
+              pattern: '^https?://'
+
+    SubmitContentCandidatesResponse:
+      description: Result of a content candidate submission
+      type: object
+      properties:
+        accepted:
+          type: array
+          description: Newly stored candidates queued for vetting
+          items:
+            type: object
+            properties:
+              url:
+                type: string
+              urlHash:
+                type: string
+        duplicates:
+          type: array
+          description: Normalized URLs already submitted for this tenant
+          items:
+            type: string
+        invalid:
+          type: array
+          description: Entries that could not be parsed as http(s) URLs
+          items:
+            type: string
+
+    ContentFeedResponse:
+      description: JSON representation of the content candidate feed
+      type: object
+      properties:
+        since:
+          type: string
+          format: date-time
+        count:
+          type: integer
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              url:
+                type: string
+              submittedUrl:
+                type: string
+              urlHash:
+                type: string
+              status:
+                type: string
+                enum: [pending, vetted, failed]
+              source:
+                type: string
+              submittedAt:
+                type: string
+                format: date-time
+              vettedAt:
+                type: string
+                format: date-time
+              anchorText:
+                type: string
+              post:
+                type: object
+                properties:
+                  author:
+                    type: string
+                  text:
+                    type: string
+                  url:
+                    type: string
+              verdict:
+                type: object
+                properties:
+                  recommendation:
+                    type: string
+                    enum: [include, maybe, skip]
+                  score:
+                    type: number
+                  title:
+                    type: string
+                  summary:
+                    type: string
+                  reasons:
+                    type: array
+                    items:
+                      type: string
 
     MintLinkRequest:
       description: Body for POST /links

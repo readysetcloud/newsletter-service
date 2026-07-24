@@ -2864,6 +2864,120 @@ Resources:
         Comment: Campaign short-code redirect
       Name: campaign-short-redirect
 
+  SubmitContentCandidateFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - content/submit-content-candidate.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: content/submit-content-candidate.handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+      Events:
+        Submit:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /content-candidates
+            Method: POST
+            Auth:
+              Authorizer: LambdaAuthorizer
+
+  VetContentCandidateFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - content/vet-content-candidate.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: content/vet-content-candidate.handler
+      Timeout: 60
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+          MODEL_ID: us.amazon.nova-pro-v1:0
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - arn:aws:bedrock:*::foundation-model/amazon.nova-*
+                - !Sub arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/us.amazon.nova-*
+      Events:
+        CandidateSubmitted:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - newsletter-service
+              detail-type:
+                - Content Candidate Submitted
+
+  GetContentFeedFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - content/get-content-feed.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: content/get-content-feed.handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref NewsletterTable
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource: !Sub "${NewsletterTable.Arn}/index/GSI1"
+      Events:
+        Feed:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NewsletterApi
+            Path: /content-candidates/feed
+            Method: GET
+            Auth:
+              Authorizer: NONE
+
   MintCampaignLinkFunction:
     Type: AWS::Serverless::Function
     Metadata:

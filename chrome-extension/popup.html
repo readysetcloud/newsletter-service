@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Newsletter Content Curator</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <h1>📰 Newsletter Content Curator</h1>
+  </header>
+
+  <section id="settings">
+    <h2>Settings</h2>
+    <label for="apiBaseUrl">API base URL</label>
+    <input type="url" id="apiBaseUrl" placeholder="https://your-api.example.com/public">
+    <label for="apiKey">API key</label>
+    <input type="password" id="apiKey" placeholder="ak_...">
+    <button id="saveSettings">Save settings</button>
+    <p id="settingsStatus" class="status" hidden></p>
+  </section>
+
+  <section id="feed">
+    <h2>Friday feed</h2>
+    <p class="hint">Vetted links from the past week, ready when you write:</p>
+    <div class="feed-links">
+      <a id="rssLink" href="#" target="_blank" rel="noopener">Open RSS feed</a>
+      <a id="jsonLink" href="#" target="_blank" rel="noopener">Open JSON view</a>
+      <button id="copyRss">Copy RSS URL for your reader</button>
+    </div>
+    <p id="feedStatus" class="status" hidden></p>
+  </section>
+
+  <section id="recent">
+    <h2>Recently saved</h2>
+    <ul id="recentList"></ul>
+    <p id="recentEmpty" class="hint">Nothing saved yet. Browse LinkedIn and hit “Save for newsletter” on posts with links.</p>
+  </section>
+
+  <script src="popup.js"></script>
+</body>
+</html>

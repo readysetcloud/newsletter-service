@@ -45,6 +45,7 @@ At a high level:
 - preview or schedule sends
 - resend issues and rebuild analytics
 - sync newsletter content from external sources such as GitHub
+- curate community content: capture links from LinkedIn via the Chrome extension (`chrome-extension/`), vet them with AI, and serve them as an RSS feed for writing sessions (see `docs/content-curation.md`)
 - render sponsor placements directly into newsletter templates when sponsor data is attached to an issue
 
 ### Sponsorship workflows

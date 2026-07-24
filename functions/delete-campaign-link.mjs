@@ -1,4 +1,4 @@
-import { DynamoDBClient, QueryCommand, BatchWriteItemCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, QueryCommand, BatchWriteItemCommand, GetItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import '@aws-sdk/signature-v4a';
 import {
@@ -6,7 +6,7 @@ import {
   DescribeKeyValueStoreCommand,
   DeleteKeyCommand,
 } from '@aws-sdk/client-cloudfront-keyvaluestore';
-import { formatResponse, formatEmptyResponse } from './utils/helpers.mjs';
+import { formatResponse, formatEmptyResponse, getTenantId, isOwnedByTenant } from './utils/helpers.mjs';
 
 const ddb = new DynamoDBClient();
 const kvs = new CloudFrontKeyValueStoreClient();
@@ -14,16 +14,37 @@ const kvs = new CloudFrontKeyValueStoreClient();
 const CODE_PATTERN = /^[A-Za-z0-9]{6}$/;
 
 export const handler = async (event) => {
+  const tenantId = getTenantId(event);
+  if (!tenantId) {
+    return formatResponse(401, 'Unauthorized');
+  }
+
   const code = event.pathParameters?.code;
   if (!code || !CODE_PATTERN.test(code)) {
     return formatResponse(400, 'code must be 6 alphanumeric characters');
   }
 
+  const pk = `CAMPAIGN_LINK_CODE#${code}`;
+  const metadata = await getMetadata(pk);
+  // A link owned by another tenant is reported as 404 (existence hidden). A
+  // missing link is treated as already-deleted (idempotent 204).
+  if (metadata && !isOwnedByTenant(metadata, tenantId)) {
+    return formatResponse(404, `Code ${code} not found`);
+  }
+
   await deleteKvsKey(code);
-  await deletePartition(`CAMPAIGN_LINK_CODE#${code}`);
+  await deletePartition(pk);
 
   return formatEmptyResponse();
 };
+
+async function getMetadata(pk) {
+  const result = await ddb.send(new GetItemCommand({
+    TableName: process.env.TABLE_NAME,
+    Key: marshall({ pk, sk: 'METADATA' }),
+  }));
+  return result.Item ? unmarshall(result.Item) : null;
+}
 
 async function deleteKvsKey(code) {
   const describe = await kvs.send(new DescribeKeyValueStoreCommand({ KvsARN: process.env.KVS_ARN }));

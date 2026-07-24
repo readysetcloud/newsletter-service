@@ -1,12 +1,17 @@
 import { DynamoDBClient, QueryCommand, BatchGetItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
-import { formatResponse } from './utils/helpers.mjs';
+import { formatResponse, getTenantId } from './utils/helpers.mjs';
 
 const ddb = new DynamoDBClient();
 
 const MAX_CAMPAIGN_ID_LENGTH = 128;
 
 export const handler = async (event) => {
+  const tenantId = getTenantId(event);
+  if (!tenantId) {
+    return formatResponse(401, 'Unauthorized');
+  }
+
   const campaignId = event.pathParameters?.campaignId;
   if (!campaignId || typeof campaignId !== 'string' || campaignId.trim().length === 0) {
     return formatResponse(400, 'campaignId is required');
@@ -15,7 +20,7 @@ export const handler = async (event) => {
     return formatResponse(400, `campaignId exceeds ${MAX_CAMPAIGN_ID_LENGTH} chars`);
   }
 
-  const links = await queryCampaignLinks(campaignId);
+  const links = await queryCampaignLinks(campaignId, tenantId);
   const analyticsByCode = await batchGetAnalytics(links.map((link) => link.code));
 
   return formatResponse(200, {
@@ -29,7 +34,7 @@ export const handler = async (event) => {
   });
 };
 
-async function queryCampaignLinks(campaignId) {
+async function queryCampaignLinks(campaignId, tenantId) {
   const links = [];
   let exclusiveStartKey;
 
@@ -38,8 +43,12 @@ async function queryCampaignLinks(campaignId) {
       TableName: process.env.TABLE_NAME,
       IndexName: 'GSI2',
       KeyConditionExpression: 'GSI2PK = :campaign',
+      // campaignId is caller-supplied and can collide across tenants, so scope
+      // to the caller's tenant. Legacy links (no tenantId) remain included.
+      FilterExpression: 'attribute_not_exists(tenantId) OR tenantId = :tenantId',
       ExpressionAttributeValues: marshall({
         ':campaign': `CAMPAIGN_LINK_CAMPAIGN#${campaignId}`,
+        ':tenantId': tenantId,
       }),
       ExclusiveStartKey: exclusiveStartKey,
     }));

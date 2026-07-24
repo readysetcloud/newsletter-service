@@ -17,15 +17,40 @@ describe('get-campaign-link', () => {
     jest.clearAllMocks();
   });
 
+  const evt = (pathParameters, tenantId = 'tenant-1') => ({
+    pathParameters,
+    requestContext: { authorizer: { tenantId } },
+  });
+
+  test('returns 401 when tenant is missing from authorizer context', async () => {
+    const res = await handler({ pathParameters: { code: 'aB3xKp' } });
+    expect(res.statusCode).toBe(401);
+    expect(mockDdbSend).not.toHaveBeenCalled();
+  });
+
   test('returns 400 when code is missing or malformed', async () => {
-    expect((await handler({})).statusCode).toBe(400);
-    expect((await handler({ pathParameters: { code: 'abc' } })).statusCode).toBe(400);
-    expect((await handler({ pathParameters: { code: 'ABCDEFG' } })).statusCode).toBe(400);
+    expect((await handler(evt(undefined))).statusCode).toBe(400);
+    expect((await handler(evt({ code: 'abc' }))).statusCode).toBe(400);
+    expect((await handler(evt({ code: 'ABCDEFG' }))).statusCode).toBe(400);
   });
 
   test('returns 404 when not found', async () => {
     mockDdbSend.mockResolvedValueOnce({});
-    const res = await handler({ pathParameters: { code: 'aB3xKp' } });
+    const res = await handler(evt({ code: 'aB3xKp' }));
+    expect(res.statusCode).toBe(404);
+  });
+
+  test('returns 404 when the link belongs to another tenant', async () => {
+    mockDdbSend.mockResolvedValueOnce({
+      Item: marshall({
+        pk: 'CAMPAIGN_LINK_CODE#aB3xKp',
+        sk: 'METADATA',
+        code: 'aB3xKp',
+        tenantId: 'other-tenant',
+        url: 'https://example.com/post',
+      }),
+    });
+    const res = await handler(evt({ code: 'aB3xKp' }));
     expect(res.statusCode).toBe(404);
   });
 
@@ -35,6 +60,7 @@ describe('get-campaign-link', () => {
         pk: 'CAMPAIGN_LINK_CODE#aB3xKp',
         sk: 'METADATA',
         code: 'aB3xKp',
+        tenantId: 'tenant-1',
         url: 'https://example.com/post',
         src: 'linkedin',
         campaignId: 'issue-123',
@@ -44,7 +70,7 @@ describe('get-campaign-link', () => {
       }),
     });
 
-    const res = await handler({ pathParameters: { code: 'aB3xKp' } });
+    const res = await handler(evt({ code: 'aB3xKp' }));
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body).toEqual({

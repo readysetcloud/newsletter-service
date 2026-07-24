@@ -146,8 +146,12 @@ const updateSubscriberCount = async (tenantId) => {
       const queryParams = {
         TableName: process.env.SUBSCRIBERS_TABLE_NAME,
         KeyConditionExpression: 'tenantId = :tenantId',
+        // Exclude segment/infra rows that overload the `email` sort key so the
+        // recomputed subscriber count reflects real subscribers only.
+        FilterExpression: 'NOT begins_with(email, :segPrefix)',
         ExpressionAttributeValues: marshall({
-          ':tenantId': tenantId
+          ':tenantId': tenantId,
+          ':segPrefix': 'SEGMENT'
         }),
         Select: 'COUNT'
       };

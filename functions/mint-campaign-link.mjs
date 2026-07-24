@@ -7,7 +7,7 @@ import {
   PutKeyCommand,
 } from '@aws-sdk/client-cloudfront-keyvaluestore';
 import crypto from 'crypto';
-import { formatResponse } from './utils/helpers.mjs';
+import { formatResponse, getTenantId } from './utils/helpers.mjs';
 
 const ddb = new DynamoDBClient();
 const kvs = new CloudFrontKeyValueStoreClient();
@@ -19,6 +19,11 @@ const DEFAULT_EXPIRES_IN_DAYS = 730;
 const MAX_EXPIRES_IN_DAYS = 1825;
 
 export const handler = async (event) => {
+  const tenantId = getTenantId(event);
+  if (!tenantId) {
+    return formatResponse(401, 'Unauthorized');
+  }
+
   if (!event.body) {
     return formatResponse(400, 'Missing request body');
   }
@@ -63,7 +68,7 @@ export const handler = async (event) => {
   const now = new Date();
   const expiresAt = new Date(now.getTime() + ttlDays * 86400 * 1000).toISOString();
 
-  const code = await allocateUniqueCode(now.toISOString(), expiresAt, url, src, campaignId);
+  const code = await allocateUniqueCode(tenantId, now.toISOString(), expiresAt, url, src, campaignId);
   if (!code) {
     return formatResponse(503, 'Could not allocate a unique code');
   }
@@ -80,7 +85,7 @@ export const handler = async (event) => {
   });
 };
 
-async function allocateUniqueCode(createdAt, expiresAt, url, src, campaignId) {
+async function allocateUniqueCode(tenantId, createdAt, expiresAt, url, src, campaignId) {
   for (let attempt = 0; attempt < MAX_COLLISION_RETRIES; attempt++) {
     const code = generateCode();
     const item = {
@@ -89,6 +94,7 @@ async function allocateUniqueCode(createdAt, expiresAt, url, src, campaignId) {
       GSI1PK: 'CAMPAIGN_LINK_CODE_EXPIRY',
       GSI1SK: expiresAt,
       entity: 'CampaignLink',
+      tenantId,
       code,
       url,
       src: src || null,

@@ -5,8 +5,12 @@ import { Octokit } from 'octokit';
 import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 
-let octokit;
-let tenants = {};
+// Warm-container caches. These MUST be keyed by tenantId — a single shared
+// value would leak the first tenant loaded into a container to every
+// subsequent tenant that hits the same warm Lambda.
+const octokits = new Map();
+const tenants = new Map();
+const GLOBAL_OCTOKIT_KEY = Symbol.for('global-octokit');
 const ddb = new DynamoDBClient();
 const ivLength = 16;
 const algorithm = 'aes-256-gcm';
@@ -14,42 +18,65 @@ const TPS_LIMIT = 5;
 const MAX_RETRIES = 3;
 
 export const getOctokit = async (tenantId) => {
-  if (!octokit) {
-    let secrets;
-    if (tenantId) {
-      const tenant = await getTenant(tenantId);
-      secrets = await getParameter(tenant.apiKeyParameter, { decrypt: true, transform: 'json' });
-    } else {
-      secrets = await getSecret(process.env.SECRET_ID, { transform: 'json' });
-    }
-
-    const auth = secrets.github;
-    octokit = new Octokit({ auth });
+  const cacheKey = tenantId || GLOBAL_OCTOKIT_KEY;
+  const cached = octokits.get(cacheKey);
+  if (cached) {
+    return cached;
   }
 
-  return octokit;
+  let secrets;
+  if (tenantId) {
+    const tenant = await getTenant(tenantId);
+    secrets = await getParameter(tenant.apiKeyParameter, { decrypt: true, transform: 'json' });
+  } else {
+    secrets = await getSecret(process.env.SECRET_ID, { transform: 'json' });
+  }
+
+  const client = new Octokit({ auth: secrets.github });
+  octokits.set(cacheKey, client);
+  return client;
 };
 
 export const getTenant = async (tenantId) => {
-  if (tenants.tenantId) {
-    return tenants.tenantId;
-  } else {
-    const result = await ddb.send(new GetItemCommand({
-      TableName: process.env.TABLE_NAME,
-      Key: marshall({
-        pk: tenantId,
-        sk: 'tenant'
-      })
-    }));
-
-    if (!result.Item) {
-      throw new Error(`Tenant '${tenantId}' not found`);
-    }
-
-    const data = unmarshall(result.Item);
-    tenants.tenantId = data;
-    return data;
+  const cached = tenants.get(tenantId);
+  if (cached) {
+    return cached;
   }
+
+  const result = await ddb.send(new GetItemCommand({
+    TableName: process.env.TABLE_NAME,
+    Key: marshall({
+      pk: tenantId,
+      sk: 'tenant'
+    })
+  }));
+
+  if (!result.Item) {
+    throw new Error(`Tenant '${tenantId}' not found`);
+  }
+
+  const data = unmarshall(result.Item);
+  tenants.set(tenantId, data);
+  return data;
+};
+
+/**
+ * Resolve the authenticated tenant id from the API Gateway Lambda authorizer
+ * context. The authorizer (functions/src/auth/lambda-authorizer.rs) sets
+ * `tenantId` for both API-key and JWT auth. Returns null when absent so callers
+ * can decide how to respond.
+ */
+export const getTenantId = (event) => {
+  return event?.requestContext?.authorizer?.tenantId || null;
+};
+
+/**
+ * Ownership predicate for tenant-scoped records. Rows without a `tenantId`
+ * are legacy (pre-tenant-scoping) rows and are treated as owned so existing
+ * data stays accessible until backfilled; rows with a `tenantId` must match.
+ */
+export const isOwnedByTenant = (row, tenantId) => {
+  return !row?.tenantId || row.tenantId === tenantId;
 };
 
 export const formatResponse = (statusCode, body) => {

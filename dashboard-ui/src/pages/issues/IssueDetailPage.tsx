@@ -523,7 +523,11 @@ export const IssueDetailPage: React.FC = () => {
   // The content heatmap overlays click data on the rendered markdown, so it only
   // applies to markdown issues that have per-link analytics.
   const canShowHeatmap = useMemo(
-    () => issue?.contentType !== 'json' && !!analytics?.links && analytics.links.length > 0,
+    () =>
+      issue?.contentType !== 'json' &&
+      issue?.contentType !== 'html' &&
+      !!analytics?.links &&
+      analytics.links.length > 0,
     [issue?.contentType, analytics]
   );
 
@@ -1210,6 +1214,17 @@ export const IssueDetailPage: React.FC = () => {
                   <pre className="overflow-x-auto rounded-lg border border-border bg-muted/40 p-4 text-sm font-mono text-foreground whitespace-pre-wrap break-words">
                     {issue.content}
                   </pre>
+                ) : issue.contentType === 'html' ? (
+                  // Pre-rendered email masters are fully self-styled and assume a
+                  // light, email-client background. The sandboxed iframe keeps the
+                  // app's theme (e.g. dark-mode text color overrides) out of the
+                  // email and the email's <style> block out of the app.
+                  <iframe
+                    srcDoc={issue.content}
+                    sandbox=""
+                    title="Rendered email preview"
+                    className="h-[70vh] w-full rounded-lg border border-border bg-white"
+                  />
                 ) : (
                   <MarkdownPreview content={issue.content} />
                 )}

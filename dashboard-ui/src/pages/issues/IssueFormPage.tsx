@@ -145,7 +145,10 @@ export const IssueFormPage: React.FC = () => {
           issueNumber: issue.issueNumber ? String(issue.issueNumber) : '',
           scheduledAt: issue.scheduledAt ? toDatetimeLocal(issue.scheduledAt) : '',
           templateId: issue.templateId ?? DEFAULT_TEMPLATE_VALUE,
-          contentType: issue.contentType === 'json' ? 'json' : 'markdown',
+          // Preserve 'html' so editing a pre-rendered issue doesn't silently
+          // flip it to markdown on save (which would send the raw master
+          // through the markdown pipeline).
+          contentType: issue.contentType ?? 'markdown',
         });
 
         // Hydrate A/B test config, converting send times to datetime-local.

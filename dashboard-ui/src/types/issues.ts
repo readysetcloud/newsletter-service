@@ -5,7 +5,7 @@ export type IssueStatus = 'draft' | 'scheduled' | 'in progress' | 'published' | 
  * - `markdown`: content is markdown (rendered to HTML on publish).
  * - `json`: content is a JSON data object rendered against a selected template.
  */
-export type IssueContentType = 'markdown' | 'json';
+export type IssueContentType = 'markdown' | 'json' | 'html';
 
 export interface IssueListItem {
   id: string;

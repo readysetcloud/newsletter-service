@@ -1792,16 +1792,50 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
                     "Idempotency key reuse with different payload".to_string(),
                 ));
             }
-            return Err(AppError::Conflict("Duplicate request".to_string()));
+            // Exact replay of a request we already processed: succeed
+            // idempotently with the previously created issue rather than 409,
+            // so CI re-runs of the same commit don't fail the workflow. If the
+            // issue has since been deleted (e.g. an expired draft), fall
+            // through and process the request as a fresh create.
+            match get_issue_by_id(&tenant_id, &existing.issue_number.to_string()).await {
+                Ok(issue) => {
+                    return response::format_response(
+                        200,
+                        CreateIssueResponse {
+                            id: issue.issue_number.to_string(),
+                            issue_number: issue.issue_number,
+                            subject: issue.subject,
+                            status: issue.status,
+                            content: issue.content,
+                            created_at: issue.created_at,
+                            updated_at: issue.updated_at,
+                            content_type: normalize_content_type(issue.content_type.as_deref()),
+                        },
+                    );
+                }
+                Err(AppError::NotFound(_)) => {}
+                Err(err) => return Err(err),
+            }
         }
     }
 
+    // An existing record only blocks the create while it is past the draft
+    // stage. Overwriting a draft is allowed on purpose: the GitHub flow stages
+    // a draft from the PR (re-staged on every push) and later re-posts the
+    // same issue number with action: schedule when the PR merges.
+    let mut overwrite_draft = false;
     let issue_number = if let Some(issue_number) = body.issue_number {
-        if issue_exists(&tenant_id, issue_number).await? {
-            return Err(AppError::Conflict(format!(
-                "Issue {} already exists",
-                issue_number
-            )));
+        match get_issue_status(&tenant_id, issue_number).await? {
+            None => {}
+            Some(status) if status == "draft" => {
+                overwrite_draft = true;
+            }
+            Some(_) => {
+                return Err(AppError::Conflict(format!(
+                    "Issue {} already exists",
+                    issue_number
+                )));
+            }
         }
         issue_number
     } else {
@@ -1825,6 +1859,7 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
         ab_test,
         local_send,
         content_assembly,
+        overwrite_draft,
     )
     .await?;
 
@@ -3286,23 +3321,34 @@ fn compute_idempotency_hash(
     hex::encode(hasher.finalize())
 }
 
-async fn issue_exists(tenant_id: &str, issue_number: i32) -> Result<bool, AppError> {
+/// Returns the status of an issue, or None when no record exists. Used by the
+/// create path to decide whether an existing record may be overwritten (drafts
+/// only).
+async fn get_issue_status(
+    tenant_id: &str,
+    issue_number: i32,
+) -> Result<Option<String>, AppError> {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
         .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
 
     let pk = format!("{}#{}", tenant_id, issue_number);
-    let sk = "newsletter";
 
     let result = ddb_client
         .get_item()
         .table_name(&table_name)
         .key("pk", AttributeValue::S(pk))
-        .key("sk", AttributeValue::S(sk.to_string()))
+        .key("sk", AttributeValue::S("newsletter".to_string()))
+        .projection_expression("#status")
+        .expression_attribute_names("#status", "status")
         .send()
         .await?;
 
-    Ok(result.item().is_some())
+    Ok(result.item().and_then(|item| {
+        item.get("status")
+            .and_then(|v| v.as_s().ok())
+            .map(|s| s.to_string())
+    }))
 }
 
 async fn validate_template_exists(tenant_id: &str, template_id: &str) -> Result<(), AppError> {
@@ -3509,6 +3555,23 @@ async fn schedule_draft_deletion(
     let schedule_expression = format!("at({})", run_at.format("%Y-%m-%dT%H:%M:%S"));
     let schedule_name = build_draft_ttl_schedule_name(tenant_id, issue_number);
 
+    // Re-staging a draft (same issue number) replaces its TTL schedule; the
+    // name is deterministic, so drop any previous schedule first. A missing
+    // schedule is the normal case; any real problem resurfaces on create.
+    if let Err(err) = scheduler
+        .delete_schedule()
+        .name(&schedule_name)
+        .group_name("newsletter")
+        .send()
+        .await
+    {
+        tracing::debug!(
+            "No prior draft TTL schedule {} to delete: {}",
+            schedule_name,
+            err
+        );
+    }
+
     let detail = serde_json::json!({
         "tenantId": tenant_id,
         "issueNumber": issue_number
@@ -3604,6 +3667,7 @@ async fn create_issue_record(
     ab_test: Option<serde_json::Value>,
     local_send: Option<serde_json::Value>,
     content_assembly: Option<serde_json::Value>,
+    overwrite_draft: bool,
 ) -> Result<CreateIssueResponse, AppError> {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
@@ -3685,13 +3749,22 @@ async fn create_issue_record(
         );
     }
 
-    ddb_client
+    // Overwrites are only permitted while the record is still a draft; the
+    // condition re-checks the status so a concurrent schedule/publish between
+    // the caller's status read and this write can't be clobbered.
+    let mut put = ddb_client
         .put_item()
         .table_name(&table_name)
-        .set_item(Some(item))
-        .condition_expression("attribute_not_exists(pk) AND attribute_not_exists(sk)")
-        .send()
-        .await?;
+        .set_item(Some(item));
+    if overwrite_draft {
+        put = put
+            .condition_expression("attribute_not_exists(pk) OR #status = :draftStatus")
+            .expression_attribute_names("#status", "status")
+            .expression_attribute_values(":draftStatus", AttributeValue::S("draft".to_string()));
+    } else {
+        put = put.condition_expression("attribute_not_exists(pk) AND attribute_not_exists(sk)");
+    }
+    put.send().await?;
 
     Ok(CreateIssueResponse {
         id: issue_number.to_string(),

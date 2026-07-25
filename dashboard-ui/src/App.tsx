@@ -1,5 +1,6 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from '@/contexts/AuthContext';
+import { SettingsProvider } from '@/contexts/SettingsContext';
 import { ToastProvider } from '@/components/ui/Toast';
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
 import { OnboardingGuard } from '@/components/auth/OnboardingGuard';
@@ -12,6 +13,7 @@ import {
   LazyDashboardPage,
   LazyBrandPage,
   LazyProfilePage,
+  LazySettingsPage,
   LazyApiKeysPage,
   LazySenderEmailSetupPage,
   LazyBillingPage,
@@ -49,462 +51,482 @@ function App() {
     <ErrorBoundary>
       <Router>
         <AuthProvider>
-          <ToastProvider>
-            <div className="min-h-screen bg-background overflow-x-hidden flex flex-col">
-              <div className="flex-1">
-                <Routes>
-                  {/* Public Routes */}
-                  <Route
-                    path="/login"
-                    element={
-                      <RouteErrorBoundary routeName="Login">
-                        <PageLoader>
-                          <LazyLoginPage />
-                        </PageLoader>
-                      </RouteErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/signup"
-                    element={
-                      <RouteErrorBoundary routeName="Sign Up">
-                        <PageLoader>
-                          <LazySignUpPage />
-                        </PageLoader>
-                      </RouteErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/verify-sender"
-                    element={
-                      <RouteErrorBoundary routeName="Verify Sender">
-                        <PageLoader>
-                          <VerifySenderPage />
-                        </PageLoader>
-                      </RouteErrorBoundary>
-                    }
-                  />
+          {/* Tenant defaults (timezone, send time) — loaded once and shared by
+              every page that formats a date. */}
+          <SettingsProvider>
+            <ToastProvider>
+              <div className="min-h-screen bg-background overflow-x-hidden flex flex-col">
+                <div className="flex-1">
+                  <Routes>
+                    {/* Public Routes */}
+                    <Route
+                      path="/login"
+                      element={
+                        <RouteErrorBoundary routeName="Login">
+                          <PageLoader>
+                            <LazyLoginPage />
+                          </PageLoader>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/signup"
+                      element={
+                        <RouteErrorBoundary routeName="Sign Up">
+                          <PageLoader>
+                            <LazySignUpPage />
+                          </PageLoader>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/verify-sender"
+                      element={
+                        <RouteErrorBoundary routeName="Verify Sender">
+                          <PageLoader>
+                            <VerifySenderPage />
+                          </PageLoader>
+                        </RouteErrorBoundary>
+                      }
+                    />
 
-                  {/* Onboarding Routes */}
-                  <Route
-                    path="/onboarding/brand"
-                    element={
-                      <RouteErrorBoundary routeName="Brand Onboarding">
-                        <ProtectedRoute>
-                          <BrandOnboardingPage />
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/onboarding/profile"
-                    element={
-                      <RouteErrorBoundary routeName="Profile Onboarding">
-                        <ProtectedRoute>
-                          <ProfileOnboardingPage />
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/onboarding/sender"
-                    element={
-                      <RouteErrorBoundary routeName="Sender Onboarding">
-                        <ProtectedRoute>
-                          <SenderOnboardingPage />
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
+                    {/* Onboarding Routes */}
+                    <Route
+                      path="/onboarding/brand"
+                      element={
+                        <RouteErrorBoundary routeName="Brand Onboarding">
+                          <ProtectedRoute>
+                            <BrandOnboardingPage />
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/onboarding/profile"
+                      element={
+                        <RouteErrorBoundary routeName="Profile Onboarding">
+                          <ProtectedRoute>
+                            <ProfileOnboardingPage />
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/onboarding/sender"
+                      element={
+                        <RouteErrorBoundary routeName="Sender Onboarding">
+                          <ProtectedRoute>
+                            <SenderOnboardingPage />
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
 
-                  {/* Protected Routes with Onboarding Guard — wrapped in AppShell */}
-                  <Route
-                    path="/"
-                    element={
-                      <RouteErrorBoundary routeName="Dashboard">
-                        <ProtectedRoute>
-                          <OnboardingGuard>
-                            <AppShell>
-                              <PageLoader>
-                                <LazyDashboardPage />
-                              </PageLoader>
-                            </AppShell>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/brand"
-                    element={
-                      <RouteErrorBoundary routeName="Brand">
-                        <ProtectedRoute>
-                          <OnboardingGuard allowOnboarding>
-                            <AppShell>
-                              <PageLoader>
-                                <LazyBrandPage />
-                              </PageLoader>
-                            </AppShell>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/profile"
-                    element={
-                      <RouteErrorBoundary routeName="Profile">
-                        <ProtectedRoute>
-                          <OnboardingGuard allowOnboarding>
-                            <AppShell>
-                              <PageLoader>
-                                <LazyProfilePage />
-                              </PageLoader>
-                            </AppShell>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/api-keys"
-                    element={
-                      <RouteErrorBoundary routeName="API Keys">
-                        <ProtectedRoute>
-                          <OnboardingGuard>
-                            <AppShell>
-                              <PageLoader>
-                                <LazyApiKeysPage />
-                              </PageLoader>
-                            </AppShell>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/senders"
-                    element={
-                      <RouteErrorBoundary routeName="Sender Email Setup">
-                        <ProtectedRoute>
-                          <OnboardingGuard>
-                            <AppShell>
-                              <PageLoader>
-                                <LazySenderEmailSetupPage />
-                              </PageLoader>
-                            </AppShell>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/billing"
-                    element={
-                      <RouteErrorBoundary routeName="Billing">
-                        <ProtectedRoute>
-                          <OnboardingGuard>
-                            <AppShell>
-                              <PageLoader>
-                                <LazyBillingPage />
-                              </PageLoader>
-                            </AppShell>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/pricing"
-                    element={
-                      <RouteErrorBoundary routeName="Sponsors">
-                        <ProtectedRoute>
-                          <OnboardingGuard>
-                            <AppShell>
-                              <PageLoader>
-                                <LazySponsorshipPricingPage />
-                              </PageLoader>
-                            </AppShell>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/subscribers"
-                    element={
-                      <RouteErrorBoundary routeName="Subscribers">
-                        <ProtectedRoute>
-                          <OnboardingGuard>
-                            <AppShell>
-                              <PageLoader>
-                                <LazySubscribersPage />
-                              </PageLoader>
-                            </AppShell>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/sponsors"
-                    element={
-                      <RouteErrorBoundary routeName="Sponsors">
-                        <ProtectedRoute>
-                          <OnboardingGuard>
-                            <AppShell>
-                              <PageLoader>
-                                <LazySponsorDirectoryPage />
-                              </PageLoader>
-                            </AppShell>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/sponsors/:sponsorId"
-                    element={
-                      <RouteErrorBoundary routeName="Sponsor Details">
-                        <ProtectedRoute>
-                          <OnboardingGuard>
-                            <AppShell>
-                              <PageLoader>
-                                <LazySponsorDetailPage />
-                              </PageLoader>
-                            </AppShell>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/segments"
-                    element={<Navigate to="/subscribers" replace />}
-                  />
-                  <Route
-                    path="/segments/:segmentId"
-                    element={
-                      <RouteErrorBoundary routeName="Segment Details">
-                        <ProtectedRoute>
-                          <OnboardingGuard>
-                            <AppShell>
-                              <PageLoader>
-                                <LazySegmentDetailPage />
-                              </PageLoader>
-                            </AppShell>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/issues"
-                    element={
-                      <RouteErrorBoundary routeName="Issues">
-                        <ProtectedRoute>
-                          <OnboardingGuard>
-                            <AppShell>
-                              <PageLoader>
-                                <LazyIssuesListPage />
-                              </PageLoader>
-                            </AppShell>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/issues/new"
-                    element={
-                      <RouteErrorBoundary routeName="Create Issue">
-                        <ProtectedRoute>
-                          <OnboardingGuard>
-                            <AppShell>
-                              <PageLoader>
-                                <LazyIssueFormPage />
-                              </PageLoader>
-                            </AppShell>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/issues/:id"
-                    element={
-                      <RouteErrorBoundary routeName="Issue Details">
-                        <ProtectedRoute>
-                          <OnboardingGuard>
-                            <AppShell>
-                              <PageLoader>
-                                <LazyIssueDetailPage />
-                              </PageLoader>
-                            </AppShell>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/issues/:id/edit"
-                    element={
-                      <RouteErrorBoundary routeName="Edit Issue">
-                        <ProtectedRoute>
-                          <OnboardingGuard>
-                            <AppShell>
-                              <PageLoader>
-                                <LazyIssueFormPage />
-                              </PageLoader>
-                            </AppShell>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
+                    {/* Protected Routes with Onboarding Guard — wrapped in AppShell */}
+                    <Route
+                      path="/"
+                      element={
+                        <RouteErrorBoundary routeName="Dashboard">
+                          <ProtectedRoute>
+                            <OnboardingGuard>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazyDashboardPage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/brand"
+                      element={
+                        <RouteErrorBoundary routeName="Brand">
+                          <ProtectedRoute>
+                            <OnboardingGuard allowOnboarding>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazyBrandPage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/profile"
+                      element={
+                        <RouteErrorBoundary routeName="Profile">
+                          <ProtectedRoute>
+                            <OnboardingGuard allowOnboarding>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazyProfilePage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/settings"
+                      element={
+                        <RouteErrorBoundary routeName="Settings">
+                          <ProtectedRoute>
+                            <OnboardingGuard allowOnboarding>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazySettingsPage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/api-keys"
+                      element={
+                        <RouteErrorBoundary routeName="API Keys">
+                          <ProtectedRoute>
+                            <OnboardingGuard>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazyApiKeysPage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/senders"
+                      element={
+                        <RouteErrorBoundary routeName="Sender Email Setup">
+                          <ProtectedRoute>
+                            <OnboardingGuard>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazySenderEmailSetupPage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/billing"
+                      element={
+                        <RouteErrorBoundary routeName="Billing">
+                          <ProtectedRoute>
+                            <OnboardingGuard>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazyBillingPage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/pricing"
+                      element={
+                        <RouteErrorBoundary routeName="Sponsors">
+                          <ProtectedRoute>
+                            <OnboardingGuard>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazySponsorshipPricingPage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/subscribers"
+                      element={
+                        <RouteErrorBoundary routeName="Subscribers">
+                          <ProtectedRoute>
+                            <OnboardingGuard>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazySubscribersPage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/sponsors"
+                      element={
+                        <RouteErrorBoundary routeName="Sponsors">
+                          <ProtectedRoute>
+                            <OnboardingGuard>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazySponsorDirectoryPage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/sponsors/:sponsorId"
+                      element={
+                        <RouteErrorBoundary routeName="Sponsor Details">
+                          <ProtectedRoute>
+                            <OnboardingGuard>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazySponsorDetailPage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/segments"
+                      element={<Navigate to="/subscribers" replace />}
+                    />
+                    <Route
+                      path="/segments/:segmentId"
+                      element={
+                        <RouteErrorBoundary routeName="Segment Details">
+                          <ProtectedRoute>
+                            <OnboardingGuard>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazySegmentDetailPage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/issues"
+                      element={
+                        <RouteErrorBoundary routeName="Issues">
+                          <ProtectedRoute>
+                            <OnboardingGuard>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazyIssuesListPage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/issues/new"
+                      element={
+                        <RouteErrorBoundary routeName="Create Issue">
+                          <ProtectedRoute>
+                            <OnboardingGuard>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazyIssueFormPage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/issues/:id"
+                      element={
+                        <RouteErrorBoundary routeName="Issue Details">
+                          <ProtectedRoute>
+                            <OnboardingGuard>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazyIssueDetailPage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/issues/:id/edit"
+                      element={
+                        <RouteErrorBoundary routeName="Edit Issue">
+                          <ProtectedRoute>
+                            <OnboardingGuard>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazyIssueFormPage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
 
-                  <Route
-                    path="/reports"
-                    element={
-                      <RouteErrorBoundary routeName="Reports">
-                        <ProtectedRoute>
-                          <OnboardingGuard>
-                            <AppShell>
-                              <PageLoader>
-                                <LazyReportsListPage />
-                              </PageLoader>
-                            </AppShell>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/reports/:id"
-                    element={
-                      <RouteErrorBoundary routeName="Report Details">
-                        <ProtectedRoute>
-                          <OnboardingGuard>
-                            <AppShell>
-                              <PageLoader>
-                                <LazyReportDetailPage />
-                              </PageLoader>
-                            </AppShell>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
+                    <Route
+                      path="/reports"
+                      element={
+                        <RouteErrorBoundary routeName="Reports">
+                          <ProtectedRoute>
+                            <OnboardingGuard>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazyReportsListPage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/reports/:id"
+                      element={
+                        <RouteErrorBoundary routeName="Report Details">
+                          <ProtectedRoute>
+                            <OnboardingGuard>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazyReportDetailPage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
 
-                  <Route
-                    path="/templates"
-                    element={
-                      <RouteErrorBoundary routeName="Templates">
-                        <ProtectedRoute>
-                          <OnboardingGuard>
-                            <AppShell>
-                              <PageLoader>
-                                <LazyTemplatesListPage />
-                              </PageLoader>
-                            </AppShell>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/templates/new"
-                    element={
-                      <RouteErrorBoundary routeName="Create Template">
-                        <ProtectedRoute>
-                          <OnboardingGuard>
-                            <AppShell>
-                              <PageLoader>
-                                <LazyTemplateFormPage />
-                              </PageLoader>
-                            </AppShell>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/templates/:id/edit"
-                    element={
-                      <RouteErrorBoundary routeName="Edit Template">
-                        <ProtectedRoute>
-                          <OnboardingGuard>
-                            <AppShell>
-                              <PageLoader>
-                                <LazyTemplateFormPage />
-                              </PageLoader>
-                            </AppShell>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
+                    <Route
+                      path="/templates"
+                      element={
+                        <RouteErrorBoundary routeName="Templates">
+                          <ProtectedRoute>
+                            <OnboardingGuard>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazyTemplatesListPage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/templates/new"
+                      element={
+                        <RouteErrorBoundary routeName="Create Template">
+                          <ProtectedRoute>
+                            <OnboardingGuard>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazyTemplateFormPage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/templates/:id/edit"
+                      element={
+                        <RouteErrorBoundary routeName="Edit Template">
+                          <ProtectedRoute>
+                            <OnboardingGuard>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazyTemplateFormPage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
 
-                  <Route
-                    path="/snippets"
-                    element={
-                      <RouteErrorBoundary routeName="Snippets">
-                        <ProtectedRoute>
-                          <OnboardingGuard>
-                            <AppShell>
-                              <PageLoader>
-                                <LazySnippetsListPage />
-                              </PageLoader>
-                            </AppShell>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/snippets/new"
-                    element={
-                      <RouteErrorBoundary routeName="Create Snippet">
-                        <ProtectedRoute>
-                          <OnboardingGuard>
-                            <AppShell>
-                              <PageLoader>
-                                <LazySnippetFormPage />
-                              </PageLoader>
-                            </AppShell>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
-                  <Route
-                    path="/snippets/:id/edit"
-                    element={
-                      <RouteErrorBoundary routeName="Edit Snippet">
-                        <ProtectedRoute>
-                          <OnboardingGuard>
-                            <AppShell>
-                              <PageLoader>
-                                <LazySnippetFormPage />
-                              </PageLoader>
-                            </AppShell>
-                          </OnboardingGuard>
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
+                    <Route
+                      path="/snippets"
+                      element={
+                        <RouteErrorBoundary routeName="Snippets">
+                          <ProtectedRoute>
+                            <OnboardingGuard>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazySnippetsListPage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/snippets/new"
+                      element={
+                        <RouteErrorBoundary routeName="Create Snippet">
+                          <ProtectedRoute>
+                            <OnboardingGuard>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazySnippetFormPage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/snippets/:id/edit"
+                      element={
+                        <RouteErrorBoundary routeName="Edit Snippet">
+                          <ProtectedRoute>
+                            <OnboardingGuard>
+                              <AppShell>
+                                <PageLoader>
+                                  <LazySnippetFormPage />
+                                </PageLoader>
+                              </AppShell>
+                            </OnboardingGuard>
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
 
-                  {/* Catch all - redirect to home */}
-                  <Route path="*" element={<Navigate to="/" replace />} />
-                </Routes>
-              </div>
-              <footer className="border-t border-border bg-surface">
-                <div className="mx-auto max-w-7xl px-4 py-3 text-xs text-muted-foreground sm:px-6 lg:px-8">
-                  <div>© {new Date().getFullYear()} {BRAND.copyrightHolder}</div>
+                    {/* Catch all - redirect to home */}
+                    <Route path="*" element={<Navigate to="/" replace />} />
+                  </Routes>
                 </div>
-              </footer>
-            </div>
-          </ToastProvider>
+                <footer className="border-t border-border bg-surface">
+                  <div className="mx-auto max-w-7xl px-4 py-3 text-xs text-muted-foreground sm:px-6 lg:px-8">
+                    <div>© {new Date().getFullYear()} {BRAND.copyrightHolder}</div>
+                  </div>
+                </footer>
+              </div>
+            </ToastProvider>
+          </SettingsProvider>
         </AuthProvider>
       </Router>
     </ErrorBoundary>

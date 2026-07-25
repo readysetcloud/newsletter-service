@@ -5,6 +5,7 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '../ui/Card
 import { IssueStatusBadge } from './IssueStatusBadge';
 import { usePrefetchIssueDetail, shouldPrefetch } from '../../utils/prefetch';
 import type { IssueListItem } from '../../types/issues';
+import { useTenantDateFormat } from '@/contexts/SettingsContext';
 
 /**
  * Props for the IssueCard component
@@ -23,13 +24,9 @@ export interface IssueCardProps {
 export const IssueCard: React.FC<IssueCardProps> = React.memo(({ issue }) => {
   const { prefetchIssueComponents } = usePrefetchIssueDetail();
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
-    });
-  };
+  // Dates read in the newsletter's timezone, not the viewer's, so a card and
+  // the schedule that produced it always agree on which day a send lands on.
+  const { formatDate } = useTenantDateFormat();
 
   const handleMouseEnter = useCallback(() => {
     // Only prefetch on fast connections

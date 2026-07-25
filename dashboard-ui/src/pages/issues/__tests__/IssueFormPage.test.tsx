@@ -25,6 +25,13 @@ let mockParams: Record<string, string> = {};
 vi.mock('react-router-dom', () => ({
   useNavigate: () => mockNavigate,
   useParams: () => mockParams,
+  // The schedule field links to Settings; render it as a plain anchor so these
+  // tests don't need a Router.
+  Link: ({ to, children, ...props }: { to: string; children: React.ReactNode }) => (
+    <a href={to} {...props}>
+      {children}
+    </a>
+  ),
 }));
 
 const mockAddToast = vi.fn();

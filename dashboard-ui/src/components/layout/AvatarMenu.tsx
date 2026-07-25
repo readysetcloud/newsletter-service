@@ -4,6 +4,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/hooks/useTheme';
 import {
   UserIcon,
+  Cog6ToothIcon,
   EnvelopeIcon,
   KeyIcon,
   CreditCardIcon,
@@ -38,6 +39,7 @@ export function AvatarMenu({ showThemeToggle = true }: AvatarMenuProps = {}) {
   const getMenuItems = useCallback(() => {
     const items: { id: string; type: 'link' | 'button' }[] = [
       { id: 'profile', type: 'link' },
+      { id: 'settings', type: 'link' },
       { id: 'senders', type: 'link' },
       { id: 'api-keys', type: 'link' },
     ];
@@ -161,6 +163,7 @@ export function AvatarMenu({ showThemeToggle = true }: AvatarMenuProps = {}) {
 
   const linkItems = [
     { id: 'profile', label: 'Profile', href: '/profile', icon: UserSolidIcon },
+    { id: 'settings', label: 'Settings', href: '/settings', icon: Cog6ToothIcon },
     { id: 'senders', label: 'Sender Emails', href: '/senders', icon: EnvelopeIcon },
     { id: 'api-keys', label: 'API Keys', href: '/api-keys', icon: KeyIcon },
     ...(showBilling

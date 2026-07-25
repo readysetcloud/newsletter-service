@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
+use super::settings::{self, TenantSettings};
+
 // Request/Response types for list issues endpoint
 #[derive(Deserialize)]
 pub struct ListIssuesQuery {
@@ -1787,7 +1789,8 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
 
     let idempotency_key = get_idempotency_key(&event);
 
-    let normalized_scheduled_at = normalize_scheduled_at(body.scheduled_at.as_deref())?;
+    let normalized_scheduled_at =
+        normalize_scheduled_at(&tenant_id, body.scheduled_at.as_deref()).await?;
 
     // Set when an exact replay's recorded issue no longer exists and the
     // request falls through to a fresh create: the idempotency record for the
@@ -1947,8 +1950,20 @@ async fn handle_update_issue(
     let issue_id =
         issue_id.ok_or_else(|| AppError::BadRequest("Issue ID is required".to_string()))?;
 
-    let body: UpdateIssueRequest = serde_json::from_slice(event.body())
+    let mut body: UpdateIssueRequest = serde_json::from_slice(event.body())
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
+
+    // A date-only reschedule gets the tenant's default send time, same as on
+    // create. Anything else is stored as sent — including past timestamps,
+    // which an update is allowed to set.
+    if let Some(scheduled_at) = body.scheduled_at.as_deref() {
+        let trimmed = scheduled_at.trim();
+        if settings::is_date_only(trimmed) {
+            let tenant_settings = settings::get_tenant_settings(&tenant_id).await;
+            body.scheduled_at =
+                Some(settings::resolve_date_only(trimmed, &tenant_settings)?.to_rfc3339());
+        }
+    }
 
     let ab_test = extract_ab_test(event.body().as_ref())?
         .map(|value| validate_and_normalize_ab_test(&value))
@@ -3322,7 +3337,38 @@ fn get_idempotency_key(event: &Request) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn normalize_scheduled_at(value: Option<&str>) -> Result<Option<String>, AppError> {
+async fn normalize_scheduled_at(
+    tenant_id: &str,
+    value: Option<&str>,
+) -> Result<Option<String>, AppError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let trimmed = value.trim();
+
+    // The tenant's defaults are only needed to fill in a missing time, so a
+    // caller that already supplied a full timestamp doesn't pay for the read.
+    let settings = if settings::is_date_only(trimmed) {
+        settings::get_tenant_settings(tenant_id).await
+    } else {
+        TenantSettings::default()
+    };
+
+    resolve_scheduled_at(Some(trimmed), &settings)
+}
+
+/// Normalizes a caller-supplied `scheduledAt` into the instant stored on the
+/// issue. `None` means "send immediately" — an absent value, `"now"`, or a
+/// time that has already passed.
+///
+/// A date-only value (`YYYY-MM-DD`) carries no time of day, so rather than
+/// rejecting it or guessing midnight UTC, it is anchored to the tenant's
+/// configured default send time, read as wall-clock time in the tenant's
+/// timezone (see [`super::settings`]).
+fn resolve_scheduled_at(
+    value: Option<&str>,
+    settings: &TenantSettings,
+) -> Result<Option<String>, AppError> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -3332,8 +3378,15 @@ fn normalize_scheduled_at(value: Option<&str>) -> Result<Option<String>, AppErro
         return Ok(None);
     }
 
-    let parsed = chrono::DateTime::parse_from_rfc3339(trimmed)
-        .map_err(|_| AppError::BadRequest("scheduledAt must be RFC3339 or \"now\"".to_string()))?;
+    let parsed = if settings::is_date_only(trimmed) {
+        settings::resolve_date_only(trimmed, settings)?.fixed_offset()
+    } else {
+        chrono::DateTime::parse_from_rfc3339(trimmed).map_err(|_| {
+            AppError::BadRequest(
+                "scheduledAt must be RFC3339, a YYYY-MM-DD date, or \"now\"".to_string(),
+            )
+        })?
+    };
 
     if parsed.with_timezone(&chrono::Utc) <= chrono::Utc::now() {
         return Ok(None);
@@ -4545,6 +4598,88 @@ Thanks!"#;
             content_type: content_type.map(|c| c.to_string()),
             ttl_seconds: None,
         }
+    }
+
+    fn tenant_settings(timezone: &str, send_time: &str) -> TenantSettings {
+        TenantSettings {
+            timezone: timezone.to_string(),
+            default_send_time: send_time.to_string(),
+        }
+    }
+
+    /// A date far enough out that these assertions don't start failing when
+    /// the clock passes them — `resolve_scheduled_at` drops past times.
+    fn future_year() -> i32 {
+        chrono::Utc::now()
+            .format("%Y")
+            .to_string()
+            .parse::<i32>()
+            .unwrap()
+            + 2
+    }
+
+    #[test]
+    fn test_resolve_scheduled_at_treats_absent_and_now_as_immediate() {
+        let settings = TenantSettings::default();
+        assert_eq!(resolve_scheduled_at(None, &settings).unwrap(), None);
+        assert_eq!(resolve_scheduled_at(Some(""), &settings).unwrap(), None);
+        assert_eq!(resolve_scheduled_at(Some("  "), &settings).unwrap(), None);
+        assert_eq!(resolve_scheduled_at(Some("now"), &settings).unwrap(), None);
+        assert_eq!(resolve_scheduled_at(Some("NOW"), &settings).unwrap(), None);
+    }
+
+    #[test]
+    fn test_resolve_scheduled_at_passes_through_full_timestamps() {
+        let value = format!("{}-08-01T12:34:00+00:00", future_year());
+        let resolved =
+            resolve_scheduled_at(Some(&value), &tenant_settings("America/Chicago", "09:00"))
+                .unwrap();
+
+        // An explicit instant wins over the tenant default; settings only fill
+        // in what the caller left out.
+        assert_eq!(resolved, Some(value));
+    }
+
+    #[test]
+    fn test_resolve_scheduled_at_applies_default_send_time_to_a_bare_date() {
+        let date = format!("{}-08-01", future_year());
+        let resolved =
+            resolve_scheduled_at(Some(&date), &tenant_settings("America/Chicago", "09:00"))
+                .unwrap()
+                .expect("a future date should stay scheduled");
+
+        // 09:00 CDT is 14:00Z.
+        assert_eq!(resolved, format!("{}-08-01T14:00:00+00:00", future_year()));
+    }
+
+    #[test]
+    fn test_resolve_scheduled_at_uses_utc_at_nine_without_configured_settings() {
+        let date = format!("{}-08-01", future_year());
+        let resolved = resolve_scheduled_at(Some(&date), &TenantSettings::default())
+            .unwrap()
+            .expect("a future date should stay scheduled");
+
+        assert_eq!(resolved, format!("{}-08-01T09:00:00+00:00", future_year()));
+    }
+
+    #[test]
+    fn test_resolve_scheduled_at_drops_past_dates() {
+        // A bare date in the past resolves to a past instant, which means the
+        // same thing an explicit past timestamp does: send now.
+        let resolved = resolve_scheduled_at(
+            Some("2020-01-01"),
+            &tenant_settings("America/Chicago", "09:00"),
+        )
+        .unwrap();
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn test_resolve_scheduled_at_rejects_unparseable_values() {
+        let settings = TenantSettings::default();
+        assert!(resolve_scheduled_at(Some("tomorrow"), &settings).is_err());
+        assert!(resolve_scheduled_at(Some("2026-13-01"), &settings).is_err());
+        assert!(resolve_scheduled_at(Some("08/01/2026"), &settings).is_err());
     }
 
     #[test]

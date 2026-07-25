@@ -220,6 +220,7 @@ There are two backend surfaces in this repository:
 The admin API includes routes for:
 
 - `/me` and profile management
+- `/settings` (tenant-wide defaults: display/send timezone and the default send time applied when a request supplies a date without a time)
 - `/brand`
 - `/api-keys`
 - `/senders` and `/senders/domain`

@@ -41,6 +41,14 @@ export const LazyProfilePage = lazy(() =>
     })
 );
 
+export const LazySettingsPage = lazy(() =>
+  import('@/pages/settings').then(module => ({ default: module.SettingsPage }))
+    .catch(error => {
+      console.error('Failed to load SettingsPage:', error);
+      throw error;
+    })
+);
+
 export const LazyApiKeysPage = lazy(() =>
   import('@/pages/api-keys').then(module => ({ default: module.ApiKeysPage }))
     .catch(error => {

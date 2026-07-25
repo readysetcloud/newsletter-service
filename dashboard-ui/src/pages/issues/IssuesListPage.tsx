@@ -12,6 +12,7 @@ import {
 } from '@/components/issues';
 import { issuesService } from '@/services/issuesService';
 import type { IssueListItem, IssueStatus, Issue } from '@/types/issues';
+import { useTenantDateFormat } from '@/contexts/SettingsContext';
 
 export const IssuesListPage: React.FC = () => {
   const navigate = useNavigate();
@@ -231,13 +232,9 @@ export const IssuesListPage: React.FC = () => {
     return filtered;
   }, [issues, sortField, sortDirection]);
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
-    });
-  };
+  // Dates read in the newsletter's timezone (see SettingsPage), so the list
+  // agrees with the schedule that produced it.
+  const { formatDate } = useTenantDateFormat();
 
   const statusOptions = useMemo(() => [
     { value: 'all', label: 'All Issues' },

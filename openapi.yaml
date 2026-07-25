@@ -21,6 +21,7 @@ info:
 tags:
   - name: API Keys
   - name: Profile
+  - name: Settings
   - name: Senders
   - name: Issues
   - name: Reports
@@ -299,6 +300,57 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /settings:
+    get:
+      summary: Get tenant settings
+      description: >-
+        Returns the tenant-wide defaults the platform falls back to when a
+        request doesn't specify a value. `settings` holds the effective values
+        (stored where set, system defaults everywhere else) and `defaults`
+        holds the system defaults, so a client can tell which effective values
+        are inherited rather than chosen.
+      tags:
+        - Settings
+      responses:
+        "200":
+          description: The tenant's effective settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettingsResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+    put:
+      summary: Update tenant settings
+      description: >-
+        Updates one or more tenant settings. Settings the request doesn't
+        mention are left unchanged; a setting sent as `null` (or an empty
+        string) is reset to the system default. At least one recognized
+        setting must be provided.
+      tags:
+        - Settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSettingsRequest"
+      responses:
+        "200":
+          description: The tenant's settings after the update
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettingsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "500":
           $ref: "#/components/responses/UnknownError"
 
@@ -2955,6 +3007,63 @@ components:
                 example: An unexpected error occurred.
 
   schemas:
+    TenantSettings:
+      type: object
+      required:
+        - timezone
+        - defaultSendTime
+      properties:
+        timezone:
+          type: string
+          description: >-
+            IANA timezone name. Used to format dates in the dashboard and as
+            the zone a date-only send is read against.
+          example: America/Chicago
+          default: UTC
+        defaultSendTime:
+          type: string
+          pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+          description: >-
+            24-hour HH:MM time of day, in `timezone`, that a send lands on when
+            a request supplies a date without a time.
+          example: "09:00"
+          default: "09:00"
+
+    SettingsResponse:
+      type: object
+      required:
+        - settings
+        - defaults
+      properties:
+        settings:
+          allOf:
+            - $ref: "#/components/schemas/TenantSettings"
+          description: The effective settings — what the platform will use.
+        defaults:
+          allOf:
+            - $ref: "#/components/schemas/TenantSettings"
+          description: The system defaults applied wherever the tenant has set nothing.
+        updatedAt:
+          type: string
+          format: date-time
+          description: When settings were last saved. Absent if they never have been.
+
+    UpdateSettingsRequest:
+      type: object
+      minProperties: 1
+      properties:
+        timezone:
+          type: string
+          nullable: true
+          description: IANA timezone name, or null to reset to the system default.
+          example: America/Chicago
+        defaultSendTime:
+          type: string
+          nullable: true
+          pattern: "^([01]?[0-9]|2[0-3]):[0-5][0-9]$"
+          description: 24-hour HH:MM time of day, or null to reset to the system default.
+          example: "09:00"
+
     SenderEmail:
       type: object
       required:
@@ -3551,7 +3660,14 @@ components:
             the content must be a JSON object.
         scheduledAt:
           type: string
-          description: When to schedule the issue for publishing (RFC3339 or "now")
+          description: >-
+            When to schedule the issue for publishing. Accepts an RFC3339
+            timestamp, "now", or a date-only "YYYY-MM-DD" value. A date-only
+            value has no time of day, so it is anchored to the tenant's
+            defaultSendTime read as wall-clock time in the tenant's timezone
+            (see GET /settings). A resolved time that has already passed sends
+            immediately.
+          example: "2026-08-01"
         action:
           type: string
           enum: [draft, schedule]
@@ -3716,8 +3832,10 @@ components:
             content must be a JSON object.
         scheduledAt:
           type: string
-          format: date-time
-          description: When to schedule the issue for publishing
+          description: >-
+            When to schedule the issue for publishing. Accepts an RFC3339
+            timestamp or a date-only "YYYY-MM-DD" value, which is anchored to
+            the tenant's defaultSendTime and timezone (see GET /settings).
         metadata:
           type: object
           description: Optional metadata for the issue

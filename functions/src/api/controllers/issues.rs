@@ -1762,9 +1762,20 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
         .transpose()?;
 
     let raw_local_send = extract_local_send(event.body().as_ref())?;
+
+    // Both a date-only `scheduledAt` and a local-send config without an
+    // explicit zone are filled in from the tenant's settings; load them once,
+    // and only when this request actually needs them.
+    let tenant_settings = load_settings_if_needed(
+        &tenant_id,
+        body.scheduled_at.as_deref(),
+        raw_local_send.is_some(),
+    )
+    .await;
+
     let local_send = raw_local_send
         .as_ref()
-        .map(validate_and_normalize_local_send)
+        .map(|value| validate_and_normalize_local_send(value, &tenant_settings.timezone))
         .transpose()?
         .flatten();
     let raw_content_assembly = extract_content_assembly(event.body().as_ref())?;
@@ -1790,7 +1801,7 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
     let idempotency_key = get_idempotency_key(&event);
 
     let normalized_scheduled_at =
-        normalize_scheduled_at(&tenant_id, body.scheduled_at.as_deref()).await?;
+        resolve_scheduled_at(body.scheduled_at.as_deref(), &tenant_settings)?;
 
     // Set when an exact replay's recorded issue no longer exists and the
     // request falls through to a fresh create: the idempotency record for the
@@ -1953,13 +1964,22 @@ async fn handle_update_issue(
     let mut body: UpdateIssueRequest = serde_json::from_slice(event.body())
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
 
+    let raw_local_send = extract_local_send(event.body().as_ref())?;
+    let local_send_provided = raw_local_send.is_some();
+
+    let tenant_settings = load_settings_if_needed(
+        &tenant_id,
+        body.scheduled_at.as_deref(),
+        local_send_provided,
+    )
+    .await;
+
     // A date-only reschedule gets the tenant's default send time, same as on
     // create. Anything else is stored as sent — including past timestamps,
     // which an update is allowed to set.
     if let Some(scheduled_at) = body.scheduled_at.as_deref() {
         let trimmed = scheduled_at.trim();
         if settings::is_date_only(trimmed) {
-            let tenant_settings = settings::get_tenant_settings(&tenant_id).await;
             body.scheduled_at =
                 Some(settings::resolve_date_only(trimmed, &tenant_settings)?.to_rfc3339());
         }
@@ -1972,10 +1992,8 @@ async fn handle_update_issue(
     // An explicit `abTest: null` is a request to clear a previously-saved test.
     let clear_ab_test = ab_test.is_none() && ab_test_explicitly_cleared(event.body().as_ref());
 
-    let raw_local_send = extract_local_send(event.body().as_ref())?;
-    let local_send_provided = raw_local_send.is_some();
     let local_send = raw_local_send
-        .map(|value| validate_and_normalize_local_send(&value))
+        .map(|value| validate_and_normalize_local_send(&value, &tenant_settings.timezone))
         .transpose()?
         .flatten();
 
@@ -2245,8 +2263,14 @@ fn is_plausible_iana_time_zone(tz: &str) -> bool {
 /// delivers at each subscriber's personal peak open hour instead. Returns
 /// Ok(None) when `enabled` is false — a disabled config is stored as no
 /// config at all.
+///
+/// `defaultTimeZone` is also optional: it names the zone whose wall clock
+/// defines the target send time, which is exactly what the tenant's own
+/// timezone setting already says, so `fallback_time_zone` fills it in when the
+/// caller doesn't.
 fn validate_and_normalize_local_send(
     value: &serde_json::Value,
+    fallback_time_zone: &str,
 ) -> Result<Option<serde_json::Value>, AppError> {
     let obj = value
         .as_object()
@@ -2266,11 +2290,7 @@ fn validate_and_normalize_local_send(
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|tz| !tz.is_empty())
-        .ok_or_else(|| {
-            AppError::BadRequest(
-                "localSend.defaultTimeZone is required when localSend is enabled".to_string(),
-            )
-        })?;
+        .unwrap_or(fallback_time_zone);
 
     if !is_plausible_iana_time_zone(default_time_zone) {
         return Err(AppError::BadRequest(
@@ -3337,24 +3357,24 @@ fn get_idempotency_key(event: &Request) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-async fn normalize_scheduled_at(
+/// Loads the tenant's settings only when something on this request actually
+/// needs them — a date-only `scheduledAt` to expand, or a local-send config
+/// whose zone may need filling in. A request that spelled everything out
+/// doesn't pay for the read.
+async fn load_settings_if_needed(
     tenant_id: &str,
-    value: Option<&str>,
-) -> Result<Option<String>, AppError> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    let trimmed = value.trim();
+    scheduled_at: Option<&str>,
+    has_local_send: bool,
+) -> TenantSettings {
+    let needs_send_time = scheduled_at
+        .map(|value| settings::is_date_only(value.trim()))
+        .unwrap_or(false);
 
-    // The tenant's defaults are only needed to fill in a missing time, so a
-    // caller that already supplied a full timestamp doesn't pay for the read.
-    let settings = if settings::is_date_only(trimmed) {
+    if needs_send_time || has_local_send {
         settings::get_tenant_settings(tenant_id).await
     } else {
         TenantSettings::default()
-    };
-
-    resolve_scheduled_at(Some(trimmed), &settings)
+    }
 }
 
 /// Normalizes a caller-supplied `scheduledAt` into the instant stored on the
@@ -4434,6 +4454,10 @@ Thanks!"#;
 
     // ── Local-send config validation ────────────────────────────────────
 
+    /// Stands in for the tenant timezone setting in tests that supply their
+    /// own zone and don't care about the fallback.
+    const FALLBACK_ZONE: &str = "UTC";
+
     #[test]
     fn test_validate_local_send_normalizes_valid_config() {
         let input = serde_json::json!({
@@ -4441,7 +4465,9 @@ Thanks!"#;
             "defaultTimeZone": " America/New_York ",
             "extraneous": "dropped"
         });
-        let normalized = validate_and_normalize_local_send(&input).unwrap().unwrap();
+        let normalized = validate_and_normalize_local_send(&input, FALLBACK_ZONE)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             normalized,
             serde_json::json!({
@@ -4468,15 +4494,20 @@ Thanks!"#;
                 "mode": "timezone"
             }),
         ] {
-            let normalized = validate_and_normalize_local_send(&input).unwrap().unwrap();
+            let normalized = validate_and_normalize_local_send(&input, FALLBACK_ZONE)
+                .unwrap()
+                .unwrap();
             assert_eq!(normalized["mode"], "timezone", "{input}");
         }
 
-        let normalized = validate_and_normalize_local_send(&serde_json::json!({
-            "enabled": true,
-            "defaultTimeZone": "America/New_York",
-            "mode": "peak-hour"
-        }))
+        let normalized = validate_and_normalize_local_send(
+            &serde_json::json!({
+                "enabled": true,
+                "defaultTimeZone": "America/New_York",
+                "mode": "peak-hour"
+            }),
+            FALLBACK_ZONE,
+        )
         .unwrap()
         .unwrap();
         assert_eq!(
@@ -4504,7 +4535,7 @@ Thanks!"#;
                 "mode": mode
             });
             assert!(
-                validate_and_normalize_local_send(&input).is_err(),
+                validate_and_normalize_local_send(&input, FALLBACK_ZONE).is_err(),
                 "{input}"
             );
         }
@@ -4513,7 +4544,9 @@ Thanks!"#;
     #[test]
     fn test_validate_local_send_disabled_becomes_none() {
         let input = serde_json::json!({ "enabled": false, "defaultTimeZone": "America/New_York" });
-        assert!(validate_and_normalize_local_send(&input).unwrap().is_none());
+        assert!(validate_and_normalize_local_send(&input, FALLBACK_ZONE)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -4523,21 +4556,44 @@ Thanks!"#;
             serde_json::json!({ "enabled": "yes", "defaultTimeZone": "America/New_York" }),
             serde_json::json!("not-an-object"),
         ] {
-            assert!(validate_and_normalize_local_send(&input).is_err());
+            assert!(validate_and_normalize_local_send(&input, FALLBACK_ZONE).is_err());
         }
     }
 
     #[test]
-    fn test_validate_local_send_requires_timezone_when_enabled() {
+    fn test_validate_local_send_falls_back_to_the_tenant_timezone() {
+        // An omitted or blank zone means "the one this newsletter already
+        // runs on" — the tenant timezone setting — rather than an error.
         for input in [
             serde_json::json!({ "enabled": true }),
             serde_json::json!({ "enabled": true, "defaultTimeZone": "" }),
             serde_json::json!({ "enabled": true, "defaultTimeZone": "  " }),
+            serde_json::json!({ "enabled": true, "defaultTimeZone": null }),
+        ] {
+            let normalized = validate_and_normalize_local_send(&input, "Europe/London")
+                .unwrap()
+                .unwrap();
+            assert_eq!(normalized["defaultTimeZone"], "Europe/London", "{input}");
+        }
+    }
+
+    #[test]
+    fn test_validate_local_send_explicit_zone_beats_the_fallback() {
+        let input = serde_json::json!({ "enabled": true, "defaultTimeZone": "Asia/Tokyo" });
+        let normalized = validate_and_normalize_local_send(&input, "Europe/London")
+            .unwrap()
+            .unwrap();
+        assert_eq!(normalized["defaultTimeZone"], "Asia/Tokyo");
+    }
+
+    #[test]
+    fn test_validate_local_send_rejects_an_unusable_zone() {
+        for input in [
             serde_json::json!({ "enabled": true, "defaultTimeZone": "Not A Zone" }),
             serde_json::json!({ "enabled": true, "defaultTimeZone": "nozone" }),
         ] {
             assert!(
-                validate_and_normalize_local_send(&input).is_err(),
+                validate_and_normalize_local_send(&input, FALLBACK_ZONE).is_err(),
                 "{input}"
             );
         }
@@ -4604,6 +4660,7 @@ Thanks!"#;
         TenantSettings {
             timezone: timezone.to_string(),
             default_send_time: send_time.to_string(),
+            ..Default::default()
         }
     }
 

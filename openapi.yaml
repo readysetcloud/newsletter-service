@@ -3028,6 +3028,22 @@ components:
             a request supplies a date without a time.
           example: "09:00"
           default: "09:00"
+        subjectTemplate:
+          type: string
+          description: >-
+            How an email subject is built when the request that staged the
+            issue didn't supply one — which is always the case on the
+            markdown/GitHub path. Supports the placeholders `{{title}}`,
+            `{{number}}` and `{{date}}`. Absent means "use the issue title";
+            there is no system default. A supplied `subject` always wins.
+          example: "{{title}} | Picks of the Week #{{number}}"
+        issueUrlPattern:
+          type: string
+          description: >-
+            Absolute URL where an issue lives on the tenant's own site, used
+            for the "view online" link. Must be http(s) and must include the
+            `{{number}}` placeholder. Absent means the link is omitted.
+          example: "https://example.com/newsletter/{{number}}"
 
     SettingsResponse:
       type: object
@@ -3063,6 +3079,21 @@ components:
           pattern: "^([01]?[0-9]|2[0-3]):[0-5][0-9]$"
           description: 24-hour HH:MM time of day, or null to reset to the system default.
           example: "09:00"
+        subjectTemplate:
+          type: string
+          nullable: true
+          description: >-
+            Subject format using `{{title}}`, `{{number}}` and `{{date}}`, or
+            null to clear it (subjects then fall back to the issue title).
+            Rejected if it contains line breaks or an unsupported placeholder.
+          example: "{{title}} | Picks of the Week #{{number}}"
+        issueUrlPattern:
+          type: string
+          nullable: true
+          description: >-
+            Absolute http(s) URL containing `{{number}}`, or null to clear it
+            (the "view online" link is then omitted from the email).
+          example: "https://example.com/newsletter/{{number}}"
 
     SenderEmail:
       type: object
@@ -3873,7 +3904,8 @@ components:
           type: string
           description: >-
             IANA timezone (e.g. "America/New_York") whose wall clock defines
-            the target send time. Required when enabled is true.
+            the target send time. Optional: when omitted or blank it falls back
+            to the tenant's `timezone` setting (see GET /settings).
         mode:
           type: string
           enum:

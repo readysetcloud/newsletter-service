@@ -40,9 +40,11 @@ describe('parse-json-issue handler', () => {
     });
 
     expect(result.sendAtDate).toBe('now');
-    // Cleanup +3 days and report +5 days from the send day at 14:00.
-    expect(result.listCleanupDate).toBe('2026-06-22T14:00:00');
-    expect(result.reportStatsDate).toBe('2026-06-24T14:00:00');
+    // Cleanup +3 days and report +5 days from the send instant. Sending "now"
+    // makes that the current time (the suite's fake clock, 09:00Z) rather than
+    // a fixed hour of the day.
+    expect(result.listCleanupDate).toBe('2026-06-22T09:00:00');
+    expect(result.reportStatsDate).toBe('2026-06-24T09:00:00');
   });
 
   it('uses the future date for scheduling when it is ahead of now', async () => {
@@ -54,8 +56,10 @@ describe('parse-json-issue handler', () => {
     });
 
     expect(result.sendAtDate).toBe(new Date('2026-07-01T12:00:00Z').toISOString());
-    expect(result.listCleanupDate).toBe('2026-07-04T14:00:00');
-    expect(result.reportStatsDate).toBe('2026-07-06T14:00:00');
+    // Offsets follow the scheduled send, so they track the time the issue
+    // actually goes out instead of a hardcoded 14:00.
+    expect(result.listCleanupDate).toBe('2026-07-04T12:00:00');
+    expect(result.reportStatsDate).toBe('2026-07-06T12:00:00');
   });
 
   it('falls back to the data title for the subject when none is supplied', async () => {

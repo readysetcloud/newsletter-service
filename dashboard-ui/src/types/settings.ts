@@ -7,6 +7,17 @@ export interface TenantSettings {
   timezone: string;
   /** 24-hour `HH:MM` time of day, expressed in {@link timezone}. */
   defaultSendTime: string;
+  /**
+   * Subject format used when the request that staged an issue didn't supply
+   * one. Supports `{{title}}`, `{{number}}` and `{{date}}`. Absent means the
+   * issue title is used — there is no system default.
+   */
+  subjectTemplate?: string;
+  /**
+   * Absolute URL where issues live on the tenant's site, containing
+   * `{{number}}`. Absent means the "view online" link is omitted.
+   */
+  issueUrlPattern?: string;
 }
 
 export interface SettingsResponse {

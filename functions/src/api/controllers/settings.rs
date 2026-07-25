@@ -1,12 +1,22 @@
 //! Tenant-level settings: the defaults the platform falls back to when a
 //! request doesn't spell a value out.
 //!
-//! Two settings live here today:
+//! The settings that live here today:
 //!
 //! - `timezone` — the tenant's wall-clock zone. It is what the dashboard
 //!   formats dates in, and the zone a date-only send is read against.
 //! - `defaultSendTime` — the time of day (in `timezone`) a send lands on when
 //!   the caller supplied a date but no time.
+//! - `subjectTemplate` — how an email subject is built when the request that
+//!   staged the issue didn't supply one (the markdown/GitHub path never does).
+//! - `issueUrlPattern` — where an issue lives on the tenant's own site, used
+//!   for the "view online" link in the email.
+//!
+//! The first two have system defaults; the last two do not. An unset
+//! `subjectTemplate` means "use the issue title", and an unset
+//! `issueUrlPattern` means "there is no public URL, omit the link" — for both,
+//! guessing a value would put the wrong words or the wrong domain in front of
+//! somebody's subscribers.
 //!
 //! Both are stored on a single `pk = {tenantId}`, `sk = "settings"` record.
 //! An absent record — or an absent attribute on it — means "use the system
@@ -36,6 +46,20 @@ pub(crate) const DEFAULT_TIMEZONE: &str = "UTC";
 /// midnight that a small zone mistake doesn't move the send to another day.
 pub(crate) const DEFAULT_SEND_TIME: &str = "09:00";
 
+/// Subject lines are capped by the create API at 200 characters; the template
+/// gets headroom for the tokens it expands.
+const SUBJECT_TEMPLATE_MAX_LEN: usize = 300;
+
+const URL_PATTERN_MAX_LEN: usize = 500;
+
+/// Tokens `subjectTemplate` may reference. Validated on write so a typo is
+/// caught in the settings form rather than shipping literally in a subject
+/// line. Kept in step with `buildSubject` in `functions/utils/tenant-settings.mjs`.
+const SUBJECT_TOKENS: [&str; 3] = ["title", "number", "date"];
+
+/// Tokens `issueUrlPattern` may reference.
+const URL_TOKENS: [&str; 1] = ["number"];
+
 // ── Data types ─────────────────────────────────────────────────────────
 
 /// The effective settings for a tenant: stored values where present, system
@@ -45,6 +69,14 @@ pub(crate) const DEFAULT_SEND_TIME: &str = "09:00";
 pub(crate) struct TenantSettings {
     pub timezone: String,
     pub default_send_time: String,
+    /// Absent when the tenant hasn't chosen one — there is no sensible system
+    /// default for somebody else's subject line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject_template: Option<String>,
+    /// Absent when the tenant hasn't chosen one, in which case the email omits
+    /// its "view online" link rather than pointing at the wrong site.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue_url_pattern: Option<String>,
 }
 
 impl Default for TenantSettings {
@@ -52,6 +84,8 @@ impl Default for TenantSettings {
         Self {
             timezone: DEFAULT_TIMEZONE.to_string(),
             default_send_time: DEFAULT_SEND_TIME.to_string(),
+            subject_template: None,
+            issue_url_pattern: None,
         }
     }
 }
@@ -169,6 +203,24 @@ fn extract_changes(body: &Value) -> Result<Vec<SettingChange>, AppError> {
         });
     }
 
+    if let Some(value) = map.get("subjectTemplate") {
+        changes.push(SettingChange {
+            attribute: "subjectTemplate",
+            value: optional_string("subjectTemplate", value)?
+                .map(|template| validate_subject_template(&template))
+                .transpose()?,
+        });
+    }
+
+    if let Some(value) = map.get("issueUrlPattern") {
+        changes.push(SettingChange {
+            attribute: "issueUrlPattern",
+            value: optional_string("issueUrlPattern", value)?
+                .map(|pattern| validate_issue_url_pattern(&pattern))
+                .transpose()?,
+        });
+    }
+
     Ok(changes)
 }
 
@@ -227,6 +279,97 @@ fn parse_send_time(value: &str) -> Result<NaiveTime, AppError> {
     let minutes: u32 = minutes.parse().map_err(|_| invalid())?;
 
     NaiveTime::from_hms_opt(hours, minutes, 0).ok_or_else(invalid)
+}
+
+/// Validates a subject template. The hard rule is no CR/LF: a subject line is
+/// an email header, and a newline in one is header injection. Everything else
+/// is a guard against a template that would obviously misbehave at send time.
+fn validate_subject_template(value: &str) -> Result<String, AppError> {
+    if value.len() > SUBJECT_TEMPLATE_MAX_LEN {
+        return Err(AppError::BadRequest(format!(
+            "subjectTemplate must be {} characters or fewer",
+            SUBJECT_TEMPLATE_MAX_LEN
+        )));
+    }
+
+    if value.chars().any(|c| c.is_control()) {
+        return Err(AppError::BadRequest(
+            "subjectTemplate must not contain line breaks or control characters".to_string(),
+        ));
+    }
+
+    validate_tokens("subjectTemplate", value, &SUBJECT_TOKENS)?;
+
+    Ok(value.to_string())
+}
+
+/// Validates the public issue URL pattern. It ends up as an `href` in every
+/// subscriber's inbox, so it must be an absolute http(s) URL, and it must vary
+/// per issue or every issue would link to the same page.
+fn validate_issue_url_pattern(value: &str) -> Result<String, AppError> {
+    if value.len() > URL_PATTERN_MAX_LEN {
+        return Err(AppError::BadRequest(format!(
+            "issueUrlPattern must be {} characters or fewer",
+            URL_PATTERN_MAX_LEN
+        )));
+    }
+
+    if !value.starts_with("https://") && !value.starts_with("http://") {
+        return Err(AppError::BadRequest(
+            "issueUrlPattern must be an absolute http:// or https:// URL".to_string(),
+        ));
+    }
+
+    if value.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err(AppError::BadRequest(
+            "issueUrlPattern must not contain whitespace or control characters".to_string(),
+        ));
+    }
+
+    validate_tokens("issueUrlPattern", value, &URL_TOKENS)?;
+
+    if !value.contains("{{number}}") {
+        return Err(AppError::BadRequest(
+            "issueUrlPattern must include {{number}} so each issue links to its own page"
+                .to_string(),
+        ));
+    }
+
+    Ok(value.to_string())
+}
+
+/// Rejects `{{token}}` placeholders the renderer doesn't know about. An
+/// unknown token would otherwise reach subscribers verbatim, braces and all.
+fn validate_tokens(field: &str, value: &str, allowed: &[&str]) -> Result<(), AppError> {
+    let mut rest = value;
+
+    while let Some(start) = rest.find("{{") {
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("}}") else {
+            return Err(AppError::BadRequest(format!(
+                "{} has an unclosed {{{{ placeholder",
+                field
+            )));
+        };
+
+        let token = after[..end].trim();
+        if !allowed.contains(&token) {
+            return Err(AppError::BadRequest(format!(
+                "{} does not support the placeholder {{{{{}}}}} — available: {}",
+                field,
+                token,
+                allowed
+                    .iter()
+                    .map(|t| format!("{{{{{}}}}}", t))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+
+        rest = &after[end + 2..];
+    }
+
+    Ok(())
 }
 
 // ── Date-only resolution ───────────────────────────────────────────────
@@ -346,6 +489,8 @@ fn settings_from_item(
     TenantSettings {
         timezone: read("timezone").unwrap_or(defaults.timezone),
         default_send_time: read("defaultSendTime").unwrap_or(defaults.default_send_time),
+        subject_template: read("subjectTemplate"),
+        issue_url_pattern: read("issueUrlPattern"),
     }
 }
 
@@ -436,6 +581,7 @@ mod tests {
         TenantSettings {
             timezone: timezone.to_string(),
             default_send_time: send_time.to_string(),
+            ..Default::default()
         }
     }
 
@@ -519,6 +665,123 @@ mod tests {
         // The handler turns this into a 400 rather than a no-op write.
         let changes = extract_changes(&json!({ "somethingElse": "x" })).unwrap();
         assert!(changes.is_empty());
+    }
+
+    #[test]
+    fn validate_subject_template_accepts_supported_tokens() {
+        assert_eq!(
+            validate_subject_template("{{title}} | Weekly #{{number}}").unwrap(),
+            "{{title}} | Weekly #{{number}}"
+        );
+        assert_eq!(
+            validate_subject_template("{{ title }} — {{ date }}").unwrap(),
+            "{{ title }} — {{ date }}"
+        );
+        // A template with no tokens at all is a fixed subject line, which is
+        // odd but not wrong.
+        assert_eq!(
+            validate_subject_template("This week's issue").unwrap(),
+            "This week's issue"
+        );
+    }
+
+    #[test]
+    fn validate_subject_template_rejects_header_injection() {
+        // A newline in a subject is a second email header. This is the one
+        // rule here that is a security boundary, not a nicety.
+        assert!(validate_subject_template("Hi\r\nBcc: someone@example.com").is_err());
+        assert!(validate_subject_template("Hi\nX-Spoof: yes").is_err());
+        assert!(validate_subject_template("Hi\u{0}there").is_err());
+    }
+
+    #[test]
+    fn validate_subject_template_rejects_unknown_and_unclosed_tokens() {
+        // {{brand}} would otherwise reach subscribers with the braces intact.
+        assert!(validate_subject_template("{{title}} from {{brand}}").is_err());
+        assert!(validate_subject_template("{{title").is_err());
+    }
+
+    #[test]
+    fn validate_subject_template_rejects_overlong_values() {
+        assert!(validate_subject_template(&"x".repeat(SUBJECT_TEMPLATE_MAX_LEN + 1)).is_err());
+    }
+
+    #[test]
+    fn validate_issue_url_pattern_accepts_an_absolute_per_issue_url() {
+        assert_eq!(
+            validate_issue_url_pattern("https://example.com/newsletter/{{number}}").unwrap(),
+            "https://example.com/newsletter/{{number}}"
+        );
+        assert_eq!(
+            validate_issue_url_pattern("http://localhost:3000/issues/{{number}}").unwrap(),
+            "http://localhost:3000/issues/{{number}}"
+        );
+    }
+
+    #[test]
+    fn validate_issue_url_pattern_requires_an_absolute_http_url() {
+        // This value becomes an href in every subscriber's inbox, so a
+        // relative path or a javascript: scheme is not acceptable.
+        assert!(validate_issue_url_pattern("/newsletter/{{number}}").is_err());
+        assert!(validate_issue_url_pattern("example.com/{{number}}").is_err());
+        assert!(validate_issue_url_pattern("javascript:alert(1){{number}}").is_err());
+    }
+
+    #[test]
+    fn validate_issue_url_pattern_requires_the_number_token() {
+        // Without it every issue would link to the same page.
+        assert!(validate_issue_url_pattern("https://example.com/newsletter").is_err());
+    }
+
+    #[test]
+    fn validate_issue_url_pattern_rejects_whitespace_and_unknown_tokens() {
+        assert!(validate_issue_url_pattern("https://example.com/a b/{{number}}").is_err());
+        assert!(validate_issue_url_pattern("https://example.com/{{slug}}/{{number}}").is_err());
+    }
+
+    #[test]
+    fn extract_changes_covers_every_recognized_setting() {
+        let changes = extract_changes(&json!({
+            "timezone": "UTC",
+            "defaultSendTime": "09:00",
+            "subjectTemplate": "{{title}}",
+            "issueUrlPattern": "https://example.com/n/{{number}}"
+        }))
+        .unwrap();
+
+        assert_eq!(changes.len(), 4);
+    }
+
+    #[test]
+    fn settings_from_item_reads_the_optional_settings() {
+        let mut item = std::collections::HashMap::new();
+        item.insert(
+            "subjectTemplate".to_string(),
+            AttributeValue::S("{{title}} #{{number}}".to_string()),
+        );
+        item.insert(
+            "issueUrlPattern".to_string(),
+            AttributeValue::S("https://example.com/n/{{number}}".to_string()),
+        );
+
+        let resolved = settings_from_item(Some(&item));
+        assert_eq!(
+            resolved.subject_template.as_deref(),
+            Some("{{title}} #{{number}}")
+        );
+        assert_eq!(
+            resolved.issue_url_pattern.as_deref(),
+            Some("https://example.com/n/{{number}}")
+        );
+    }
+
+    #[test]
+    fn optional_settings_have_no_system_default() {
+        // Unlike timezone and send time, these two stay None: guessing a
+        // subject line or a domain would be worse than omitting them.
+        let defaults = TenantSettings::default();
+        assert!(defaults.subject_template.is_none());
+        assert!(defaults.issue_url_pattern.is_none());
     }
 
     #[test]

@@ -6,6 +6,12 @@ import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { renderWithSnippets } from './utils/render-template.mjs';
 import { resolveParameters } from './utils/snippet-parameters.mjs';
 import { sectionStartMarker, sectionEndMarker } from './utils/interest-assembly.mjs';
+import {
+  getTenantSettings,
+  resolveSendInstant,
+  buildSubject,
+  buildIssueUrl
+} from './utils/tenant-settings.mjs';
 
 const ddb = new DynamoDBClient();
 const converter = new showdown.Converter();
@@ -33,6 +39,7 @@ export const handler = async (state) => {
   const author = await getAuthor(newsletter.data.author);
   const snippets = await getSnippets(state.tenantId);
   const snippetsByName = new Map(snippets.filter(s => s.name).map(s => [s.name, s]));
+  const settings = await getTenantSettings(state.tenantId);
   const issueNumber = Number(state.issueId);
 
   if (!Number.isFinite(issueNumber) || issueNumber < 1) {
@@ -47,8 +54,23 @@ export const handler = async (state) => {
     delete sponsor.ad;
   }
 
-  const newsletterDate = new Date(newsletter.data.date);
-  const formattedDate = newsletterDate.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  // The frontmatter `date` is the day the issue goes out. A bare date carries
+  // no time, so it is anchored to the tenant's default send time in the
+  // tenant's timezone; a date that already names a time is respected as-is.
+  const sendInstant = resolveSendInstant(newsletter.data.date, settings);
+  const formattedDate = sendInstant
+    ? sendInstant.toLocaleDateString('en-US', {
+      timeZone: settings.timezone,
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    })
+    : '';
+
+  // Omitted when the tenant hasn't configured where issues live on their site
+  // — the template drops the "view online" link rather than pointing every
+  // tenant's subscribers at somebody else's domain.
+  const issueUrl = buildIssueUrl(settings, { number: issueNumber });
 
   const dataTemplate = {
     metadata: {
@@ -56,7 +78,7 @@ export const handler = async (state) => {
       title: newsletter.data.title,
       description: newsletter.data.description,
       date: formattedDate,
-      url: `https://readysetcloud.io/newsletter/${issueNumber}`,
+      ...(issueUrl && { url: issueUrl }),
       ...(author && { author })
     },
     ...(sponsor && { sponsor }),
@@ -112,23 +134,32 @@ export const handler = async (state) => {
     console.error('Failed to apply content assembly markers, sending canonical order', { error: err.message });
   }
 
-  newsletterDate.setHours(14);
+  // Downstream jobs hang off the send instant: list cleanup three days later,
+  // the stats report five.
+  const baseDate = sendInstant ?? new Date();
 
-  const listCleanupDate = new Date(newsletterDate);
+  const listCleanupDate = new Date(baseDate);
   listCleanupDate.setDate(listCleanupDate.getDate() + 3);
 
-  const reportStatsDate = new Date(newsletterDate);
+  const reportStatsDate = new Date(baseDate);
   reportStatsDate.setDate(reportStatsDate.getDate() + 5);
 
   const now = new Date();
-  const sendAtDate = newsletterDate < now ? 'now' : newsletterDate.toISOString();
+  const sendAtDate = !sendInstant || sendInstant < now ? 'now' : sendInstant.toISOString();
 
   return {
     data: dataTemplate,
     sendAtDate,
     listCleanupDate: listCleanupDate.toISOString().split('.')[0],
     reportStatsDate: reportStatsDate.toISOString().split('.')[0],
-    subject: `${dataTemplate.metadata.title} | Ready, Set, Cloud Picks of the Week #${dataTemplate.metadata.number}`
+    subject: buildSubject(settings, {
+      // The markdown path is reached from the GitHub import, which carries no
+      // subject of its own, so this is normally the tenant's subjectTemplate.
+      callerSubject: state.subject,
+      title: dataTemplate.metadata.title,
+      number: issueNumber,
+      date: formattedDate
+    })
   };
 };
 

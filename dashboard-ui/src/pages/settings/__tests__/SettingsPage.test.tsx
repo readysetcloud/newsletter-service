@@ -29,10 +29,14 @@ const mockedService = vi.mocked(settingsService);
 
 const DEFAULTS = { timezone: 'UTC', defaultSendTime: '09:00' };
 
-function settingsResponse(
-  settings: { timezone: string; defaultSendTime: string },
-  updatedAt?: string
-) {
+type Settings = {
+  timezone: string;
+  defaultSendTime: string;
+  subjectTemplate?: string;
+  issueUrlPattern?: string;
+};
+
+function settingsResponse(settings: Settings, updatedAt?: string) {
   return {
     success: true as const,
     data: { settings, defaults: DEFAULTS, ...(updatedAt ? { updatedAt } : {}) },
@@ -105,6 +109,8 @@ describe('SettingsPage', () => {
       expect(mockedService.updateSettings).toHaveBeenCalledWith({
         timezone: 'Europe/London',
         defaultSendTime: '07:30',
+        subjectTemplate: '',
+        issueUrlPattern: '',
       });
     });
     expect(mockAddToast).toHaveBeenCalledWith(
@@ -178,5 +184,96 @@ describe('SettingsPage', () => {
     renderPage();
 
     expect(await screen.findByText(/Could not load settings/i)).toBeInTheDocument();
+  });
+
+  describe('subject line format', () => {
+    it('shows the saved template and previews a rendered subject', async () => {
+      mockedService.getSettings.mockResolvedValue(
+        settingsResponse(
+          {
+            timezone: 'America/Chicago',
+            defaultSendTime: '09:00',
+            subjectTemplate: '{{title}} | Weekly #{{number}}',
+          },
+          '2026-07-25T00:00:00Z'
+        )
+      );
+
+      renderPage();
+
+      const field = await screen.findByLabelText<HTMLInputElement>('Format');
+      await waitFor(() => expect(field.value).toBe('{{title}} | Weekly #{{number}}'));
+      expect(screen.getByText(/Serverless Patterns That Scale \| Weekly #128/)).toBeInTheDocument();
+    });
+
+    it('rejects an unsupported placeholder before saving', async () => {
+      renderPage();
+
+      const field = await screen.findByLabelText<HTMLInputElement>('Format');
+      fireEvent.change(field, { target: { value: '{{title}} from {{brand}}' } });
+      fireEvent.click(screen.getByRole('button', { name: /save settings/i }));
+
+      expect(await screen.findByText(/\{\{brand\}\} isn't available/)).toBeInTheDocument();
+      expect(mockedService.updateSettings).not.toHaveBeenCalled();
+    });
+
+    it('sends an empty template to clear it', async () => {
+      mockedService.getSettings.mockResolvedValue(
+        settingsResponse(
+          {
+            timezone: 'America/Chicago',
+            defaultSendTime: '09:00',
+            subjectTemplate: '{{title}}',
+          },
+          '2026-07-25T00:00:00Z'
+        )
+      );
+      mockedService.updateSettings.mockResolvedValue(
+        settingsResponse({ timezone: 'America/Chicago', defaultSendTime: '09:00' })
+      );
+
+      renderPage();
+
+      const field = await screen.findByLabelText<HTMLInputElement>('Format');
+      await waitFor(() => expect(field.value).toBe('{{title}}'));
+
+      fireEvent.change(field, { target: { value: '' } });
+      fireEvent.click(screen.getByRole('button', { name: /save settings/i }));
+
+      await waitFor(() => {
+        expect(mockedService.updateSettings).toHaveBeenCalledWith(
+          expect.objectContaining({ subjectTemplate: '' })
+        );
+      });
+    });
+  });
+
+  describe('issue URL', () => {
+    it('previews the URL a specific issue would get', async () => {
+      renderPage();
+
+      const field = await screen.findByLabelText<HTMLInputElement>('URL pattern');
+      fireEvent.change(field, {
+        target: { value: 'https://example.com/newsletter/{{number}}' },
+      });
+
+      expect(await screen.findByText('https://example.com/newsletter/128')).toBeInTheDocument();
+    });
+
+    it('requires an absolute URL containing the issue number', async () => {
+      renderPage();
+
+      const field = await screen.findByLabelText<HTMLInputElement>('URL pattern');
+
+      fireEvent.change(field, { target: { value: '/newsletter/{{number}}' } });
+      fireEvent.click(screen.getByRole('button', { name: /save settings/i }));
+      expect(await screen.findByText(/full URL starting with https/i)).toBeInTheDocument();
+
+      fireEvent.change(field, { target: { value: 'https://example.com/newsletter' } });
+      fireEvent.click(screen.getByRole('button', { name: /save settings/i }));
+      expect(await screen.findByText(/Include \{\{number\}\}/)).toBeInTheDocument();
+
+      expect(mockedService.updateSettings).not.toHaveBeenCalled();
+    });
   });
 });

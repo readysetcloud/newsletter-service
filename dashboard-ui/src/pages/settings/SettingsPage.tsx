@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ClockIcon, GlobeAltIcon } from '@heroicons/react/24/outline';
+import { ClockIcon, EnvelopeIcon, GlobeAltIcon, LinkIcon } from '@heroicons/react/24/outline';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { ErrorDisplay } from '@/components/ui/ErrorDisplay';
@@ -10,6 +10,9 @@ import { useToast } from '@/components/ui/Toast';
 import { useSettings } from '@/contexts/SettingsContext';
 import {
   SEND_TIME_PRESETS,
+  SUBJECT_TOKENS,
+  URL_TOKENS,
+  findUnknownToken,
   getTimezoneOptions,
   tenantSettingsSchema,
   type TenantSettingsFormData
@@ -18,8 +21,10 @@ import { padSendTime } from '@/services/settingsService';
 import {
   combineDateAndTimeInTimeZone,
   formatDateTimeInTimeZone,
+  formatLongDateInTimeZone,
   getBrowserTimeZone
 } from '@/utils/dateFormatting';
+import { renderTokens } from '@/utils/renderTokens';
 
 /**
  * Tenant-wide defaults. Everything here answers the same question: what should
@@ -36,13 +41,27 @@ export function SettingsPage() {
 
   const browserTimeZone = useMemo(() => getBrowserTimeZone(), []);
 
-  const [form, setForm] = useState<TenantSettingsFormData>(settings);
+  // The optional templates are absent when unset; the form works in empty
+  // strings and converts back on save.
+  const toForm = (value: typeof settings): TenantSettingsFormData => ({
+    timezone: value.timezone,
+    defaultSendTime: value.defaultSendTime,
+    subjectTemplate: value.subjectTemplate ?? '',
+    issueUrlPattern: value.issueUrlPattern ?? ''
+  });
+
+  const [form, setForm] = useState<TenantSettingsFormData>(() => toForm(settings));
   const [errors, setErrors] = useState<Partial<Record<keyof TenantSettingsFormData, string>>>({});
   const [isSaving, setIsSaving] = useState(false);
 
   // Adopt whatever the provider settles on (initial load, or a refresh).
   useEffect(() => {
-    setForm(settings);
+    setForm({
+      timezone: settings.timezone,
+      defaultSendTime: settings.defaultSendTime,
+      subjectTemplate: settings.subjectTemplate ?? '',
+      issueUrlPattern: settings.issueUrlPattern ?? ''
+    });
     setErrors({});
   }, [settings]);
 
@@ -61,7 +80,10 @@ export function SettingsPage() {
   }, [form.timezone]);
 
   const isDirty =
-    form.timezone !== settings.timezone || form.defaultSendTime !== settings.defaultSendTime;
+    form.timezone !== settings.timezone ||
+    form.defaultSendTime !== settings.defaultSendTime ||
+    form.subjectTemplate !== (settings.subjectTemplate ?? '') ||
+    form.issueUrlPattern !== (settings.issueUrlPattern ?? '');
 
   const usingDefaultTimezone = settings.timezone === defaults.timezone && !updatedAt;
   const usingDefaultSendTime = settings.defaultSendTime === defaults.defaultSendTime && !updatedAt;
@@ -93,6 +115,26 @@ export function SettingsPage() {
     };
   }, [form]);
 
+  /**
+   * Sample renderings, so the effect of a placeholder is visible before an
+   * issue goes out with it. Sample values are obviously fake on purpose.
+   */
+  const subjectPreview = useMemo(() => {
+    const template = form.subjectTemplate.trim();
+    if (!template || findUnknownToken(template, SUBJECT_TOKENS)) return null;
+    return renderTokens(template, {
+      title: 'Serverless Patterns That Scale',
+      number: 128,
+      date: formatLongDateInTimeZone(new Date(), form.timezone)
+    });
+  }, [form.subjectTemplate, form.timezone]);
+
+  const urlPreview = useMemo(() => {
+    const pattern = form.issueUrlPattern.trim();
+    if (!pattern || findUnknownToken(pattern, URL_TOKENS)) return null;
+    return renderTokens(pattern, { number: 128 });
+  }, [form.issueUrlPattern]);
+
   const handleChange = <K extends keyof TenantSettingsFormData>(
     field: K,
     value: TenantSettingsFormData[K]
@@ -119,7 +161,10 @@ export function SettingsPage() {
     try {
       await save({
         timezone: parsed.data.timezone,
-        defaultSendTime: padSendTime(parsed.data.defaultSendTime)
+        defaultSendTime: padSendTime(parsed.data.defaultSendTime),
+        // Empty means "clear this"; the service turns it into an explicit null.
+        subjectTemplate: parsed.data.subjectTemplate,
+        issueUrlPattern: parsed.data.issueUrlPattern
       });
       addToast({
         type: 'success',
@@ -138,7 +183,7 @@ export function SettingsPage() {
   };
 
   const handleReset = () => {
-    setForm(settings);
+    setForm(toForm(settings));
     setErrors({});
   };
 
@@ -269,6 +314,67 @@ export function SettingsPage() {
               </p>
               <p className="text-sm text-muted-foreground mt-1">{preview.inTenantZone}</p>
               <p className="text-xs text-muted-foreground mt-0.5">{preview.inUtc}</p>
+            </div>
+          )}
+        </Card>
+
+        <Card className="p-6">
+          <div className="flex items-start gap-3 mb-6">
+            <EnvelopeIcon className="h-6 w-6 text-muted-foreground shrink-0 mt-0.5" aria-hidden="true" />
+            <div>
+              <h2 className="text-lg font-semibold text-foreground">Subject line format</h2>
+              <p className="text-sm text-muted-foreground mt-1">
+                Used when the request that stages an issue doesn&rsquo;t supply a subject &mdash;
+                which is every issue imported from GitHub. A subject sent with the request always
+                wins. Leave empty to use the issue title on its own.
+              </p>
+            </div>
+          </div>
+
+          <Input
+            label="Format"
+            value={form.subjectTemplate}
+            onChange={(event) => handleChange('subjectTemplate', event.target.value)}
+            error={errors.subjectTemplate}
+            disabled={isSaving}
+            placeholder="{{title}} | Picks of the Week #{{number}}"
+            helperText={`Available placeholders: ${SUBJECT_TOKENS.map((t) => `{{${t}}}`).join(', ')}`}
+          />
+
+          {subjectPreview && (
+            <div className="mt-4 rounded-lg border border-border bg-surface p-4">
+              <p className="text-xs text-muted-foreground">A subject would look like</p>
+              <p className="text-sm font-medium text-foreground mt-1">{subjectPreview}</p>
+            </div>
+          )}
+        </Card>
+
+        <Card className="p-6">
+          <div className="flex items-start gap-3 mb-6">
+            <LinkIcon className="h-6 w-6 text-muted-foreground shrink-0 mt-0.5" aria-hidden="true" />
+            <div>
+              <h2 className="text-lg font-semibold text-foreground">Issue URL</h2>
+              <p className="text-sm text-muted-foreground mt-1">
+                Where issues live on your own site. It becomes the &ldquo;view online&rdquo; link in
+                the email. Leave empty and the link is left out entirely.
+              </p>
+            </div>
+          </div>
+
+          <Input
+            label="URL pattern"
+            value={form.issueUrlPattern}
+            onChange={(event) => handleChange('issueUrlPattern', event.target.value)}
+            error={errors.issueUrlPattern}
+            disabled={isSaving}
+            placeholder="https://example.com/newsletter/{{number}}"
+            helperText="Must include {{number}} so each issue links to its own page."
+          />
+
+          {urlPreview && (
+            <div className="mt-4 rounded-lg border border-border bg-surface p-4">
+              <p className="text-xs text-muted-foreground">Issue 128 would link to</p>
+              <p className="text-sm font-medium text-foreground mt-1 break-all">{urlPreview}</p>
             </div>
           )}
         </Card>

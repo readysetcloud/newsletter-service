@@ -1,5 +1,10 @@
 import { apiClient } from './api';
-import { SEND_TIME_PATTERN } from '@/schemas/settingsSchema';
+import {
+  SEND_TIME_PATTERN,
+  SUBJECT_TOKENS,
+  URL_TOKENS,
+  findUnknownToken
+} from '@/schemas/settingsSchema';
 import type { ApiResponse } from '@/types/api';
 import type { SettingsResponse, UpdateSettingsRequest } from '@/types/settings';
 
@@ -54,6 +59,33 @@ export class SettingsService {
       }
     }
 
+    if (typeof data.subjectTemplate === 'string' && data.subjectTemplate.trim()) {
+      const template = data.subjectTemplate.trim();
+      // A newline in a subject line is an extra email header, so this one is a
+      // hard rule rather than a nicety (the backend rejects it too).
+      if (/[\r\n]/.test(template)) {
+        return 'Subject format cannot contain line breaks';
+      }
+      const unknown = findUnknownToken(template, SUBJECT_TOKENS);
+      if (unknown) {
+        return `Subject format uses {{${unknown}}}, which isn't available`;
+      }
+    }
+
+    if (typeof data.issueUrlPattern === 'string' && data.issueUrlPattern.trim()) {
+      const pattern = data.issueUrlPattern.trim();
+      if (!/^https?:\/\//.test(pattern)) {
+        return 'Issue URL must start with https://';
+      }
+      if (!pattern.includes('{{number}}')) {
+        return 'Issue URL must include {{number}}';
+      }
+      const unknown = findUnknownToken(pattern, URL_TOKENS);
+      if (unknown) {
+        return `Issue URL uses {{${unknown}}}, which isn't available`;
+      }
+    }
+
     return null;
   }
 
@@ -73,6 +105,14 @@ export class SettingsService {
       const value =
         typeof data.defaultSendTime === 'string' ? data.defaultSendTime.trim() : data.defaultSendTime;
       normalized.defaultSendTime = value ? padSendTime(value) : null;
+    }
+
+    // An emptied field is a reset, not a blank value to store.
+    for (const key of ['subjectTemplate', 'issueUrlPattern'] as const) {
+      if (key in data) {
+        const value = typeof data[key] === 'string' ? data[key]!.trim() : data[key];
+        normalized[key] = value ? value : null;
+      }
     }
 
     return normalized;

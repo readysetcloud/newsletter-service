@@ -215,8 +215,8 @@
                                   <tr>
                                     <td height="100%" valign="top" role="module-content">
                                       <div style="font-family: inherit;padding-bottom:8px;">
-                                        <span>{{ metadata.date }} - </span>
-                                        <span> <a href="{{ metadata.url }}"> View online version</a></span>
+                                        <span>{{ metadata.date }}{{#if metadata.url}} - {{/if}}</span>
+                                        {{#if metadata.url}}<span> <a href="{{ metadata.url }}"> View online version</a></span>{{/if}}
                                       </div>
                                     </td>
                                   </tr>

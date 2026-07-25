@@ -95,6 +95,62 @@ describe('SettingsService', () => {
     });
   });
 
+  describe('template validation', () => {
+    it('rejects a subject template with a line break', async () => {
+      // A newline in a subject line is a second email header.
+      const result = await settingsService.updateSettings({
+        subjectTemplate: 'Hi\r\nBcc: someone@example.com',
+      });
+
+      expect(result.success).toBe(false);
+      expect(mockedClient.put).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unsupported subject placeholder', async () => {
+      const result = await settingsService.updateSettings({
+        subjectTemplate: '{{title}} from {{brand}}',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('{{brand}}');
+      expect(mockedClient.put).not.toHaveBeenCalled();
+    });
+
+    it('accepts the supported subject placeholders', async () => {
+      mockedClient.put.mockResolvedValue(successResponse);
+
+      await settingsService.updateSettings({ subjectTemplate: '{{title}} #{{number}} {{date}}' });
+
+      expect(mockedClient.put).toHaveBeenCalledWith('/settings', {
+        subjectTemplate: '{{title}} #{{number}} {{date}}',
+      });
+    });
+
+    it('requires the issue URL to be absolute and per-issue', async () => {
+      for (const bad of [
+        '/newsletter/{{number}}',
+        'example.com/{{number}}',
+        'https://example.com/newsletter',
+        'https://example.com/{{slug}}/{{number}}',
+      ]) {
+        const result = await settingsService.updateSettings({ issueUrlPattern: bad });
+        expect(result.success, `${bad} should be rejected`).toBe(false);
+      }
+      expect(mockedClient.put).not.toHaveBeenCalled();
+    });
+
+    it('sends an emptied template as an explicit null', async () => {
+      mockedClient.put.mockResolvedValue(successResponse);
+
+      await settingsService.updateSettings({ subjectTemplate: '  ', issueUrlPattern: '' });
+
+      expect(mockedClient.put).toHaveBeenCalledWith('/settings', {
+        subjectTemplate: null,
+        issueUrlPattern: null,
+      });
+    });
+  });
+
   describe('padSendTime', () => {
     it('zero-pads the hour', () => {
       expect(padSendTime('9:05')).toBe('09:05');

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Eye, EyeOff, FileText, FileJson } from 'lucide-react';
 import { Input } from '@/components/ui/Input';
@@ -120,13 +120,12 @@ export const IssueFormPage: React.FC = () => {
 
   const [localSendEnabled, setLocalSendEnabled] = useState(false);
   const [localSendMode, setLocalSendMode] = useState<'timezone' | 'peak-hour'>('timezone');
-  const [localSendTimeZone, setLocalSendTimeZone] = useState(() => {
-    // Default to the author's browser timezone when it's one of the options.
-    const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return timezoneOptions.some((option) => option.value === browserZone)
-      ? browserZone
-      : 'America/New_York';
-  });
+  // Defaults to the newsletter's own timezone — the same zone the schedule
+  // field above is read in, and the one the API falls back to when a local-send
+  // config omits it. An author can still pick a different zone per issue.
+  const [localSendTimeZone, setLocalSendTimeZone] = useState(timeZone);
+  /** Set once the author (or a saved issue) picks a zone explicitly. */
+  const localSendTouched = useRef(false);
   // Interest-aware assembly: personalized section order (contentAssembly).
   const [personalizedOrder, setPersonalizedOrder] = useState(false);
 
@@ -140,6 +139,27 @@ export const IssueFormPage: React.FC = () => {
   const [showCancelDialog, setShowCancelDialog] = useState(false);
   const [existingIssue, setExistingIssue] = useState<Issue | null>(null);
   const [isFormDisabled, setIsFormDisabled] = useState(false);
+
+  // Follow the tenant setting once it loads, unless this issue already carries
+  // its own saved zone (edit mode sets it explicitly below).
+  useEffect(() => {
+    if (!localSendTouched.current) {
+      setLocalSendTimeZone(timeZone);
+    }
+  }, [timeZone]);
+
+  // The local-send picker offers a curated shortlist; the newsletter's own zone
+  // may not be on it, and a `<select>` whose value isn't an option silently
+  // shows a different one.
+  const localSendTimeZoneOptions = useMemo(() => {
+    if (timezoneOptions.some((option) => option.value === localSendTimeZone)) {
+      return timezoneOptions;
+    }
+    return [
+      { value: localSendTimeZone, label: localSendTimeZone.replace(/_/g, ' ') },
+      ...timezoneOptions
+    ];
+  }, [localSendTimeZone]);
 
   // Schedule fields work in the newsletter's timezone rather than the author's
   // browser zone, so what's typed here is the wall-clock time subscribers get
@@ -185,6 +205,7 @@ export const IssueFormPage: React.FC = () => {
         if (issue.localSend?.enabled) {
           setLocalSendEnabled(true);
           if (issue.localSend.defaultTimeZone) {
+            localSendTouched.current = true;
             setLocalSendTimeZone(issue.localSend.defaultTimeZone);
           }
           setLocalSendMode(issue.localSend.mode === 'peak-hour' ? 'peak-hour' : 'timezone');
@@ -786,20 +807,22 @@ export const IssueFormPage: React.FC = () => {
                     id="localSendTimeZone"
                     value={localSendTimeZone}
                     onChange={(e) => {
+                      localSendTouched.current = true;
                       setLocalSendTimeZone(e.target.value);
                       setIsDirty(true);
                     }}
                     disabled={isFormDisabled}
                     className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {timezoneOptions.map((option) => (
+                    {localSendTimeZoneOptions.map((option) => (
                       <option key={option.value} value={option.value}>
                         {option.label}
                       </option>
                     ))}
                   </select>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    The scheduled time is read as a wall-clock time in this timezone.
+                    The scheduled time is read as a wall-clock time in this timezone. Defaults to
+                    your newsletter&rsquo;s timezone.
                   </p>
                 </div>
               )}

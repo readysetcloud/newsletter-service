@@ -2,6 +2,7 @@ import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
 import frontmatter from '@github-docs/frontmatter';
 import { getOctokit, getTenant } from './utils/helpers.mjs';
 import { publishIssueEvent, EVENT_TYPES } from './utils/event-publisher.mjs';
+import { getTenantSettings, resolveSendInstant } from './utils/tenant-settings.mjs';
 
 const sfn = new SFNClient();
 let octokit;
@@ -50,14 +51,16 @@ const getIssueData = async (tenant, github) => {
 const processNewIssue = async (data) => {
   const today = new Date();
   const metadata = frontmatter(data.content);
-  let postDate = metadata.data.date;
-  if (postDate.toISOString().indexOf('T00:00:00.000Z') > -1) {
-    postDate = `${postDate.toISOString().split('T')[0]}T12:00:00Z`;
-  }
 
-  const date = new Date(postDate);
-  if (date > today) {
-    data.futureDate = `${metadata.data.date.toISOString().split('T')[0]}T12:00:00Z`;
+  // A frontmatter `date:` with no time attached (which YAML hands back as UTC
+  // midnight) is a day, not a moment. It gets the tenant's configured default
+  // send time in the tenant's timezone; a date that already names a time is
+  // taken as written.
+  const settings = await getTenantSettings(data.tenant.id);
+  const date = resolveSendInstant(metadata.data.date, settings);
+
+  if (date && date > today) {
+    data.futureDate = date.toISOString();
   }
 
   const slugSource = (metadata.data.slug || github.slug || '').toString();
@@ -82,7 +85,7 @@ const processNewIssue = async (data) => {
       issueId: data.key,
       fileName: data.fileName,
       title: metadata.data.title || 'Untitled Issue',
-      scheduledDate: date > today ? date.toISOString() : null,
+      scheduledDate: date && date > today ? date.toISOString() : null,
       isPreview: data.isPreview,
       metadata: metadata.data
     }

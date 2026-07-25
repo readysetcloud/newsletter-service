@@ -97,6 +97,45 @@ describe('dateFormatting', () => {
       );
     });
 
+    it('resolves a time inside the spring-forward gap forward, never backward', () => {
+      // 02:00–02:59 never happens on 2026-03-08 in Chicago. Naively applying
+      // offsets lands on 01:30 CST — an hour EARLIER than asked for, which
+      // would send an issue before its scheduled time. The first minute that
+      // exists is 03:00 CDT.
+      const resolved = fromDatetimeLocalInTimeZone('2026-03-08T02:30', 'America/Chicago');
+
+      expect(resolved).toBe('2026-03-08T08:00:00.000Z');
+      expect(new Date(resolved).getTime()).toBeGreaterThan(
+        new Date('2026-03-08T07:30:00.000Z').getTime()
+      );
+    });
+
+    it('matches the API for every minute of a spring-forward gap', () => {
+      // The dashboard and settings.rs must agree on what a gap time means, or
+      // the preview would disagree with the send.
+      for (const minute of ['02:00', '02:01', '02:30', '02:59']) {
+        expect(
+          fromDatetimeLocalInTimeZone(`2026-03-08T${minute}`, 'America/Chicago'),
+          `${minute} should resolve to the first valid minute`
+        ).toBe('2026-03-08T08:00:00.000Z');
+      }
+    });
+
+    it('resolves a gap time in a zone with a half-hour offset', () => {
+      // Lord Howe springs forward by 30 minutes, so the gap is 02:00–02:29.
+      const resolved = fromDatetimeLocalInTimeZone('2026-10-04T02:15', 'Australia/Lord_Howe');
+
+      expect(resolved).toBe('2026-10-03T15:30:00.000Z');
+    });
+
+    it('keeps the earlier instant for an ambiguous fall-back hour', () => {
+      // 01:30 happens twice on 2026-11-01; the earlier one (CDT) is closest to
+      // the requested wall clock, matching the Rust resolver.
+      expect(fromDatetimeLocalInTimeZone('2026-11-01T01:30', 'America/Chicago')).toBe(
+        '2026-11-01T06:30:00.000Z'
+      );
+    });
+
     it('returns an empty string for empty input', () => {
       expect(toDatetimeLocalInTimeZone('', 'UTC')).toBe('');
       expect(fromDatetimeLocalInTimeZone('', 'UTC')).toBe('');

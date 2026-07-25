@@ -266,6 +266,26 @@ describe('parse-md-to-json tenant settings', () => {
     expect(result.subject).toBe('Test Issue | Picks of the Week #12');
   });
 
+  it('prefers a subject the caller supplied over the tenant template', async () => {
+    // The API sets `subject` on every issue it stages, and the state machine
+    // forwards it here. A tenant template is a default, not an override.
+    await loadIsolated([], { subjectTemplate: '{{title}} | Picks of the Week #{{number}}' });
+
+    const result = await handler(issue({ subject: 'A subject the caller chose' }));
+
+    expect(result.subject).toBe('A subject the caller chose');
+  });
+
+  it('uses the tenant template when the caller subject is null', async () => {
+    // GitHub imports carry `subject: null` so the state machine can reference
+    // the field unconditionally.
+    await loadIsolated([], { subjectTemplate: '{{title}} | Picks of the Week #{{number}}' });
+
+    const result = await handler(issue({ subject: null }));
+
+    expect(result.subject).toBe('Test Issue | Picks of the Week #12');
+  });
+
   it('falls back to the issue title when no template is configured', async () => {
     // The subject used to be a hardcoded "Ready, Set, Cloud" string that every
     // tenant inherited; with nothing configured it is now just the title.

@@ -25,6 +25,11 @@ export const handler = async (event) => {
       // Always present (null when no template selected) so the state machine can
       // reference it unconditionally; GitHub-imported issues use the default template.
       templateId: null,
+      // Same reason: the state machine forwards `subject` to the markdown
+      // parser with a `.$` path reference, which fails the execution outright
+      // if the field is absent. Null means "no caller subject", so the parser
+      // falls back to the tenant's subjectTemplate.
+      subject: null,
       ...email && { email }
     };
     await processNewIssue(issueData);

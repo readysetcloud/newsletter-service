@@ -238,7 +238,8 @@
             "fileName.$": "$$.Execution.Input.fileName",
             "isPreview.$": "$$.Execution.Input.isPreview",
             "issueId.$": "$$.Execution.Input.issueId",
-            "tenantId.$": "$$.Execution.Input.tenant.id"
+            "tenantId.$": "$$.Execution.Input.tenant.id",
+            "subject.$": "$$.Execution.Input.subject"
           }
         },
               "Retry": [

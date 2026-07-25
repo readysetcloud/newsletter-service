@@ -153,8 +153,9 @@ export const handler = async (state) => {
     listCleanupDate: listCleanupDate.toISOString().split('.')[0],
     reportStatsDate: reportStatsDate.toISOString().split('.')[0],
     subject: buildSubject(settings, {
-      // The markdown path is reached from the GitHub import, which carries no
-      // subject of its own, so this is normally the tenant's subjectTemplate.
+      // Null for GitHub imports, which have no subject of their own — those
+      // fall through to the tenant's subjectTemplate. An API-created issue
+      // always supplies one, and an explicit subject outranks the template.
       callerSubject: state.subject,
       title: dataTemplate.metadata.title,
       number: issueNumber,

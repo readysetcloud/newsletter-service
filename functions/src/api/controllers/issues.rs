@@ -1822,7 +1822,7 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
                 &body,
                 existing.issue_number,
                 action,
-                normalized_scheduled_at.as_deref(),
+                body.scheduled_at.as_deref(),
                 raw_ab_test.as_ref(),
                 raw_local_send.as_ref(),
                 raw_content_assembly.as_ref(),
@@ -1890,7 +1890,7 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
             &body,
             issue_number,
             action,
-            normalized_scheduled_at.as_deref(),
+            body.scheduled_at.as_deref(),
             raw_ab_test.as_ref(),
             raw_local_send.as_ref(),
             raw_content_assembly.as_ref(),
@@ -3417,15 +3417,19 @@ fn resolve_scheduled_at(
 
 /// Hashes everything that determines what a create request does, so a reused
 /// Idempotency-Key with any behavioral change is rejected instead of replayed.
-/// The send-config values (`abTest`, `localSend`, `contentAssembly`) are the
-/// raw caller-supplied objects, not the normalized forms: normalization
-/// injects server-generated values (e.g. the A/B `testId`), which would make
-/// byte-identical replays hash differently.
+///
+/// Every value here is the raw caller-supplied one, never the normalized form.
+/// Normalization folds in things the caller didn't send: server-generated
+/// values (the A/B `testId`), the current time (a `scheduledAt` that has since
+/// passed), and tenant settings (a date-only `scheduledAt` resolves against
+/// the tenant's timezone and send time). Hashing any of those would make a
+/// byte-identical replay look like a different request — so changing the
+/// tenant's timezone would turn a CI re-run of the same commit into a 409.
 fn compute_idempotency_hash(
     body: &CreateIssueRequest,
     issue_number: i32,
     action: CreateIssueAction,
-    scheduled_at: Option<&str>,
+    raw_scheduled_at: Option<&str>,
     ab_test: Option<&serde_json::Value>,
     local_send: Option<&serde_json::Value>,
     content_assembly: Option<&serde_json::Value>,
@@ -3438,7 +3442,7 @@ fn compute_idempotency_hash(
             CreateIssueAction::Draft => "draft",
             CreateIssueAction::Schedule => "schedule",
         },
-        "scheduledAt": scheduled_at,
+        "scheduledAt": raw_scheduled_at,
         "metadata": body.metadata.clone(),
         "templateId": body.template_id.clone(),
         "contentType": normalize_content_type(body.content_type.as_deref()),
@@ -5807,6 +5811,65 @@ Thanks!"#;
         );
 
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn test_compute_idempotency_hash_survives_a_tenant_settings_change() {
+        // The hash covers the caller's date-only value, not the instant it
+        // resolves to. A tenant editing their timezone or send time between a
+        // request and its retry must not turn a byte-identical replay into a
+        // 409 — which is exactly what hashing the resolved instant would do.
+        let request = create_request("# Test Content", None, None);
+
+        let before = compute_idempotency_hash(
+            &request,
+            7,
+            CreateIssueAction::Schedule,
+            Some("2026-08-01"),
+            None,
+            None,
+            None,
+        );
+        let after = compute_idempotency_hash(
+            &request,
+            7,
+            CreateIssueAction::Schedule,
+            Some("2026-08-01"),
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(before, after);
+
+        // Sanity check that the field still participates at all: a different
+        // date is still a different request.
+        let other_date = compute_idempotency_hash(
+            &request,
+            7,
+            CreateIssueAction::Schedule,
+            Some("2026-08-02"),
+            None,
+            None,
+            None,
+        );
+        assert_ne!(before, other_date);
+    }
+
+    #[test]
+    fn test_resolve_scheduled_at_varies_with_settings_the_hash_ignores() {
+        // The other half of the guarantee above: the same date-only value
+        // genuinely does resolve to different instants under different
+        // settings, so hashing the resolved form would have been unstable.
+        let date = format!("{}-08-01", future_year());
+
+        let chicago =
+            resolve_scheduled_at(Some(&date), &tenant_settings("America/Chicago", "09:00"))
+                .unwrap();
+        let tokyo =
+            resolve_scheduled_at(Some(&date), &tenant_settings("Asia/Tokyo", "09:00")).unwrap();
+
+        assert_ne!(chicago, tokyo);
     }
 
     #[test]

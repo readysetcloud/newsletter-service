@@ -189,6 +189,12 @@ export function toDatetimeLocalInTimeZone(value: DateInput, timeZone?: string): 
  * the wall-clock time treated as UTC, which is wrong by up to an hour when the
  * value sits near a DST boundary; re-reading the offset at that first estimate
  * lands on the correct instant.
+ *
+ * A wall-clock time inside a spring-forward gap never happens, and no offset
+ * makes it happen — the two-pass result lands *before* the requested time,
+ * which would send an issue an hour early. Those are resolved forward to the
+ * first minute that does exist, matching `resolve_date_only` in `settings.rs`
+ * so the dashboard and the API agree on what a gap time means.
  */
 export function fromDatetimeLocalInTimeZone(value: string, timeZone?: string): string {
   // `Date.parse` is lenient enough to find a date in strings that are nothing
@@ -200,14 +206,52 @@ export function fromDatetimeLocalInTimeZone(value: string, timeZone?: string): s
     return Number.isNaN(date.getTime()) ? EMPTY : date.toISOString();
   }
 
-  const asUtc = Date.parse(`${value.slice(0, 16)}:00Z`);
+  const wallClock = value.slice(0, 16);
+  const asUtc = Date.parse(`${wallClock}:00Z`);
   if (Number.isNaN(asUtc)) return EMPTY;
 
-  const firstPass = asUtc - timeZoneOffsetMs(asUtc, timeZone);
-  const instant = asUtc - timeZoneOffsetMs(firstPass, timeZone);
+  const instant = resolveWallClock(asUtc, timeZone);
+  if (instant === null) return EMPTY;
 
   return new Date(instant).toISOString();
 }
+
+/**
+ * Turns a wall-clock time (expressed as though it were UTC) into the instant it
+ * names in `timeZone`, or null if the input isn't a usable time.
+ */
+function resolveWallClock(asUtc: number, timeZone: string): number | null {
+  const firstPass = asUtc - timeZoneOffsetMs(asUtc, timeZone);
+  const instant = asUtc - timeZoneOffsetMs(firstPass, timeZone);
+
+  // Round-trip check: if reading the instant back in the zone doesn't give the
+  // wall clock we asked for, that wall clock doesn't exist on that day.
+  if (wallClockOf(instant, timeZone) === asUtc) {
+    return instant;
+  }
+
+  // Walk forward to the first wall-clock minute that does exist. DST gaps are
+  // at most a couple of hours, so the bound is generous rather than tight.
+  for (let minutes = 1; minutes <= GAP_SEARCH_LIMIT_MINUTES; minutes += 1) {
+    const candidate = asUtc + minutes * 60_000;
+    const resolved = candidate - timeZoneOffsetMs(candidate - timeZoneOffsetMs(candidate, timeZone), timeZone);
+    if (wallClockOf(resolved, timeZone) === candidate) {
+      return resolved;
+    }
+  }
+
+  // No valid time found (should be unreachable for real zones) — the two-pass
+  // estimate is still a real instant, so prefer it over failing outright.
+  return instant;
+}
+
+/** The zone's wall clock at `instant`, as though that wall clock were UTC. */
+function wallClockOf(instant: number, timeZone: string): number {
+  return instant + timeZoneOffsetMs(instant, timeZone);
+}
+
+/** Longest spring-forward gap we'll search past. Real gaps are 30–120 minutes. */
+const GAP_SEARCH_LIMIT_MINUTES = 180;
 
 /**
  * Combines a `YYYY-MM-DD` date and an `HH:MM` time into the instant they name

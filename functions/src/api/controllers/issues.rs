@@ -582,16 +582,16 @@ async fn handle_resend_issue(
         ));
     }
 
-    start_issue_schedule(
-        &tenant_id,
-        user_context.email.as_str(),
-        issue.issue_number,
-        &issue.content,
-        None,
-        issue.template_id.as_deref(),
-        &normalize_content_type(issue.content_type.as_deref()),
-        &issue.subject,
-    )
+    start_issue_schedule(IssueScheduleInput {
+        tenant_id: &tenant_id,
+        tenant_email: user_context.email.as_str(),
+        issue_number: issue.issue_number,
+        content: &issue.content,
+        scheduled_at: None,
+        template_id: issue.template_id.as_deref(),
+        content_type: &normalize_content_type(issue.content_type.as_deref()),
+        subject: &issue.subject,
+    })
     .await?;
 
     response::format_response(
@@ -1902,9 +1902,11 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
         issue_number,
         &body,
         normalized_scheduled_at.clone(),
-        ab_test,
-        local_send,
-        content_assembly,
+        SendConfig {
+            ab_test,
+            local_send,
+            content_assembly,
+        },
         overwrite_draft,
     )
     .await?;
@@ -1920,16 +1922,16 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
     }
 
     if action == CreateIssueAction::Schedule {
-        start_issue_schedule(
-            &tenant_id,
-            user_context.email.as_str(),
+        start_issue_schedule(IssueScheduleInput {
+            tenant_id: &tenant_id,
+            tenant_email: user_context.email.as_str(),
             issue_number,
-            &body.content,
-            normalized_scheduled_at.as_deref(),
-            body.template_id.as_deref(),
-            &normalize_content_type(body.content_type.as_deref()),
-            &body.subject,
-        )
+            content: &body.content,
+            scheduled_at: normalized_scheduled_at.as_deref(),
+            template_id: body.template_id.as_deref(),
+            content_type: &normalize_content_type(body.content_type.as_deref()),
+            subject: &body.subject,
+        })
         .await?;
     } else if let Some(ttl_seconds) = body.ttl_seconds {
         schedule_draft_deletion(&tenant_id, issue_number, ttl_seconds).await?;
@@ -2051,12 +2053,14 @@ async fn handle_update_issue(
         &tenant_id,
         &issue_id,
         &body,
-        ab_test,
-        clear_ab_test,
-        local_send,
-        clear_local_send,
-        content_assembly,
-        clear_content_assembly,
+        SendConfigUpdate {
+            ab_test,
+            clear_ab_test,
+            local_send,
+            clear_local_send,
+            content_assembly,
+            clear_content_assembly,
+        },
     )
     .await?;
 
@@ -3629,16 +3633,33 @@ async fn save_idempotency_record(
     }
 }
 
-async fn start_issue_schedule(
-    tenant_id: &str,
-    tenant_email: &str,
+/// Everything the stage-issue state machine needs in its execution input.
+/// Grouped rather than passed positionally because several fields are bare
+/// `&str` — named struct fields make a transposed pair a compile error instead
+/// of an issue published under the wrong tenant.
+struct IssueScheduleInput<'a> {
+    tenant_id: &'a str,
+    tenant_email: &'a str,
     issue_number: i32,
-    content: &str,
-    scheduled_at: Option<&str>,
-    template_id: Option<&str>,
-    content_type: &str,
-    subject: &str,
-) -> Result<(), AppError> {
+    content: &'a str,
+    scheduled_at: Option<&'a str>,
+    template_id: Option<&'a str>,
+    content_type: &'a str,
+    subject: &'a str,
+}
+
+async fn start_issue_schedule(input: IssueScheduleInput<'_>) -> Result<(), AppError> {
+    let IssueScheduleInput {
+        tenant_id,
+        tenant_email,
+        issue_number,
+        content,
+        scheduled_at,
+        template_id,
+        content_type,
+        subject,
+    } = input;
+
     let sfn_client = aws_clients::get_sfn_client().await;
     let state_machine_arn = std::env::var("STATE_MACHINE_ARN")
         .map_err(|_| AppError::InternalError("STATE_MACHINE_ARN not set".to_string()))?;
@@ -3819,16 +3840,30 @@ async fn get_next_issue_number(tenant_id: &str) -> Result<i32, AppError> {
     Ok(max_issue_number + 1)
 }
 
+/// The per-issue send configuration. These three always travel together — the
+/// API extracts, validates and stores them as a set — so they are passed as
+/// one.
+#[derive(Default)]
+struct SendConfig {
+    ab_test: Option<serde_json::Value>,
+    local_send: Option<serde_json::Value>,
+    content_assembly: Option<serde_json::Value>,
+}
+
 async fn create_issue_record(
     tenant_id: &str,
     issue_number: i32,
     body: &CreateIssueRequest,
     scheduled_at: Option<String>,
-    ab_test: Option<serde_json::Value>,
-    local_send: Option<serde_json::Value>,
-    content_assembly: Option<serde_json::Value>,
+    send_config: SendConfig,
     overwrite_draft: bool,
 ) -> Result<CreateIssueResponse, AppError> {
+    let SendConfig {
+        ab_test,
+        local_send,
+        content_assembly,
+    } = send_config;
+
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
         .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
@@ -3938,17 +3973,34 @@ async fn create_issue_record(
     })
 }
 
-async fn update_issue_record(
-    tenant_id: &str,
-    issue_id: &str,
-    body: &UpdateIssueRequest,
+/// The same three configs on update, where each can also be explicitly
+/// cleared — a distinct case from "not mentioned in this request", which
+/// leaves the stored value alone.
+#[derive(Default)]
+struct SendConfigUpdate {
     ab_test: Option<serde_json::Value>,
     clear_ab_test: bool,
     local_send: Option<serde_json::Value>,
     clear_local_send: bool,
     content_assembly: Option<serde_json::Value>,
     clear_content_assembly: bool,
+}
+
+async fn update_issue_record(
+    tenant_id: &str,
+    issue_id: &str,
+    body: &UpdateIssueRequest,
+    send_config: SendConfigUpdate,
 ) -> Result<GetIssueResponse, AppError> {
+    let SendConfigUpdate {
+        ab_test,
+        clear_ab_test,
+        local_send,
+        clear_local_send,
+        content_assembly,
+        clear_content_assembly,
+    } = send_config;
+
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
         .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;

@@ -9,6 +9,8 @@ import {
 } from 'lucide-react';
 import { Card, CardContent, Button } from '@/components/ui';
 import type { BillingAlertsProps, BillingAlert } from '@/types';
+import { formatInTimeZone } from '@/utils/dateFormatting';
+import { useTenantDateFormat } from '@/contexts/SettingsContext';
 
 interface AlertItemProps {
   alert: BillingAlert;
@@ -50,13 +52,16 @@ function AlertItem({ alert, onDismiss, onAction }: AlertItemProps) {
     }
   };
 
+  // Dates render in the newsletter's timezone, not the viewer's.
+  const { timeZone } = useTenantDateFormat();
+
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
+    return formatInTimeZone(dateString, timeZone, {
       month: 'short',
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit'
-    });
+    }, 'en-US');
   };
 
   return (

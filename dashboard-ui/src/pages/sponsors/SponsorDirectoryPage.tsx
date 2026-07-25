@@ -12,8 +12,12 @@ import {
   filterSponsors,
 } from '../../services/sponsorService';
 import type { SponsorRecord, CreateSponsorRequest } from '../../services/sponsorService';
+import { formatInTimeZone } from '@/utils/dateFormatting';
+import { useTenantDateFormat } from '@/contexts/SettingsContext';
 
 export const SponsorDirectoryPage: React.FC = () => {
+  // Dates render in the newsletter's timezone, not the viewer's.
+  const { timeZone } = useTenantDateFormat();
   const navigate = useNavigate();
   const { addToast } = useToast();
 
@@ -69,11 +73,11 @@ export const SponsorDirectoryPage: React.FC = () => {
 
   const formatDate = (dateString?: string) => {
     if (!dateString) return '—';
-    return new Date(dateString).toLocaleDateString('en-US', {
+    return formatInTimeZone(dateString, timeZone, {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
-    });
+    }, 'en-US');
   };
 
   const formatCurrency = (amount: number) =>

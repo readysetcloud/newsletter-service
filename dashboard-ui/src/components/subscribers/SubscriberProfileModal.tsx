@@ -9,6 +9,8 @@ import {
 import { getEngagementStatus } from '@/utils/engagement';
 import { subscriberService } from '@/services/subscriberService';
 import type { SubscriberListItem, SubscriberDetail, ActivityEntry } from '@/types';
+import { useTenantDateFormat } from '@/contexts/SettingsContext';
+import { formatInTimeZone } from '@/utils/dateFormatting';
 
 interface SubscriberProfileModalProps {
   subscriber: SubscriberListItem | null;
@@ -16,12 +18,12 @@ interface SubscriberProfileModalProps {
   onClose: () => void;
 }
 
-const formatDate = (dateString: string) =>
-  new Date(dateString).toLocaleDateString('en-US', {
+const formatDate = (dateString: string, timeZone?: string) =>
+  formatInTimeZone(dateString, timeZone, {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
-  });
+  }, 'en-US');
 
 /** Shorten a URL to host + path for compact display; full URL goes in a title. */
 const shortenUrl = (url?: string): string => {
@@ -38,7 +40,7 @@ const shortenUrl = (url?: string): string => {
 };
 
 /** A short relative timestamp ("just now", "5h ago", "3d ago") with a date fallback. */
-const formatRelative = (iso: string): string => {
+const formatRelative = (iso: string, timeZone?: string): string => {
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return '';
   const diffMs = Date.now() - then;
@@ -48,7 +50,7 @@ const formatRelative = (iso: string): string => {
   if (diffMs < day) return `${Math.floor(diffMs / hour)}h ago`;
   const days = Math.floor(diffMs / day);
   if (days < 30) return `${days}d ago`;
-  return formatDate(iso);
+  return formatDate(iso, timeZone);
 };
 
 const activityLabel = (entry: ActivityEntry): React.ReactNode => {
@@ -75,6 +77,8 @@ export const SubscriberProfileModal: React.FC<SubscriberProfileModalProps> = ({
   latestIssueNumber,
   onClose,
 }) => {
+  // Dates render in the newsletter's timezone, not the viewer's.
+  const { timeZone } = useTenantDateFormat();
   const [detail, setDetail] = useState<SubscriberDetail | null>(null);
   const [activityLoading, setActivityLoading] = useState(false);
   const email = subscriber?.email;
@@ -149,7 +153,7 @@ export const SubscriberProfileModal: React.FC<SubscriberProfileModalProps> = ({
             )}
           </div>
           <div className="text-xs text-muted-foreground mt-2 space-y-0.5">
-            {subscriber.addedAt && <p>Subscribed {formatDate(subscriber.addedAt)}</p>}
+            {subscriber.addedAt && <p>Subscribed {formatDate(subscriber.addedAt, timeZone)}</p>}
             {subscriber.timeZone && (
               <p title="Detected from engagement activity across 3 consecutive issues">
                 Local timezone: {subscriber.timeZone} (auto-detected)
@@ -219,7 +223,7 @@ export const SubscriberProfileModal: React.FC<SubscriberProfileModalProps> = ({
                   )}
                   <span className="min-w-0 truncate">{activityLabel(entry)}</span>
                   <span className="ml-auto text-xs text-muted-foreground whitespace-nowrap">
-                    {formatRelative(entry.ts)}
+                    {formatRelative(entry.ts, timeZone)}
                   </span>
                 </li>
               ))}

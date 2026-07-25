@@ -14,8 +14,12 @@ import {
   PencilSquareIcon,
   TrashIcon,
 } from '@heroicons/react/24/outline';
+import { formatInTimeZone } from '@/utils/dateFormatting';
+import { useTenantDateFormat } from '@/contexts/SettingsContext';
 
 export function TemplatesListPage() {
+  // Dates render in the newsletter's timezone, not the viewer's.
+  const { timeZone } = useTenantDateFormat();
   const navigate = useNavigate();
   const { addToast } = useToast();
   const { showConfirmation, ConfirmationDialog } = useConfirmationDialog();
@@ -130,7 +134,7 @@ export function TemplatesListPage() {
                         <p className="text-sm text-muted-foreground truncate mt-0.5">{template.description}</p>
                       )}
                       <p className="text-xs text-muted-foreground mt-1">
-                        Updated {new Date(template.updatedAt).toLocaleDateString()} · v{template.version}
+                        Updated {formatInTimeZone(template.updatedAt, timeZone, {})} · v{template.version}
                       </p>
                     </div>
                   </button>

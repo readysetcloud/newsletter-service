@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Pencil, Trash, RefreshCw, AlertCircle, TrendingUp, Users, Shield, FileText, CheckCircle, Flame, Hash, CalendarDays, Clock, Send } from 'lucide-react';
+import { ArrowLeft, Pencil, PencilLine, Trash, RefreshCw, AlertCircle, TrendingUp, Users, Shield, FileText, CheckCircle, Flame, Hash, CalendarDays, Clock, Send } from 'lucide-react';
 import { PageHero, PageHeroTitle, PageHeroChips, PageHeroChip, SegmentedControl } from '@readysetcloud/ui';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { useToast } from '../../components/ui/Toast';
+import { cn } from '../../utils/cn';
 import { IssueStatusBadge } from '../../components/issues/IssueStatusBadge';
 import { MarkdownPreview } from '../../components/issues/MarkdownPreview';
 import { DeleteIssueDialog } from '../../components/issues/DeleteIssueDialog';
@@ -513,6 +514,15 @@ export const IssueDetailPage: React.FC = () => {
 
   const isDraft = useMemo(() => issue?.status === 'draft', [issue?.status]);
   const isPublished = useMemo(() => issue?.status === 'published', [issue?.status]);
+  /**
+   * Whether the issue has reached the point where things actually happen —
+   * mail goes out, an A/B sample is measured. A draft or a scheduled issue
+   * hasn't sent anything yet, so panels must not report on it as if it had.
+   */
+  const hasStartedSending = useMemo(
+    () => issue?.status === 'in progress' || issue?.status === 'published' || issue?.status === 'failed',
+    [issue?.status]
+  );
   const canMarkAsPublished = useMemo(() => issue?.status === 'in progress' || issue?.status === 'failed', [issue?.status]);
 
   // The content heatmap overlays click data on the rendered markdown, so it only
@@ -748,7 +758,7 @@ export const IssueDetailPage: React.FC = () => {
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-3 mb-3 flex-wrap">
                   <PageHeroTitle className="break-words">{issue.subject}</PageHeroTitle>
-                  <IssueStatusBadge status={issue.status} />
+                  <IssueStatusBadge status={issue.status} size="lg" />
                 </div>
                 <PageHeroChips>
                   <PageHeroChip icon={<Hash className="w-3.5 h-3.5" />}>
@@ -915,6 +925,40 @@ export const IssueDetailPage: React.FC = () => {
           </div>
         )}
 
+        {/* Unsent-state notice. The badge alone sits inline with the title and is
+            easy to read past; this states plainly that nothing has gone out,
+            which is the thing that matters when previewing a draft. */}
+        {!hasStartedSending && (
+          <Card
+            className={cn(
+              'shadow-sm mb-4 sm:mb-6 border-l-4',
+              isDraft ? 'border-l-amber-500' : 'border-l-blue-500'
+            )}
+          >
+            <CardContent className="p-3 sm:p-4">
+              <div className="flex items-start gap-3">
+                {isDraft ? (
+                  <PencilLine className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" aria-hidden="true" />
+                ) : (
+                  <Clock className="h-5 w-5 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" aria-hidden="true" />
+                )}
+                <div>
+                  <p className="text-sm font-semibold text-foreground">
+                    {isDraft ? 'This is a draft — it has not been sent' : 'Scheduled — it has not been sent yet'}
+                  </p>
+                  <p className="text-sm text-muted-foreground mt-0.5">
+                    {isDraft
+                      ? 'Everything below is a preview. No subscriber has received this issue, and there are no results to report.'
+                      : issue.scheduledAt
+                        ? `Everything below is a preview until it sends on ${formatDate(issue.scheduledAt)}.`
+                        : 'Everything below is a preview until it sends.'}
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* A/B Test Results Panel - Show whenever the issue has a managed A/B test */}
         {issue.abTest && (
           <div className="mb-4 sm:mb-6">
@@ -923,6 +967,7 @@ export const IssueDetailPage: React.FC = () => {
                 <AbTestResults
                   abTest={issue.abTest}
                   variantStats={issue.variantStats}
+                  hasStarted={hasStartedSending}
                 />
               </AsyncErrorBoundary>
             </FadeIn>

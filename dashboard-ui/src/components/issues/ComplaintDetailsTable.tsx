@@ -1,6 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { InfoTooltip } from '../ui/InfoTooltip';
 import { ComplaintDetail } from '../../types/issues';
+import { formatInTimeZone } from '@/utils/dateFormatting';
+import { useTenantDateFormat } from '@/contexts/SettingsContext';
 
 export interface ComplaintDetailsTableProps {
   complaints: ComplaintDetail[];
@@ -17,6 +19,8 @@ const SortIcon: React.FC<{ field: SortField; sortField: SortField; sortDirection
 };
 
 export const ComplaintDetailsTable: React.FC<ComplaintDetailsTableProps> = ({ complaints }) => {
+  // Dates render in the newsletter's timezone, not the viewer's.
+  const { timeZone } = useTenantDateFormat();
   const [sortField, setSortField] = useState<SortField>('timestamp');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [filterType, setFilterType] = useState<string>('all');
@@ -53,14 +57,13 @@ export const ComplaintDetailsTable: React.FC<ComplaintDetailsTableProps> = ({ co
   }, [complaints, sortField, sortDirection, filterType]);
 
   const formatTimestamp = (timestamp: string) => {
-    const date = new Date(timestamp);
-    return date.toLocaleString('en-US', {
+    return formatInTimeZone(timestamp, timeZone, {
       month: 'short',
       day: 'numeric',
       year: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
-    });
+    }, 'en-US');
   };
 
   if (complaints.length === 0) {

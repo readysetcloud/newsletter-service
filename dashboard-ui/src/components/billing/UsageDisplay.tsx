@@ -7,6 +7,8 @@ import {
   formatUsage
 } from '@/constants';
 import type { UsageDisplayProps } from '@/types';
+import { formatInTimeZone } from '@/utils/dateFormatting';
+import { useTenantDateFormat } from '@/contexts/SettingsContext';
 
 interface UsageProgressBarProps {
   current: number;
@@ -17,6 +19,8 @@ interface UsageProgressBarProps {
 }
 
 function UsageProgressBar({ current, limit, label, icon, resetDate }: UsageProgressBarProps) {
+  // Dates render in the newsletter's timezone, not the viewer's.
+  const { timeZone } = useTenantDateFormat();
   const percentage = calculateUsagePercentage(current, limit);
   const status = getUsageStatus(percentage);
 
@@ -59,10 +63,10 @@ function UsageProgressBar({ current, limit, label, icon, resetDate }: UsageProgr
 
       {resetDate && (
         <p className="text-xs text-muted-foreground">
-          Resets on {new Date(resetDate).toLocaleDateString('en-US', {
+          Resets on {formatInTimeZone(resetDate, timeZone, {
             month: 'short',
             day: 'numeric'
-          })}
+          }, 'en-US')}
         </p>
       )}
 

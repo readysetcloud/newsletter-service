@@ -12,6 +12,7 @@ import {
   saveScrollPosition,
   loadScrollPosition,
   clearScrollPosition,
+  formatDate,
 } from '../issueDetailUtils';
 
 describe('User Preferences', () => {
@@ -205,5 +206,36 @@ describe('Scroll Position', () => {
       const loaded = loadScrollPosition('issue-123');
       expect(loaded).toBeNull();
     });
+  });
+});
+
+describe('formatDate', () => {
+  // 14:00Z is 9am in Chicago during daylight saving, and still Jul 31 there
+  // when it is already Aug 1 in UTC.
+  const instant = '2026-08-01T14:00:00Z';
+
+  it('formats in the timezone it is given', () => {
+    expect(formatDate(instant, false, 'America/Chicago')).toBe('Aug 1, 2026');
+    expect(formatDate(instant, true, 'America/Chicago')).toContain('09:00');
+    expect(formatDate(instant, true, 'UTC')).toContain('02:00');
+  });
+
+  it('can put an instant on a different calendar day per zone', () => {
+    const lateEvening = '2026-08-01T04:00:00Z';
+
+    expect(formatDate(lateEvening, false, 'UTC')).toBe('Aug 1, 2026');
+    expect(formatDate(lateEvening, false, 'America/Chicago')).toBe('Jul 31, 2026');
+  });
+
+  it('falls back to the browser zone when no timezone is supplied', () => {
+    // Callers without tenant context keep the old behavior rather than
+    // silently formatting against UTC.
+    expect(formatDate(instant, false)).toBe(
+      new Date(instant).toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      })
+    );
   });
 });

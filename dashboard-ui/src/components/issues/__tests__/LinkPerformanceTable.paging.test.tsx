@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { LinkPerformanceTable } from '../LinkPerformanceTable';
 import type { LinkPerformance } from '../../../types/issues';
@@ -25,6 +25,10 @@ const tableRowUrls = () =>
     .filter(text => text.includes('https://'));
 
 describe('LinkPerformanceTable paging', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('renders only one page of links at a time', () => {
     render(<LinkPerformanceTable links={makeLinks(25)} totalClicks={325} pageSize={10} />);
 
@@ -83,7 +87,9 @@ describe('LinkPerformanceTable paging', () => {
     expect(screen.getByText('325')).toBeInTheDocument();
   });
 
-  it('clamps the current page when the link list shrinks', () => {
+  it('goes back to the first page when a different issue supplies new links', () => {
+    // The page stays mounted while navigating between issues, so page state from
+    // the previous issue must not carry over onto the new one's links.
     const { rerender } = render(
       <LinkPerformanceTable links={makeLinks(25)} totalClicks={325} pageSize={10} />
     );
@@ -92,10 +98,72 @@ describe('LinkPerformanceTable paging', () => {
     fireEvent.click(screen.getByRole('button', { name: /next page/i }));
     expect(screen.getByText('3 / 3')).toBeInTheDocument();
 
-    rerender(<LinkPerformanceTable links={makeLinks(12)} totalClicks={78} pageSize={10} />);
+    const otherIssueLinks = makeLinks(30).map(link => ({
+      ...link,
+      url: link.url.replace('article', 'other'),
+    }));
+    rerender(<LinkPerformanceTable links={otherIssueLinks} totalClicks={465} pageSize={10} />);
+
+    expect(screen.getByText('1 / 3')).toBeInTheDocument();
+    expect(tableRowUrls()[0]).toContain('other-1');
+  });
+
+  it('keeps the page when the same links re-render', () => {
+    const links = makeLinks(25);
+    const { rerender } = render(
+      <LinkPerformanceTable links={links} totalClicks={325} pageSize={10} />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /next page/i }));
+    rerender(<LinkPerformanceTable links={links} totalClicks={325} pageSize={10} />);
+
+    expect(screen.getByText('2 / 3')).toBeInTheDocument();
+  });
+
+  it('scrolls back to the list when the new rows are above the viewport', () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    // The pager sits below the rows, so on a phone the list header has scrolled
+    // off the top by the time it's tapped.
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+      top: -400,
+    } as DOMRect);
+
+    render(<LinkPerformanceTable links={makeLinks(25)} totalClicks={325} pageSize={10} />);
+    fireEvent.click(screen.getByRole('button', { name: /next page/i }));
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' });
+  });
+
+  it('leaves the scroll position alone when the list is already in view', () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+      top: 120,
+    } as DOMRect);
+
+    render(<LinkPerformanceTable links={makeLinks(25)} totalClicks={325} pageSize={10} />);
+    fireEvent.click(screen.getByRole('button', { name: /next page/i }));
+
+    expect(screen.getByText('2 / 3')).toBeInTheDocument();
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it('clamps the current page when fewer pages exist', () => {
+    const links = makeLinks(25);
+    const { rerender } = render(
+      <LinkPerformanceTable links={links} totalClicks={325} pageSize={10} />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /next page/i }));
+    fireEvent.click(screen.getByRole('button', { name: /next page/i }));
+    expect(screen.getByText('3 / 3')).toBeInTheDocument();
+
+    // Same links, bigger pages: page 3 no longer exists.
+    rerender(<LinkPerformanceTable links={links} totalClicks={325} pageSize={20} />);
 
     expect(screen.getByText('2 / 2')).toBeInTheDocument();
-    expect(tableRowUrls()).toHaveLength(2);
+    expect(tableRowUrls()).toHaveLength(5);
   });
 
   it('renders a stacked card per link for narrow screens', () => {

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { InfoTooltip } from '../ui/InfoTooltip';
 import { TablePager } from '../ui/TablePager';
 import { ComplaintDetail } from '../../types/issues';
@@ -33,6 +33,28 @@ export const ComplaintDetailsTable: React.FC<ComplaintDetailsTableProps> = ({
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [filterType, setFilterType] = useState<string>('all');
   const [page, setPage] = useState(0);
+  const listTopRef = useRef<HTMLDivElement>(null);
+
+  // The component stays mounted across issue navigation, so a fresh list can
+  // land under the previous issue's page number. Reset during render rather
+  // than in an effect so there's no flash of the wrong page.
+  const [renderedComplaints, setRenderedComplaints] = useState(complaints);
+  if (complaints !== renderedComplaints) {
+    setRenderedComplaints(complaints);
+    setPage(0);
+  }
+
+  // The pager sits below the table, so after a page change the new rows can all
+  // be above the viewport. Bring the top of the table back into view.
+  const handlePageChange = (nextPage: number) => {
+    setPage(nextPage);
+
+    const listTop = listTopRef.current;
+    if (!listTop || typeof listTop.scrollIntoView !== 'function') return;
+    if (listTop.getBoundingClientRect().top >= 0) return; // already on screen
+
+    listTop.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   // Re-sorting or re-filtering changes what row 1 is, so go back to page one.
   const handleSort = (field: SortField) => {
@@ -101,7 +123,11 @@ export const ComplaintDetailsTable: React.FC<ComplaintDetailsTableProps> = ({
 
   return (
     <div className="bg-white rounded-lg shadow p-3 sm:p-6">
-      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start mb-3 sm:mb-4 gap-2">
+      {/* Scroll target for page changes; `scroll-mt-24` clears the sticky nav. */}
+      <div
+        ref={listTopRef}
+        className="flex flex-col sm:flex-row sm:justify-between sm:items-start mb-3 sm:mb-4 gap-2 scroll-mt-24"
+      >
         <div className="flex items-start gap-2">
           <h3 className="text-base sm:text-lg font-semibold">Complaint Details</h3>
           <InfoTooltip
@@ -206,7 +232,7 @@ export const ComplaintDetailsTable: React.FC<ComplaintDetailsTableProps> = ({
         page={currentPage}
         pageSize={pageSize}
         totalItems={sortedAndFilteredComplaints.length}
-        onPageChange={setPage}
+        onPageChange={handlePageChange}
         itemLabel={filterType === 'all' ? 'complaints' : `${filterType} complaints`}
       />
 

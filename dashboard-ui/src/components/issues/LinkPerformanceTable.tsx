@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { ExternalLink, Copy, Check, MapPin, ChevronDown, ChevronUp } from 'lucide-react';
 import { InfoTooltip } from '../ui/InfoTooltip';
 import { TablePager } from '../ui/TablePager';
@@ -24,6 +24,17 @@ export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   const [expandedUrls, setExpandedUrls] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(0);
+  const listTopRef = useRef<HTMLDivElement>(null);
+
+  // This component survives navigation between issues, so a new set of links can
+  // arrive under a page number from the issue before it — leaving someone on
+  // page 3 of an issue they just opened, past its best-performing links. Reset
+  // during render rather than in an effect so there's no flash of the old page.
+  const [renderedLinks, setRenderedLinks] = useState(links);
+  if (links !== renderedLinks) {
+    setRenderedLinks(links);
+    setPage(0);
+  }
 
   const handleCopyUrl = async (url: string) => {
     try {
@@ -51,6 +62,18 @@ export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({
     () => [...(links || [])].sort((a, b) => b.clicks - a.clicks),
     [links]
   );
+
+  // The pager sits below ten cards, so on a phone the rows it just swapped in
+  // are all above the viewport. Bring the top of the list back into view.
+  const handlePageChange = (nextPage: number) => {
+    setPage(nextPage);
+
+    const listTop = listTopRef.current;
+    if (!listTop || typeof listTop.scrollIntoView !== 'function') return;
+    if (listTop.getBoundingClientRect().top >= 0) return; // already on screen
+
+    listTop.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   // A shorter list (or a different issue) can leave `page` past the end, so the
   // page actually rendered is always clamped to what exists.
@@ -96,7 +119,9 @@ export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({
 
   return (
     <div>
-      <div className="flex items-center gap-2 mb-3">
+      {/* Scroll target for page changes. `scroll-mt-24` keeps the heading clear
+          of the sticky section nav when we scroll back to it. */}
+      <div ref={listTopRef} className="flex items-center gap-2 mb-3 scroll-mt-24">
         <h3 className="text-base sm:text-lg font-semibold">Link Performance</h3>
         <InfoTooltip
           label="Link Performance"
@@ -372,7 +397,7 @@ export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({
         page={currentPage}
         pageSize={pageSize}
         totalItems={sortedLinks.length}
-        onPageChange={setPage}
+        onPageChange={handlePageChange}
         itemLabel="links"
       />
 

@@ -824,7 +824,10 @@ pub struct ActiveAbTest {
     win_metric: String,
     #[serde(rename = "publishedAt", skip_serializing_if = "Option::is_none")]
     published_at: Option<String>,
-    #[serde(rename = "evaluateAfterMinutes", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "evaluateAfterMinutes",
+        skip_serializing_if = "Option::is_none"
+    )]
     evaluate_after_minutes: Option<i64>,
     variants: Vec<ActiveAbTestVariant>,
     #[serde(rename = "variantStats")]
@@ -945,8 +948,14 @@ fn parse_active_ab_test(item: &HashMap<String, AttributeValue>) -> Option<Active
                         .and_then(|x| x.as_str())
                         .unwrap_or_default()
                         .to_string(),
-                    subject: v.get("subject").and_then(|x| x.as_str()).map(|s| s.to_string()),
-                    send_at: v.get("sendAt").and_then(|x| x.as_str()).map(|s| s.to_string()),
+                    subject: v
+                        .get("subject")
+                        .and_then(|x| x.as_str())
+                        .map(|s| s.to_string()),
+                    send_at: v
+                        .get("sendAt")
+                        .and_then(|x| x.as_str())
+                        .map(|s| s.to_string()),
                 })
                 .collect()
         })
@@ -1740,16 +1749,26 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
 
     validate_create_request(&body)?;
 
-    let ab_test = extract_ab_test(event.body().as_ref())?
-        .map(|value| validate_and_normalize_ab_test(&value))
+    // The raw (pre-normalization) config values also feed the idempotency
+    // hash: normalization injects server-generated values (e.g. the A/B
+    // testId), so hashing normalized config would make byte-identical
+    // replays look different.
+    let raw_ab_test = extract_ab_test(event.body().as_ref())?;
+    let ab_test = raw_ab_test
+        .as_ref()
+        .map(validate_and_normalize_ab_test)
         .transpose()?;
 
-    let local_send = extract_local_send(event.body().as_ref())?
-        .map(|value| validate_and_normalize_local_send(&value))
+    let raw_local_send = extract_local_send(event.body().as_ref())?;
+    let local_send = raw_local_send
+        .as_ref()
+        .map(validate_and_normalize_local_send)
         .transpose()?
         .flatten();
-    let content_assembly = extract_content_assembly(event.body().as_ref())?
-        .map(|value| validate_and_normalize_content_assembly(&value))
+    let raw_content_assembly = extract_content_assembly(event.body().as_ref())?;
+    let content_assembly = raw_content_assembly
+        .as_ref()
+        .map(validate_and_normalize_content_assembly)
         .transpose()?;
 
     if let Some(template_id) = body.template_id.as_deref() {
@@ -1770,6 +1789,11 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
 
     let normalized_scheduled_at = normalize_scheduled_at(body.scheduled_at.as_deref())?;
 
+    // Set when an exact replay's recorded issue no longer exists and the
+    // request falls through to a fresh create: the idempotency record for the
+    // key is still in place and must be overwritten, not condition-failed.
+    let mut replace_idempotency_record = false;
+
     if let Some(key) = idempotency_key.as_deref() {
         if let Some(existing) = get_idempotency_record(&tenant_id, key).await? {
             if let Some(issue_number) = body.issue_number {
@@ -1785,6 +1809,9 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
                 existing.issue_number,
                 action,
                 normalized_scheduled_at.as_deref(),
+                raw_ab_test.as_ref(),
+                raw_local_send.as_ref(),
+                raw_content_assembly.as_ref(),
             );
 
             if existing_hash != existing.payload_hash {
@@ -1813,7 +1840,9 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
                         },
                     );
                 }
-                Err(AppError::NotFound(_)) => {}
+                Err(AppError::NotFound(_)) => {
+                    replace_idempotency_record = true;
+                }
                 Err(err) => return Err(err),
             }
         }
@@ -1848,6 +1877,9 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
             issue_number,
             action,
             normalized_scheduled_at.as_deref(),
+            raw_ab_test.as_ref(),
+            raw_local_send.as_ref(),
+            raw_content_assembly.as_ref(),
         )
     });
 
@@ -1864,6 +1896,14 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
     .await?;
 
     publish_event(&tenant_id, "ISSUE_DRAFT_SAVED", &issue).await?;
+
+    // Overwriting an existing draft invalidates any TTL deletion schedule it
+    // had: left in place it would fire against the new record (which is still
+    // a draft) and delete it. schedule_draft_deletion recreates one below when
+    // this request carries its own ttlSeconds.
+    if overwrite_draft {
+        delete_draft_ttl_schedule(&tenant_id, issue_number).await?;
+    }
 
     if action == CreateIssueAction::Schedule {
         start_issue_schedule(
@@ -1882,7 +1922,14 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
     }
 
     if let (Some(key), Some(hash)) = (idempotency_key.as_deref(), payload_hash.as_deref()) {
-        save_idempotency_record(&tenant_id, key, issue_number, hash).await?;
+        save_idempotency_record(
+            &tenant_id,
+            key,
+            issue_number,
+            hash,
+            replace_idempotency_record,
+        )
+        .await?;
     }
 
     response::format_response(201, issue)
@@ -3295,11 +3342,20 @@ fn normalize_scheduled_at(value: Option<&str>) -> Result<Option<String>, AppErro
     Ok(Some(parsed.to_rfc3339()))
 }
 
+/// Hashes everything that determines what a create request does, so a reused
+/// Idempotency-Key with any behavioral change is rejected instead of replayed.
+/// The send-config values (`abTest`, `localSend`, `contentAssembly`) are the
+/// raw caller-supplied objects, not the normalized forms: normalization
+/// injects server-generated values (e.g. the A/B `testId`), which would make
+/// byte-identical replays hash differently.
 fn compute_idempotency_hash(
     body: &CreateIssueRequest,
     issue_number: i32,
     action: CreateIssueAction,
     scheduled_at: Option<&str>,
+    ab_test: Option<&serde_json::Value>,
+    local_send: Option<&serde_json::Value>,
+    content_assembly: Option<&serde_json::Value>,
 ) -> String {
     let payload = serde_json::json!({
         "issueNumber": issue_number,
@@ -3314,6 +3370,9 @@ fn compute_idempotency_hash(
         "templateId": body.template_id.clone(),
         "contentType": normalize_content_type(body.content_type.as_deref()),
         "ttlSeconds": body.ttl_seconds,
+        "abTest": ab_test,
+        "localSend": local_send,
+        "contentAssembly": content_assembly,
     });
 
     let mut hasher = Sha256::new();
@@ -3324,10 +3383,7 @@ fn compute_idempotency_hash(
 /// Returns the status of an issue, or None when no record exists. Used by the
 /// create path to decide whether an existing record may be overwritten (drafts
 /// only).
-async fn get_issue_status(
-    tenant_id: &str,
-    issue_number: i32,
-) -> Result<Option<String>, AppError> {
+async fn get_issue_status(tenant_id: &str, issue_number: i32) -> Result<Option<String>, AppError> {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
         .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
@@ -3423,11 +3479,18 @@ async fn get_idempotency_record(
     }))
 }
 
+/// Stores the idempotency record for a processed create. `replace_existing`
+/// is set when a replay's recorded issue no longer existed and the request was
+/// processed as a fresh create: the prior record for the key is still present
+/// (its 24h TTL outlives an expired draft), so the conditional put would fail
+/// after the issue and its side effects were already created. In that case the
+/// record is overwritten to point at the new issue.
 async fn save_idempotency_record(
     tenant_id: &str,
     idempotency_key: &str,
     issue_number: i32,
     payload_hash: &str,
+    replace_existing: bool,
 ) -> Result<(), AppError> {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
@@ -3456,13 +3519,14 @@ async fn save_idempotency_record(
     item.insert("createdAt".to_string(), AttributeValue::S(now.to_rfc3339()));
     item.insert("ttl".to_string(), AttributeValue::N(ttl.to_string()));
 
-    let result = ddb_client
+    let mut put = ddb_client
         .put_item()
         .table_name(&table_name)
-        .set_item(Some(item))
-        .condition_expression("attribute_not_exists(pk) AND attribute_not_exists(sk)")
-        .send()
-        .await;
+        .set_item(Some(item));
+    if !replace_existing {
+        put = put.condition_expression("attribute_not_exists(pk) AND attribute_not_exists(sk)");
+    }
+    let result = put.send().await;
 
     match result {
         Ok(_) => Ok(()),
@@ -3556,21 +3620,8 @@ async fn schedule_draft_deletion(
     let schedule_name = build_draft_ttl_schedule_name(tenant_id, issue_number);
 
     // Re-staging a draft (same issue number) replaces its TTL schedule; the
-    // name is deterministic, so drop any previous schedule first. A missing
-    // schedule is the normal case; any real problem resurfaces on create.
-    if let Err(err) = scheduler
-        .delete_schedule()
-        .name(&schedule_name)
-        .group_name("newsletter")
-        .send()
-        .await
-    {
-        tracing::debug!(
-            "No prior draft TTL schedule {} to delete: {}",
-            schedule_name,
-            err
-        );
-    }
+    // name is deterministic, so drop any previous schedule first.
+    delete_draft_ttl_schedule(tenant_id, issue_number).await?;
 
     let detail = serde_json::json!({
         "tenantId": tenant_id,
@@ -3614,17 +3665,49 @@ async fn schedule_draft_deletion(
     Ok(())
 }
 
+/// Deletes the draft TTL schedule for an issue, tolerating a missing schedule
+/// (the normal case). Any other failure propagates: leaving a stale schedule
+/// behind would let it fire later and delete a freshly re-staged draft.
+async fn delete_draft_ttl_schedule(tenant_id: &str, issue_number: i32) -> Result<(), AppError> {
+    let scheduler = aws_clients::get_scheduler_client().await;
+    let schedule_name = build_draft_ttl_schedule_name(tenant_id, issue_number);
+
+    match scheduler
+        .delete_schedule()
+        .name(&schedule_name)
+        .group_name("newsletter")
+        .send()
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            let is_not_found = err
+                .as_service_error()
+                .is_some_and(|service_err| service_err.is_resource_not_found_exception());
+
+            if is_not_found {
+                return Ok(());
+            }
+
+            Err(AppError::AwsError(format!(
+                "Failed to delete draft TTL schedule {}: {}",
+                schedule_name, err
+            )))
+        }
+    }
+}
+
 /// Builds a schedule name within EventBridge Scheduler's constraints
-/// (<= 64 chars, `[0-9a-zA-Z-_.]`). The tenant id is sanitized and truncated
-/// and a millisecond timestamp keeps repeated drafts from colliding.
+/// (<= 64 chars, `[0-9a-zA-Z-_.]`). The tenant id is sanitized and truncated.
+/// The name is deterministic per (tenant, issue) so re-staging a draft can
+/// find and replace the previous TTL schedule instead of leaking it.
 fn build_draft_ttl_schedule_name(tenant_id: &str, issue_number: i32) -> String {
     let tenant_prefix: String = tenant_id
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
         .take(16)
         .collect();
-    let suffix = chrono::Utc::now().timestamp_millis();
-    format!("draft-ttl-{}-{}-{}", tenant_prefix, issue_number, suffix)
+    format!("draft-ttl-{}-{}", tenant_prefix, issue_number)
 }
 
 async fn get_next_issue_number(tenant_id: &str) -> Result<i32, AppError> {
@@ -4277,9 +4360,17 @@ Thanks!"#;
   ]
 }"#;
         let review = parse_review_response(raw).unwrap();
-        assert_eq!(review.grammar.len(), 1, "only the fully-formed grammar item survives");
+        assert_eq!(
+            review.grammar.len(),
+            1,
+            "only the fully-formed grammar item survives"
+        );
         assert_eq!(review.grammar[0].quote, "their are");
-        assert_eq!(review.spelling.len(), 1, "only the fully-formed spelling item survives");
+        assert_eq!(
+            review.spelling.len(),
+            1,
+            "only the fully-formed spelling item survives"
+        );
         assert_eq!(review.spelling[0].word, "teh");
     }
 
@@ -4744,7 +4835,10 @@ Thanks!"#;
         ab_test_json: Option<&str>,
     ) -> HashMap<String, AttributeValue> {
         let mut item = HashMap::new();
-        item.insert("pk".to_string(), AttributeValue::S("tenant-123#42".to_string()));
+        item.insert(
+            "pk".to_string(),
+            AttributeValue::S("tenant-123#42".to_string()),
+        );
         item.insert(
             "status".to_string(),
             AttributeValue::S(issue_status.to_string()),
@@ -4783,8 +4877,7 @@ Thanks!"#;
     #[test]
     fn test_parse_active_ab_test_keeps_pending_and_evaluating() {
         for status in ["pending", "evaluating"] {
-            let json =
-                format!(r#"{{"dimension":"subject","status":"{status}","variants":[]}}"#);
+            let json = format!(r#"{{"dimension":"subject","status":"{status}","variants":[]}}"#);
             assert!(
                 parse_active_ab_test(&active_ab_item("published", Some(&json))).is_some(),
                 "status {status} should count as in progress"
@@ -4795,8 +4888,7 @@ Thanks!"#;
     #[test]
     fn test_parse_active_ab_test_skips_final_statuses() {
         for status in ["sent", "inconclusive"] {
-            let json =
-                format!(r#"{{"dimension":"subject","status":"{status}","variants":[]}}"#);
+            let json = format!(r#"{{"dimension":"subject","status":"{status}","variants":[]}}"#);
             assert!(
                 parse_active_ab_test(&active_ab_item("published", Some(&json))).is_none(),
                 "status {status} is final and must be excluded"
@@ -5480,11 +5572,102 @@ Thanks!"#;
     fn test_build_draft_ttl_schedule_name_is_valid() {
         let name = build_draft_ttl_schedule_name("tenant-abc_123", 42);
 
-        assert!(name.starts_with("draft-ttl-tenant-abc_123-42-"));
+        assert_eq!(name, "draft-ttl-tenant-abc_123-42");
         assert!(name.len() <= 64);
         assert!(name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'));
+    }
+
+    #[test]
+    fn test_build_draft_ttl_schedule_name_is_deterministic() {
+        // Re-staging a draft must produce the same name so the prior TTL
+        // schedule is found and replaced instead of leaking (and later firing
+        // against the re-staged draft).
+        assert_eq!(
+            build_draft_ttl_schedule_name("tenant-abc_123", 42),
+            build_draft_ttl_schedule_name("tenant-abc_123", 42)
+        );
+    }
+
+    #[test]
+    fn test_compute_idempotency_hash_stable_for_identical_requests() {
+        let request = create_request("# Test Content", None, None);
+        let ab_test = serde_json::json!({ "dimension": "subject", "variants": ["A", "B"] });
+
+        let first = compute_idempotency_hash(
+            &request,
+            7,
+            CreateIssueAction::Draft,
+            None,
+            Some(&ab_test),
+            None,
+            None,
+        );
+        let second = compute_idempotency_hash(
+            &request,
+            7,
+            CreateIssueAction::Draft,
+            None,
+            Some(&ab_test),
+            None,
+            None,
+        );
+
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn test_compute_idempotency_hash_changes_with_send_config() {
+        // A reused key with changed abTest/localSend/contentAssembly must not
+        // look like an exact replay: replaying would silently keep the old
+        // send configuration.
+        let request = create_request("# Test Content", None, None);
+        let ab_test = serde_json::json!({ "dimension": "subject", "variants": ["A", "B"] });
+        let local_send = serde_json::json!({ "enabled": true, "batchSize": 10 });
+        let content_assembly = serde_json::json!({ "enabled": true });
+
+        let base = compute_idempotency_hash(
+            &request,
+            7,
+            CreateIssueAction::Draft,
+            None,
+            None,
+            None,
+            None,
+        );
+        let with_ab = compute_idempotency_hash(
+            &request,
+            7,
+            CreateIssueAction::Draft,
+            None,
+            Some(&ab_test),
+            None,
+            None,
+        );
+        let with_local_send = compute_idempotency_hash(
+            &request,
+            7,
+            CreateIssueAction::Draft,
+            None,
+            None,
+            Some(&local_send),
+            None,
+        );
+        let with_assembly = compute_idempotency_hash(
+            &request,
+            7,
+            CreateIssueAction::Draft,
+            None,
+            None,
+            None,
+            Some(&content_assembly),
+        );
+
+        assert_ne!(base, with_ab);
+        assert_ne!(base, with_local_send);
+        assert_ne!(base, with_assembly);
+        assert_ne!(with_ab, with_local_send);
     }
 
     #[test]

@@ -313,10 +313,7 @@ async fn handle_get_domain_verification(
     // shouldn't block returning the domain status.
     if current_status == VerificationStatus::Verified {
         if let Err(e) = mark_domain_senders_verified(&tenant_id, &domain).await {
-            tracing::error!(
-                "Failed to propagate domain verification to senders: {}",
-                e
-            );
+            tracing::error!("Failed to propagate domain verification to senders: {}", e);
         }
     }
 

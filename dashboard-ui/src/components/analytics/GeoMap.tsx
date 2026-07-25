@@ -285,7 +285,9 @@ export function GeoMap({
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
         <div className="lg:col-span-2">
-          <div className="relative bg-gray-50 rounded-lg p-4" style={{ height: '500px' }}>
+          {/* Shorter on a phone: a 500px map eats most of a mobile viewport and
+              pushes everything below it out of reach. */}
+          <div className="relative bg-gray-50 rounded-lg p-2 sm:p-4 h-[320px] sm:h-[500px]">
             <MapContainer
               geoDistribution={filteredGeoDistribution}
               selectedMetric={state.selectedMetric}

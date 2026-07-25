@@ -96,13 +96,17 @@ export const QuickNavigation: React.FC<QuickNavigationProps> = React.memo(({
     <nav
       className={cn(
         'bg-surface border-b border-border transition-all duration-300 z-40',
-        isSticky && 'sticky top-0 shadow-md',
+        // When pinned, bleed into the page gutter so the bar covers the full
+        // width of the screen instead of leaving content visible down its sides.
+        isSticky && 'sticky top-0 shadow-md -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10',
         className
       )}
       aria-label="Quick navigation to page sections"
       role="navigation"
     >
-      <div className="max-w-7xl 2xl:max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-10">
+      {/* No horizontal padding here: this bar renders inside the page container,
+          which already supplies the gutter. */}
+      <div>
         {/* Mobile Dropdown */}
         <div className="sm:hidden py-2" ref={dropdownRef}>
           <button

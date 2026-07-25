@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
+use super::settings::{self, TenantSettings};
+
 // Request/Response types for list issues endpoint
 #[derive(Deserialize)]
 pub struct ListIssuesQuery {
@@ -580,16 +582,16 @@ async fn handle_resend_issue(
         ));
     }
 
-    start_issue_schedule(
-        &tenant_id,
-        user_context.email.as_str(),
-        issue.issue_number,
-        &issue.content,
-        None,
-        issue.template_id.as_deref(),
-        &normalize_content_type(issue.content_type.as_deref()),
-        &issue.subject,
-    )
+    start_issue_schedule(IssueScheduleInput {
+        tenant_id: &tenant_id,
+        tenant_email: user_context.email.as_str(),
+        issue_number: issue.issue_number,
+        content: &issue.content,
+        scheduled_at: None,
+        template_id: issue.template_id.as_deref(),
+        content_type: &normalize_content_type(issue.content_type.as_deref()),
+        subject: &issue.subject,
+    })
     .await?;
 
     response::format_response(
@@ -1760,9 +1762,20 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
         .transpose()?;
 
     let raw_local_send = extract_local_send(event.body().as_ref())?;
+
+    // Both a date-only `scheduledAt` and a local-send config without an
+    // explicit zone are filled in from the tenant's settings; load them once,
+    // and only when this request actually needs them.
+    let tenant_settings = load_settings_if_needed(
+        &tenant_id,
+        body.scheduled_at.as_deref(),
+        raw_local_send.is_some(),
+    )
+    .await;
+
     let local_send = raw_local_send
         .as_ref()
-        .map(validate_and_normalize_local_send)
+        .map(|value| validate_and_normalize_local_send(value, &tenant_settings.timezone))
         .transpose()?
         .flatten();
     let raw_content_assembly = extract_content_assembly(event.body().as_ref())?;
@@ -1787,7 +1800,8 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
 
     let idempotency_key = get_idempotency_key(&event);
 
-    let normalized_scheduled_at = normalize_scheduled_at(body.scheduled_at.as_deref())?;
+    let normalized_scheduled_at =
+        resolve_scheduled_at(body.scheduled_at.as_deref(), &tenant_settings)?;
 
     // Set when an exact replay's recorded issue no longer exists and the
     // request falls through to a fresh create: the idempotency record for the
@@ -1808,7 +1822,7 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
                 &body,
                 existing.issue_number,
                 action,
-                normalized_scheduled_at.as_deref(),
+                body.scheduled_at.as_deref(),
                 raw_ab_test.as_ref(),
                 raw_local_send.as_ref(),
                 raw_content_assembly.as_ref(),
@@ -1876,7 +1890,7 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
             &body,
             issue_number,
             action,
-            normalized_scheduled_at.as_deref(),
+            body.scheduled_at.as_deref(),
             raw_ab_test.as_ref(),
             raw_local_send.as_ref(),
             raw_content_assembly.as_ref(),
@@ -1888,9 +1902,11 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
         issue_number,
         &body,
         normalized_scheduled_at.clone(),
-        ab_test,
-        local_send,
-        content_assembly,
+        SendConfig {
+            ab_test,
+            local_send,
+            content_assembly,
+        },
         overwrite_draft,
     )
     .await?;
@@ -1906,16 +1922,16 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
     }
 
     if action == CreateIssueAction::Schedule {
-        start_issue_schedule(
-            &tenant_id,
-            user_context.email.as_str(),
+        start_issue_schedule(IssueScheduleInput {
+            tenant_id: &tenant_id,
+            tenant_email: user_context.email.as_str(),
             issue_number,
-            &body.content,
-            normalized_scheduled_at.as_deref(),
-            body.template_id.as_deref(),
-            &normalize_content_type(body.content_type.as_deref()),
-            &body.subject,
-        )
+            content: &body.content,
+            scheduled_at: normalized_scheduled_at.as_deref(),
+            template_id: body.template_id.as_deref(),
+            content_type: &normalize_content_type(body.content_type.as_deref()),
+            subject: &body.subject,
+        })
         .await?;
     } else if let Some(ttl_seconds) = body.ttl_seconds {
         schedule_draft_deletion(&tenant_id, issue_number, ttl_seconds).await?;
@@ -1947,8 +1963,29 @@ async fn handle_update_issue(
     let issue_id =
         issue_id.ok_or_else(|| AppError::BadRequest("Issue ID is required".to_string()))?;
 
-    let body: UpdateIssueRequest = serde_json::from_slice(event.body())
+    let mut body: UpdateIssueRequest = serde_json::from_slice(event.body())
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
+
+    let raw_local_send = extract_local_send(event.body().as_ref())?;
+    let local_send_provided = raw_local_send.is_some();
+
+    let tenant_settings = load_settings_if_needed(
+        &tenant_id,
+        body.scheduled_at.as_deref(),
+        local_send_provided,
+    )
+    .await;
+
+    // A date-only reschedule gets the tenant's default send time, same as on
+    // create. Anything else is stored as sent — including past timestamps,
+    // which an update is allowed to set.
+    if let Some(scheduled_at) = body.scheduled_at.as_deref() {
+        let trimmed = scheduled_at.trim();
+        if settings::is_date_only(trimmed) {
+            body.scheduled_at =
+                Some(settings::resolve_date_only(trimmed, &tenant_settings)?.to_rfc3339());
+        }
+    }
 
     let ab_test = extract_ab_test(event.body().as_ref())?
         .map(|value| validate_and_normalize_ab_test(&value))
@@ -1957,10 +1994,8 @@ async fn handle_update_issue(
     // An explicit `abTest: null` is a request to clear a previously-saved test.
     let clear_ab_test = ab_test.is_none() && ab_test_explicitly_cleared(event.body().as_ref());
 
-    let raw_local_send = extract_local_send(event.body().as_ref())?;
-    let local_send_provided = raw_local_send.is_some();
     let local_send = raw_local_send
-        .map(|value| validate_and_normalize_local_send(&value))
+        .map(|value| validate_and_normalize_local_send(&value, &tenant_settings.timezone))
         .transpose()?
         .flatten();
 
@@ -2018,12 +2053,14 @@ async fn handle_update_issue(
         &tenant_id,
         &issue_id,
         &body,
-        ab_test,
-        clear_ab_test,
-        local_send,
-        clear_local_send,
-        content_assembly,
-        clear_content_assembly,
+        SendConfigUpdate {
+            ab_test,
+            clear_ab_test,
+            local_send,
+            clear_local_send,
+            content_assembly,
+            clear_content_assembly,
+        },
     )
     .await?;
 
@@ -2230,8 +2267,14 @@ fn is_plausible_iana_time_zone(tz: &str) -> bool {
 /// delivers at each subscriber's personal peak open hour instead. Returns
 /// Ok(None) when `enabled` is false — a disabled config is stored as no
 /// config at all.
+///
+/// `defaultTimeZone` is also optional: it names the zone whose wall clock
+/// defines the target send time, which is exactly what the tenant's own
+/// timezone setting already says, so `fallback_time_zone` fills it in when the
+/// caller doesn't.
 fn validate_and_normalize_local_send(
     value: &serde_json::Value,
+    fallback_time_zone: &str,
 ) -> Result<Option<serde_json::Value>, AppError> {
     let obj = value
         .as_object()
@@ -2251,11 +2294,7 @@ fn validate_and_normalize_local_send(
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|tz| !tz.is_empty())
-        .ok_or_else(|| {
-            AppError::BadRequest(
-                "localSend.defaultTimeZone is required when localSend is enabled".to_string(),
-            )
-        })?;
+        .unwrap_or(fallback_time_zone);
 
     if !is_plausible_iana_time_zone(default_time_zone) {
         return Err(AppError::BadRequest(
@@ -3065,13 +3104,10 @@ fn parse_issue_stats(item: &HashMap<String, AttributeValue>) -> Result<IssueStat
 fn extract_analytics_summary(stats: &IssueStats) -> Option<IssueAnalyticsSummary> {
     let analytics = stats.analytics.as_ref()?;
     let parsed: Result<IssueAnalyticsSummary, _> = serde_json::from_value(analytics.clone());
-    parsed.ok().and_then(|summary| {
-        if summary.engagement_type.is_none() && summary.traffic_source.is_none() {
-            None
-        } else {
-            Some(summary)
-        }
-    })
+    // A summary with neither breakdown carries no information worth returning.
+    parsed
+        .ok()
+        .filter(|summary| summary.engagement_type.is_some() || summary.traffic_source.is_some())
 }
 
 fn parse_insights_map(
@@ -3322,7 +3358,38 @@ fn get_idempotency_key(event: &Request) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn normalize_scheduled_at(value: Option<&str>) -> Result<Option<String>, AppError> {
+/// Loads the tenant's settings only when something on this request actually
+/// needs them — a date-only `scheduledAt` to expand, or a local-send config
+/// whose zone may need filling in. A request that spelled everything out
+/// doesn't pay for the read.
+async fn load_settings_if_needed(
+    tenant_id: &str,
+    scheduled_at: Option<&str>,
+    has_local_send: bool,
+) -> TenantSettings {
+    let needs_send_time = scheduled_at
+        .map(|value| settings::is_date_only(value.trim()))
+        .unwrap_or(false);
+
+    if needs_send_time || has_local_send {
+        settings::get_tenant_settings(tenant_id).await
+    } else {
+        TenantSettings::default()
+    }
+}
+
+/// Normalizes a caller-supplied `scheduledAt` into the instant stored on the
+/// issue. `None` means "send immediately" — an absent value, `"now"`, or a
+/// time that has already passed.
+///
+/// A date-only value (`YYYY-MM-DD`) carries no time of day, so rather than
+/// rejecting it or guessing midnight UTC, it is anchored to the tenant's
+/// configured default send time, read as wall-clock time in the tenant's
+/// timezone (see [`super::settings`]).
+fn resolve_scheduled_at(
+    value: Option<&str>,
+    settings: &TenantSettings,
+) -> Result<Option<String>, AppError> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -3332,8 +3399,15 @@ fn normalize_scheduled_at(value: Option<&str>) -> Result<Option<String>, AppErro
         return Ok(None);
     }
 
-    let parsed = chrono::DateTime::parse_from_rfc3339(trimmed)
-        .map_err(|_| AppError::BadRequest("scheduledAt must be RFC3339 or \"now\"".to_string()))?;
+    let parsed = if settings::is_date_only(trimmed) {
+        settings::resolve_date_only(trimmed, settings)?.fixed_offset()
+    } else {
+        chrono::DateTime::parse_from_rfc3339(trimmed).map_err(|_| {
+            AppError::BadRequest(
+                "scheduledAt must be RFC3339, a YYYY-MM-DD date, or \"now\"".to_string(),
+            )
+        })?
+    };
 
     if parsed.with_timezone(&chrono::Utc) <= chrono::Utc::now() {
         return Ok(None);
@@ -3344,15 +3418,19 @@ fn normalize_scheduled_at(value: Option<&str>) -> Result<Option<String>, AppErro
 
 /// Hashes everything that determines what a create request does, so a reused
 /// Idempotency-Key with any behavioral change is rejected instead of replayed.
-/// The send-config values (`abTest`, `localSend`, `contentAssembly`) are the
-/// raw caller-supplied objects, not the normalized forms: normalization
-/// injects server-generated values (e.g. the A/B `testId`), which would make
-/// byte-identical replays hash differently.
+///
+/// Every value here is the raw caller-supplied one, never the normalized form.
+/// Normalization folds in things the caller didn't send: server-generated
+/// values (the A/B `testId`), the current time (a `scheduledAt` that has since
+/// passed), and tenant settings (a date-only `scheduledAt` resolves against
+/// the tenant's timezone and send time). Hashing any of those would make a
+/// byte-identical replay look like a different request — so changing the
+/// tenant's timezone would turn a CI re-run of the same commit into a 409.
 fn compute_idempotency_hash(
     body: &CreateIssueRequest,
     issue_number: i32,
     action: CreateIssueAction,
-    scheduled_at: Option<&str>,
+    raw_scheduled_at: Option<&str>,
     ab_test: Option<&serde_json::Value>,
     local_send: Option<&serde_json::Value>,
     content_assembly: Option<&serde_json::Value>,
@@ -3365,7 +3443,7 @@ fn compute_idempotency_hash(
             CreateIssueAction::Draft => "draft",
             CreateIssueAction::Schedule => "schedule",
         },
-        "scheduledAt": scheduled_at,
+        "scheduledAt": raw_scheduled_at,
         "metadata": body.metadata.clone(),
         "templateId": body.template_id.clone(),
         "contentType": normalize_content_type(body.content_type.as_deref()),
@@ -3552,16 +3630,33 @@ async fn save_idempotency_record(
     }
 }
 
-async fn start_issue_schedule(
-    tenant_id: &str,
-    tenant_email: &str,
+/// Everything the stage-issue state machine needs in its execution input.
+/// Grouped rather than passed positionally because several fields are bare
+/// `&str` — named struct fields make a transposed pair a compile error instead
+/// of an issue published under the wrong tenant.
+struct IssueScheduleInput<'a> {
+    tenant_id: &'a str,
+    tenant_email: &'a str,
     issue_number: i32,
-    content: &str,
-    scheduled_at: Option<&str>,
-    template_id: Option<&str>,
-    content_type: &str,
-    subject: &str,
-) -> Result<(), AppError> {
+    content: &'a str,
+    scheduled_at: Option<&'a str>,
+    template_id: Option<&'a str>,
+    content_type: &'a str,
+    subject: &'a str,
+}
+
+async fn start_issue_schedule(input: IssueScheduleInput<'_>) -> Result<(), AppError> {
+    let IssueScheduleInput {
+        tenant_id,
+        tenant_email,
+        issue_number,
+        content,
+        scheduled_at,
+        template_id,
+        content_type,
+        subject,
+    } = input;
+
     let sfn_client = aws_clients::get_sfn_client().await;
     let state_machine_arn = std::env::var("STATE_MACHINE_ARN")
         .map_err(|_| AppError::InternalError("STATE_MACHINE_ARN not set".to_string()))?;
@@ -3742,16 +3837,30 @@ async fn get_next_issue_number(tenant_id: &str) -> Result<i32, AppError> {
     Ok(max_issue_number + 1)
 }
 
+/// The per-issue send configuration. These three always travel together — the
+/// API extracts, validates and stores them as a set — so they are passed as
+/// one.
+#[derive(Default)]
+struct SendConfig {
+    ab_test: Option<serde_json::Value>,
+    local_send: Option<serde_json::Value>,
+    content_assembly: Option<serde_json::Value>,
+}
+
 async fn create_issue_record(
     tenant_id: &str,
     issue_number: i32,
     body: &CreateIssueRequest,
     scheduled_at: Option<String>,
-    ab_test: Option<serde_json::Value>,
-    local_send: Option<serde_json::Value>,
-    content_assembly: Option<serde_json::Value>,
+    send_config: SendConfig,
     overwrite_draft: bool,
 ) -> Result<CreateIssueResponse, AppError> {
+    let SendConfig {
+        ab_test,
+        local_send,
+        content_assembly,
+    } = send_config;
+
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
         .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
@@ -3861,17 +3970,34 @@ async fn create_issue_record(
     })
 }
 
-async fn update_issue_record(
-    tenant_id: &str,
-    issue_id: &str,
-    body: &UpdateIssueRequest,
+/// The same three configs on update, where each can also be explicitly
+/// cleared — a distinct case from "not mentioned in this request", which
+/// leaves the stored value alone.
+#[derive(Default)]
+struct SendConfigUpdate {
     ab_test: Option<serde_json::Value>,
     clear_ab_test: bool,
     local_send: Option<serde_json::Value>,
     clear_local_send: bool,
     content_assembly: Option<serde_json::Value>,
     clear_content_assembly: bool,
+}
+
+async fn update_issue_record(
+    tenant_id: &str,
+    issue_id: &str,
+    body: &UpdateIssueRequest,
+    send_config: SendConfigUpdate,
 ) -> Result<GetIssueResponse, AppError> {
+    let SendConfigUpdate {
+        ab_test,
+        clear_ab_test,
+        local_send,
+        clear_local_send,
+        content_assembly,
+        clear_content_assembly,
+    } = send_config;
+
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
         .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
@@ -4381,6 +4507,10 @@ Thanks!"#;
 
     // ── Local-send config validation ────────────────────────────────────
 
+    /// Stands in for the tenant timezone setting in tests that supply their
+    /// own zone and don't care about the fallback.
+    const FALLBACK_ZONE: &str = "UTC";
+
     #[test]
     fn test_validate_local_send_normalizes_valid_config() {
         let input = serde_json::json!({
@@ -4388,7 +4518,9 @@ Thanks!"#;
             "defaultTimeZone": " America/New_York ",
             "extraneous": "dropped"
         });
-        let normalized = validate_and_normalize_local_send(&input).unwrap().unwrap();
+        let normalized = validate_and_normalize_local_send(&input, FALLBACK_ZONE)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             normalized,
             serde_json::json!({
@@ -4415,15 +4547,20 @@ Thanks!"#;
                 "mode": "timezone"
             }),
         ] {
-            let normalized = validate_and_normalize_local_send(&input).unwrap().unwrap();
+            let normalized = validate_and_normalize_local_send(&input, FALLBACK_ZONE)
+                .unwrap()
+                .unwrap();
             assert_eq!(normalized["mode"], "timezone", "{input}");
         }
 
-        let normalized = validate_and_normalize_local_send(&serde_json::json!({
-            "enabled": true,
-            "defaultTimeZone": "America/New_York",
-            "mode": "peak-hour"
-        }))
+        let normalized = validate_and_normalize_local_send(
+            &serde_json::json!({
+                "enabled": true,
+                "defaultTimeZone": "America/New_York",
+                "mode": "peak-hour"
+            }),
+            FALLBACK_ZONE,
+        )
         .unwrap()
         .unwrap();
         assert_eq!(
@@ -4451,7 +4588,7 @@ Thanks!"#;
                 "mode": mode
             });
             assert!(
-                validate_and_normalize_local_send(&input).is_err(),
+                validate_and_normalize_local_send(&input, FALLBACK_ZONE).is_err(),
                 "{input}"
             );
         }
@@ -4460,7 +4597,9 @@ Thanks!"#;
     #[test]
     fn test_validate_local_send_disabled_becomes_none() {
         let input = serde_json::json!({ "enabled": false, "defaultTimeZone": "America/New_York" });
-        assert!(validate_and_normalize_local_send(&input).unwrap().is_none());
+        assert!(validate_and_normalize_local_send(&input, FALLBACK_ZONE)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -4470,21 +4609,44 @@ Thanks!"#;
             serde_json::json!({ "enabled": "yes", "defaultTimeZone": "America/New_York" }),
             serde_json::json!("not-an-object"),
         ] {
-            assert!(validate_and_normalize_local_send(&input).is_err());
+            assert!(validate_and_normalize_local_send(&input, FALLBACK_ZONE).is_err());
         }
     }
 
     #[test]
-    fn test_validate_local_send_requires_timezone_when_enabled() {
+    fn test_validate_local_send_falls_back_to_the_tenant_timezone() {
+        // An omitted or blank zone means "the one this newsletter already
+        // runs on" — the tenant timezone setting — rather than an error.
         for input in [
             serde_json::json!({ "enabled": true }),
             serde_json::json!({ "enabled": true, "defaultTimeZone": "" }),
             serde_json::json!({ "enabled": true, "defaultTimeZone": "  " }),
+            serde_json::json!({ "enabled": true, "defaultTimeZone": null }),
+        ] {
+            let normalized = validate_and_normalize_local_send(&input, "Europe/London")
+                .unwrap()
+                .unwrap();
+            assert_eq!(normalized["defaultTimeZone"], "Europe/London", "{input}");
+        }
+    }
+
+    #[test]
+    fn test_validate_local_send_explicit_zone_beats_the_fallback() {
+        let input = serde_json::json!({ "enabled": true, "defaultTimeZone": "Asia/Tokyo" });
+        let normalized = validate_and_normalize_local_send(&input, "Europe/London")
+            .unwrap()
+            .unwrap();
+        assert_eq!(normalized["defaultTimeZone"], "Asia/Tokyo");
+    }
+
+    #[test]
+    fn test_validate_local_send_rejects_an_unusable_zone() {
+        for input in [
             serde_json::json!({ "enabled": true, "defaultTimeZone": "Not A Zone" }),
             serde_json::json!({ "enabled": true, "defaultTimeZone": "nozone" }),
         ] {
             assert!(
-                validate_and_normalize_local_send(&input).is_err(),
+                validate_and_normalize_local_send(&input, FALLBACK_ZONE).is_err(),
                 "{input}"
             );
         }
@@ -4545,6 +4707,89 @@ Thanks!"#;
             content_type: content_type.map(|c| c.to_string()),
             ttl_seconds: None,
         }
+    }
+
+    fn tenant_settings(timezone: &str, send_time: &str) -> TenantSettings {
+        TenantSettings {
+            timezone: timezone.to_string(),
+            default_send_time: send_time.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// A date far enough out that these assertions don't start failing when
+    /// the clock passes them — `resolve_scheduled_at` drops past times.
+    fn future_year() -> i32 {
+        chrono::Utc::now()
+            .format("%Y")
+            .to_string()
+            .parse::<i32>()
+            .unwrap()
+            + 2
+    }
+
+    #[test]
+    fn test_resolve_scheduled_at_treats_absent_and_now_as_immediate() {
+        let settings = TenantSettings::default();
+        assert_eq!(resolve_scheduled_at(None, &settings).unwrap(), None);
+        assert_eq!(resolve_scheduled_at(Some(""), &settings).unwrap(), None);
+        assert_eq!(resolve_scheduled_at(Some("  "), &settings).unwrap(), None);
+        assert_eq!(resolve_scheduled_at(Some("now"), &settings).unwrap(), None);
+        assert_eq!(resolve_scheduled_at(Some("NOW"), &settings).unwrap(), None);
+    }
+
+    #[test]
+    fn test_resolve_scheduled_at_passes_through_full_timestamps() {
+        let value = format!("{}-08-01T12:34:00+00:00", future_year());
+        let resolved =
+            resolve_scheduled_at(Some(&value), &tenant_settings("America/Chicago", "09:00"))
+                .unwrap();
+
+        // An explicit instant wins over the tenant default; settings only fill
+        // in what the caller left out.
+        assert_eq!(resolved, Some(value));
+    }
+
+    #[test]
+    fn test_resolve_scheduled_at_applies_default_send_time_to_a_bare_date() {
+        let date = format!("{}-08-01", future_year());
+        let resolved =
+            resolve_scheduled_at(Some(&date), &tenant_settings("America/Chicago", "09:00"))
+                .unwrap()
+                .expect("a future date should stay scheduled");
+
+        // 09:00 CDT is 14:00Z.
+        assert_eq!(resolved, format!("{}-08-01T14:00:00+00:00", future_year()));
+    }
+
+    #[test]
+    fn test_resolve_scheduled_at_uses_utc_at_nine_without_configured_settings() {
+        let date = format!("{}-08-01", future_year());
+        let resolved = resolve_scheduled_at(Some(&date), &TenantSettings::default())
+            .unwrap()
+            .expect("a future date should stay scheduled");
+
+        assert_eq!(resolved, format!("{}-08-01T09:00:00+00:00", future_year()));
+    }
+
+    #[test]
+    fn test_resolve_scheduled_at_drops_past_dates() {
+        // A bare date in the past resolves to a past instant, which means the
+        // same thing an explicit past timestamp does: send now.
+        let resolved = resolve_scheduled_at(
+            Some("2020-01-01"),
+            &tenant_settings("America/Chicago", "09:00"),
+        )
+        .unwrap();
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn test_resolve_scheduled_at_rejects_unparseable_values() {
+        let settings = TenantSettings::default();
+        assert!(resolve_scheduled_at(Some("tomorrow"), &settings).is_err());
+        assert!(resolve_scheduled_at(Some("2026-13-01"), &settings).is_err());
+        assert!(resolve_scheduled_at(Some("08/01/2026"), &settings).is_err());
     }
 
     #[test]
@@ -5615,6 +5860,65 @@ Thanks!"#;
         );
 
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn test_compute_idempotency_hash_survives_a_tenant_settings_change() {
+        // The hash covers the caller's date-only value, not the instant it
+        // resolves to. A tenant editing their timezone or send time between a
+        // request and its retry must not turn a byte-identical replay into a
+        // 409 — which is exactly what hashing the resolved instant would do.
+        let request = create_request("# Test Content", None, None);
+
+        let before = compute_idempotency_hash(
+            &request,
+            7,
+            CreateIssueAction::Schedule,
+            Some("2026-08-01"),
+            None,
+            None,
+            None,
+        );
+        let after = compute_idempotency_hash(
+            &request,
+            7,
+            CreateIssueAction::Schedule,
+            Some("2026-08-01"),
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(before, after);
+
+        // Sanity check that the field still participates at all: a different
+        // date is still a different request.
+        let other_date = compute_idempotency_hash(
+            &request,
+            7,
+            CreateIssueAction::Schedule,
+            Some("2026-08-02"),
+            None,
+            None,
+            None,
+        );
+        assert_ne!(before, other_date);
+    }
+
+    #[test]
+    fn test_resolve_scheduled_at_varies_with_settings_the_hash_ignores() {
+        // The other half of the guarantee above: the same date-only value
+        // genuinely does resolve to different instants under different
+        // settings, so hashing the resolved form would have been unstable.
+        let date = format!("{}-08-01", future_year());
+
+        let chicago =
+            resolve_scheduled_at(Some(&date), &tenant_settings("America/Chicago", "09:00"))
+                .unwrap();
+        let tokyo =
+            resolve_scheduled_at(Some(&date), &tenant_settings("Asia/Tokyo", "09:00")).unwrap();
+
+        assert_ne!(chicago, tokyo);
     }
 
     #[test]

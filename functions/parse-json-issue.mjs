@@ -12,6 +12,8 @@
  *
  *   { data, sendAtDate, listCleanupDate, reportStatsDate, subject }
  */
+import { getTenantSettings, resolveSendInstant } from './utils/tenant-settings.mjs';
+
 export const handler = async (state) => {
   const issueNumber = Number(state.issueId);
   if (!Number.isFinite(issueNumber) || issueNumber < 1) {
@@ -42,15 +44,21 @@ export const handler = async (state) => {
   }
 
   const now = new Date();
-  const scheduled = state.futureDate ? new Date(state.futureDate) : null;
+  // A `futureDate` that is a bare date gets the tenant's default send time in
+  // the tenant's timezone, the same as a date-only `scheduledAt` on the API.
+  // The state machine waits out the schedule before this step and doesn't
+  // currently forward `futureDate`, so this is a safety net for callers that
+  // do — hence the settings read only happening when there's a date to resolve.
+  const scheduled = state.futureDate
+    ? resolveSendInstant(state.futureDate, await getTenantSettings(state.tenantId))
+    : null;
   const hasFutureSend = scheduled && !Number.isNaN(scheduled.getTime()) && scheduled > now;
 
   const sendAtDate = hasFutureSend ? scheduled.toISOString() : 'now';
 
-  // Mirror parse-md-to-json: schedule downstream jobs relative to the send day
-  // at 14:00, cleanup +3 days and stats report +5 days.
+  // Mirror parse-md-to-json: downstream jobs hang off the send instant,
+  // cleanup +3 days and the stats report +5.
   const baseDate = hasFutureSend ? new Date(scheduled) : new Date(now);
-  baseDate.setHours(14, 0, 0, 0);
 
   const listCleanupDate = new Date(baseDate);
   listCleanupDate.setDate(listCleanupDate.getDate() + 3);

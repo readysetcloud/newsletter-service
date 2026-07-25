@@ -12,7 +12,7 @@
     "lint:all": "npm run lint && npm run lint:ui",
     "coverage": "c8 npm test",
     "test:rust": "cargo test --workspace",
-    "lint:rust": "cargo clippy --workspace --all-targets",
+    "lint:rust": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
     "lint:rust:fix": "cargo clippy --workspace --all-targets --fix --allow-dirty --allow-staged",
     "fmt:rust": "cargo fmt --all -- --check",
     "fmt:rust:fix": "cargo fmt --all"

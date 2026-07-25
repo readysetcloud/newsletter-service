@@ -8,6 +8,7 @@ pub mod profile;
 pub mod reports;
 pub mod segments;
 pub mod senders;
+pub mod settings;
 pub mod snippets;
 pub mod sponsors;
 pub mod subscribers;

@@ -46,6 +46,7 @@ import { getErrorDetails, validateAnalyticsData } from '../../utils/errorMessage
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 import type { Issue, IssueAnalytics, IssueMetrics, TrendsData } from '../../types/issues';
 import type { NavigationSection } from '../../components/issues/QuickNavigation';
+import { useTenantDateFormat } from '@/contexts/SettingsContext';
 
 // Lazy load analytics components for better performance
 const LinkPerformanceTable = lazy(() => import('../../components/issues/LinkPerformanceTable').then(m => ({ default: m.LinkPerformanceTable })));
@@ -506,15 +507,9 @@ export const IssueDetailPage: React.FC = () => {
     navigate('/issues');
   }, [navigate]);
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
+  // Times here carry a zone label: an issue's send time is only meaningful
+  // against the newsletter's timezone, which may not be the viewer's.
+  const { formatDateTime: formatDate } = useTenantDateFormat();
 
   const isDraft = useMemo(() => issue?.status === 'draft', [issue?.status]);
   const isPublished = useMemo(() => issue?.status === 'published', [issue?.status]);

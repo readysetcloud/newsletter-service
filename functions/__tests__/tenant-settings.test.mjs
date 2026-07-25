@@ -90,6 +90,55 @@ describe('tenant-settings', () => {
       expect(resolved.toISOString()).toBe('2026-08-01T09:00:00.000Z');
     });
 
+    it('resolves a gap send time forward, never backward', () => {
+      // 02:00–02:59 never happens on 2026-03-08 in Chicago. Applying offsets
+      // naively lands on 01:30 CST — an hour EARLIER than the tenant asked
+      // for, which would send a GitHub-imported issue ahead of schedule. The
+      // first minute that exists is 03:00 CDT.
+      const resolved = resolveSendInstant(
+        '2026-03-08',
+        settings({ timezone: 'America/Chicago', defaultSendTime: '02:30' })
+      );
+
+      expect(resolved.toISOString()).toBe('2026-03-08T08:00:00.000Z');
+      expect(resolved.getTime()).toBeGreaterThan(new Date('2026-03-08T07:30:00.000Z').getTime());
+    });
+
+    it('agrees with the Rust and dashboard resolvers across a whole gap', () => {
+      // settings.rs, dateFormatting.ts and this module all resolve a gap to
+      // the same instant; if they drifted, the settings preview would
+      // contradict the send.
+      for (const sendTime of ['02:00', '02:01', '02:30', '02:59']) {
+        expect(
+          resolveSendInstant(
+            '2026-03-08',
+            settings({ timezone: 'America/Chicago', defaultSendTime: sendTime })
+          ).toISOString()
+        ).toBe('2026-03-08T08:00:00.000Z');
+      }
+    });
+
+    it('resolves a gap in a zone that shifts by half an hour', () => {
+      // Lord Howe springs forward 30 minutes, so its gap is 02:00–02:29.
+      const resolved = resolveSendInstant(
+        '2026-10-04',
+        settings({ timezone: 'Australia/Lord_Howe', defaultSendTime: '02:15' })
+      );
+
+      expect(resolved.toISOString()).toBe('2026-10-03T15:30:00.000Z');
+    });
+
+    it('keeps the earlier instant for an ambiguous fall-back hour', () => {
+      // 01:30 happens twice on 2026-11-01; the earlier occurrence is closest
+      // to the requested wall clock, matching the Rust resolver.
+      const resolved = resolveSendInstant(
+        '2026-11-01',
+        settings({ timezone: 'America/Chicago', defaultSendTime: '01:30' })
+      );
+
+      expect(resolved.toISOString()).toBe('2026-11-01T06:30:00.000Z');
+    });
+
     it('returns null for missing or unusable values', () => {
       for (const bad of [null, undefined, '', 'tomorrow', new Date('nope')]) {
         expect(resolveSendInstant(bad, DEFAULT_SETTINGS)).toBeNull();

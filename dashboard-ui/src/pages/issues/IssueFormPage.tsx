@@ -126,6 +126,8 @@ export const IssueFormPage: React.FC = () => {
   const [localSendTimeZone, setLocalSendTimeZone] = useState(timeZone);
   /** Set once the author (or a saved issue) picks a zone explicitly. */
   const localSendTouched = useRef(false);
+  /** The issue id already fetched, so a re-render can't trigger a second GET. */
+  const loadedIssueId = useRef<string | null>(null);
   // Interest-aware assembly: personalized section order (contentAssembly).
   const [personalizedOrder, setPersonalizedOrder] = useState(false);
 
@@ -242,12 +244,46 @@ export const IssueFormPage: React.FC = () => {
     }
   }, [navigate, addToast, toDatetimeLocal]);
 
-  // Load existing issue data for edit mode
+  // Load existing issue data for edit mode, once per issue. `loadIssue` changes
+  // identity when the tenant timezone resolves (it converts timestamps for
+  // display), and re-running it would fire a second GET, reset the form under
+  // the author, and race the first response. The zone change is handled by
+  // reprojection below instead.
   useEffect(() => {
-    if (isEditMode && id) {
+    if (isEditMode && id && loadedIssueId.current !== id) {
+      loadedIssueId.current = id;
       loadIssue(id);
     }
   }, [isEditMode, id, loadIssue]);
+
+  // Settings can resolve after the issue does, in which case the schedule
+  // fields were converted against the fallback zone. Re-express them from the
+  // issue's stored timestamps — no refetch, and only while the form is
+  // untouched, so this can never overwrite something the author typed.
+  useEffect(() => {
+    if (!existingIssue || isDirty) return;
+
+    setFormData((prev) => ({
+      ...prev,
+      scheduledAt: existingIssue.scheduledAt ? toDatetimeLocal(existingIssue.scheduledAt) : '',
+    }));
+
+    if (existingIssue.abTest) {
+      setAbTest((prev) =>
+        prev
+          ? {
+            ...prev,
+            variants: prev.variants.map((variant, index) => {
+              const saved = existingIssue.abTest?.variants[index];
+              return saved?.sendAt
+                ? { ...variant, sendAt: toDatetimeLocal(saved.sendAt) }
+                : variant;
+            }),
+          }
+          : prev
+      );
+    }
+  }, [existingIssue, isDirty, toDatetimeLocal]);
 
   // Load available templates for the template picker
   useEffect(() => {

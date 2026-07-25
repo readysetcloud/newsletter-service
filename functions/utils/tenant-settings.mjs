@@ -135,6 +135,9 @@ const timeZoneOffsetMs = (instantMs, timeZone) => {
   return wallClockAsUtc - instantMs;
 };
 
+/** Longest spring-forward gap we'll search past. Real gaps are 30–120 minutes. */
+const GAP_SEARCH_LIMIT_MINUTES = 180;
+
 /**
  * Reads `YYYY-MM-DDTHH:mm` as a wall-clock time in `timeZone` and returns the
  * instant it names.
@@ -142,25 +145,57 @@ const timeZoneOffsetMs = (instantMs, timeZone) => {
  * The offset is applied twice on purpose: the first pass uses the offset at
  * the wall-clock time treated as UTC, which is wrong by up to an hour near a
  * DST boundary, and re-reading the offset at that estimate lands on the right
- * instant. Mirrors `resolve_date_only` in `settings.rs` and
- * `fromDatetimeLocalInTimeZone` in the dashboard.
+ * instant.
+ *
+ * A wall-clock time inside a spring-forward gap never happens, and no offset
+ * makes it happen — the two-pass result lands *before* the requested time,
+ * which would send an issue an hour early. Those resolve forward to the first
+ * minute that does exist, matching `resolve_date_only` in `settings.rs` and
+ * `fromDatetimeLocalInTimeZone` in the dashboard. All three have to agree, or
+ * the settings preview would contradict the send.
  */
 const wallClockToInstant = (wallClock, timeZone) => {
   const asUtc = Date.parse(`${wallClock}:00Z`);
   if (Number.isNaN(asUtc)) return null;
 
-  let offset;
   try {
-    offset = timeZoneOffsetMs(asUtc, timeZone);
-    const firstPass = asUtc - offset;
-    offset = timeZoneOffsetMs(firstPass, timeZone);
+    return new Date(resolveWallClock(asUtc, timeZone));
   } catch (err) {
     console.error('Unknown timezone, falling back to UTC', { timeZone, error: err.message });
     return new Date(asUtc);
   }
-
-  return new Date(asUtc - offset);
 };
+
+/**
+ * The instant a wall-clock time names, where the wall clock is expressed as
+ * though it were UTC.
+ */
+const resolveWallClock = (asUtc, timeZone) => {
+  const firstPass = asUtc - timeZoneOffsetMs(asUtc, timeZone);
+  const instant = asUtc - timeZoneOffsetMs(firstPass, timeZone);
+
+  // Round-trip check: if reading the instant back in the zone doesn't give the
+  // wall clock we asked for, that wall clock doesn't exist on that day.
+  if (wallClockOf(instant, timeZone) === asUtc) {
+    return instant;
+  }
+
+  for (let minutes = 1; minutes <= GAP_SEARCH_LIMIT_MINUTES; minutes += 1) {
+    const candidate = asUtc + minutes * 60_000;
+    const firstPassCandidate = candidate - timeZoneOffsetMs(candidate, timeZone);
+    const resolved = candidate - timeZoneOffsetMs(firstPassCandidate, timeZone);
+    if (wallClockOf(resolved, timeZone) === candidate) {
+      return resolved;
+    }
+  }
+
+  // No valid time found (unreachable for real zones) — the two-pass estimate is
+  // still a real instant, so prefer it over failing the publish outright.
+  return instant;
+};
+
+/** The zone's wall clock at `instant`, as though that wall clock were UTC. */
+const wallClockOf = (instant, timeZone) => instant + timeZoneOffsetMs(instant, timeZone);
 
 /**
  * Resolves a send date into the instant it should actually go out at.
@@ -192,9 +227,9 @@ export const resolveSendInstant = (value, settings = DEFAULT_SETTINGS) => {
     return resolved;
   }
 
-  // A wall-clock time that doesn't exist (a spring-forward gap) or an
-  // unparseable day: fall back to the day at the send time in UTC rather than
-  // dropping the schedule entirely.
+  // An unparseable day: fall back to the send time in UTC rather than dropping
+  // the schedule entirely. (Spring-forward gaps are handled above, in
+  // `resolveWallClock`.)
   const fallback = new Date(`${day}T${sendTime}:00Z`);
   return Number.isNaN(fallback.getTime()) ? null : fallback;
 };

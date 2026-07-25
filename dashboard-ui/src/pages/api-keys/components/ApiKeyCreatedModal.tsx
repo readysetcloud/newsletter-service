@@ -15,6 +15,8 @@ import {
   ClipboardDocumentIcon,
   ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline';
+import { formatInTimeZone } from '@/utils/dateFormatting';
+import { useTenantDateFormat } from '@/contexts/SettingsContext';
 
 interface ApiKeyCreatedModalProps {
   isOpen: boolean;
@@ -27,6 +29,8 @@ export const ApiKeyCreatedModal: React.FC<ApiKeyCreatedModalProps> = ({
   onClose,
   apiKey,
 }) => {
+  // Dates render in the newsletter's timezone, not the viewer's.
+  const { timeZone } = useTenantDateFormat();
   const [isCopied, setIsCopied] = useState(false);
   const { addToast } = useToast();
 
@@ -139,13 +143,13 @@ export const ApiKeyCreatedModal: React.FC<ApiKeyCreatedModalProps> = ({
                   Created
                 </div>
                 <p className="text-foreground">
-                  {new Date(apiKey.createdAt).toLocaleDateString('en-US', {
+                  {formatInTimeZone(apiKey.createdAt, timeZone, {
                     year: 'numeric',
                     month: 'long',
                     day: 'numeric',
                     hour: '2-digit',
                     minute: '2-digit',
-                  })}
+                  }, 'en-US')}
                 </p>
               </div>
 
@@ -155,13 +159,13 @@ export const ApiKeyCreatedModal: React.FC<ApiKeyCreatedModalProps> = ({
                 </div>
                 <p className="text-foreground">
                   {apiKey.expiresAt
-                    ? new Date(apiKey.expiresAt).toLocaleDateString('en-US', {
+                    ? formatInTimeZone(apiKey.expiresAt, timeZone, {
                       year: 'numeric',
                       month: 'long',
                       day: 'numeric',
                       hour: '2-digit',
                       minute: '2-digit',
-                    })
+                    }, 'en-US')
                     : 'Never'
                   }
                 </p>

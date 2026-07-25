@@ -6,8 +6,12 @@ import { useToast } from '@/components/ui/Toast';
 import { Card, CardContent } from '@/components/ui/Card';
 import { segmentService } from '@/services/segmentService';
 import type { Segment } from '@/services/segmentService';
+import { useTenantDateFormat } from '@/contexts/SettingsContext';
+import { formatInTimeZone } from '@/utils/dateFormatting';
 
 export const SegmentListPage: React.FC = () => {
+  // Dates render in the newsletter's timezone, not the viewer's.
+  const { timeZone } = useTenantDateFormat();
   const navigate = useNavigate();
   const { addToast } = useToast();
 
@@ -109,7 +113,7 @@ export const SegmentListPage: React.FC = () => {
   }, [segmentToDelete, segments, addToast]);
 
   const formatDate = (dateString: string) =>
-    new Date(dateString).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+    formatInTimeZone(dateString, timeZone, { year: 'numeric', month: 'short', day: 'numeric' }, 'en-US');
 
   const manualSegments = useMemo(() => segments.filter(s => !s.autoManaged), [segments]);
   const autoSegments = useMemo(() => segments.filter(s => s.autoManaged), [segments]);

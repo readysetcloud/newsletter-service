@@ -21,18 +21,32 @@ import { useToast } from '@/components/ui/Toast';
 import { cn } from '@/utils/cn';
 import { reportsService } from '@/services/reportsService';
 import type { MonthlyReport, ReportInsightSeverity } from '@/types/reports';
+import { useTenantDateFormat } from '@/contexts/SettingsContext';
+import { formatCalendarDate, formatInTimeZone } from '@/utils/dateFormatting';
 
 const formatPercent = (value: number): string => `${value.toFixed(1)}%`;
 const formatNumber = (value: number): string => value.toLocaleString('en-US');
 const formatSignedNumber = (value: number): string =>
   `${value > 0 ? '+' : ''}${value.toLocaleString('en-US')}`;
 
-const formatDate = (dateString: string): string =>
-  new Date(dateString).toLocaleDateString('en-US', {
+const formatDate = (dateString: string, timeZone?: string): string =>
+  formatInTimeZone(dateString, timeZone, {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
-  });
+  }, 'en-US');
+
+/**
+ * The reporting window is built from UTC month boundaries, so its ends name
+ * calendar days rather than instants. Shifting them into the tenant's zone
+ * would report July as running from June 30.
+ */
+const formatPeriodDate = (dateString: string): string =>
+  formatCalendarDate(dateString, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  }, 'en-US');
 
 /**
  * Severity styling mirrors the issues analytics `InsightsHeroSection` palette:
@@ -111,6 +125,8 @@ const Section: React.FC<SectionProps> = ({ title, icon, children }) => (
 );
 
 export const ReportDetailPage: React.FC = () => {
+  // Dates render in the newsletter's timezone, not the viewer's.
+  const { timeZone } = useTenantDateFormat();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { addToast } = useToast();
@@ -256,8 +272,8 @@ export const ReportDetailPage: React.FC = () => {
             {report.monthLabel} Report
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {formatDate(report.periodStart)} – {formatDate(report.periodEnd)} · Generated{' '}
-            {formatDate(report.generatedAt)}
+            {formatPeriodDate(report.periodStart)} – {formatPeriodDate(report.periodEnd)} · Generated{' '}
+            {formatDate(report.generatedAt, timeZone)}
           </p>
         </div>
 
@@ -471,7 +487,7 @@ export const ReportDetailPage: React.FC = () => {
                         >
                           <div className="text-sm font-medium text-foreground">{issue.subject}</div>
                           <div className="text-xs text-muted-foreground mt-0.5">
-                            #{issue.issueNumber} · {formatDate(issue.publishedAt)}
+                            #{issue.issueNumber} · {formatDate(issue.publishedAt, timeZone)}
                           </div>
                         </button>
                       </td>

@@ -10,6 +10,8 @@ import {
   NoSymbolIcon,
   ClockIcon,
 } from '@heroicons/react/24/outline';
+import { formatInTimeZone } from '@/utils/dateFormatting';
+import { useTenantDateFormat } from '@/contexts/SettingsContext';
 
 interface ApiKeyCardProps {
   apiKey: Omit<ApiKey, 'keyValue'>;
@@ -22,17 +24,19 @@ export const ApiKeyCard: React.FC<ApiKeyCardProps> = ({
   onRevoke,
   onDelete,
 }) => {
+  // Dates render in the newsletter's timezone, not the viewer's.
+  const { timeZone } = useTenantDateFormat();
   const isExpired = apiKeyService.isApiKeyExpired(apiKey);
   const isActive = apiKeyService.isApiKeyActive(apiKey);
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
+    return formatInTimeZone(dateString, timeZone, {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
-    });
+    }, 'en-US');
   };
 
   const getStatusBadge = () => {

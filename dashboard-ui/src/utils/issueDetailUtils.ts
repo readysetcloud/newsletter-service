@@ -117,6 +117,33 @@ export function formatPercentageValue(percentage: number, decimals: number = 1):
 }
 
 /**
+ * The DOM id for a collapsible section on the issue detail page. Used for
+ * anchors, scroll targets and the intersection observers.
+ *
+ * `CollapsibleSection` echoes its DOM id back through `onToggle`, so anything
+ * keyed by section id has to run the value through `toSectionKey` first —
+ * otherwise the toggle writes `section-engagement` while the render reads
+ * `engagement`, and the section never opens.
+ *
+ * @param sectionKey - Section identifier, e.g. 'engagement'
+ * @returns The DOM id, e.g. 'section-engagement'
+ */
+export function toSectionDomId(sectionKey: string): string {
+  return `section-${sectionKey}`;
+}
+
+/**
+ * Inverse of `toSectionDomId`. Tolerates values that are already section keys,
+ * which also migrates DOM ids persisted by older builds.
+ *
+ * @param id - A section DOM id or section key
+ * @returns The section key
+ */
+export function toSectionKey(id: string): string {
+  return id.replace(/^section-/, '');
+}
+
+/**
  * Determine if a section should be visible based on data availability
  * @param sectionId - Section identifier
  * @param analytics - Analytics data

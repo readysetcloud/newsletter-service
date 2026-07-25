@@ -41,6 +41,8 @@ import {
   saveScrollPosition,
   loadScrollPosition,
   clearScrollPosition,
+  toSectionDomId,
+  toSectionKey,
   type UserPreferences
 } from '../../utils/issueDetailUtils';
 import { getErrorDetails, validateAnalyticsData } from '../../utils/errorMessages';
@@ -74,6 +76,9 @@ interface SectionConfig {
   defaultExpanded: boolean;
   requiredData: string[];
 }
+
+/** Room left above a section when scrolling to it, for the sticky nav bar. */
+const SECTION_SCROLL_OFFSET = 88;
 
 const SECTION_CONFIGS: SectionConfig[] = [
   {
@@ -283,13 +288,17 @@ export const IssueDetailPage: React.FC = () => {
     };
   }, [id]);
 
-  // Initialize expanded sections based on screen size, defaults, and user preferences
+  // Initialize expanded sections based on screen size, defaults, and user preferences.
+  // Deliberately no resize listener: mobile browsers fire `resize` every time the
+  // address bar hides or shows while scrolling, and collapsing sections out from
+  // under someone mid-scroll is worse than leaving them as they were.
   useEffect(() => {
     const isMobile = window.innerWidth < 768;
     const defaultExpanded = new Set<string>();
 
-    // Load user preferences for expanded sections
-    const savedExpandedSections = userPreferences.expandedSections;
+    // Load user preferences for expanded sections. Older builds saved DOM ids
+    // ("section-engagement") here, so normalize whatever we read back.
+    const savedExpandedSections = userPreferences.expandedSections.map(toSectionKey);
 
     if (savedExpandedSections.length > 0) {
       // Use saved preferences if available
@@ -307,18 +316,6 @@ export const IssueDetailPage: React.FC = () => {
 
     // Load comparison mode preference
     setComparisonMode(userPreferences.defaultComparison);
-
-    // Handle window resize to adjust section states
-    const handleResize = () => {
-      const isNowMobile = window.innerWidth < 768;
-      if (isNowMobile && expandedSections.size > 0) {
-        // Collapse all sections when switching to mobile
-        setExpandedSections(new Set());
-      }
-    };
-
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Only run on mount
 
@@ -326,7 +323,7 @@ export const IssueDetailPage: React.FC = () => {
   useEffect(() => {
     const keyMetricsElement = document.getElementById('key-metrics-summary');
     const sectionElements = SECTION_CONFIGS.map(config =>
-      document.getElementById(`section-${config.id}`)
+      document.getElementById(toSectionDomId(config.id))
     ).filter(Boolean);
 
     // Observer for sticky navigation trigger
@@ -346,8 +343,7 @@ export const IssueDetailPage: React.FC = () => {
       (entries) => {
         entries.forEach((entry) => {
           if (entry.isIntersecting) {
-            const sectionId = entry.target.id.replace('section-', '');
-            setActiveSection(sectionId);
+            setActiveSection(toSectionKey(entry.target.id));
           }
         });
       },
@@ -372,45 +368,71 @@ export const IssueDetailPage: React.FC = () => {
     updatePreference('defaultComparison', mode);
   }, []);
 
-  // Handler for section toggle
-  const handleSectionToggle = useCallback((sectionId: string) => {
-    setExpandedSections(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(sectionId)) {
-        newSet.delete(sectionId);
-      } else {
-        newSet.add(sectionId);
-      }
+  // Mirror of expandedSections so the toggle handler can read current state
+  // without taking it as a dependency (the sections are memoized on identity).
+  const expandedSectionsRef = useRef(expandedSections);
+  useEffect(() => {
+    expandedSectionsRef.current = expandedSections;
+  }, [expandedSections]);
 
-      // Save expanded sections to preferences
-      const expandedArray = Array.from(newSet);
-      updatePreference('expandedSections', expandedArray);
+  // Bring a section's header to just under the sticky nav
+  const scrollSectionIntoView = useCallback((sectionKey: string) => {
+    const element = document.getElementById(toSectionDomId(sectionKey));
+    if (!element) return;
 
-      return newSet;
+    const offsetPosition =
+      element.getBoundingClientRect().top + window.pageYOffset - SECTION_SCROLL_OFFSET;
+
+    window.scrollTo({
+      top: Math.max(offsetPosition, 0),
+      behavior: 'smooth',
     });
   }, []);
 
+  // Handler for section toggle. `CollapsibleSection` hands back its DOM id, so
+  // normalize it to the section key the expanded-set is keyed by.
+  const handleSectionToggle = useCallback((id: string) => {
+    const sectionId = toSectionKey(id);
+    const next = new Set(expandedSectionsRef.current);
+    const isExpanding = !next.has(sectionId);
+
+    if (isExpanding) {
+      next.add(sectionId);
+    } else {
+      next.delete(sectionId);
+    }
+
+    expandedSectionsRef.current = next;
+    setExpandedSections(next);
+    updatePreference('expandedSections', Array.from(next));
+
+    // On a phone the drawer header often sits near the bottom of the screen, so
+    // the content it just revealed opens entirely below the fold and the tap
+    // reads as "nothing happened". Pull the header up when that's the case.
+    if (isExpanding) {
+      const element = document.getElementById(toSectionDomId(sectionId));
+      if (element && element.getBoundingClientRect().top > window.innerHeight * 0.4) {
+        // Wait a frame so the expand animation has started before we scroll.
+        requestAnimationFrame(() => scrollSectionIntoView(sectionId));
+      }
+    }
+  }, [scrollSectionIntoView]);
+
   // Handler for navigation click with smooth scrolling
   const handleNavigationClick = useCallback((sectionId: string) => {
-    const element = document.getElementById(`section-${sectionId}`);
-    if (element) {
-      const offset = 100; // Account for sticky header
-      const elementPosition = element.getBoundingClientRect().top + window.pageYOffset;
-      const offsetPosition = elementPosition - offset;
+    const sectionKey = toSectionKey(sectionId);
+    if (!document.getElementById(toSectionDomId(sectionKey))) return;
 
-      window.scrollTo({
-        top: offsetPosition,
-        behavior: 'smooth'
-      });
-
-      // Expand the section if it's collapsed
-      setExpandedSections(prev => {
-        const newSet = new Set(prev);
-        newSet.add(sectionId);
-        return newSet;
-      });
+    // Expand the section if it's collapsed
+    if (!expandedSectionsRef.current.has(sectionKey)) {
+      const next = new Set(expandedSectionsRef.current).add(sectionKey);
+      expandedSectionsRef.current = next;
+      setExpandedSections(next);
+      updatePreference('expandedSections', Array.from(next));
     }
-  }, []);
+
+    scrollSectionIntoView(sectionKey);
+  }, [scrollSectionIntoView]);
 
   const handleRebuildAnalytics = useCallback(async () => {
     if (!id) return;
@@ -713,7 +735,10 @@ export const IssueDetailPage: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-background overflow-x-hidden">
+    // `overflow-x-clip` rather than `overflow-x-hidden`: hidden makes this a
+    // scroll container, which silently breaks `position: sticky` for the quick
+    // nav inside it. Clip contains the same overflow without that side effect.
+    <div className="min-h-screen bg-background overflow-x-clip">
       {/* Skip to main content link for keyboard navigation */}
       <a
         href="#main-content"
@@ -994,7 +1019,7 @@ export const IssueDetailPage: React.FC = () => {
         {/* Engagement Analytics Section */}
         {isPublished && analytics && shouldShowSection('engagement', analytics, issue?.stats) && (
           <CollapsibleSection
-            id="section-engagement"
+            id={toSectionDomId('engagement')}
             title="Engagement Analytics"
             description="Link performance, geographic distribution, and engagement over time"
             icon={<TrendingUp className="w-5 h-5" />}
@@ -1102,7 +1127,7 @@ export const IssueDetailPage: React.FC = () => {
         {/* Audience Insights Section */}
         {isPublished && analytics && shouldShowSection('audience', analytics, issue?.stats) && (
           <CollapsibleSection
-            id="section-audience"
+            id={toSectionDomId('audience')}
             title="Audience Insights"
             description="Device breakdown, geography, and engagement timing"
             icon={<Users className="w-5 h-5" />}
@@ -1143,7 +1168,7 @@ export const IssueDetailPage: React.FC = () => {
         {/* Deliverability & Quality Section */}
         {isPublished && analytics && shouldShowSection('deliverability', analytics, issue?.stats) && (
           <CollapsibleSection
-            id="section-deliverability"
+            id={toSectionDomId('deliverability')}
             title="Deliverability & Quality"
             description="Bounce analysis, complaints, and quality signals"
             icon={<Shield className="w-5 h-5" />}

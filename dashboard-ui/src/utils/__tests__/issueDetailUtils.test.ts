@@ -13,7 +13,36 @@ import {
   loadScrollPosition,
   clearScrollPosition,
   formatDate,
+  toSectionDomId,
+  toSectionKey,
 } from '../issueDetailUtils';
+
+describe('Section ids', () => {
+  it('should build the DOM id for a section key', () => {
+    expect(toSectionDomId('engagement')).toBe('section-engagement');
+  });
+
+  it('should recover the section key from a DOM id', () => {
+    expect(toSectionKey('section-engagement')).toBe('engagement');
+    expect(toSectionKey('section-deliverability')).toBe('deliverability');
+  });
+
+  it('should leave a value that is already a section key alone', () => {
+    // Preferences persisted by older builds stored DOM ids; both forms have to
+    // normalize to the same key or the section renders collapsed forever.
+    expect(toSectionKey('engagement')).toBe('engagement');
+  });
+
+  it('should round-trip every section key', () => {
+    ['engagement', 'audience', 'deliverability'].forEach(key => {
+      expect(toSectionKey(toSectionDomId(key))).toBe(key);
+    });
+  });
+
+  it('should only strip a leading section prefix', () => {
+    expect(toSectionKey('audience-section-extra')).toBe('audience-section-extra');
+  });
+});
 
 describe('User Preferences', () => {
   beforeEach(() => {

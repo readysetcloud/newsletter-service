@@ -3104,13 +3104,10 @@ fn parse_issue_stats(item: &HashMap<String, AttributeValue>) -> Result<IssueStat
 fn extract_analytics_summary(stats: &IssueStats) -> Option<IssueAnalyticsSummary> {
     let analytics = stats.analytics.as_ref()?;
     let parsed: Result<IssueAnalyticsSummary, _> = serde_json::from_value(analytics.clone());
-    parsed.ok().and_then(|summary| {
-        if summary.engagement_type.is_none() && summary.traffic_source.is_none() {
-            None
-        } else {
-            Some(summary)
-        }
-    })
+    // A summary with neither breakdown carries no information worth returning.
+    parsed
+        .ok()
+        .filter(|summary| summary.engagement_type.is_some() || summary.traffic_source.is_some())
 }
 
 fn parse_insights_map(

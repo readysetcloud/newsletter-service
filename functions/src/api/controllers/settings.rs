@@ -114,9 +114,22 @@ struct SettingsResponse {
     /// The system defaults, so the dashboard can mark which effective values
     /// are inherited rather than chosen.
     defaults: TenantSettings,
+    /// Which settings the tenant has explicitly chosen. `settings` alone can't
+    /// answer that — a stored `UTC` and an unset timezone look identical — and
+    /// the dashboard needs the difference to offer a better suggestion than the
+    /// system default (e.g. the viewer's own timezone).
+    configured: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     updated_at: Option<String>,
 }
+
+/// Every setting name this endpoint recognizes, in display order.
+const SETTING_NAMES: [&str; 4] = [
+    "timezone",
+    "defaultSendTime",
+    "subjectTemplate",
+    "issueUrlPattern",
+];
 
 /// One update to one settings attribute. `None` is an explicit reset back to
 /// the system default (`"timezone": null` in the request body).
@@ -506,8 +519,30 @@ fn build_response(
     SettingsResponse {
         settings: settings_from_item(item.as_ref()),
         defaults: TenantSettings::default(),
+        configured: configured_settings(item.as_ref()),
         updated_at,
     }
+}
+
+/// The settings actually present on the record, so a value the tenant chose is
+/// distinguishable from one that happens to equal the system default.
+fn configured_settings(
+    item: Option<&std::collections::HashMap<String, AttributeValue>>,
+) -> Vec<String> {
+    let Some(item) = item else {
+        return Vec::new();
+    };
+
+    SETTING_NAMES
+        .iter()
+        .filter(|name| {
+            item.get(**name)
+                .and_then(|value| value.as_s().ok())
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false)
+        })
+        .map(|name| name.to_string())
+        .collect()
 }
 
 /// Applies the changes with a single UpdateItem so settings the request didn't
@@ -911,5 +946,39 @@ mod tests {
         let response = build_response(None);
         assert!(response.updated_at.is_none());
         assert_eq!(response.settings, TenantSettings::default());
+        assert!(response.configured.is_empty());
+    }
+
+    #[test]
+    fn configured_lists_only_the_settings_the_tenant_chose() {
+        let mut item = std::collections::HashMap::new();
+        item.insert(
+            "defaultSendTime".to_string(),
+            AttributeValue::S("07:30".to_string()),
+        );
+        // A blank attribute is not a choice.
+        item.insert("timezone".to_string(), AttributeValue::S("".to_string()));
+        item.insert(
+            "updatedAt".to_string(),
+            AttributeValue::S("2026-07-25T00:00:00Z".to_string()),
+        );
+
+        let response = build_response(Some(item));
+
+        // The tenant saved a send time but never picked a zone, even though
+        // the effective timezone reads as the system default either way.
+        assert_eq!(response.configured, vec!["defaultSendTime".to_string()]);
+        assert_eq!(response.settings.timezone, DEFAULT_TIMEZONE);
+    }
+
+    #[test]
+    fn configured_reports_a_timezone_that_matches_the_system_default() {
+        // Explicitly choosing UTC is a choice, and must not be reported as an
+        // unset value the dashboard is free to replace with a suggestion.
+        let mut item = std::collections::HashMap::new();
+        item.insert("timezone".to_string(), AttributeValue::S("UTC".to_string()));
+
+        let response = build_response(Some(item));
+        assert_eq!(response.configured, vec!["timezone".to_string()]);
     }
 }

@@ -20,11 +20,20 @@ export interface TenantSettings {
   issueUrlPattern?: string;
 }
 
+/** The settings a tenant can explicitly configure. */
+export type SettingName = keyof TenantSettings;
+
 export interface SettingsResponse {
   /** Effective settings: stored values where set, system defaults elsewhere. */
   settings: TenantSettings;
   /** The system defaults, so the UI can mark inherited values as such. */
   defaults: TenantSettings;
+  /**
+   * Which settings the tenant has explicitly chosen. `settings` alone can't
+   * say — a stored `UTC` and an unset timezone are indistinguishable — so this
+   * is what tells the UI it's free to suggest something better.
+   */
+  configured: SettingName[];
   /** When settings were last saved; absent if they never have been. */
   updatedAt?: string;
 }

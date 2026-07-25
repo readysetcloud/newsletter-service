@@ -3059,6 +3059,16 @@ components:
           allOf:
             - $ref: "#/components/schemas/TenantSettings"
           description: The system defaults applied wherever the tenant has set nothing.
+        configured:
+          type: array
+          items:
+            type: string
+            enum: [timezone, defaultSendTime, subjectTemplate, issueUrlPattern]
+          description: >-
+            Which settings the tenant has explicitly chosen. `settings` alone
+            cannot answer that — a stored "UTC" and an unset timezone look the
+            same — so clients that want to suggest a better value than the
+            system default (the viewer's own timezone, say) should check here.
         updatedAt:
           type: string
           format: date-time

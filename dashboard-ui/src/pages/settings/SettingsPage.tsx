@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ClockIcon, EnvelopeIcon, GlobeAltIcon, LinkIcon } from '@heroicons/react/24/outline';
 import { Button } from '@/components/ui/Button';
+import { cn } from '@/utils/cn';
 import { Card } from '@/components/ui/Card';
 import { ErrorDisplay } from '@/components/ui/ErrorDisplay';
 import { Input } from '@/components/ui/Input';
@@ -36,7 +37,8 @@ import { renderTokens } from '@/utils/renderTokens';
  * on its own gives no feedback about whether you picked the right one.
  */
 export function SettingsPage() {
-  const { settings, defaults, updatedAt, isLoading, error, refresh, save } = useSettings();
+  const { settings, configured, isTimeZoneInferred, defaults, updatedAt, isLoading, error, refresh, save } =
+    useSettings();
   const { addToast } = useToast();
 
   const browserTimeZone = useMemo(() => getBrowserTimeZone(), []);
@@ -54,15 +56,16 @@ export function SettingsPage() {
   const [errors, setErrors] = useState<Partial<Record<keyof TenantSettingsFormData, string>>>({});
   const [isSaving, setIsSaving] = useState(false);
 
-  // Adopt whatever the provider settles on (initial load, or a refresh).
+  // Adopt whatever the provider settles on (initial load, or a refresh). The
+  // provider already substitutes the browser zone when the tenant has never
+  // picked one, so an unconfigured newsletter opens on a sensible suggestion
+  // that one Save turns into a real setting.
   useEffect(() => {
-    setForm({
-      timezone: settings.timezone,
-      defaultSendTime: settings.defaultSendTime,
-      subjectTemplate: settings.subjectTemplate ?? '',
-      issueUrlPattern: settings.issueUrlPattern ?? ''
-    });
+    setForm(toForm(settings));
     setErrors({});
+    // toForm is a pure projection of `settings`; re-running on its identity
+    // would loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings]);
 
   /**
@@ -80,13 +83,15 @@ export function SettingsPage() {
   }, [form.timezone]);
 
   const isDirty =
+    // A zone inferred from the browser has never been saved, so the form is
+    // meaningfully ahead of the stored settings from the first render.
+    isTimeZoneInferred ||
     form.timezone !== settings.timezone ||
     form.defaultSendTime !== settings.defaultSendTime ||
     form.subjectTemplate !== (settings.subjectTemplate ?? '') ||
     form.issueUrlPattern !== (settings.issueUrlPattern ?? '');
 
-  const usingDefaultTimezone = settings.timezone === defaults.timezone && !updatedAt;
-  const usingDefaultSendTime = settings.defaultSendTime === defaults.defaultSendTime && !updatedAt;
+  const usingDefaultSendTime = !configured.includes('defaultSendTime');
 
   /**
    * Where a date-only send would land under the values currently in the form.
@@ -196,7 +201,7 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       <div>
         <h1 className="text-2xl sm:text-3xl font-bold text-foreground">Settings</h1>
         <p className="text-muted-foreground mt-2 text-sm sm:text-base">
@@ -217,9 +222,9 @@ export function SettingsPage() {
         />
       )}
 
-      <form onSubmit={handleSubmit} className="space-y-6">
-        <Card className="p-6">
-          <div className="flex items-start gap-3 mb-6">
+      <form onSubmit={handleSubmit} className="space-y-4 sm:space-y-6">
+        <Card className="p-4 sm:p-6">
+          <div className="flex items-start gap-3 mb-4 sm:mb-6">
             <GlobeAltIcon className="h-6 w-6 text-muted-foreground shrink-0 mt-0.5" aria-hidden="true" />
             <div>
               <h2 className="text-lg font-semibold text-foreground">Timezone</h2>
@@ -238,8 +243,8 @@ export function SettingsPage() {
             error={errors.timezone}
             disabled={isSaving}
             helperText={
-              usingDefaultTimezone
-                ? `Currently using the system default (${defaults.timezone}).`
+              isTimeZoneInferred
+                ? `Detected from your browser. Save to use it for scheduling too — until then, dates without a time send at ${defaults.defaultSendTime} ${defaults.timezone}.`
                 : undefined
             }
           />
@@ -249,7 +254,7 @@ export function SettingsPage() {
               Your browser is in {browserTimeZone}.{' '}
               <button
                 type="button"
-                className="text-primary-600 hover:text-primary-700 underline"
+                className="text-primary-600 hover:text-primary-700 underline min-h-[44px] sm:min-h-0 inline-flex items-center"
                 onClick={() => handleChange('timezone', browserTimeZone)}
                 disabled={isSaving}
               >
@@ -259,8 +264,8 @@ export function SettingsPage() {
           )}
         </Card>
 
-        <Card className="p-6">
-          <div className="flex items-start gap-3 mb-6">
+        <Card className="p-4 sm:p-6">
+          <div className="flex items-start gap-3 mb-4 sm:mb-6">
             <ClockIcon className="h-6 w-6 text-muted-foreground shrink-0 mt-0.5" aria-hidden="true" />
             <div>
               <h2 className="text-lg font-semibold text-foreground">Default send time</h2>
@@ -272,7 +277,7 @@ export function SettingsPage() {
             </div>
           </div>
 
-          <div className="max-w-xs">
+          <div className="w-full sm:max-w-xs">
             <Input
               label="Time of day"
               type="time"
@@ -296,11 +301,13 @@ export function SettingsPage() {
                 onClick={() => handleChange('defaultSendTime', preset.value)}
                 disabled={isSaving}
                 aria-pressed={padSendTime(form.defaultSendTime) === preset.value}
-                className={
+                className={cn(
+                  // 44px minimum so the chips are comfortably tappable.
+                  'min-h-[44px] px-4 text-sm rounded-full border transition-colors',
                   padSendTime(form.defaultSendTime) === preset.value
-                    ? 'px-3 py-1 text-sm rounded-full border border-primary-500 bg-primary-50 text-primary-700'
-                    : 'px-3 py-1 text-sm rounded-full border border-border text-muted-foreground hover:bg-surface'
-                }
+                    ? 'border-primary-500 bg-primary-50 text-primary-700'
+                    : 'border-border text-muted-foreground hover:bg-surface'
+                )}
               >
                 {preset.label}
               </button>
@@ -318,8 +325,8 @@ export function SettingsPage() {
           )}
         </Card>
 
-        <Card className="p-6">
-          <div className="flex items-start gap-3 mb-6">
+        <Card className="p-4 sm:p-6">
+          <div className="flex items-start gap-3 mb-4 sm:mb-6">
             <EnvelopeIcon className="h-6 w-6 text-muted-foreground shrink-0 mt-0.5" aria-hidden="true" />
             <div>
               <h2 className="text-lg font-semibold text-foreground">Subject line format</h2>
@@ -339,18 +346,20 @@ export function SettingsPage() {
             disabled={isSaving}
             placeholder="{{title}} | Picks of the Week #{{number}}"
             helperText={`Available placeholders: ${SUBJECT_TOKENS.map((t) => `{{${t}}}`).join(', ')}`}
+            autoCorrect="off"
+            spellCheck={false}
           />
 
           {subjectPreview && (
             <div className="mt-4 rounded-lg border border-border bg-surface p-4">
               <p className="text-xs text-muted-foreground">A subject would look like</p>
-              <p className="text-sm font-medium text-foreground mt-1">{subjectPreview}</p>
+              <p className="text-sm font-medium text-foreground mt-1 break-words">{subjectPreview}</p>
             </div>
           )}
         </Card>
 
-        <Card className="p-6">
-          <div className="flex items-start gap-3 mb-6">
+        <Card className="p-4 sm:p-6">
+          <div className="flex items-start gap-3 mb-4 sm:mb-6">
             <LinkIcon className="h-6 w-6 text-muted-foreground shrink-0 mt-0.5" aria-hidden="true" />
             <div>
               <h2 className="text-lg font-semibold text-foreground">Issue URL</h2>
@@ -369,6 +378,11 @@ export function SettingsPage() {
             disabled={isSaving}
             placeholder="https://example.com/newsletter/{{number}}"
             helperText="Must include {{number}} so each issue links to its own page."
+            // A phone keyboard would otherwise capitalize and autocorrect a URL.
+            inputMode="url"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
           />
 
           {urlPreview && (
@@ -379,18 +393,31 @@ export function SettingsPage() {
           )}
         </Card>
 
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-sm text-muted-foreground">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-3">
+          <p className="text-sm text-muted-foreground order-2 sm:order-1">
             {updatedAt
               ? `Last saved ${formatDateTimeInTimeZone(updatedAt, settings.timezone)}`
               : 'These settings have never been saved — everything is on system defaults.'}
           </p>
 
-          <div className="flex gap-3">
-            <Button type="button" variant="secondary" onClick={handleReset} disabled={!isDirty || isSaving}>
+          {/* Stacked and full-width on a phone, with the primary action on top
+              so it sits under the thumb rather than below a secondary button. */}
+          <div className="flex flex-col-reverse sm:flex-row gap-3 order-1 sm:order-2">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={handleReset}
+              disabled={!isDirty || isSaving}
+              className="w-full sm:w-auto"
+            >
               Discard changes
             </Button>
-            <Button type="submit" disabled={!isDirty || isSaving} isLoading={isSaving}>
+            <Button
+              type="submit"
+              disabled={!isDirty || isSaving}
+              isLoading={isSaving}
+              className="w-full sm:w-auto"
+            >
               {isSaving ? 'Saving...' : 'Save settings'}
             </Button>
           </div>

@@ -7,10 +7,16 @@ import {
   formatDateTimeInTimeZone,
   formatLongDateInTimeZone,
   formatTimeInTimeZone,
+  getBrowserTimeZone,
   getTimeZoneAbbreviation,
   type DateInput
 } from '@/utils/dateFormatting';
-import type { SettingsResponse, TenantSettings, UpdateSettingsRequest } from '@/types/settings';
+import type {
+  SettingName,
+  SettingsResponse,
+  TenantSettings,
+  UpdateSettingsRequest
+} from '@/types/settings';
 
 /**
  * What the app falls back to before settings have loaded, and if the request
@@ -24,10 +30,20 @@ export const FALLBACK_SETTINGS: TenantSettings = {
 };
 
 interface SettingsContextValue {
-  /** Effective settings — never null, so callers don't need a loading branch. */
+  /**
+   * Effective settings — never null, so callers don't need a loading branch.
+   * When the tenant has never chosen a timezone, this reports the viewer's
+   * browser zone rather than the server-side UTC default: the server can't
+   * know where anyone is, but the browser can, and reading a send time in your
+   * own zone beats reading it in UTC.
+   */
   settings: TenantSettings;
   /** System defaults, for marking which effective values are inherited. */
   defaults: TenantSettings;
+  /** Which settings the tenant has explicitly chosen. */
+  configured: SettingName[];
+  /** True when the tenant has never picked a timezone. */
+  isTimeZoneInferred: boolean;
   /** When settings were last saved; undefined if they never have been. */
   updatedAt?: string;
   isLoading: boolean;
@@ -91,18 +107,26 @@ export function SettingsProvider({ children }: SettingsProviderProps) {
     setResponse(result.data);
   }, []);
 
-  const value = useMemo<SettingsContextValue>(
-    () => ({
-      settings: response?.settings ?? FALLBACK_SETTINGS,
+  const value = useMemo<SettingsContextValue>(() => {
+    const configured = response?.configured ?? [];
+    const settings = response?.settings ?? FALLBACK_SETTINGS;
+    const isTimeZoneInferred = !configured.includes('timezone');
+
+    return {
+      // Substituting the browser zone only changes how instants are *rendered*
+      // — the instant itself is whatever the API returned. Once the tenant
+      // saves a zone, their choice wins everywhere.
+      settings: isTimeZoneInferred ? { ...settings, timezone: getBrowserTimeZone() } : settings,
       defaults: response?.defaults ?? FALLBACK_SETTINGS,
+      configured,
+      isTimeZoneInferred,
       updatedAt: response?.updatedAt,
       isLoading,
       error,
       refresh: load,
       save
-    }),
-    [response, isLoading, error, load, save]
-  );
+    };
+  }, [response, isLoading, error, load, save]);
 
   return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>;
 }
@@ -127,6 +151,18 @@ export function useSettings(): SettingsContextValue {
  */
 export function useTenantSettings(): TenantSettings {
   return useContext(SettingsContext)?.settings ?? FALLBACK_SETTINGS;
+}
+
+/**
+ * The zone dates are rendered in, and whether it's the tenant's own choice or
+ * the browser zone standing in for one they haven't made yet.
+ */
+export function useDisplayTimeZone(): { timeZone: string; isInferred: boolean } {
+  const context = useContext(SettingsContext);
+  return {
+    timeZone: context?.settings.timezone ?? FALLBACK_SETTINGS.timezone,
+    isInferred: context?.isTimeZoneInferred ?? false
+  };
 }
 
 /**

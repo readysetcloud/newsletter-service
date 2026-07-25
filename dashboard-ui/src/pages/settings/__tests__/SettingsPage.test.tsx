@@ -4,6 +4,17 @@ import { SettingsPage } from '../SettingsPage';
 import { SettingsProvider } from '@/contexts/SettingsContext';
 import { settingsService } from '@/services/settingsService';
 
+/**
+ * CI runs in UTC, which is also the server-side default for an unset zone — so
+ * a real browser zone is stubbed in, otherwise the substitution tests below
+ * would pass without proving anything.
+ */
+const BROWSER_TIME_ZONE = 'America/Chicago';
+vi.mock('@/utils/dateFormatting', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/utils/dateFormatting')>()),
+  getBrowserTimeZone: () => BROWSER_TIME_ZONE,
+}));
+
 vi.mock('@/services/settingsService', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/services/settingsService')>();
   return {
@@ -36,10 +47,19 @@ type Settings = {
   issueUrlPattern?: string;
 };
 
-function settingsResponse(settings: Settings, updatedAt?: string) {
+/**
+ * Mirrors the backend: `configured` lists the settings actually present on the
+ * record, which is what tells the UI a value was chosen rather than inherited.
+ */
+function settingsResponse(settings: Settings, updatedAt?: string, configured?: string[]) {
   return {
     success: true as const,
-    data: { settings, defaults: DEFAULTS, ...(updatedAt ? { updatedAt } : {}) },
+    data: {
+      settings,
+      defaults: DEFAULTS,
+      configured: configured ?? (Object.keys(settings) as string[]),
+      ...(updatedAt ? { updatedAt } : {}),
+    },
   };
 }
 
@@ -70,7 +90,7 @@ describe('SettingsPage', () => {
   });
 
   it('says when a value is only inherited from the system default', async () => {
-    mockedService.getSettings.mockResolvedValue(settingsResponse(DEFAULTS));
+    mockedService.getSettings.mockResolvedValue(settingsResponse(DEFAULTS, undefined, []));
 
     renderPage();
 
@@ -229,7 +249,10 @@ describe('SettingsPage', () => {
         )
       );
       mockedService.updateSettings.mockResolvedValue(
-        settingsResponse({ timezone: 'America/Chicago', defaultSendTime: '09:00' })
+        settingsResponse({ timezone: 'America/Chicago', defaultSendTime: '09:00' }, undefined, [
+          'timezone',
+          'defaultSendTime',
+        ])
       );
 
       renderPage();
@@ -274,6 +297,116 @@ describe('SettingsPage', () => {
       expect(await screen.findByText(/Include \{\{number\}\}/)).toBeInTheDocument();
 
       expect(mockedService.updateSettings).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('unconfigured timezone', () => {
+    const unconfigured = () =>
+      mockedService.getSettings.mockResolvedValue(
+        settingsResponse({ timezone: 'UTC', defaultSendTime: '09:00' }, undefined, [])
+      );
+
+    it("suggests the browser's timezone instead of the server default", async () => {
+      // The server can't know where anyone is, so an unset zone comes back as
+      // UTC. The browser does know, and one Save turns the guess into a real
+      // setting.
+      unconfigured();
+
+      renderPage();
+
+      const timezone = await screen.findByLabelText<HTMLSelectElement>('Newsletter timezone');
+      await waitFor(() => expect(timezone.value).toBe(BROWSER_TIME_ZONE));
+    });
+
+    it('says the zone was detected rather than chosen', async () => {
+      unconfigured();
+
+      renderPage();
+
+      expect(await screen.findByText(/Detected from your browser/i)).toBeInTheDocument();
+    });
+
+    it('saves the detected zone as the tenant choice', async () => {
+      unconfigured();
+      mockedService.updateSettings.mockResolvedValue(
+        settingsResponse({ timezone: BROWSER_TIME_ZONE, defaultSendTime: '09:00' })
+      );
+
+      renderPage();
+
+      const timezone = await screen.findByLabelText<HTMLSelectElement>('Newsletter timezone');
+      await waitFor(() => expect(timezone.value).toBe(BROWSER_TIME_ZONE));
+
+      fireEvent.click(screen.getByRole('button', { name: /save settings/i }));
+
+      await waitFor(() => {
+        expect(mockedService.updateSettings).toHaveBeenCalledWith(
+          expect.objectContaining({ timezone: BROWSER_TIME_ZONE })
+        );
+      });
+    });
+
+    it('offers to save the suggestion without further edits', async () => {
+      // The form is meaningfully ahead of what's stored, so Save is live.
+      unconfigured();
+
+      renderPage();
+
+      await screen.findByLabelText('Newsletter timezone');
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: /save settings/i })).toBeEnabled()
+      );
+    });
+
+    it('leaves a zone the tenant did choose alone', async () => {
+      mockedService.getSettings.mockResolvedValue(
+        settingsResponse({ timezone: 'UTC', defaultSendTime: '09:00' }, '2026-07-25T00:00:00Z', [
+          'timezone',
+        ])
+      );
+
+      renderPage();
+
+      // An explicit UTC is a choice, not an absent value to override.
+      const timezone = await screen.findByLabelText<HTMLSelectElement>('Newsletter timezone');
+      await waitFor(() => expect(timezone.value).toBe('UTC'));
+      expect(screen.queryByText(/Detected from your browser/i)).not.toBeInTheDocument();
+    });
+  });
+
+  describe('mobile layout', () => {
+    it('gives the send-time presets a 44px touch target', async () => {
+      renderPage();
+
+      const preset = await screen.findByRole('button', { name: '6:00 AM' });
+      expect(preset.className).toContain('min-h-[44px]');
+    });
+
+    it('stacks the actions full-width on small screens only', async () => {
+      renderPage();
+
+      const save = await screen.findByRole('button', { name: /save settings/i });
+      const discard = screen.getByRole('button', { name: /discard changes/i });
+
+      for (const button of [save, discard]) {
+        expect(button.className).toContain('w-full');
+        expect(button.className).toContain('sm:w-auto');
+      }
+
+      // Reversed column order puts the primary action above the secondary one
+      // on a phone, where the thumb reaches the bottom of the screen first.
+      expect(save.parentElement?.className).toContain('flex-col-reverse');
+      expect(save.parentElement?.className).toContain('sm:flex-row');
+    });
+
+    it('tightens card padding below the sm breakpoint', async () => {
+      renderPage();
+
+      const heading = await screen.findByRole('heading', { name: 'Timezone' });
+      const card = heading.closest('div.p-4');
+
+      expect(card).not.toBeNull();
+      expect(card!.className).toContain('sm:p-6');
     });
   });
 });

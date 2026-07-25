@@ -30,7 +30,7 @@ import type {
   CreateSponsorshipRequest,
   UpdateSponsorshipRequest,
 } from '../../services/sponsorService';
-import { formatInTimeZone } from '@/utils/dateFormatting';
+import { formatCalendarDate, formatInTimeZone } from '@/utils/dateFormatting';
 import { useTenantDateFormat } from '@/contexts/SettingsContext';
 
 // --- Helpers ---
@@ -38,6 +38,18 @@ import { useTenantDateFormat } from '@/contexts/SettingsContext';
 const formatDate = (dateString?: string, timeZone?: string) => {
   if (!dateString) return '—';
   return formatInTimeZone(dateString, timeZone, {
+    year: 'numeric', month: 'short', day: 'numeric',
+  }, 'en-US');
+};
+
+/**
+ * Sponsorship dates are entered in a `type="date"` field and stored verbatim,
+ * so they name a day, not an instant. Rendering them in the tenant's zone
+ * would move them a day earlier anywhere west of UTC.
+ */
+const formatSponsorshipDate = (dateString?: string) => {
+  if (!dateString) return '—';
+  return formatCalendarDate(dateString, {
     year: 'numeric', month: 'short', day: 'numeric',
   }, 'en-US');
 };
@@ -710,7 +722,7 @@ export const SponsorDetailPage: React.FC = () => {
           <Card>
             <CardContent className="text-center py-4">
               <p className="text-xs text-muted-foreground">Last Sponsored</p>
-              <p className="text-xl font-bold text-foreground">{formatDate(sponsor.lastSponsoredDate, timeZone)}</p>
+              <p className="text-xl font-bold text-foreground">{formatSponsorshipDate(sponsor.lastSponsoredDate)}</p>
             </CardContent>
           </Card>
         </div>
@@ -789,7 +801,7 @@ export const SponsorDetailPage: React.FC = () => {
                         <td className="px-4 py-3 text-sm text-foreground max-w-[200px] truncate" title={entry.issueTitle}>
                           {entry.issueTitle || entry.issueId}
                         </td>
-                        <td className="px-4 py-3 text-sm text-muted-foreground whitespace-nowrap">{formatDate(entry.sponsorshipDate, timeZone)}</td>
+                        <td className="px-4 py-3 text-sm text-muted-foreground whitespace-nowrap">{formatSponsorshipDate(entry.sponsorshipDate)}</td>
                         <td className="px-4 py-3 text-sm text-foreground whitespace-nowrap">{formatCurrency(entry.amountCharged)}</td>
                         <td className="px-4 py-3">
                           <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${statusColor(entry.status)}`}>

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   combineDateAndTimeInTimeZone,
+  formatCalendarDate,
   formatDateInTimeZone,
   formatDateTimeInTimeZone,
   formatTimeInTimeZone,
@@ -160,6 +161,35 @@ describe('dateFormatting', () => {
     it('returns an empty string when either half is missing', () => {
       expect(combineDateAndTimeInTimeZone('', '09:00', 'UTC')).toBe('');
       expect(combineDateAndTimeInTimeZone('2026-08-01', '', 'UTC')).toBe('');
+    });
+  });
+
+  describe('formatCalendarDate', () => {
+    const OPTIONS = { year: 'numeric', month: 'short', day: 'numeric' } as const;
+
+    it('keeps the day a bare YYYY-MM-DD names', () => {
+      // The bug this exists for: `2026-01-15` parses as midnight UTC, so
+      // formatting it in a zone west of UTC renders January 14 — moving a
+      // sponsorship a day earlier than the one that was entered.
+      expect(formatCalendarDate('2026-01-15', OPTIONS, 'en-US')).toBe('Jan 15, 2026');
+    });
+
+    it('keeps a UTC-midnight boundary on its own day', () => {
+      // Reporting periods are built from UTC month edges; in Chicago this
+      // instant is 6pm on June 30.
+      expect(formatCalendarDate('2026-07-01T00:00:00.000Z', OPTIONS, 'en-US')).toBe('Jul 1, 2026');
+    });
+
+    it('differs from zoned formatting exactly where it should', () => {
+      // Same input, the two helpers, one calendar day apart — this is what
+      // makes the distinction worth having.
+      expect(formatDateInTimeZone('2026-01-15', 'America/Chicago')).toBe('Jan 14, 2026');
+      expect(formatCalendarDate('2026-01-15', OPTIONS, 'en-US')).toBe('Jan 15, 2026');
+    });
+
+    it('formats empty and unparseable values as an empty string', () => {
+      expect(formatCalendarDate('', OPTIONS)).toBe('');
+      expect(formatCalendarDate('not a date', OPTIONS)).toBe('');
     });
   });
 });

@@ -22,7 +22,7 @@ import { cn } from '@/utils/cn';
 import { reportsService } from '@/services/reportsService';
 import type { MonthlyReport, ReportInsightSeverity } from '@/types/reports';
 import { useTenantDateFormat } from '@/contexts/SettingsContext';
-import { formatInTimeZone } from '@/utils/dateFormatting';
+import { formatCalendarDate, formatInTimeZone } from '@/utils/dateFormatting';
 
 const formatPercent = (value: number): string => `${value.toFixed(1)}%`;
 const formatNumber = (value: number): string => value.toLocaleString('en-US');
@@ -31,6 +31,18 @@ const formatSignedNumber = (value: number): string =>
 
 const formatDate = (dateString: string, timeZone?: string): string =>
   formatInTimeZone(dateString, timeZone, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  }, 'en-US');
+
+/**
+ * The reporting window is built from UTC month boundaries, so its ends name
+ * calendar days rather than instants. Shifting them into the tenant's zone
+ * would report July as running from June 30.
+ */
+const formatPeriodDate = (dateString: string): string =>
+  formatCalendarDate(dateString, {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
@@ -260,7 +272,7 @@ export const ReportDetailPage: React.FC = () => {
             {report.monthLabel} Report
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {formatDate(report.periodStart, timeZone)} – {formatDate(report.periodEnd, timeZone)} · Generated{' '}
+            {formatPeriodDate(report.periodStart)} – {formatPeriodDate(report.periodEnd)} · Generated{' '}
             {formatDate(report.generatedAt, timeZone)}
           </p>
         </div>

@@ -267,6 +267,26 @@ export function combineDateAndTimeInTimeZone(
   return fromDatetimeLocalInTimeZone(`${date}T${time}`, timeZone);
 }
 
+/**
+ * Formats a *calendar date* — a value that names a day rather than an instant.
+ *
+ * These come from `<input type="date">` fields (stored verbatim as
+ * `YYYY-MM-DD`) and from period boundaries built at UTC midnight. They are not
+ * moments in time, so shifting them into any zone is wrong: `2026-01-15` read
+ * in a zone west of UTC renders as January 14, moving a sponsorship or a
+ * reporting period a day earlier than the one that was entered.
+ *
+ * Formatting in UTC is what keeps the day intact, because that is the zone a
+ * bare `YYYY-MM-DD` parses into.
+ */
+export function formatCalendarDate(
+  value: DateInput,
+  options: Intl.DateTimeFormatOptions,
+  locale?: string
+): string {
+  return formatInTimeZone(value, 'UTC', options, locale);
+}
+
 /** The browser's own timezone, used to seed a tenant that hasn't picked one. */
 export function getBrowserTimeZone(): string {
   try {

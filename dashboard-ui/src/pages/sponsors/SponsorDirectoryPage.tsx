@@ -12,7 +12,7 @@ import {
   filterSponsors,
 } from '../../services/sponsorService';
 import type { SponsorRecord, CreateSponsorRequest } from '../../services/sponsorService';
-import { formatInTimeZone } from '@/utils/dateFormatting';
+import { formatCalendarDate, formatInTimeZone } from '@/utils/dateFormatting';
 import { useTenantDateFormat } from '@/contexts/SettingsContext';
 
 export const SponsorDirectoryPage: React.FC = () => {
@@ -370,7 +370,7 @@ export const SponsorDirectoryPage: React.FC = () => {
                         {formatCurrency(sponsor.totalRevenue)}
                       </td>
                       <td className="px-6 py-4 text-sm text-muted-foreground hidden lg:table-cell">
-                        {formatDate(sponsor.lastSponsoredDate)}
+                        {formatCalendarDate(sponsor.lastSponsoredDate, { year: 'numeric', month: 'short', day: 'numeric' }, 'en-US')}
                       </td>
                       <td className="px-6 py-4 text-sm text-muted-foreground hidden xl:table-cell">
                         {formatDate(sponsor.lastOutreachAt)}

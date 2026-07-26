@@ -81,6 +81,22 @@ const eventBridgeCalls = () => eventBridgeInstance.send.mock.calls.map(([cmd]) =
 const parseScheduleDetail = (cmd) => JSON.parse(JSON.parse(cmd.Target.Input).Entries[0].Detail);
 const parseEventDetail = (cmd) => JSON.parse(cmd.Entries[0].Detail);
 
+/** DynamoDB writes against the issue's progress item, with their call order. */
+const progressWrites = () =>
+  ddbInstance.send.mock.calls
+    .map(([cmd], index) => ({ cmd, order: ddbInstance.send.mock.invocationCallOrder[index] }))
+    .filter(({ cmd }) => cmd.__type === 'UpdateItem' && cmd.Key?.marshalled?.sk === 'sendProgress');
+
+/** The fan-out's plan write (the one that sets the whole group map). */
+const planWrite = () =>
+  progressWrites().find(({ cmd }) => cmd.UpdateExpression.includes('#groups = :groups'));
+
+/** Per-group completion writes, by the group label each targeted. */
+const markedLabels = () =>
+  progressWrites()
+    .filter(({ cmd }) => cmd.UpdateExpression.includes('#groups.#label.#status'))
+    .map(({ cmd }) => cmd.ExpressionAttributeNames['#label']);
+
 describe('send-email-v2 local send', () => {
   beforeAll(() => {
     process.env.TABLE_NAME = 'test-table';
@@ -509,6 +525,118 @@ describe('send-email-v2 local send', () => {
       expect(byDetailZone.get('America/New_York').ScheduleExpression).toBe('at(2099-01-15T14:00:00)');
       expect(byDetailZone.get('America/Los_Angeles').ScheduleExpression).toBe('at(2099-01-15T17:00:00)');
       expect(byDetailZone.get('__catch_all__').ScheduleExpression).toBe('at(2099-01-15T17:30:00)');
+    });
+  });
+  describe('progress tracking', () => {
+    const pool = [
+      { email: 'ny@example.com', timeZone: 'America/New_York' },
+      { email: 'la@example.com', timeZone: 'America/Los_Angeles' },
+      { email: 'none@example.com', timeZone: null }
+    ];
+
+    test('records the plan, including the catch-all, before emitting any group', async () => {
+      mockVerifiedSender();
+      listSubscribers.mockResolvedValue({ subscribers: pool, lastEvaluatedKey: undefined });
+
+      await handler(baseEvent());
+
+      const plan = planWrite();
+      expect(plan).toBeDefined();
+
+      const groups = plan.cmd.ExpressionAttributeValues.marshalled[':groups'];
+      expect(Object.keys(groups).sort()).toEqual([
+        'America/Los_Angeles',
+        'America/New_York',
+        '__catch_all__',
+        '__default__'
+      ]);
+      expect(Object.values(groups).every((group) => group.status === 'pending')).toBe(true);
+
+      // Ordering is load-bearing: a group due now is emitted immediately and can
+      // report back within milliseconds. If the plan were written second, that
+      // report would find no group to update and the issue would never leave
+      // `sending`.
+      const firstEmit = eventBridgeInstance.send.mock.invocationCallOrder[0];
+      expect(plan.order).toBeLessThan(firstEmit);
+    });
+
+    test('every group the fan-out emits reports against a label the plan created', async () => {
+      mockVerifiedSender();
+      listSubscribers.mockResolvedValue({ subscribers: pool, lastEvaluatedKey: undefined });
+
+      await handler(baseEvent());
+
+      const plannedLabels = Object.keys(planWrite().cmd.ExpressionAttributeValues.marshalled[':groups']);
+      const groupPayloads = [
+        ...eventBridgeCalls().filter((cmd) => cmd.__type === 'PutEvents').map(parseEventDetail),
+        ...schedulerCalls().map(parseScheduleDetail)
+      ];
+      expect(groupPayloads.length).toBe(plannedLabels.length);
+
+      // Re-enter the handler as each group and check where its progress landed.
+      for (const payload of groupPayloads) {
+        jest.clearAllMocks();
+        mockVerifiedSender();
+        listSubscribers.mockResolvedValue({ subscribers: pool, lastEvaluatedKey: undefined });
+        sesInstance.send.mockResolvedValue({ MessageId: 'msg-1' });
+
+        await handler({ detail: payload });
+
+        const marked = markedLabels();
+        expect(marked).toHaveLength(1);
+        expect(plannedLabels).toContain(marked[0]);
+      }
+    });
+
+    test('a group with nothing left to send still reports, so the issue can complete', async () => {
+      mockVerifiedSender();
+      // Everyone already received this issue, which is the normal state of the
+      // world by the time the catch-all sweep runs.
+      listSubscribers.mockResolvedValue({
+        subscribers: pool.map((subscriber) => ({ ...subscriber, lastIssueSent: 'tenant-123_42' })),
+        lastEvaluatedKey: undefined
+      });
+
+      await handler({
+        detail: {
+          ...baseEvent().detail,
+          localSend: undefined,
+          localSendGroup: { timeZone: '__catch_all__' }
+        }
+      });
+
+      expect(markedLabels()).toEqual(['__catch_all__']);
+      const write = progressWrites().find(({ cmd }) =>
+        cmd.UpdateExpression.includes('#groups.#label.#status')
+      );
+      expect(write.cmd.ExpressionAttributeValues.marshalled[':recipients']).toBe(0);
+    });
+
+    test('a plain list send records no progress', async () => {
+      mockVerifiedSender();
+      listSubscribers.mockResolvedValue({ subscribers: pool, lastEvaluatedKey: undefined });
+
+      await handler({ detail: { ...baseEvent().detail, localSend: undefined } });
+
+      expect(progressWrites()).toHaveLength(0);
+    });
+
+    test('peak-hour groups report against their hour labels', async () => {
+      mockVerifiedSender();
+      listSubscribers.mockResolvedValue({
+        subscribers: [
+          { email: 'p14@example.com', openHours: { 14: 7 }, openHourTotal: 10 },
+          { email: 'thin@example.com', openHours: { 3: 1 }, openHourTotal: 1 }
+        ],
+        lastEvaluatedKey: undefined
+      });
+
+      await handler(baseEvent({ localSend: { enabled: true, defaultTimeZone: 'America/New_York', mode: 'peak-hour' } }));
+
+      const groups = Object.keys(planWrite().cmd.ExpressionAttributeValues.marshalled[':groups']);
+      expect(groups).toContain('hour-14');
+      expect(groups).toContain('default');
+      expect(groups).toContain('__catch_all__');
     });
   });
 });

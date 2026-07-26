@@ -1224,6 +1224,14 @@ Resources:
               Action:
                 - states:StartExecution
               Resource: !Ref StageIssueStateMachine
+            # Reports where a scheduled issue's publish workflow actually is,
+            # for issues that have not reached local-send fan-out yet.
+            - Effect: Allow
+              Action:
+                - states:DescribeExecution
+              Resource: !Sub
+                - "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${StateMachineName}:*"
+                - StateMachineName: !Select [6, !Split [":", !Ref StageIssueStateMachine]]
             - Effect: Allow
               Action:
                 - scheduler:CreateSchedule

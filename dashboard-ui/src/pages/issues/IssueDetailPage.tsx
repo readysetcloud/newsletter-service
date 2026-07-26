@@ -11,6 +11,7 @@ import { MarkdownPreview } from '../../components/issues/MarkdownPreview';
 import { DeleteIssueDialog } from '../../components/issues/DeleteIssueDialog';
 import { SubscriberMetricsPanel } from '../../components/issues/SubscriberMetricsPanel';
 import { AbTestResults } from '../../components/issues/AbTestResults';
+import { SendProgressCard } from '../../components/issues/SendProgressCard';
 import {
   IssueDetailSkeleton,
   InsightsHeroSkeleton,
@@ -542,7 +543,11 @@ export const IssueDetailPage: React.FC = () => {
    * hasn't sent anything yet, so panels must not report on it as if it had.
    */
   const hasStartedSending = useMemo(
-    () => issue?.status === 'in progress' || issue?.status === 'published' || issue?.status === 'failed',
+    () =>
+      issue?.status === 'in progress' ||
+      issue?.status === 'sending' ||
+      issue?.status === 'published' ||
+      issue?.status === 'failed',
     [issue?.status]
   );
   const canMarkAsPublished = useMemo(() => issue?.status === 'in progress' || issue?.status === 'failed', [issue?.status]);
@@ -982,6 +987,24 @@ export const IssueDetailPage: React.FC = () => {
               </div>
             </CardContent>
           </Card>
+        )}
+
+        {/* Local send delivery - a local-send issue keeps delivering for hours
+            after the publish workflow finishes, so this sits above the analytics
+            panels: it answers "is this issue still going out?" before anything
+            about how it performed. Also carries the publish workflow's state for
+            issues that have not fanned out yet. */}
+        {(issue.sendProgress || issue.workflow) && (
+          <div className="mb-4 sm:mb-6">
+            <FadeIn variant="fade" speed="normal">
+              <AsyncErrorBoundary onRetry={loadIssue}>
+                <SendProgressCard
+                  sendProgress={issue.sendProgress}
+                  workflow={issue.workflow}
+                />
+              </AsyncErrorBoundary>
+            </FadeIn>
+          </div>
         )}
 
         {/* A/B Test Results Panel - Show whenever the issue has a managed A/B test */}

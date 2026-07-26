@@ -707,6 +707,7 @@
     },
     "Mark JSON Issue Published": {
       "Type": "Task",
+      "Comment": "Conditional on the issue not being mid local-send. Publish hands off to send-email-v2 asynchronously, so a local-send fan-out may already have moved the issue to 'sending' - deliveries continue for hours after this state runs, and overwriting that with 'published' would report the issue as fully sent while most subscribers are still waiting. The fan-out owns the final transition in that case.",
       "Resource": "${DynamodbUpdateItem}",
       "Parameters": {
         "TableName": "${TableName}",
@@ -719,6 +720,7 @@
           }
         },
         "UpdateExpression": "SET #status = :status, publishedAt = :publishedAt",
+        "ConditionExpression": "#status <> :sending",
         "ExpressionAttributeNames": {
           "#status": "status"
         },
@@ -726,11 +728,24 @@
           ":status": {
             "S": "published"
           },
+          ":sending": {
+            "S": "sending"
+          },
           ":publishedAt": {
             "S.$": "$$.State.EnteredTime"
           }
         }
       },
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "DynamoDB.ConditionalCheckFailedException"
+          ],
+          "Comment": "Already 'sending' - the local-send fan-out will publish when the last group lands.",
+          "Next": "Notify of JSON Success",
+          "ResultPath": null
+        }
+      ],
       "ResultPath": null,
       "Next": "Notify of JSON Success"
     },
@@ -806,6 +821,7 @@
     },
     "Update Issue Record - Success": {
       "Type": "Task",
+      "Comment": "Conditional on the issue not being mid local-send. Publish hands off to send-email-v2 asynchronously, so a local-send fan-out may already have moved the issue to 'sending' - deliveries continue for hours after this state runs, and overwriting that with 'published' would report the issue as fully sent while most subscribers are still waiting. The fan-out owns the final transition in that case.",
       "Resource": "${DynamodbUpdateItem}",
       "Parameters": {
         "TableName": "${TableName}",
@@ -818,6 +834,7 @@
           }
         },
         "UpdateExpression": "SET #status = :status, publishedAt = :publishedAt",
+        "ConditionExpression": "#status <> :sending",
         "ExpressionAttributeNames": {
           "#status": "status"
         },
@@ -825,11 +842,24 @@
           ":status": {
             "S": "published"
           },
+          ":sending": {
+            "S": "sending"
+          },
           ":publishedAt": {
             "S.$": "$$.State.EnteredTime"
           }
         }
       },
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "DynamoDB.ConditionalCheckFailedException"
+          ],
+          "Comment": "Already 'sending' - the local-send fan-out will publish when the last group lands.",
+          "Next": "Generate Social Copy",
+          "ResultPath": null
+        }
+      ],
       "ResultPath": null,
       "Next": "Generate Social Copy"
     },

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
+use super::send_progress;
 use super::settings::{self, TenantSettings};
 
 // Request/Response types for list issues endpoint
@@ -182,6 +183,14 @@ pub struct GetIssueResponse {
     local_send: Option<serde_json::Value>,
     #[serde(rename = "contentAssembly", skip_serializing_if = "Option::is_none")]
     content_assembly: Option<serde_json::Value>,
+    /// Group-by-group delivery state for a local send. Present from fan-out
+    /// until the last group lands, and afterwards as a record of what happened.
+    #[serde(rename = "sendProgress", skip_serializing_if = "Option::is_none")]
+    send_progress: Option<send_progress::SendProgressResponse>,
+    /// Where the publish workflow is. Only filled when there is no send
+    /// progress to report — before fan-out, or when the workflow failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workflow: Option<send_progress::WorkflowState>,
 }
 
 // Per-variant engagement counters for an A/B test.
@@ -352,6 +361,9 @@ pub struct IssueRecord {
     pub ab_test: Option<serde_json::Value>,
     pub local_send: Option<serde_json::Value>,
     pub content_assembly: Option<serde_json::Value>,
+    /// ARN of the publish workflow execution, recorded when the issue is
+    /// scheduled so its state can be reported back without guessing.
+    pub execution_arn: Option<String>,
 }
 
 #[derive(Debug)]
@@ -507,9 +519,51 @@ async fn handle_get_issue(
         Vec::new()
     };
 
-    let response_data = build_issue_response(issue, stats, insights, variant_stats);
+    let send_progress = send_progress::get_send_progress(&tenant_id, issue.issue_number).await;
+    let workflow = get_workflow_state_for(&issue, send_progress.is_some()).await;
+
+    let response_data = build_issue_response(
+        issue,
+        stats,
+        insights,
+        variant_stats,
+        send_progress,
+        workflow,
+    );
 
     response::format_response(200, response_data)
+}
+
+/// Ask Step Functions where the publish workflow is, but only when that is the
+/// only thing that can explain the issue's state.
+///
+/// Once a local send has fanned out, the progress record is both more detailed
+/// and more durable than the execution (Step Functions retains history for 90
+/// days), so it wins. This fills two gaps the record cannot: an issue waiting
+/// for a future send time, and an issue whose workflow failed.
+async fn get_workflow_state_for(
+    issue: &IssueRecord,
+    has_send_progress: bool,
+) -> Option<send_progress::WorkflowState> {
+    if has_send_progress {
+        return None;
+    }
+    if !matches!(
+        issue.status.as_str(),
+        "scheduled" | "in progress" | "failed"
+    ) {
+        return None;
+    }
+
+    let execution_arn = issue.execution_arn.as_deref()?;
+    let scheduled_in_future = issue
+        .scheduled_at
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|parsed| parsed.with_timezone(&chrono::Utc) > chrono::Utc::now())
+        .unwrap_or(false);
+
+    send_progress::get_workflow_state(execution_arn, scheduled_in_future).await
 }
 
 async fn handle_rebuild_issue_analytics(
@@ -687,7 +741,9 @@ async fn handle_declare_ab_winner(
         .flatten();
     let variant_stats = get_variant_stats(&tenant_id, &issue_id).await;
 
-    let response_data = build_issue_response(updated, stats, insights, variant_stats);
+    // An A/B test and a local send are mutually exclusive, so an issue reaching
+    // here never has send progress to report.
+    let response_data = build_issue_response(updated, stats, insights, variant_stats, None, None);
     response::format_response(200, response_data)
 }
 
@@ -2141,7 +2197,17 @@ fn validate_list_params(query: &ListIssuesQuery) -> Result<(), AppError> {
     }
 
     if let Some(status) = &query.status {
-        let valid_statuses = ["draft", "scheduled", "published", "failed"];
+        // "sending" is a local-send issue whose groups are still going out.
+        // "in progress" was missing despite the dashboard offering it as a
+        // filter, so selecting it returned a 400.
+        let valid_statuses = [
+            "draft",
+            "scheduled",
+            "in progress",
+            "sending",
+            "published",
+            "failed",
+        ];
         if !valid_statuses.contains(&status.as_str()) {
             return Err(AppError::BadRequest(format!(
                 "Invalid status. Must be one of: {}",
@@ -2966,6 +3032,11 @@ fn parse_issue_record(item: &HashMap<String, AttributeValue>) -> Result<IssueRec
         }
     });
 
+    let execution_arn = item
+        .get("executionArn")
+        .and_then(|v| v.as_s().ok())
+        .map(|s| s.to_string());
+
     Ok(IssueRecord {
         pk,
         sk,
@@ -2985,6 +3056,7 @@ fn parse_issue_record(item: &HashMap<String, AttributeValue>) -> Result<IssueRec
         ab_test,
         local_send,
         content_assembly,
+        execution_arn,
     })
 }
 
@@ -3684,7 +3756,7 @@ async fn start_issue_schedule(input: IssueScheduleInput<'_>) -> Result<(), AppEr
         input["futureDate"] = serde_json::Value::String(scheduled_at.to_string());
     }
 
-    sfn_client
+    let execution = sfn_client
         .start_execution()
         .state_machine_arn(state_machine_arn)
         .input(input.to_string())
@@ -3692,7 +3764,35 @@ async fn start_issue_schedule(input: IssueScheduleInput<'_>) -> Result<(), AppEr
         .await
         .map_err(|e| AppError::AwsError(format!("Failed to start schedule workflow: {}", e)))?;
 
+    record_execution_arn(tenant_id, issue_number, execution.execution_arn()).await;
+
     Ok(())
+}
+
+/// Store the publish workflow's execution ARN on the issue record so its state
+/// can be reported later. Best-effort: the issue is already scheduled by this
+/// point, and losing the ARN costs visibility, not the send.
+async fn record_execution_arn(tenant_id: &str, issue_number: i32, execution_arn: &str) {
+    let Ok(table_name) = std::env::var("TABLE_NAME") else {
+        return;
+    };
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+
+    if let Err(error) = ddb_client
+        .update_item()
+        .table_name(&table_name)
+        .key(
+            "pk",
+            AttributeValue::S(format!("{tenant_id}#{issue_number}")),
+        )
+        .key("sk", AttributeValue::S("newsletter".to_string()))
+        .update_expression("SET executionArn = :arn")
+        .expression_attribute_values(":arn", AttributeValue::S(execution_arn.to_string()))
+        .send()
+        .await
+    {
+        tracing::warn!("Failed to record publish execution ARN: {error}");
+    }
 }
 
 /// Creates a one-time EventBridge schedule that deletes the draft once its
@@ -4153,11 +4253,16 @@ async fn update_issue_record(
         Vec::new()
     };
 
+    let progress = send_progress::get_send_progress(tenant_id, updated_issue.issue_number).await;
+    let workflow = get_workflow_state_for(&updated_issue, progress.is_some()).await;
+
     Ok(build_issue_response(
         updated_issue,
         stats,
         insights,
         variant_stats,
+        progress,
+        workflow,
     ))
 }
 
@@ -4346,6 +4451,8 @@ fn build_issue_response(
     stats: Option<IssueStats>,
     insights: Option<IssueInsights>,
     variant_stats: Vec<VariantStats>,
+    send_progress: Option<send_progress::SendProgressResponse>,
+    workflow: Option<send_progress::WorkflowState>,
 ) -> GetIssueResponse {
     GetIssueResponse {
         id: issue.issue_number.to_string(),
@@ -4371,6 +4478,8 @@ fn build_issue_response(
         },
         local_send: issue.local_send,
         content_assembly: issue.content_assembly,
+        send_progress,
+        workflow,
     }
 }
 
@@ -5664,6 +5773,7 @@ Thanks!"#;
             ab_test: None,
             local_send: None,
             content_assembly: None,
+            execution_arn: None,
         };
 
         let stats = Some(IssueStats {
@@ -5680,7 +5790,7 @@ Thanks!"#;
             analytics: None,
         });
 
-        let response = build_issue_response(issue, stats, None, Vec::new());
+        let response = build_issue_response(issue, stats, None, Vec::new(), None, None);
 
         assert_eq!(response.id, "42");
         assert_eq!(response.issue_number, 42);
@@ -5711,9 +5821,10 @@ Thanks!"#;
             ab_test: None,
             local_send: None,
             content_assembly: None,
+            execution_arn: None,
         };
 
-        let response = build_issue_response(issue, None, None, Vec::new());
+        let response = build_issue_response(issue, None, None, Vec::new(), None, None);
 
         assert_eq!(response.id, "1");
         assert_eq!(response.issue_number, 1);
@@ -6125,6 +6236,7 @@ Thanks!"#;
             ab_test: None,
             local_send: None,
             content_assembly: None,
+            execution_arn: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -6152,6 +6264,7 @@ Thanks!"#;
             ab_test: None,
             local_send: None,
             content_assembly: None,
+            execution_arn: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -6180,6 +6293,7 @@ Thanks!"#;
             ab_test: None,
             local_send: None,
             content_assembly: None,
+            execution_arn: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -6208,6 +6322,7 @@ Thanks!"#;
             ab_test: None,
             local_send: None,
             content_assembly: None,
+            execution_arn: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -6235,6 +6350,7 @@ Thanks!"#;
             ab_test: None,
             local_send: None,
             content_assembly: None,
+            execution_arn: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -6263,6 +6379,7 @@ Thanks!"#;
             ab_test: None,
             local_send: None,
             content_assembly: None,
+            execution_arn: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -6291,6 +6408,7 @@ Thanks!"#;
             ab_test: None,
             local_send: None,
             content_assembly: None,
+            execution_arn: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -6856,6 +6974,8 @@ Thanks!"#;
             content_assembly: None,
             variant_stats: None,
             local_send: None,
+            send_progress: None,
+            workflow: None,
         };
 
         let result = publish_event(tenant_id, event_type, &data).await;
@@ -6885,6 +7005,7 @@ Thanks!"#;
             ab_test: None,
             local_send: None,
             content_assembly: None,
+            execution_arn: None,
         };
 
         let result = publish_event(tenant_id, event_type, &data).await;

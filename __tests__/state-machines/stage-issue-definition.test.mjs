@@ -44,14 +44,14 @@ const STATE_MACHINE_RESOURCE = 'StageIssueStateMachine';
 // unchanged: `Update Web Links` became `Extract Links` and moved, it did not
 // multiply.
 const EXPECTED_STATE_COUNTS = {
-  topLevel: 24,
-  total: 28,
-  Choice: 5,
+  topLevel: 26,
+  total: 30,
+  Choice: 6,
   Fail: 1,
   Parallel: 1,
   Pass: 4,
   Succeed: 2,
-  Task: 14,
+  Task: 15,
   Wait: 1
 };
 
@@ -94,17 +94,18 @@ const PREVIEW_STATES = [
 // away from taking their `Catch` branch. Phase 1 gave every one of these a
 // Catch, so the failure is now recorded rather than silent - but the retry gap
 // itself is still open and this list still has to shrink.
+// Every task that runs AFTER the send event has been emitted now retries its
+// transient service errors, which is the point: without a Retry, one throttle
+// falls straight through to the Catch and the failure write relabels an issue
+// that really did send. What is left here runs before the send, or is the
+// failure write itself.
 const TASKS_WITHOUT_RETRY = [
   'Get Existing Issue',
   'Mark Issue In Progress',
   'Notify of Success',
   'Save Issue Record',
-  'Schedule Issue Report',
-  'Schedule List Cleanup',
   'Trigger Site Rebuild',
-  'Update Issue Metadata',
-  'Update Issue Record - Failure',
-  'Update Issue Record - Success'
+  'Update Issue Record - Failure'
 ];
 
 // Phase 1's Catch coverage, pinned exactly: `state -> [catcher, ...]` in Catch
@@ -129,6 +130,7 @@ const EXPECTED_CATCH_ROUTES = {
   // it can have - including States.Timeout - continues down the publish path.
   // Degraded personalization is acceptable; a missed issue is not. Pinned here
   // and again in the "cannot block or fail a send" test below.
+  'Claim With Supplied Content': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   'Extract Links': ['States.ALL -> Parse Issue (error discarded)'],
   'Mark Issue In Progress': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   // Post-publish courtesy email: a failure here must not relabel an issue that
@@ -142,7 +144,10 @@ const EXPECTED_CATCH_ROUTES = {
   'Trigger Site Rebuild': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   // The failure writer cannot catch to itself, and there is nothing left to
   // record once recording is what failed.
-  'Update Issue Record - Failure': ['States.ALL -> Fail (error discarded)'],
+  'Update Issue Record - Failure': [
+    'DynamoDB.ConditionalCheckFailedException -> Fail (error discarded)',
+    'States.ALL -> Fail (error discarded)'
+  ],
   'Update Issue Record - Success': [
     'DynamoDB.ConditionalCheckFailedException -> Social Copy Applies? (error discarded)',
     'States.ALL -> Update Issue Record - Failure ($.error)'
@@ -160,12 +165,26 @@ const NON_CATCH_ENTRIES_TO_FAILURE_WRITE = ['Record Publish Rejection'];
 // exception and has to stay the only one - it runs when there is no record to
 // read (import-issue-from-github.mjs starts executions for issues the API has
 // never seen), so the input is the only place its content can come from.
-const CONTENT_FROM_EXECUTION_INPUT = ['Save Issue Record'];
+// Two states, both on the producer-supplied side of the content fork, and that
+// has to stay the boundary: an execution started by import-issue-from-github.mjs
+// carries the file body it was started for, and that body must win over whatever
+// the draft record happens to hold. Everything else reads the record.
+// `Content Supplied By Producer?` only tests the field for presence; the other
+// two read the body itself.
+const CONTENT_FROM_EXECUTION_INPUT = [
+  'Claim With Supplied Content',
+  'Content Supplied By Producer?',
+  'Save Issue Record'
+];
 
 // The two states that bind the content variables, one per side of the
 // `Has Issue Been Processed?` fork. Pinned because a third binder would mean a
 // third answer to "what is this execution publishing".
-const CONTENT_BINDERS = ['Mark Issue In Progress', 'Save Issue Record'];
+const CONTENT_BINDERS = [
+  'Claim With Supplied Content',
+  'Mark Issue In Progress',
+  'Save Issue Record'
+];
 
 // Phase 4's two states of interest, and the ceiling on what link classification
 // is allowed to add to a send. The function's own Lambda timeout is 60s
@@ -173,6 +192,9 @@ const CONTENT_BINDERS = ['Mark Issue In Progress', 'Save Issue Record'];
 // has to sit just above it to be a backstop rather than a second, tighter limit -
 // but it must stay bounded and small, because every second of it is a second the
 // issue is late.
+// The fork that decides where an execution's content comes from.
+const CONTENT_FORK = 'Content Supplied By Producer?';
+
 const LINK_EXTRACTION = 'Extract Links';
 const PUBLISH = 'Publish';
 const MAX_LINK_EXTRACTION_TIMEOUT_SECONDS = 90;
@@ -916,12 +938,47 @@ describe('stage-issue definition: identifiers, not content', () => {
   // succeed without sending.
   it('treats a scheduled record as still to be sent', () => {
     const { state } = allStates.find(({ name }) => name === 'Has Issue Been Processed?');
-    const sendable = state.Choices.filter((choice) => choice.Next === 'Mark Issue In Progress');
+    const sendable = state.Choices.filter((choice) => choice.Next === CONTENT_FORK);
 
     const statuses = JSON.stringify(sendable);
     expect(statuses).toContain('"StringEquals":"draft"');
     expect(statuses).toContain('"StringEquals":"scheduled"');
     expect(state.Default).toBe('Success - Duplicate Request');
+  });
+
+  // A re-staged `failed` issue must NOT go to `Save Issue Record`. That state
+  // reads `$$.Execution.Input.content`, which the API stopped sending in Phase 5,
+  // and an absent path raises States.Runtime - neither retriable nor catchable,
+  // so `States.ALL` does not save it. Re-staging a failed API issue used to kill
+  // the execution outright and leave the record at `failed` with nothing
+  // recorded. Its record exists and holds the content, so it takes the fork.
+  it('re-stages a failed issue from its record, not from the execution input', () => {
+    const { state } = allStates.find(({ name }) => name === 'Has Issue Been Processed?');
+    const failedEdge = state.Choices.find((choice) =>
+      JSON.stringify(choice).includes('"StringEquals":"failed"')
+    );
+
+    expect(failedEdge?.Next).toBe(CONTENT_FORK);
+  });
+
+  // Which producer started the execution decides where the content comes from,
+  // and only the input can say: import-issue-from-github.mjs sends the file body
+  // it was started for, the API sends identifiers. Routing on record status
+  // instead would publish whatever the last draft push stored - silently - for
+  // every GitHub-imported issue, because that flow re-stages a draft on every
+  // push and then starts an execution carrying the file.
+  it('routes on who supplied the content, not on the record status', () => {
+    const { state } = allStates.find(({ name }) => name === CONTENT_FORK);
+
+    expect(state.Type).toBe('Choice');
+    expect(state.Choices).toHaveLength(1);
+    expect(state.Choices[0]).toMatchObject({
+      Variable: '$$.Execution.Input.content',
+      IsPresent: true,
+      Next: 'Claim With Supplied Content'
+    });
+    // Absent content is the API, which reads the record.
+    expect(state.Default).toBe('Mark Issue In Progress');
   });
 
   // The API cannot record the ARN of an execution it did not start, and
@@ -1104,5 +1161,95 @@ describe('stage-issue definition: state counts', () => {
     // file ambiguous.
     const duplicates = stateNames.filter((name, index) => stateNames.indexOf(name) !== index).sort();
     expect(duplicates).toEqual([]);
+  });
+});
+
+describe('stage-issue definition: no status write may lie about a send', () => {
+  // The regression this exists to prevent, in full, because it is subtle and it
+  // shipped once already:
+  //
+  // `Publish` hands off to send-email-v2 asynchronously. For a local-send issue
+  // the fan-out then moves the record to `sending` and owns the transition to
+  // `published`, which it makes conditionally (`from: ['sending']` in
+  // functions/utils/send-progress.mjs). So any state that runs after `Publish`
+  // and writes `status` unconditionally can overwrite `sending` - and once it
+  // does, the fan-out's conditional write never matches again. The issue is
+  // stranded, the API reports "This issue was not sent" while deliveries run for
+  // hours, and because `Has Issue Been Processed?` treats `failed` as sendable,
+  // re-staging it sends the issue a second time.
+  //
+  // Phase 1 introduced exactly this by giving the post-publish states a Catch
+  // that routed to an unconditional failure write. Nothing else in this file
+  // would have caught it: the Catch coverage test asserts the edge EXISTS.
+
+  /** States reachable from `Publish` by any transition, excluding Publish itself. */
+  const reachableAfterPublish = () => {
+    const byName = new Map(allStates.map(({ name, state }) => [name, state]));
+    const seen = new Set();
+    const queue = [...transitionTargets(byName.get(PUBLISH))];
+
+    while (queue.length > 0) {
+      const name = queue.shift();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      const state = byName.get(name);
+      if (!state) continue;
+      queue.push(...transitionTargets(state));
+      // A Parallel's branches run as part of reaching it.
+      for (const key of NESTED_KEYS) {
+        for (const branch of state[key] ?? []) {
+          queue.push(branch.StartAt, ...Object.keys(branch.States ?? {}));
+        }
+      }
+    }
+    return seen;
+  };
+
+  /** Tasks that SET the newsletter record's status attribute. */
+  const statusWriters = () =>
+    allStates.filter(({ state }) => {
+      const update = state.Parameters?.UpdateExpression;
+      const names = state.Parameters?.ExpressionAttributeNames ?? {};
+      if (typeof update !== 'string') return false;
+      return /SET .*#status\b/.test(update) && names['#status'] === 'status';
+    });
+
+  it('guards every status write that can run after the send event', () => {
+    const afterPublish = reachableAfterPublish();
+
+    const unguarded = statusWriters()
+      .filter(({ name }) => afterPublish.has(name))
+      .filter(({ state }) => {
+        const condition = state.Parameters?.ConditionExpression ?? '';
+        return !/#status\s*<>\s*:sending/.test(condition);
+      })
+      .map(({ name }) => name);
+
+    expect(unguarded).toEqual([]);
+  });
+
+  it('leaves the guard refusable rather than fatal', () => {
+    // A refused condition must be caught, or the guard turns a recoverable
+    // mislabelling into a hard execution failure with nothing recorded.
+    for (const { name, state } of statusWriters()) {
+      const condition = state.Parameters?.ConditionExpression ?? '';
+      if (!/#status\s*<>\s*:sending/.test(condition)) continue;
+
+      const catchers = describeCatchers(state);
+      expect(catchers[0]).toMatch(/^DynamoDB\.ConditionalCheckFailedException/);
+      expect(name).toBeTruthy();
+    }
+  });
+
+  it('never retries a refused condition', () => {
+    // ConditionalCheckFailedException is an answer, not a fault. Retrying it
+    // delays the pipeline and, on the success write, delays the local-send
+    // handoff by the whole backoff window.
+    for (const { state } of statusWriters()) {
+      for (const retrier of state.Retry ?? []) {
+        expect(retrier.ErrorEquals).not.toContain('DynamoDB.ConditionalCheckFailedException');
+        expect(retrier.ErrorEquals).not.toContain('States.ALL');
+      }
+    }
   });
 });

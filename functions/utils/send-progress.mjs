@@ -315,10 +315,11 @@ const updateWithRetry = async (input, attempts = 3) => {
  * @param {string} params.status - Status to set
  * @param {string[]} params.from - Statuses this transition is valid from
  * @param {boolean} [params.stampPublishedAt] - Also set publishedAt if unset
- * @returns {Promise<boolean>} Whether the record ended up in a settled state -
- *   true when the write landed, and also when the condition refused it, since
- *   a refusal means something else already owns the status. False only for a
- *   failure that leaves the transition genuinely outstanding.
+ * @returns {Promise<boolean>} Whether the record is in the requested status -
+ *   true when the write landed, or when the condition refused it BECAUSE the
+ *   record already reads that status. A refusal for any other reason is false:
+ *   the transition is genuinely outstanding and the caller must not treat the
+ *   issue as settled.
  */
 const setIssueStatus = async (issueId, { status, from, stampPublishedAt = false }) => {
   const names = { '#status': 'status' };
@@ -342,13 +343,35 @@ const setIssueStatus = async (issueId, { status, from, stampPublishedAt = false 
       UpdateExpression: updateExpression,
       ConditionExpression: `#status IN (${from.map((_, index) => `:from${index}`).join(', ')})`,
       ExpressionAttributeNames: names,
-      ExpressionAttributeValues: marshall(values)
+      ExpressionAttributeValues: marshall(values),
+      // The refusal has to be interpretable, not just counted. Asking for the
+      // item back on a condition failure is what lets the caller tell "already
+      // there" from "somewhere else entirely" without a second read that could
+      // observe a third state.
+      ReturnValuesOnConditionCheckFailure: 'ALL_OLD'
     });
     return true;
   } catch (error) {
     if (error.name === 'ConditionalCheckFailedException') {
-      console.log('[PROGRESS] Status transition not applicable, leaving unchanged', { issueId, status });
-      return true;
+      // A refusal is not the same as being settled. The transition can lose a
+      // race to the state machine's failure write, and treating the resulting
+      // `failed` as success is how an issue ends up permanently `failed` with
+      // its delivery complete - and eligible for a duplicate re-stage, since a
+      // failed record is sendable. Only the record already reading the status
+      // we asked for counts as settled.
+      const current = error.Item ? unmarshall(error.Item).status : undefined;
+      if (current === status) {
+        console.log('[PROGRESS] Status already set, nothing to do', { issueId, status });
+        return true;
+      }
+
+      console.error('[PROGRESS] Status transition refused by an unexpected status', {
+        issueId,
+        wanted: status,
+        current: current ?? 'unknown',
+        allowedFrom: from
+      });
+      return false;
     }
     console.error('[PROGRESS] Failed to set issue status', { issueId, status, error: error.message });
     return false;

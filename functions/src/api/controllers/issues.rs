@@ -2151,6 +2151,12 @@ async fn handle_update_issue(
             content_assembly,
             clear_content_assembly,
         },
+        // Unscheduling is the one update racing something that can change the
+        // record underneath it: the schedule may fire between the status read
+        // above and this write. Deleting an entry that already fired succeeds
+        // (or reports not-found, which this path tolerates), so the delete
+        // cannot tell us whether the send started - only the record can.
+        is_unscheduling.then_some("scheduled"),
     )
     .await?;
 
@@ -4412,6 +4418,10 @@ async fn update_issue_record(
     issue_id: &str,
     body: &UpdateIssueRequest,
     send_config: SendConfigUpdate,
+    // `expected_status`: the status the record must still hold for this write
+    // to apply. Set it whenever the caller's authorization to make the change
+    // depends on the status it read a moment ago; a refusal surfaces as a 409.
+    expected_status: Option<&str>,
 ) -> Result<GetIssueResponse, AppError> {
     let SendConfigUpdate {
         ab_test,
@@ -4552,6 +4562,24 @@ async fn update_issue_record(
         .update_expression(update_expression)
         .return_values(aws_sdk_dynamodb::types::ReturnValue::AllNew);
 
+    // The caller read the record before deciding this update was allowed, and
+    // for unscheduling that gap is a race against the send itself: the
+    // ISSUE-SEND entry can fire in between, at which point the execution has
+    // claimed the issue as `in progress` and is publishing it. Without this
+    // condition the write would put the record back to `draft` anyway - the
+    // operator sees a cancelled draft while the newsletter goes out, and
+    // because the state machine treats `draft` as sendable, re-staging it sends
+    // a second time.
+    if let Some(expected) = expected_status {
+        update_builder = update_builder
+            .condition_expression("#currentStatus = :expectedStatus")
+            .expression_attribute_names("#currentStatus", "status")
+            .expression_attribute_values(
+                ":expectedStatus",
+                AttributeValue::S(expected.to_string()),
+            );
+    }
+
     for (key, value) in expression_attribute_values {
         update_builder = update_builder.expression_attribute_values(key, value);
     }
@@ -4560,7 +4588,20 @@ async fn update_issue_record(
         update_builder = update_builder.expression_attribute_names(key, value);
     }
 
-    let result = update_builder.send().await?;
+    let result = update_builder.send().await.map_err(|error| {
+        if expected_status.is_some()
+            && error
+                .as_service_error()
+                .is_some_and(|service| service.is_conditional_check_failed_exception())
+        {
+            return AppError::Conflict(
+                "The issue changed while this update was in flight - it is no longer in the state \
+                 this change was allowed from. Re-read the issue before retrying."
+                    .to_string(),
+            );
+        }
+        AppError::from(error)
+    })?;
 
     let updated_item = result
         .attributes()

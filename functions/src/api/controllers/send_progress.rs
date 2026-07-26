@@ -331,14 +331,23 @@ pub fn describe_execution_status(
             message: "Publishing now.".to_string(),
             detail: None,
         }),
+        // Deliberately does not claim the issue went unsent. A failure can
+        // happen after `Publish` has already emitted the send event - the
+        // scheduling parallel and the hard-failure catcher on the success write
+        // both terminate the execution as FAILED from downstream of it. Saying
+        // "not sent" there would be false, and the natural response to it is to
+        // re-stage, which sends the issue twice.
         "FAILED" => Some(WorkflowState {
             state: "failed".to_string(),
-            message: "The publish workflow failed. This issue was not sent.".to_string(),
+            message: "The publish workflow failed. It may have failed after the send was handed \
+                      off - check delivery before re-staging this issue."
+                .to_string(),
             detail: cause.map(|value| value.to_string()),
         }),
         "TIMED_OUT" => Some(WorkflowState {
             state: "failed".to_string(),
-            message: "The publish workflow timed out. This issue may not have been sent."
+            message: "The publish workflow timed out. It may have timed out after the send was \
+                      handed off - check delivery before re-staging this issue."
                 .to_string(),
             detail: cause.map(|value| value.to_string()),
         }),
@@ -752,7 +761,6 @@ mod tests {
 
         let failed = describe_execution_status("FAILED", Some("States.Runtime"), false).unwrap();
         assert_eq!(failed.state, "failed");
-        assert!(failed.message.contains("was not sent"));
         assert_eq!(failed.detail.as_deref(), Some("States.Runtime"));
 
         let timed_out = describe_execution_status("TIMED_OUT", None, false).unwrap();
@@ -760,6 +768,28 @@ mod tests {
 
         let aborted = describe_execution_status("ABORTED", None, false).unwrap();
         assert_eq!(aborted.state, "stopped");
+    }
+
+    #[test]
+    fn never_claims_a_failed_workflow_sent_nothing() {
+        // A failure downstream of `Publish` still terminates the execution as
+        // FAILED, and the send event has already gone out by then. Telling an
+        // operator the issue was not sent invites a re-stage, which sends it
+        // twice - so the wording has to leave the question open.
+        for status in ["FAILED", "TIMED_OUT"] {
+            let state = describe_execution_status(status, None, false).unwrap();
+
+            assert!(
+                !state.message.contains("was not sent"),
+                "{status} asserted the issue went unsent: {}",
+                state.message
+            );
+            assert!(
+                state.message.contains("check delivery"),
+                "{status} did not tell the operator to check: {}",
+                state.message
+            );
+        }
     }
 
     #[test]

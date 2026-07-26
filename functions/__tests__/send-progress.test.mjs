@@ -17,9 +17,13 @@ let SEND_PROGRESS_SK;
 let items; // Map of `${pk}|${sk}` -> unmarshalled item
 
 class ConditionalCheckFailedException extends Error {
-  constructor() {
+  constructor(item) {
     super('The conditional request failed');
     this.name = 'ConditionalCheckFailedException';
+    // DynamoDB returns the current item alongside the error when the request
+    // asks for it, which is how callers tell "already there" from "somewhere
+    // else entirely".
+    if (item) this.Item = marshall(item);
   }
 }
 
@@ -53,7 +57,7 @@ const checkCondition = (condition, item, values, names) => {
   const inMatch = resolved.match(/^status IN \((.+)\)$/);
   if (inMatch) {
     const allowed = inMatch[1].split(',').map((token) => values[token.trim()]);
-    if (!allowed.includes(item?.status)) throw new ConditionalCheckFailedException();
+    if (!allowed.includes(item?.status)) throw new ConditionalCheckFailedException(item);
     return;
   }
 
@@ -441,5 +445,36 @@ describe('markGroupSent', () => {
 
     // One attempt against a group that exists, and no repeats.
     expect(attempts).toHaveLength(1);
+  });
+  test('a refusal against an unexpected status is not treated as settled', async () => {
+    // The transition can lose a race to the state machine's failure write.
+    // Treating the resulting 'failed' as success would strand the issue there
+    // with its delivery complete - and a failed record is sendable, so a
+    // re-stage would send it a second time.
+    await markGroupSent(ISSUE_ID, 'America/Chicago', { recipients: 38 });
+    await markGroupSent(ISSUE_ID, 'America/Los_Angeles', { recipients: 12 });
+    await markGroupSent(ISSUE_ID, '__default__', { recipients: 100 });
+
+    items.get(issueKey()).status = 'failed';
+
+    await markGroupSent(ISSUE_ID, '__catch_all__', { recipients: 0 });
+
+    expect(items.get(issueKey()).status).toBe('failed');
+    // Completion must stay unstamped so the mismatch is still repairable.
+    expect(items.get(progressKey()).completedAt).toBeUndefined();
+  });
+
+  test('a refusal because the status is already the target counts as settled', async () => {
+    await markGroupSent(ISSUE_ID, 'America/Chicago', { recipients: 38 });
+    await markGroupSent(ISSUE_ID, 'America/Los_Angeles', { recipients: 12 });
+    await markGroupSent(ISSUE_ID, '__default__', { recipients: 100 });
+
+    // The state machine got there first - a legitimate outcome, not a conflict.
+    items.get(issueKey()).status = 'published';
+
+    await markGroupSent(ISSUE_ID, '__catch_all__', { recipients: 0 });
+
+    expect(items.get(issueKey()).status).toBe('published');
+    expect(items.get(progressKey()).completedAt).toBeDefined();
   });
 });

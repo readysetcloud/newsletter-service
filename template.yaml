@@ -2488,6 +2488,19 @@ Resources:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           SECRET_ID: "{{resolve:ssm:/readysetcloud/secrets}}"
           STATE_MACHINE_ARN: !Ref StageIssueStateMachine
+          # NO LONGER A GUARD - READ BEFORE DEPLOYING TO SANDBOX OR STAGE.
+          # This made every non-production GitHub import a preview: the importer
+          # put `isPreview: true` on the execution input and the state machine
+          # sent one [Preview] email to the tenant, with no list send, no
+          # Scheduler entries and no `published` write. Phase 2 of
+          # docs/stage-issue-simplification-plan.md deleted those preview states
+          # on the premise that nothing set the field, and its gate (PR #358,
+          # which deletes this whole function) is still open - so the premise is
+          # wrong and the flag now does nothing. A GitHub import in sandbox or
+          # stage runs the real publish path and really sends to that stack's
+          # subscriber list. Production is unaffected; it never set this.
+          # Resolve it deliberately: merge #358, restore a preview mechanism for
+          # this ingress, or accept the real send and delete this variable.
           IS_PREVIEW: !If [DeployStageResources, true, false]
       Events:
         AmplifyBuildSuccessful:

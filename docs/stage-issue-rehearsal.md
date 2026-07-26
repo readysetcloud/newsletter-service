@@ -66,7 +66,7 @@ Requirements either way:
   is a real send to real people.
 - **Reserve an issue-number band for rehearsals — 9000 and up.** The stats
   Scheduler entry is named `ISSUE-STATS-<issueId>` with *no tenant prefix*
-  (`state-machines/stage-issue.asl.json:407`) and lives in the shared
+  (`state-machines/stage-issue.asl.json:437`) and lives in the shared
   `newsletter` schedule group, so a rehearsal that reuses a live issue number
   collides with that issue's real entry and `CreateSchedule` fails mid-run.
 - **Use a fresh issue number for every rehearsal.** `update-link-tracking` skips
@@ -111,9 +111,10 @@ Notes:
 
 - **The frontmatter `date` is the send instant for a markdown issue, and it is
   what the two Scheduler dates hang off** — not the API's `scheduledAt`, and not
-  the `Wait` state. `parse-md-to-json` resolves it through `resolveSendInstant`
-  (`functions/parse-md-to-json.mjs:59`) and derives `listCleanupDate` /
-  `reportStatsDate` from it (`functions/parse-md-to-json.mjs:137-145`).
+  the `ISSUE-SEND-*` entry that starts the workflow. `parse-md-to-json` resolves
+  it through `resolveSendInstant` (`functions/parse-md-to-json.mjs:60`) and
+  derives `listCleanupDate` / `reportStatsDate` from it
+  (`functions/parse-md-to-json.mjs:143-147`).
   **Bump it to the rehearsal day on every run.** A stale date degrades
   `sendAtDate` to `'now'` and anchors both Scheduler entries in the past, which
   is exactly the silent failure verification 4 is looking for.
@@ -202,7 +203,14 @@ Have these to hand; every command below uses them.
 | `TENANT` | the rehearsal tenant id |
 | `API` / `TOKEN` | `DashboardApi` base URL and a Cognito token for the tenant |
 
-Scheduler entries all live in the `newsletter` schedule group.
+Scheduler entries all live in the `newsletter` schedule group. Since Phase 5
+there are **three** kinds, and only the first can send an issue:
+
+| Prefix | Created by | Fires |
+|---|---|---|
+| `ISSUE-SEND-<tenant>-<issue>` | the API, when an issue is scheduled | at the send instant − `IssueSendLeadTimeMinutes`; **starts the workflow** |
+| `ISSUE-STATS-<issue>` | the workflow | send +5 days |
+| `<tenant>-CLEAN-<issue>` | the workflow | send +3 days |
 
 ---
 
@@ -215,7 +223,7 @@ changing send-path code before then alters an in-flight send.
 
 | When | Safe to deploy |
 |---|---|
-| Fri (staging) → Mon 09:00 | **Nothing.** An issue is parked in `Wait`. |
+| Fri (staging) → Mon 09:00 | **Nothing.** A send is pending — since Phase 5 as an `ISSUE-SEND-*` Scheduler entry rather than an execution parked in `Wait`. See the pre-deploy check: what is at risk in this window changed with it. |
 | Mon ~09:05 → ~16:00 | **State machine definition only.** Local-send groups and the catch-all sweep are still firing. |
 | Mon ~16:00 → Thu | **Everything** — definition, Lambdas, resources, in one deploy. |
 | Fri | **Nothing.** Friday is staging day. |
@@ -234,12 +242,31 @@ nothing running. **Confirm rather than assume, every time:**
 ```
 aws stepfunctions list-executions \
   --state-machine-arn "$STAGE_ISSUE_ARN" --status-filter RUNNING
+
+aws scheduler list-schedules --group-name newsletter \
+  --name-prefix ISSUE-SEND- --query 'Schedules[].{n:Name,t:Target.Arn}'
 ```
 
-An empty `executions` array is the green light for a single-deploy definition +
-resource change. Anything listed means an issue is parked in `Wait` — stop.
+**Both have to be empty**, and the second one is the check Phase 5 added. A
+scheduled issue is no longer a running execution: it is an `ISSUE-SEND-*` entry
+that will *start* one at the send instant, so `list-executions` comes back empty
+all week and says nothing about whether a send is pending. Anything listed by
+either command — stop.
 
-The exception the check cannot cover: **EventBridge Scheduler entries outlive
+What each one puts at risk is different, which is the reason to read both:
+
+- **A running execution** pins the definition it started with, so any resource it
+  still needs has to survive the deploy.
+- **A pending `ISSUE-SEND-*` entry** pins the *execution input the API baked into
+  it when the issue was scheduled*, and it will start that input against
+  **whatever definition is live when it fires**. So the thing to protect in this
+  window is the input contract, not the resource list: a deploy that changes what
+  the definition reads off `$$.Execution.Input` (or removes a state a pending
+  input still steers through) mis-sends the pending issue. Reschedule the issue
+  after such a deploy rather than reasoning about it — `PUT /issues/{id}` with
+  `status: "draft"` deletes the entry, then re-schedule.
+
+The exception neither check covers: **the two post-send Scheduler entries outlive
 their execution by days.** `ISSUE-STATS-<issue>` fires at send +5 days and
 `<tenant>-CLEAN-<issue>` at +3, so the previous issue's entries are outstanding
 mid-window. Do not delete their targets (`ReportStatsStateMachine`, the default
@@ -276,23 +303,44 @@ Per content type, ~15 minutes. Repeat for markdown, json, and html.
    ```
 
    For json: `"contentType": "json"` plus a `templateId` (required). For html:
-   `"contentType": "html"`; the state machine routes both down the same
-   non-markdown path (`state-machines/stage-issue.asl.json:164-191`).
+   `"contentType": "html"`; both take the same path as markdown apart from social
+   copy, and `Route By Content Type`
+   (`state-machines/stage-issue.asl.json:223-250`) is where they diverge.
 
-   Ten minutes is deliberate: long enough to confirm the record sits in the
-   `Wait` state and the execution is parked, short enough that the whole
-   rehearsal fits in one sitting.
+   Ten minutes is deliberate: long enough to confirm the issue is genuinely
+   parked before the send, short enough that the whole rehearsal fits in one
+   sitting.
 
-4. **Grab the execution ARN** — the API stores it on the record as
-   `executionArn` (`functions/src/api/controllers/issues.rs:3773-3790`).
+4. **Confirm the pending send, before the send time.** Since Phase 5 there is
+   nothing to describe yet — the record stays `scheduled` with no `executionArn`,
+   and the workflow does not exist until the `ISSUE-SEND-*` entry starts it.
+   Check both halves:
 
    ```
    aws dynamodb get-item --table-name "$TABLE_NAME" \
      --key "{\"pk\":{\"S\":\"$TENANT#9001\"},\"sk\":{\"S\":\"newsletter\"}}" \
      --query 'Item.{status:status.S,arn:executionArn.S,scheduledAt:scheduledAt.S}'
+
+   aws scheduler get-schedule --group-name newsletter --name "ISSUE-SEND-$TENANT-9001"
    ```
 
-5. **Wait out the send time**, then work the five verifications in order.
+   Expect `status: scheduled`, **no** `executionArn`, and a schedule whose
+   `ScheduleExpression` is `at(<scheduledAt − IssueSendLeadTimeMinutes>)` in UTC
+   targeting `StageIssueStateMachine`. A record already at `in progress` before
+   the send time is the pre-Phase-5 shape and means the API started an execution
+   directly (D5). No schedule but a `scheduled` record is the one unrecoverable
+   combination — the send will never fire and nothing watches for it.
+
+5. **Grab the execution ARN after the send time.** The execution records it
+   itself (`Mark Issue In Progress`), because the API has no ARN for an execution
+   it did not start (`functions/src/api/controllers/issues.rs:4071-4092` is the
+   immediate-publish path only). Re-run the `get-item` above, or:
+
+   ```
+   aws stepfunctions list-executions --state-machine-arn "$STAGE_ISSUE_ARN" --max-items 5
+   ```
+
+6. **Wait out the send time**, then work the five verifications in order.
 
 ---
 
@@ -312,8 +360,7 @@ aws stepfunctions get-execution-history --execution-arn "$ARN" --max-results 100
 
 ```
 Get Existing Issue → Has Issue Been Processed? → Mark Issue In Progress
-  → Is Scheduled In The Future? → Wait For Future Date
-  → Trigger Site Rebuild → Route By Content Type
+  → Is Scheduled In The Future? → Trigger Site Rebuild → Route By Content Type
   → Markdown Extras → Extract Links → Parse Issue → Publish → Publish Success?
   → Schedule Tasks and Update
        branch 0: Schedule Issue Report
@@ -327,8 +374,7 @@ Get Existing Issue → Has Issue Been Processed? → Mark Issue In Progress
 
 ```
 Get Existing Issue → Has Issue Been Processed? → Mark Issue In Progress
-  → Is Scheduled In The Future? → Wait For Future Date
-  → Trigger Site Rebuild → Route By Content Type
+  → Is Scheduled In The Future? → Trigger Site Rebuild → Route By Content Type
   → No Markdown Extras → Extract Links → Parse Issue → Publish → Publish Success?
   → Schedule Tasks and Update
        branch 0: Schedule Issue Report
@@ -337,6 +383,15 @@ Get Existing Issue → Has Issue Been Processed? → Mark Issue In Progress
   → Update Issue Record - Success → Social Copy Applies?
   → Notify of Success → Success
 ```
+
+**`Wait For Future Date` must not appear on either.** Phase 5 moved the waiting
+out of the execution: the API sends no `futureDate`, so
+`Is Scheduled In The Future?` falls through to `Trigger Site Rebuild` and a
+scheduled issue looks exactly like an immediate one from `Get Existing Issue`
+onward. Seeing the `Wait` means the input still carries a `futureDate` — either
+the legacy GitHub ingress produced this execution (it resolves its own
+frontmatter date and still uses the `Wait` deliberately), or the API was rolled
+back to `StartExecution`. On an API-staged rehearsal it is a finding.
 
 Phase 3 collapsed the two tails into one and Phase 4 made link extraction
 shared, so the two sequences now differ in exactly two places — `Markdown Extras`
@@ -351,10 +406,13 @@ Reading notes:
 - **Branch states interleave nondeterministically.** Compare the states inside a
   `Parallel` as a set; only the order *across* the parallel's boundary is
   meaningful.
-- `Mark Issue In Progress` is the expected third state, because the API writes
-  the record as `draft` first (`issues.rs:3988`). `Save Issue Record` instead
-  means the record was absent or `failed`;
-  `Success - Duplicate Request` means the record was already past `draft` and
+- `Mark Issue In Progress` is the expected third state, and it is where the issue
+  content is read: the record is `draft` for an immediate publish and `scheduled`
+  for a scheduled one (`create_issue_record`, `issues.rs:4256`), and both are
+  sendable. `Save Issue Record` instead means the record was absent or `failed`,
+  which for an API-staged issue now fails the execution rather than recovering it
+  — the input carries identifiers only, so there is no content to write.
+  `Success - Duplicate Request` means the record was past those statuses and
   **nothing was sent** — usually a re-run against a used issue number.
 - `Update Issue Record - Failure` must **not** appear on any rehearsal. The
   preview states that used to be listed here alongside it (`Send Preview`,
@@ -397,11 +455,16 @@ aws dynamodb get-item --table-name "$TABLE_NAME" \
   --query 'Item.{status:status.S,publishedAt:publishedAt.S,subject:subject.S,gsi:GSI1PK.S}'
 ```
 
-| Issue | Expected terminal status |
+| Issue | Expected status |
 |---|---|
+| Scheduled, before the send time | `scheduled` — for the whole wait, with no `executionArn` |
 | Ordinary send | `published`, with `publishedAt` set |
 | Local-send issue | `sending` while groups are outstanding, then `published` — see below |
 | Deliberately broken run | `failed` |
+
+The first row is Phase 5's fix for D5 and reads like a stall if you are used to
+the old shape: the record used to claim `in progress` from the moment it was
+staged, for days. `scheduled` until the send instant is now correct.
 
 `in progress` after the execution finished is the wedged-record failure mode
 (D2): the send may or may not have happened, so check the inbox before touching
@@ -452,12 +515,21 @@ Assert on each:
 
 - **markdown:** base is the resolved frontmatter `date`. If the fixture's date
   is stale, both entries land in the *past* and `sendAtDate` is `'now'`.
-- **json / html:** base is the moment `Parse Issue` runs — i.e. just after the
-  `Wait` expires, within seconds of the real send. The state machine does not
+- **json / html:** base is the moment `Parse Issue` runs — i.e. when the
+  execution starts, within seconds of the real send. The state machine does not
   forward `futureDate` to the parse step, so `hasFutureSend` is false and
   `baseDate` is `now` (`functions/parse-json-issue.mjs:52-62`). The dispatcher
   changed nothing here: it forwards the payload it is given and returns the
   parser's values verbatim (`functions/parse-issue.mjs`).
+
+  **This is why `IssueSendLeadTimeMinutes` cannot simply be raised.** For json and
+  html the base instant *is* the execution's start time, so a lead time of `L`
+  moves both entries `L` earlier — and moves the send itself earlier, because
+  `sendAtDate` comes out as `'now'` too. The parameter defaults to `0` and Phase 6
+  has to forward the send instant to `Parse Issue` before it can be raised; see
+  `issue_send_lead_time` in `functions/src/api/controllers/issues.rs`. If a
+  rehearsal runs with a non-zero lead time, verification 4's expected values shift
+  by it and verification 2 will show an email that arrived early.
 
 Compute expectations **in UTC**, because `setDate()` does its arithmetic in the
 runtime's local zone — UTC in Lambda, but your laptop's zone on your laptop,
@@ -603,9 +675,12 @@ Open `/issues/9001`. `GET /issues/{id}` returns `sendProgress` and `workflow`
 (`functions/src/api/controllers/issues.rs:522-530`), and the **"Local send
 delivery"** card renders them (`dashboard-ui/src/components/issues/SendProgressCard.tsx`).
 
-- Before fan-out (still parked in `Wait`) there is no `sendProgress`, so the
-  card shows the **workflow** row instead — `waiting`, from `DescribeExecution`.
-  The two are alternatives, never stacked.
+- Before fan-out there is no `sendProgress`, so the card shows the **workflow**
+  row instead — `waiting`. Before the send time that row is derived from the
+  record (`scheduled` plus a future `scheduledAt`), not from `DescribeExecution`:
+  there is no execution to describe yet, and `get_workflow_state_for` returns
+  `waiting_for_send_time` off the record for exactly that reason
+  (`issues.rs:556-573`). The two are alternatives, never stacked.
 - After fan-out: state `Sending`, `groupsDelivered` / `groupsTotal` climbing,
   one row per group with its scheduled time in the tenant's timezone, and
   `nextSendAt` pointing at the earliest outstanding group.
@@ -653,6 +728,26 @@ aws scheduler list-schedules --group-name newsletter --name-prefix local- \
   --query 'Schedules[].Name'
 ```
 
+**Abandon a rehearsal after step 3 and there is a fourth entry, and it is the only
+one that sends an issue.** An `ISSUE-SEND-*` entry fires whether or not you are
+still watching, and its `ActionAfterCompletion: DELETE` only tidies up after the
+send has gone. Cancel through the API so the record and the schedule stay
+consistent — the API deletes the schedule before writing the record back to
+`draft`, in that order, because the state machine treats a `draft` record as
+sendable:
+
+```
+curl -sS -X PUT "$API/issues/9001" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"status":"draft"}'
+
+aws scheduler list-schedules --group-name newsletter --name-prefix ISSUE-SEND- \
+  --query 'Schedules[].Name'
+```
+
+The second command is the one that has to come back empty. `DELETE /issues/9001`
+does the same thing and removes the record with it.
+
 Any `local-*` entries left over from an aborted local-send rehearsal will fire
 and send again — delete them too.
 
@@ -669,12 +764,15 @@ Copy into the PR and tick per content type.
 Rehearsed on: <date>   Deployment: <sandbox|stage|production>   Issues: 9001-9003
 
 [ ] Pre-deploy: list-executions --status-filter RUNNING was empty
+[ ] Pre-deploy: list-schedules --name-prefix ISSUE-SEND- was empty
 [ ] Tenant list confirmed to contain only the rehearsal address
+[ ] Before the send time: record was `scheduled` with no executionArn
 [ ] markdown: V1 sequence  V2 email  V3 status  V4 scheduler dates  V5 link records
 [ ] json:     V1 sequence  V2 email  V3 status  V4 scheduler dates  V5 link records
 [ ] html:     V1 sequence  V2 email  V3 status  V4 scheduler dates  V5 link records
 [ ] Extract Links forced to time out: send still went, record published
 [ ] local send: sendProgress plan, every group reported, published only after catch-all
 [ ] dashboard "Local send delivery" card matched the record
+[ ] No ISSUE-SEND-* entry left behind (the only leftover that can send)
 [ ] Scheduler entries and rehearsal records cleaned up
 ```

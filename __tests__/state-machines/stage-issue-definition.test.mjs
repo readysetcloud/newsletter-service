@@ -61,16 +61,28 @@ const EXPECTED_STATE_COUNTS = {
 // It was already empty before Phase 2, which is worth recording because the
 // plan expected otherwise: the four dead preview states were *graph*-reachable
 // (`Send email preview?` and `Send JSON Preview?` routed to them whenever
-// `$$.Execution.Input.isPreview` was true) and only semantically dead, because
-// no producer set isPreview. A reachability check could never have flagged
-// them; PREVIEW_STATES below is what holds the line now.
+// `$$.Execution.Input.isPreview` was true), so a reachability check could never
+// have flagged them. PREVIEW_STATES below is what holds the line now.
 const KNOWN_UNREACHABLE_STATES = [];
 
 // The dead preview path Phase 2 deleted, asserted absent. Kept as a named
 // constant rather than dropped entirely so a reintroduced preview branch fails
 // a test instead of quietly re-adding a second publish path to the definition.
 // The live preview mechanism is `send-test-email.mjs` invoking `publish-issue`
-// with `isPreview: true` directly - it never involved this state machine.
+// with `isPreview: true` directly - that has never involved this state machine.
+//
+// One correction on the record, because the phase that deleted these states
+// asserted the opposite and the assertion was wrong. They were not dead: the
+// legacy ingress still sets the field (`functions/import-issue-from-github.mjs`
+// reads it from `IS_PREVIEW`, which template.yaml sets to true for every
+// non-production deploy), so in sandbox and stage a GitHub-imported issue took
+// this path and got a single `[Preview]` email with no list send, no Scheduler
+// entries and no `published` write. With the states gone it runs the real
+// publish path instead. Phase 2's stated gate was PR #358 - the PR that deletes
+// that ingress - and #358 is still open, so the gate was never met. Production
+// is unaffected (`IS_PREVIEW` is false there). Until #358 lands, either restore
+// a preview mechanism for the ingress or accept real non-production sends
+// deliberately; do not let this test's green reassure you that nothing changed.
 const PREVIEW_STATES = [
   'Publish JSON Preview',
   'Send JSON Preview?',
@@ -967,6 +979,58 @@ describe('stage-issue definition: substitutions', () => {
   it('uses every substitution template.yaml declares', () => {
     const orphaned = declared.filter((token) => !used.has(token)).sort();
     expect(orphaned).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// Scheduler names against template.yaml's IAM. The definition's two
+// `CreateSchedule` calls are the only actions in it whose permission is scoped
+// by a *name pattern* rather than a resource ARN, which makes the name format
+// and the policy a matched pair kept in two files. Getting it wrong fails at
+// CreateSchedule with AccessDenied - and it fails the two jobs that run three
+// and five days after the send, where nothing is watching.
+// ===========================================================================
+const SCHEDULE_NAME_IAM_PATTERNS = {
+  'Schedule Issue Report': 'schedule/newsletter/ISSUE-STATS*',
+  'Schedule List Cleanup': 'schedule/newsletter/*-CLEAN-*'
+};
+
+describe('stage-issue definition: Scheduler names and IAM', () => {
+  // `States.Format('{}-CLEAN-{}', ...)` with a stand-in for every argument, so
+  // the glob below is matched against a name the definition really produces
+  // rather than against a literal copied out of the policy.
+  const exampleName = (expression) => {
+    const literal = /^States\.Format\('([^']+)'/.exec(expression);
+    return literal ? literal[1].replace(/\{\}/g, 'X') : null;
+  };
+
+  const globToRegExp = (glob) =>
+    new RegExp(`^${glob.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
+
+  it('produces a name matched by the IAM pattern that allows it', () => {
+    const checked = [];
+
+    for (const { name, state } of allStates) {
+      if (state.Resource !== '${SchedulerCreateSchedule}') continue;
+
+      const pattern = SCHEDULE_NAME_IAM_PATTERNS[name];
+      expect([name, typeof pattern]).toEqual([name, 'string']);
+
+      // The policy has to actually contain it - this is the half that catches a
+      // pattern edited in template.yaml alone.
+      expect([name, templateText.includes(pattern)]).toEqual([name, true]);
+
+      const example = exampleName(state.Parameters['Name.$']);
+      expect([name, example]).not.toEqual([name, null]);
+      expect([name, example, globToRegExp(pattern.split('/').pop()).test(example)]).toEqual([
+        name,
+        example,
+        true
+      ]);
+      checked.push(name);
+    }
+
+    expect(checked.sort()).toEqual(Object.keys(SCHEDULE_NAME_IAM_PATTERNS).sort());
   });
 });
 

@@ -127,7 +127,9 @@ Each phase is one PR, independently deployable and reversible. No phase both cha
 
 **Keep** `publish-issue.mjs`'s `isPreview` branch (`publish-issue.mjs:24`) — `send-test-email.mjs:63` invokes it directly and is the live preview mechanism. Only the *state machine's* preview states are dead.
 
-**Validation:** 0a's unreachable-state check should go from "4 known dead" to zero. **Rollback:** revert; nothing else references these states.
+**Correction — this phase landed with its gate unmet, and the "dead" claim above is wrong.** #358 is still open, so `import-issue-from-github.mjs` is still live and still sets `isPreview` from `IS_PREVIEW`, which `template.yaml` sets to `true` for **every non-production deploy**. The preview states were therefore reachable and used: a GitHub import in sandbox or stage sent one `[Preview]` email to the tenant and nothing else. With them deleted, that import runs the real publish path and sends to the stack's subscriber list. Production never set the flag and is unaffected. Three ways out, in preference order: merge #358 (this phase's actual gate, which deletes the ingress); give the ingress a preview mechanism of its own (`send-test-email.mjs` already is one); or accept non-production sends and delete `IS_PREVIEW` so nothing reads as a guard that isn't. Until then the flag is a comment in `template.yaml`, not a safeguard.
+
+**Validation:** 0a's unreachable-state check should go from "4 known dead" to zero — note that it was *already* zero, because the states were graph-reachable through `isPreview`; the check could not have caught this and did not. **Rollback:** revert; nothing else references these states.
 
 ### Phase 3 — Unify the two content-type paths
 

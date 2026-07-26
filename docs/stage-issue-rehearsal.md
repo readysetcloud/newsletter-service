@@ -2,7 +2,8 @@
 
 The end-to-end check for any change to the publish pipeline: the
 `StageIssueStateMachine` definition, the Lambdas it orchestrates
-(`parse-md-to-json`, `parse-json-issue`, `update-link-tracking`, `publish-issue`,
+(`parse-issue` and the two parsers it dispatches to, `parse-md-to-json` and
+`parse-json-issue`, plus `update-link-tracking`, `publish-issue` and
 `generate-social-post`), or the send path underneath them (`send-email-v2`).
 
 **This exists instead of an SFN Local harness.** A simulation can only assert
@@ -25,17 +26,19 @@ produce a right-looking outcome for one issue and break the next one.
 Two independence rules follow from how the machine is wired, and they are the
 reason the verifications below are separate rather than one glance:
 
-- **An email in the inbox does not mean the record is correct.** On the markdown
-  path `Publish` is a sibling branch of `Update Web Links` inside
-  `Build Web and Email Versions`. If the link branch throws after its retries,
-  the `Parallel` aborts — but `Publish` may already have sent. The email lands
-  and the record stays at `in progress`.
+- **An email in the inbox does not mean the record is correct.** Everything after
+  `Publish` can still fail — the Scheduler entries, the metadata write, the
+  status write — and every one of those routes to
+  `Update Issue Record - Failure` on an issue that has already gone out. (Before
+  Phase 3 this cut the other way too: `Publish` was a sibling branch of
+  `Update Web Links`, so a link failure could abort the `Parallel` after the send
+  had left. Link extraction runs ahead of `Publish` now, so that particular
+  ordering is gone.)
 - **A green execution does not mean the send succeeded.** `publish-issue`
   catches its own errors and returns `{ success: false }`
   (`functions/publish-issue.mjs:97-100`). A failed send therefore shows up as the
-  `Success?` / `JSON Publish Success?` choice routing to
-  `Update Issue Record - Failure`, not as an execution error. Read the choice
-  outcome, not the execution's colour.
+  `Publish Success?` choice routing to `Update Issue Record - Failure`, not as an
+  execution error. Read the choice outcome, not the execution's colour.
 
 ---
 
@@ -297,30 +300,34 @@ aws stepfunctions get-execution-history --execution-arn "$ARN" --max-results 100
 Get Existing Issue → Has Issue Been Processed? → Mark Issue In Progress
   → Is Scheduled In The Future? → Wait For Future Date
   → Trigger Site Rebuild → Route By Content Type
-  → Build Web and Email Versions
-       branch 0: Update Web Links
-       branch 1: Parse Markdown to Json → Publish
-                 → Schedule Tasks and Update
-                      branch 0: Schedule Issue Report
-                      branch 1: Format List Cleanup Input → Schedule List Cleanup
-                      branch 2: Update Issue Metadata
-  → Success? → Update Issue Record - Success → Generate Social Copy
-  → Notify of Success → Success
+  → Update Web Links → Parse Issue → Publish → Publish Success?
+  → Schedule Tasks and Update
+       branch 0: Schedule Issue Report
+       branch 1: Format List Cleanup Input → Schedule List Cleanup
+       branch 2: Update Issue Metadata
+  → Update Issue Record - Success → Social Copy Applies?
+  → Generate Social Copy → Notify of Success → Success
 ```
 
-**json / html, scheduled:**
+**json / html, scheduled** — the same states, minus the two markdown-only ones:
 
 ```
 Get Existing Issue → Has Issue Been Processed? → Mark Issue In Progress
   → Is Scheduled In The Future? → Wait For Future Date
-  → Trigger Site Rebuild → Route By Content Type → Parse JSON Issue
-  → Publish JSON → JSON Publish Success?
-  → Schedule JSON Tasks
-       branch 0: Schedule JSON Issue Report
-       branch 1: Format JSON List Cleanup Input → Schedule JSON List Cleanup
-       branch 2: Update JSON Issue Metadata
-  → Mark JSON Issue Published → Notify of JSON Success → Success
+  → Trigger Site Rebuild → Route By Content Type
+  → No Markdown Extras → Parse Issue → Publish → Publish Success?
+  → Schedule Tasks and Update
+       branch 0: Schedule Issue Report
+       branch 1: Format List Cleanup Input → Schedule List Cleanup
+       branch 2: Update Issue Metadata
+  → Update Issue Record - Success → Social Copy Applies?
+  → Notify of Success → Success
 ```
+
+Phase 3 collapsed the two tails into one, so the two sequences now differ in
+exactly two places — `Update Web Links` vs `No Markdown Extras`, and whether
+`Social Copy Applies?` routes through `Generate Social Copy`. Comparing them
+against each other is itself a check: any *third* difference is a bug.
 
 Reading notes:
 
@@ -335,9 +342,11 @@ Reading notes:
 - `Update Issue Record - Failure` must **not** appear on any rehearsal. The
   preview states that used to be listed here alongside it (`Send Preview`,
   `Publish JSON Preview`) are gone — Phase 2 deleted them.
-- `Trigger Site Rebuild` appears only on the scheduled path. An immediate
-  publish skips it — that is D6, expected until Phase 3, not a rehearsal
-  failure.
+- `Trigger Site Rebuild` must appear on **both** the scheduled and the immediate
+  path. It used to hang off the `Wait` alone, so an immediate publish never
+  rebuilt the site (D6); Phase 3 moved it onto the common path, which makes its
+  absence from an immediate-publish rehearsal a regression rather than the
+  expected result it was before.
 - After Phase 1, also check that every `Task` that failed routed through its
   `Catch` rather than failing the execution.
 
@@ -426,11 +435,12 @@ Assert on each:
 
 - **markdown:** base is the resolved frontmatter `date`. If the fixture's date
   is stale, both entries land in the *past* and `sendAtDate` is `'now'`.
-- **json / html:** base is the moment `Parse JSON Issue` runs — i.e. just after
-  the `Wait` expires, within seconds of the real send. The state machine does
-  not forward `futureDate` to that Lambda
-  (`state-machines/stage-issue.asl.json:471-476`), so `hasFutureSend` is false
-  and `baseDate` is `now` (`functions/parse-json-issue.mjs:52-62`).
+- **json / html:** base is the moment `Parse Issue` runs — i.e. just after the
+  `Wait` expires, within seconds of the real send. The state machine does not
+  forward `futureDate` to the parse step, so `hasFutureSend` is false and
+  `baseDate` is `now` (`functions/parse-json-issue.mjs:52-62`). The dispatcher
+  changed nothing here: it forwards the payload it is given and returns the
+  parser's values verbatim (`functions/parse-issue.mjs`).
 
 Compute expectations **in UTC**, because `setDate()` does its arithmetic in the
 runtime's local zone — UTC in Lambda, but your laptop's zone on your laptop,
@@ -536,14 +546,15 @@ both directions are guarded. Do not regress either half:
 - The fan-out moves the issue to `sending`, conditional on it being mid-flight
   (`from: ['in progress', 'published', 'sending']` — `draft` is excluded so a
   stray event cannot resurrect an unsent issue).
-- `Update Issue Record - Success` and `Mark JSON Issue Published` carry
-  `ConditionExpression: "#status <> :sending"` plus a `Catch` on
-  `DynamoDB.ConditionalCheckFailedException`
-  (`state-machines/stage-issue.asl.json:723-748`, `:837-862`). When the fan-out
-  got there first, the write is refused and the execution **continues to
-  `Generate Social Copy` / `Notify of JSON Success` and Succeeds** with the
-  record still at `sending`. A green execution plus `status: sending` is the
-  correct state here, not a bug.
+- `Update Issue Record - Success` carries `ConditionExpression:
+  "#status <> :sending"` plus a `Catch` on
+  `DynamoDB.ConditionalCheckFailedException`. When the fan-out got there first,
+  the write is refused and the execution **continues to `Social Copy Applies?`
+  and Succeeds** with the record still at `sending`. A green execution plus
+  `status: sending` is the correct state here, not a bug. Phase 3 merged the two
+  writes that used to carry this (`Mark JSON Issue Published` was the json path's
+  copy), so there is now one place for it to be right — and
+  `__tests__/state-machines/stage-issue-definition.test.mjs` asserts both halves.
 - The issue reaches `published` **only after the catch-all sweep has reported**,
   because the catch-all is one of the planned groups: `markGroupSent` stamps
   `completedAt` when `isComplete` first holds, and only then flips the status

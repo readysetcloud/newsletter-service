@@ -2636,8 +2636,7 @@ Resources:
         TableName: !Ref NewsletterTable
         DynamodbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
         LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
-        ParseMdToJson: !GetAtt ParseMdToJsonFunction.Arn
-        ParseJsonIssue: !GetAtt ParseJsonIssueFunction.Arn
+        ParseIssue: !GetAtt ParseIssueFunction.Arn
         PublishIssue: !GetAtt PublishIssueFunction.Arn
         DynamodbUpdateItem: !Sub arn:${AWS::Partition}:states:::dynamodb:updateItem
         EventBridgePutEvents: !Sub arn:${AWS::Partition}:states:::events:putEvents
@@ -2660,6 +2659,13 @@ Resources:
               Action: lambda:InvokeFunction
               Resource:
                 - !GetAtt PublishIssueFunction.Arn
+                - !GetAtt ParseIssueFunction.Arn
+                # The definition no longer invokes either parser directly - the
+                # dispatcher above does, in-process. These two grants stay until
+                # the functions themselves are retired, because an execution
+                # started on the pre-dispatcher definition can sit in
+                # `Wait For Future Date` for days and still has to be able to
+                # finish after this deploys.
                 - !GetAtt ParseMdToJsonFunction.Arn
                 - !GetAtt ParseJsonIssueFunction.Arn
                 - !GetAtt UpdateLinksWithTrackingDataFunction.Arn

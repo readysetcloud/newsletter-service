@@ -98,23 +98,25 @@ describe('import-issue-from-github', () => {
     jest.useRealTimers();
   });
 
-  it('carries every execution-input field the markdown parser dereferences', async () => {
-    // "Parse Markdown to Json" pulls fields off the execution input with `.$`
-    // references. Those are not optional lookups: a missing field fails the
-    // whole execution at runtime, and a GitHub import is the one caller that
-    // doesn't go through the API's request validation. Reading the contract
-    // out of the ASL keeps this honest when the payload gains a field.
+  it('carries every execution-input field the parse step dereferences', async () => {
+    // "Parse Issue" pulls fields off the execution input with `.$` references.
+    // Those are not optional lookups: a missing field fails the whole execution
+    // at runtime, and a GitHub import is the one caller that doesn't go through
+    // the API's request validation. Reading the contract out of the ASL keeps
+    // this honest when the payload gains a field.
     //
-    // Scoped to that one state on purpose. Elsewhere the machine either guards
-    // a reference with `IsPresent` (contentType, in the routing Choice) or
-    // sits on the json branch, which a GitHub import never reaches.
+    // Scoped to that one state on purpose. It is now the only parse state -
+    // Phase 3 merged the markdown and json/html paths - and it reads the
+    // content type off the `$contentType` variable rather than the execution
+    // input, precisely because a GitHub import doesn't set that field. The two
+    // Choices that do read it guard the reference with `IsPresent`.
     const asl = JSON.parse(
       readFileSync(new URL('../../state-machines/stage-issue.asl.json', import.meta.url), 'utf8')
     );
 
     // Undefined would mean the state was renamed and this test stopped
     // checking anything, so assert it was found before reading it.
-    const payload = findStatePayload(asl, 'Parse Markdown to Json');
+    const payload = findStatePayload(asl, 'Parse Issue');
     expect(payload).toBeDefined();
 
     const referenced = Object.values(payload)

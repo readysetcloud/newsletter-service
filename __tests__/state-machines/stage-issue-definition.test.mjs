@@ -29,20 +29,23 @@ const STATE_MACHINE_RESOURCE = 'StageIssueStateMachine';
 // ===========================================================================
 
 // Counted over the whole tree, including states nested inside Parallel branches.
-// `topLevel` is back to 25 by coincidence, not by staying still: the plan's
-// original 25, plus the two Phase 1 added (`Record Publish Rejection`,
-// `Social Copy Unavailable`), minus the two top-level preview states Phase 2
-// deleted. `total` includes the 12 states living inside the two Parallel
-// states' branches.
+// Phase 3 merged the markdown and json/html tails into one path: ten top-level
+// states and one whole Parallel went, and `total` lost the 12 states that used
+// to be duplicated across two Parallels' branches. The `Choice` count is
+// unchanged at 5 and that is the interesting number - two of them (`Route By
+// Content Type`, `Social Copy Applies?`) are now the *only* content-type
+// branches, in place of a fork that ran two near-identical tails, and one
+// (`Publish Success?`) replaces the pair that used to check the same thing per
+// path, including the `$[0]`/`$[1]` indexed one.
 const EXPECTED_STATE_COUNTS = {
-  topLevel: 25,
-  total: 37,
+  topLevel: 23,
+  total: 27,
   Choice: 5,
   Fail: 1,
-  Parallel: 3,
-  Pass: 4,
+  Parallel: 1,
+  Pass: 3,
   Succeed: 2,
-  Task: 21,
+  Task: 14,
   Wait: 1
 };
 
@@ -76,19 +79,14 @@ const PREVIEW_STATES = [
 const TASKS_WITHOUT_RETRY = [
   'Get Existing Issue',
   'Mark Issue In Progress',
-  'Mark JSON Issue Published',
-  'Notify of JSON Success',
   'Notify of Success',
   'Save Issue Record',
   'Schedule Issue Report',
-  'Schedule JSON Issue Report',
-  'Schedule JSON List Cleanup',
   'Schedule List Cleanup',
   'Trigger Site Rebuild',
   'Update Issue Metadata',
   'Update Issue Record - Failure',
-  'Update Issue Record - Success',
-  'Update JSON Issue Metadata'
+  'Update Issue Record - Success'
 ];
 
 // Phase 1's Catch coverage, pinned exactly: `state -> [catcher, ...]` in Catch
@@ -104,29 +102,28 @@ const TASKS_WITHOUT_RETRY = [
 // the error in-branch would hide it from the record entirely. Their errors
 // surface through the enclosing Parallel's catcher instead.
 const EXPECTED_CATCH_ROUTES = {
-  'Build Web and Email Versions': ['States.ALL -> Update Issue Record - Failure ($.error)'],
-  'Generate Social Copy': ['States.ALL -> Social Copy Unavailable ($.error)'],
+  // Straight to the notification, because the fallback `$social` is assigned
+  // before publish rather than by a placeholder state on this edge.
+  'Generate Social Copy': ['States.ALL -> Notify of Success ($.error)'],
   'Get Existing Issue': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   'Mark Issue In Progress': ['States.ALL -> Update Issue Record - Failure ($.error)'],
-  'Mark JSON Issue Published': [
-    'DynamoDB.ConditionalCheckFailedException -> Notify of JSON Success (error discarded)',
-    'States.ALL -> Update Issue Record - Failure ($.error)'
-  ],
-  // Post-publish courtesy emails: a failure here must not relabel an issue that
+  // Post-publish courtesy email: a failure here must not relabel an issue that
   // published fine, because `Has Issue Been Processed?` treats `failed` as
   // re-processable and a re-stage would send the issue twice.
-  'Notify of JSON Success': ['States.ALL -> Success ($.error)'],
   'Notify of Success': ['States.ALL -> Success ($.error)'],
-  'Parse JSON Issue': ['States.ALL -> Update Issue Record - Failure ($.error)'],
-  'Publish JSON': ['States.ALL -> Update Issue Record - Failure ($.error)'],
+  'Parse Issue': ['States.ALL -> Update Issue Record - Failure ($.error)'],
+  'Publish': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   'Save Issue Record': ['States.ALL -> Update Issue Record - Failure ($.error)'],
-  'Schedule JSON Tasks': ['States.ALL -> Update Issue Record - Failure ($.error)'],
+  'Schedule Tasks and Update': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   'Trigger Site Rebuild': ['States.ALL -> Update Issue Record - Failure ($.error)'],
+  // Link extraction runs ahead of `Publish` now, so this catcher fires with
+  // nothing delivered - failing the issue here costs a rehearsal, not a send.
+  'Update Web Links': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   // The failure writer cannot catch to itself, and there is nothing left to
   // record once recording is what failed.
   'Update Issue Record - Failure': ['States.ALL -> Fail (error discarded)'],
   'Update Issue Record - Success': [
-    'DynamoDB.ConditionalCheckFailedException -> Generate Social Copy (error discarded)',
+    'DynamoDB.ConditionalCheckFailedException -> Social Copy Applies? (error discarded)',
     'States.ALL -> Update Issue Record - Failure ($.error)'
   ]
 };
@@ -337,6 +334,22 @@ describe('stage-issue definition: context paths', () => {
     expect(unrecognized).toEqual([]);
   });
 
+  // Phase 3 retired the `$[0]` / `$[1]` reads of the publish Parallel's output.
+  // Indexed parallel output is the most brittle construct available in ASL:
+  // the index is a branch ordinal with nothing naming it, so reordering the
+  // branches silently repoints the reference at a different result.
+  it('reads no Parallel output by branch index', () => {
+    const indexed = [];
+
+    for (const { name, state } of allStates) {
+      walkStrings(ownBody(state), `$.${name}`, (value, path) => {
+        if (/^\$\[\d/.test(value)) indexed.push(`${path} = ${value}`);
+      });
+    }
+
+    expect(indexed).toEqual([]);
+  });
+
   it('resolves every $variable reference to an Assign block that declares it', () => {
     const undeclared = [];
 
@@ -484,15 +497,184 @@ describe('stage-issue definition: error handling', () => {
   });
 
   // `Notify of Success` formats `$social.copy` into the email body, and `Assign`
-  // runs only when a state succeeds - so whatever `Generate Social Copy` catches
-  // to has to declare `social` itself, or the notification dies alongside the
-  // social copy it was meant to survive.
-  it('declares $social on the social-copy failure path', () => {
-    const [catcher] = allStates.find(({ name }) => name === 'Generate Social Copy').state.Catch;
-    const fallback = allStates.find(({ name }) => name === catcher.Next).state;
+  // runs only when a state succeeds - so a `Generate Social Copy` failure has to
+  // find a `social` already bound, or the notification dies alongside the social
+  // copy it was meant to survive. Phase 3 moved that fallback off the catch edge
+  // and onto the two states that fork on content type, which is what lets the
+  // walk below hold for every route rather than just this one.
+  //
+  // With one notify state for every content type, `$social` has three possible
+  // origins (generated, the markdown fork's fallback, the json/html fork's) and
+  // a fourth path that forgot to bind it would only show up as a failed courtesy
+  // email on an issue that had already sent.
+  //
+  // Walks every route from `StartAt` carrying "has an Assign declared `social`
+  // yet", and asserts no reader of `$social` is reachable with that false.
+  // Catch edges deliberately inherit the *pre-state* answer: a state's `Assign`
+  // does not run when the state throws, which is exactly the trap the
+  // `Social Copy Unavailable` placeholder exists to close.
+  it('declares $social on every route into the states that read it', () => {
+    const readsSocial = ({ state }) => {
+      let found = false;
+      walkDollarFields(ownBody(state), '$', (value) => {
+        if (typeof value === 'string' && variableReferencesIn(value).includes('social')) found = true;
+      });
+      return found;
+    };
 
-    expect(Object.keys(fallback.Assign ?? {})).toContain('social');
-    expect(fallback.Next).toBe('Notify of Success');
+    const readers = new Set(allStates.filter(readsSocial).map(({ name }) => name));
+    expect(readers.size).toBeGreaterThan(0);
+
+    const declaresSocial = (state) =>
+      Object.keys(state.Assign ?? {}).some((key) => key.replace(/\.\$$/, '') === 'social');
+
+    const undeclared = new Set();
+    const visited = new Set();
+    const queue = [[definition.StartAt, false]];
+
+    while (queue.length > 0) {
+      const [name, declared] = queue.pop();
+      const key = `${name}:${declared}`;
+      if (visited.has(key)) continue;
+      visited.add(key);
+
+      const state = definition.States[name];
+      if (readers.has(name) && !declared) {
+        undeclared.add(name);
+        continue;
+      }
+
+      const onward = declared || declaresSocial(state);
+      for (const target of [state.Next, state.Default, ...(state.Choices ?? []).map((choice) => choice.Next)]) {
+        if (target) queue.push([target, onward]);
+      }
+      for (const catcher of state.Catch ?? []) {
+        if (catcher.Next) queue.push([catcher.Next, declared]);
+      }
+    }
+
+    expect([...undeclared]).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// The single content-type path, and the values that leave the execution and
+// fire days later. Phase 3 of docs/stage-issue-simplification-plan.md merged
+// two near-identical tails into one; these are the properties that merge had
+// to preserve exactly.
+// ===========================================================================
+describe('stage-issue definition: one path per issue', () => {
+  const tasksInvoking = (substitution) =>
+    allStates
+      .filter(({ state }) => state.Type === 'Task' && state.Parameters?.FunctionName === `\${${substitution}}`)
+      .map(({ name }) => name);
+
+  // The duplication Phase 3 removed was two of each of these. One of each is
+  // the whole point: a second parse or publish state means the content-type
+  // fork grew a tail again.
+  it('parses and publishes in exactly one state each', () => {
+    expect(tasksInvoking('ParseIssue')).toEqual(['Parse Issue']);
+    expect(tasksInvoking('PublishIssue')).toEqual(['Publish']);
+  });
+
+  it('writes the published status in exactly one state', () => {
+    const publishedWrites = allStates.filter(
+      ({ state }) => state.Parameters?.ExpressionAttributeValues?.[':status']?.S === 'published'
+    );
+
+    expect(publishedWrites.map(({ name }) => name)).toEqual(['Update Issue Record - Success']);
+  });
+
+  // The local-send handshake, which the merge of the two success writes had to
+  // carry over: publish hands off to send-email-v2 asynchronously, so the
+  // fan-out may already have moved the issue to `sending` and be hours from
+  // done. Without the condition this write would report the issue as fully
+  // sent while most subscribers are still waiting; without the catcher the
+  // rejected write would fail the execution instead.
+  it('makes the published write conditional on the issue not being mid local-send', () => {
+    const { state } = allStates.find(({ name }) => name === 'Update Issue Record - Success');
+
+    expect(state.Parameters.ConditionExpression).toBe('#status <> :sending');
+    expect(state.Parameters.ExpressionAttributeValues[':sending']).toEqual({ S: 'sending' });
+    expect(state.Catch[0].ErrorEquals).toEqual(['DynamoDB.ConditionalCheckFailedException']);
+  });
+
+  // These two outlive the execution by days - the stats report fires at send
+  // +5, the list cleanup at +3 - and both names are matched by IAM resource
+  // patterns in template.yaml (`schedule/newsletter/ISSUE-STATS*` and
+  // `schedule/newsletter/*-CLEAN-*`). A changed name format fails at
+  // CreateSchedule; a changed date source mis-fires a job days later with
+  // nothing watching. Pinned literally for both reasons.
+  it('creates the two Scheduler entries with unchanged names and dates', () => {
+    const scheduler = Object.fromEntries(
+      allStates
+        .filter(({ state }) => state.Resource === '${SchedulerCreateSchedule}')
+        .map(({ name, state }) => [
+          name,
+          {
+            name: state.Parameters['Name.$'],
+            schedule: state.Parameters['ScheduleExpression.$'],
+            group: state.Parameters.GroupName
+          }
+        ])
+    );
+
+    expect(scheduler).toEqual({
+      'Schedule Issue Report': {
+        name: "States.Format('ISSUE-STATS-{}', $$.Execution.Input.issueId)",
+        schedule: "States.Format('at({})', $reportStatsDate)",
+        group: 'newsletter'
+      },
+      'Schedule List Cleanup': {
+        name: "States.Format('{}-CLEAN-{}', $$.Execution.Input.tenant.id, $$.Execution.Input.issueId)",
+        schedule: "States.Format('at({})', $listCleanupDate)",
+        group: 'newsletter'
+      }
+    });
+  });
+
+  // Both dates come off the parse step's own output and are never recomputed
+  // in ASL, which is what makes the dispatcher's "hand the parser's values back
+  // verbatim" contract (__tests__/parse-issue.test.mjs) the only thing that has
+  // to hold for the two entries above to be right.
+  it('assigns both scheduler dates from the parse result and nowhere else', () => {
+    const assigners = allStates.filter(({ state }) =>
+      Object.keys(state.Assign ?? {}).some((key) => /^(reportStatsDate|listCleanupDate)\.\$$/.test(key))
+    );
+
+    expect(assigners.map(({ name }) => name)).toEqual(['Parse Issue']);
+    expect(assigners[0].state.Assign['reportStatsDate.$']).toBe('$.Payload.reportStatsDate');
+    expect(assigners[0].state.Assign['listCleanupDate.$']).toBe('$.Payload.listCleanupDate');
+  });
+
+  // Link extraction and social copy are the two markdown-only steps, and the
+  // whole reason a content-type branch still exists. Both Choices have to keep
+  // treating an *absent* contentType as markdown: import-issue-from-github.mjs
+  // never sets the field, and an unguarded comparison against a missing path is
+  // a runtime error rather than a false rule.
+  it('guards both content-type Choices against an absent contentType', () => {
+    const contentTypeChoices = allStates.filter(
+      ({ state }) =>
+        state.Type === 'Choice' &&
+        JSON.stringify(state.Choices).includes('$$.Execution.Input.contentType')
+    );
+
+    expect(contentTypeChoices.map(({ name }) => name).sort()).toEqual([
+      'Route By Content Type',
+      'Social Copy Applies?'
+    ]);
+
+    for (const { name, state } of contentTypeChoices) {
+      for (const rule of state.Choices) {
+        expect(`${name}: ${JSON.stringify(rule.And?.[0])}`).toBe(
+          `${name}: ${JSON.stringify({ Variable: '$$.Execution.Input.contentType', IsPresent: true })}`
+        );
+      }
+      // Default is the markdown side on both, so an unrecognized value is
+      // parsed as markdown and gets the markdown extras - the same fallback
+      // normalizeContentType makes in functions/parse-issue.mjs.
+      expect([name, state.Default]).toEqual([name, name === 'Route By Content Type' ? 'Update Web Links' : 'Generate Social Copy']);
+    }
   });
 });
 

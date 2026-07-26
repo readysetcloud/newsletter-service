@@ -103,7 +103,10 @@ export const handler = async (state) => {
 
   await processLinks(linkTasks, state.tenantId, state.issueId);
 
-  // `success` gates the state machine's "Success?" choice (the $[0] web branch).
+  // Returned for the execution history, not read by the state machine: the
+  // `Success?` choice that used to test `success` through the publish Parallel's
+  // `$[0]` output is gone. `Update Web Links` is a sequential step now, so a
+  // failure here reaches its Catch as a throw instead.
   return { success: true, linkCount: linkPosition };
 };
 

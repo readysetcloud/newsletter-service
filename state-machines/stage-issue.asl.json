@@ -16,6 +16,15 @@
           }
         }
       },
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Update Issue Record - Failure",
+          "ResultPath": "$.error"
+        }
+      ],
       "Next": "Has Issue Been Processed?",
       "ResultPath": "$.existingNewsletter"
     },
@@ -88,6 +97,15 @@
           }
         }
       },
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Update Issue Record - Failure",
+          "ResultPath": "$.error"
+        }
+      ],
       "Next": "Is Scheduled In The Future And Not Preview?",
       "ResultPath": null
     },
@@ -117,6 +135,15 @@
           }
         }
       },
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Update Issue Record - Failure",
+          "ResultPath": "$.error"
+        }
+      ],
       "Next": "Is Scheduled In The Future And Not Preview?",
       "ResultPath": null
     },
@@ -158,6 +185,15 @@
           }
         ]
       },
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Update Issue Record - Failure",
+          "ResultPath": "$.error"
+        }
+      ],
       "Next": "Route By Content Type",
       "ResultPath": null
     },
@@ -191,7 +227,17 @@
     },
     "Build Web and Email Versions": {
       "Type": "Parallel",
+      "Comment": "The branch states deliberately carry no Catch of their own: a Catch can only name states in its own scope, so a branch could not reach 'Update Issue Record - Failure'. Branch errors surface here instead, which is also the only way a branch failure can be attributed to the issue record.",
       "Next": "Success?",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Update Issue Record - Failure",
+          "ResultPath": "$.error"
+        }
+      ],
       "Branches": [
         {
           "StartAt": "Update Web Links",
@@ -293,7 +339,7 @@
                   "subject.$": "$.subject",
                   "email.$": "$$.Execution.Input.tenant.email",
                   "isPreview": true,
-                  "tenantId.$": "$.Execution.Input.tenant.id",
+                  "tenantId.$": "$$.Execution.Input.tenant.id",
                   "templateId.$": "$$.Execution.Input.templateId"
                 }
               },
@@ -488,6 +534,15 @@
           "BackoffRate": 2
         }
       ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Update Issue Record - Failure",
+          "ResultPath": "$.error"
+        }
+      ],
       "OutputPath": "$.Payload",
       "Next": "Send JSON Preview?",
       "Assign": {
@@ -544,6 +599,15 @@
           "BackoffRate": 2
         }
       ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Update Issue Record - Failure",
+          "ResultPath": "$.error"
+        }
+      ],
       "OutputPath": "$.Payload",
       "End": true
     },
@@ -574,6 +638,15 @@
           "BackoffRate": 2
         }
       ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Update Issue Record - Failure",
+          "ResultPath": "$.error"
+        }
+      ],
       "ResultPath": "$.publishResult",
       "Next": "JSON Publish Success?"
     },
@@ -586,12 +659,22 @@
           "Next": "Schedule JSON Tasks"
         }
       ],
-      "Default": "Update Issue Record - Failure"
+      "Default": "Record Publish Rejection"
     },
     "Schedule JSON Tasks": {
       "Type": "Parallel",
+      "Comment": "Branch states carry no Catch of their own - see 'Build Web and Email Versions' for why. Reached only after a successful publish, so a failure here means the send is already handed off; the record still has to stop claiming 'in progress'.",
       "ResultPath": null,
       "Next": "Mark JSON Issue Published",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Update Issue Record - Failure",
+          "ResultPath": "$.error"
+        }
+      ],
       "Branches": [
         {
           "StartAt": "Schedule JSON Issue Report",
@@ -744,6 +827,14 @@
           "Comment": "Already 'sending' - the local-send fan-out will publish when the last group lands.",
           "Next": "Notify of JSON Success",
           "ResultPath": null
+        },
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Comment": "Ordered after the conditional-check catcher so it cannot swallow it. A hard failure here means the issue published but the record never said so, which is worse than saying 'failed' with a cause attached.",
+          "Next": "Update Issue Record - Failure",
+          "ResultPath": "$.error"
         }
       ],
       "ResultPath": null,
@@ -768,6 +859,16 @@
           }
         ]
       },
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Comment": "The issue is already published at this point and this email is only a courtesy. Marking the record 'failed' over it would both lie and invite a re-stage, which 'Has Issue Been Processed?' would honor - a duplicate send for a lost notification.",
+          "Next": "Success",
+          "ResultPath": "$.error"
+        }
+      ],
       "Next": "Success",
       "ResultPath": null
     },
@@ -788,10 +889,22 @@
           ]
         }
       ],
-      "Default": "Update Issue Record - Failure"
+      "Default": "Record Publish Rejection"
+    },
+    "Record Publish Rejection": {
+      "Type": "Pass",
+      "Comment": "The two publish-success Choices are the only way into the failure write that is not a Catch, so they have to supply the $.error the write reads. Parameters replaces the state data outright rather than adding to it, because the markdown path arrives here with a Parallel's array output, into which '$.error' cannot be inserted.",
+      "Parameters": {
+        "error": {
+          "Error": "PublishUnsuccessful",
+          "Cause": "publish-issue reported success: false. See the Publish task's output in the execution history."
+        }
+      },
+      "Next": "Update Issue Record - Failure"
     },
     "Update Issue Record - Failure": {
       "Type": "Task",
+      "Comment": "Reachable from every Catch in the definition as well as the two publish-success Choices, so it reads nothing but the context object and $.error - it must be safe to enter no matter what the state data looks like. The write is a plain idempotent SET; deliberately unconditional, so re-entering it cannot fail on a condition of its own.",
       "Resource": "${DynamodbUpdateItem}",
       "Parameters": {
         "TableName": "${TableName}",
@@ -803,16 +916,33 @@
             "S": "newsletter"
           }
         },
-        "UpdateExpression": "SET #status = :status",
+        "UpdateExpression": "SET #status = :status, #failureReason = :failureReason, updatedAt = :updatedAt",
         "ExpressionAttributeNames": {
-          "#status": "status"
+          "#status": "status",
+          "#failureReason": "failureReason"
         },
         "ExpressionAttributeValues": {
           ":status": {
             "S": "failed"
+          },
+          ":failureReason": {
+            "S.$": "States.JsonToString($.error)"
+          },
+          ":updatedAt": {
+            "S.$": "$$.State.EnteredTime"
           }
         }
       },
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Comment": "Nothing left to record if recording is what failed - end at Fail rather than throwing out of the failure handler. ResultPath null keeps the original $.error in the execution output, which is the diagnosis worth reading.",
+          "Next": "Fail",
+          "ResultPath": null
+        }
+      ],
       "ResultPath": null,
       "Next": "Fail"
     },
@@ -858,6 +988,14 @@
           "Comment": "Already 'sending' - the local-send fan-out will publish when the last group lands.",
           "Next": "Generate Social Copy",
           "ResultPath": null
+        },
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Comment": "Ordered after the conditional-check catcher so it cannot swallow it. A hard failure here means the issue published but the record never said so, which is worse than saying 'failed' with a cause attached.",
+          "Next": "Update Issue Record - Failure",
+          "ResultPath": "$.error"
         }
       ],
       "ResultPath": null,
@@ -865,6 +1003,7 @@
     },
     "Generate Social Copy": {
       "Type": "Task",
+      "Comment": "Off the critical path by way of its Catch: the issue is already published by the time this runs, so a Bedrock failure must not redden the execution or touch the record.",
       "Resource": "${LambdaInvoke}",
       "Parameters": {
         "FunctionName": "${GenerateSocialPost}",
@@ -887,11 +1026,31 @@
           "BackoffRate": 2
         }
       ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Social Copy Unavailable",
+          "ResultPath": "$.error"
+        }
+      ],
       "ResultPath": null,
       "Next": "Notify of Success",
       "Assign": {
         "social.$": "$.Payload"
       }
+    },
+    "Social Copy Unavailable": {
+      "Type": "Pass",
+      "Comment": "Assign runs only when a state succeeds, so skipping 'Generate Social Copy' leaves $social undeclared - and 'Notify of Success' formats $social.copy into the body, which would then fail the very notification this Catch exists to protect. Standing in a placeholder keeps the email sending and tells the operator why the copy is missing.",
+      "Assign": {
+        "social": {
+          "copy": "(unavailable - social copy generation failed, see the execution history)"
+        }
+      },
+      "ResultPath": null,
+      "Next": "Notify of Success"
     },
     "Notify of Success": {
       "Type": "Task",
@@ -912,6 +1071,16 @@
           }
         ]
       },
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Comment": "The issue is already published at this point and this email is only a courtesy. Marking the record 'failed' over it would both lie and invite a re-stage, which 'Has Issue Been Processed?' would honor - a duplicate send for a lost notification.",
+          "Next": "Success",
+          "ResultPath": "$.error"
+        }
+      ],
       "Next": "Success",
       "ResultPath": null
     },

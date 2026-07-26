@@ -234,25 +234,23 @@ export const markGroupSent = async (issueId, label, { recipients, skipped = 0 })
     return;
   }
 
-  try {
-    await getClient().send(new UpdateItemCommand({
-      TableName: process.env.TABLE_NAME,
-      Key: marshall({ pk: issueId, sk: SEND_PROGRESS_SK }),
-      UpdateExpression: 'SET completedAt = :now',
-      ConditionExpression: 'attribute_not_exists(completedAt)',
-      ExpressionAttributeValues: marshall({ ':now': new Date().toISOString() })
-    }));
-  } catch (error) {
-    if (error.name !== 'ConditionalCheckFailedException') {
-      console.error('[PROGRESS] Failed to stamp completion', { issueId, error: error.message });
-    }
-    // Already stamped by a concurrent final group — that group also owns the
-    // status flip below, so return rather than doing it twice.
-    return;
-  }
-
+  // The status transition comes FIRST and is attempted regardless of whether
+  // this call is the one that stamps completion.
+  //
+  // The obvious ordering — stamp completedAt, then publish, and skip both if
+  // the stamp was already taken — has a hole with no way out of it. If the
+  // stamp lands and the status write then fails transiently, the issue is
+  // permanently `sending`: `completedAt` now exists, so a redelivered group
+  // event fails the stamp's condition and returns before ever retrying the
+  // status. Delivery is finished and the record disagrees, forever.
+  //
+  // Doing the status first means a failure there leaves `completedAt` unset, so
+  // any later event retries both. Doing it unconditionally means a duplicate
+  // delivery of the final group heals a status that was missed. Both writes are
+  // conditional and idempotent, so the concurrent-finishers case the old early
+  // return was avoiding costs one refused write and nothing else.
   console.log(`[PROGRESS] All groups delivered for ${issueId} - marking published`);
-  await setIssueStatus(issueId, {
+  const settled = await setIssueStatus(issueId, {
     status: 'published',
     from: ['sending'],
     // The state machine may already have stamped publishedAt when it finished;
@@ -260,6 +258,53 @@ export const markGroupSent = async (issueId, label, { recipients, skipped = 0 })
     // so it wins.
     stampPublishedAt: true
   });
+
+  // Completion is only stamped once the record agrees. Stamping it after a
+  // failed status write is what strands the issue: `attribute_not_exists`
+  // would then refuse every later attempt, and with it the retry of the status
+  // write that is actually outstanding. Leaving it unstamped costs a redundant
+  // group update on redelivery and keeps the repair reachable.
+  if (!settled) {
+    return;
+  }
+
+  try {
+    await updateWithRetry({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({ pk: issueId, sk: SEND_PROGRESS_SK }),
+      UpdateExpression: 'SET completedAt = :now',
+      ConditionExpression: 'attribute_not_exists(completedAt)',
+      ExpressionAttributeValues: marshall({ ':now': new Date().toISOString() })
+    });
+  } catch (error) {
+    if (error.name !== 'ConditionalCheckFailedException') {
+      console.error('[PROGRESS] Failed to stamp completion', { issueId, error: error.message });
+    }
+  }
+};
+
+/**
+ * Send a conditional UpdateItem, retrying transient failures.
+ *
+ * Every write in this module is conditional and idempotent, so a retry is
+ * always safe. ConditionalCheckFailedException is never retried: it is the
+ * write being answered, not failing.
+ *
+ * @param {Object} input - UpdateItemCommand input
+ * @param {number} [attempts] - Total attempts including the first
+ * @returns {Promise<Object>} The command output
+ */
+const updateWithRetry = async (input, attempts = 3) => {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await getClient().send(new UpdateItemCommand(input));
+    } catch (error) {
+      if (error.name === 'ConditionalCheckFailedException' || attempt >= attempts) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2 ** (attempt - 1) * 100));
+    }
+  }
 };
 
 /**
@@ -270,6 +315,10 @@ export const markGroupSent = async (issueId, label, { recipients, skipped = 0 })
  * @param {string} params.status - Status to set
  * @param {string[]} params.from - Statuses this transition is valid from
  * @param {boolean} [params.stampPublishedAt] - Also set publishedAt if unset
+ * @returns {Promise<boolean>} Whether the record ended up in a settled state -
+ *   true when the write landed, and also when the condition refused it, since
+ *   a refusal means something else already owns the status. False only for a
+ *   failure that leaves the transition genuinely outstanding.
  */
 const setIssueStatus = async (issueId, { status, from, stampPublishedAt = false }) => {
   const names = { '#status': 'status' };
@@ -284,19 +333,24 @@ const setIssueStatus = async (issueId, { status, from, stampPublishedAt = false 
   }
 
   try {
-    await getClient().send(new UpdateItemCommand({
+    // Retried: the terminal 'sending' -> 'published' transition is the last
+    // thing that happens to a local-send issue, so there is no later event to
+    // fix it if a transient failure is simply swallowed.
+    await updateWithRetry({
       TableName: process.env.TABLE_NAME,
       Key: marshall({ pk: issueId, sk: 'newsletter' }),
       UpdateExpression: updateExpression,
       ConditionExpression: `#status IN (${from.map((_, index) => `:from${index}`).join(', ')})`,
       ExpressionAttributeNames: names,
       ExpressionAttributeValues: marshall(values)
-    }));
+    });
+    return true;
   } catch (error) {
     if (error.name === 'ConditionalCheckFailedException') {
       console.log('[PROGRESS] Status transition not applicable, leaving unchanged', { issueId, status });
-      return;
+      return true;
     }
     console.error('[PROGRESS] Failed to set issue status', { issueId, status, error: error.message });
+    return false;
   }
 };

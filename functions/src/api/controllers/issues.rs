@@ -4201,14 +4201,32 @@ fn build_draft_ttl_schedule_name(tenant_id: &str, issue_number: i32) -> String {
 }
 
 /// The tenant id as it can appear in a schedule name: EventBridge Scheduler
-/// allows `[0-9a-zA-Z-_.]` and 64 characters total, so anything else is dropped
-/// and the id is truncated to leave room for the prefix and issue number.
+/// allows `[0-9a-zA-Z-_.]` and 64 characters total, so illegal characters are
+/// dropped and the id is shortened to leave room for the prefix and issue
+/// number.
+///
+/// A truncated prefix alone is not enough, because these names are load-bearing
+/// identities rather than labels. `CreateSchedule` uses the name as the
+/// per-issue lock and `DeleteSchedule` cancels by it, so two tenants that
+/// collide do not merely look alike: the second cannot schedule while the
+/// first's entry exists, and unscheduling one tenant's issue cancels the
+/// other's pending send. Tenant ids run to 50 characters, so a 16-character
+/// prefix collides on any two ids that share an opening.
+///
+/// The readable prefix is kept for operators reading the console, and a short
+/// digest of the WHOLE id (before sanitizing, so ids differing only in dropped
+/// characters still differ) restores uniqueness. Worst case is
+/// `ISSUE-SEND-` + 16 + 1 + 8 + 1 + 10 = 47 characters.
 fn sanitize_tenant_for_schedule_name(tenant_id: &str) -> String {
-    tenant_id
+    let readable: String = tenant_id
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
         .take(16)
-        .collect()
+        .collect();
+
+    let digest = format!("{:x}", Sha256::digest(tenant_id.as_bytes()));
+
+    format!("{readable}-{}", &digest[..8])
 }
 
 async fn get_next_issue_number(tenant_id: &str) -> Result<i32, AppError> {
@@ -6234,11 +6252,50 @@ Thanks!"#;
     fn test_build_draft_ttl_schedule_name_is_valid() {
         let name = build_draft_ttl_schedule_name("tenant-abc_123", 42);
 
-        assert_eq!(name, "draft-ttl-tenant-abc_123-42");
+        assert!(name.starts_with("draft-ttl-tenant-abc_123-"));
+        assert!(name.ends_with("-42"));
         assert!(name.len() <= 64);
         assert!(name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'));
+    }
+
+    #[test]
+    fn test_schedule_names_do_not_collide_on_a_shared_prefix() {
+        // Tenant ids run to 50 characters, so a truncated prefix collides on any
+        // two that share an opening. These names are identities, not labels: a
+        // collision means one tenant cannot schedule while the other's entry
+        // exists, and worse, unscheduling one tenant's issue deletes the other
+        // tenant's pending send.
+        let alpha = "abcdefghijklmnopalpha";
+        let beta = "abcdefghijklmnopbeta";
+
+        assert_ne!(
+            build_issue_send_schedule_name(alpha, 42),
+            build_issue_send_schedule_name(beta, 42)
+        );
+        assert_ne!(
+            build_draft_ttl_schedule_name(alpha, 42),
+            build_draft_ttl_schedule_name(beta, 42)
+        );
+    }
+
+    #[test]
+    fn test_schedule_name_distinguishes_ids_differing_only_in_dropped_characters() {
+        // The digest covers the raw id, so two ids that sanitize to the same
+        // characters still produce different names.
+        assert_ne!(
+            build_issue_send_schedule_name("tenant/one", 42),
+            build_issue_send_schedule_name("tenant#one", 42)
+        );
+    }
+
+    #[test]
+    fn test_schedule_name_stays_within_the_scheduler_limit_for_a_max_length_tenant() {
+        let name = build_issue_send_schedule_name(&"a".repeat(50), i32::MAX);
+
+        assert!(name.len() <= 64, "name was {} chars: {name}", name.len());
+        assert!(name.starts_with("ISSUE-SEND-"));
     }
 
     #[test]

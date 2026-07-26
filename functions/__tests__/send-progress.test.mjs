@@ -368,4 +368,78 @@ describe('markGroupSent', () => {
     await expect(markGroupSent(ISSUE_ID, 'America/Chicago', { recipients: 1 })).resolves.toBeUndefined();
     expect(items.get(issueKey()).status).toBe('sending');
   });
+  test('a transient failure on the terminal status write is retried, not swallowed', async () => {
+    // The failure Codex described: completedAt lands, the status write blips,
+    // and the issue is stuck at 'sending' with no later event able to fix it.
+    const realSend = DynamoDBClient.prototype.send;
+    let failures = 2;
+    DynamoDBClient.prototype.send = jest.fn(async (command) => {
+      const key = unmarshall(command.input.Key);
+      const setsPublished =
+        key.sk === 'newsletter' &&
+        unmarshall(command.input.ExpressionAttributeValues ?? {})[':status'] === 'published';
+      if (setsPublished && failures > 0) {
+        failures -= 1;
+        const error = new Error('InternalServerError');
+        error.name = 'InternalServerError';
+        throw error;
+      }
+      return realSend(command);
+    });
+
+    for (const label of ['America/Chicago', 'America/Los_Angeles', '__default__', '__catch_all__']) {
+      await markGroupSent(ISSUE_ID, label, { recipients: 1 });
+    }
+
+    expect(items.get(issueKey()).status).toBe('published');
+    expect(items.get(progressKey()).completedAt).toBeDefined();
+  });
+
+  test('a status write that never succeeds leaves completion unstamped, so a redelivery can retry', async () => {
+    // Ordering matters as much as the retry: if completedAt were stamped first,
+    // the attribute_not_exists condition would make every later attempt bail out
+    // before reaching the status write.
+    const realSend = DynamoDBClient.prototype.send;
+    let failing = true;
+    DynamoDBClient.prototype.send = jest.fn(async (command) => {
+      const key = unmarshall(command.input.Key);
+      const setsPublished =
+        key.sk === 'newsletter' &&
+        unmarshall(command.input.ExpressionAttributeValues ?? {})[':status'] === 'published';
+      if (setsPublished && failing) {
+        const error = new Error('InternalServerError');
+        error.name = 'InternalServerError';
+        throw error;
+      }
+      return realSend(command);
+    });
+
+    for (const label of ['America/Chicago', 'America/Los_Angeles', '__default__', '__catch_all__']) {
+      await markGroupSent(ISSUE_ID, label, { recipients: 1 });
+    }
+
+    expect(items.get(issueKey()).status).toBe('sending');
+    expect(items.get(progressKey()).completedAt).toBeUndefined();
+
+    // A redelivered final group now heals both.
+    failing = false;
+    await markGroupSent(ISSUE_ID, '__catch_all__', { recipients: 0 });
+
+    expect(items.get(issueKey()).status).toBe('published');
+    expect(items.get(progressKey()).completedAt).toBeDefined();
+  });
+
+  test('a refused condition is never retried', async () => {
+    // ConditionalCheckFailedException is the write being answered, not failing;
+    // retrying it would just burn the backoff window before the same answer.
+    await markGroupSent(ISSUE_ID, 'America/Chicago', { recipients: 1 });
+
+    const attempts = DynamoDBClient.prototype.send.mock.calls.filter(([command]) => {
+      const key = unmarshall(command.input.Key);
+      return key.sk === SEND_PROGRESS_SK && command.input.UpdateExpression.includes('#groups.#label');
+    });
+
+    // One attempt against a group that exists, and no repeats.
+    expect(attempts).toHaveLength(1);
+  });
 });

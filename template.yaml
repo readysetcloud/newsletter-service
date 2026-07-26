@@ -2352,6 +2352,41 @@ Resources:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
 
+  # Content-type dispatcher over the two parsers above: it imports their handlers
+  # and delegates, so the state machine can run one Parse Issue Task instead of a
+  # duplicated per-content-type tail (Phase 3 of
+  # docs/stage-issue-simplification-plan.md). Because it bundles both modules its
+  # policies are the union of theirs - which is parse-md-to-json's, the wider of
+  # the two.
+  ParseIssueFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - parse-issue.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: parse-issue.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Query
+              Resource: !GetAtt NewsletterTable.Arn
+            # getSnippets() reads tenant snippets via the GSI1 index.
+            - Effect: Allow
+              Action: dynamodb:Query
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}/index/GSI1
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+
   SyncRepoDataFunction:
     Type: AWS::Serverless::Function
     Metadata:

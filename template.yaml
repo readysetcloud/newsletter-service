@@ -42,6 +42,16 @@ Parameters:
     Type: String
     Default: ""
     Description: Route 53 Hosted Zone ID for frontend custom domain (optional)
+  IssueSendLeadTimeMinutes:
+    Type: String
+    Default: "0"
+    Description: >
+      How long before its send time an issue's publish workflow starts. This is
+      the content freeze point - the workflow reads the issue record when it
+      starts. 0 keeps the workflow starting at the send instant; raising it lets
+      the local-send fan-out schedule timezones east of the base zone instead of
+      sending them immediately. Raising it above 0 needs one code change first:
+      see issue_send_lead_time in functions/src/api/controllers/issues.rs.
 
 Metadata:
   esbuild-properties: &esbuild-properties
@@ -1240,10 +1250,18 @@ Resources:
               Resource:
                 - !Sub "arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/default/sender-check-*"
                 - !Sub "arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/newsletter/draft-ttl-*"
+                # One per scheduled issue, named ISSUE-SEND-<tenant>-<issue>:
+                # it starts the publish workflow at the send instant. The name
+                # is deterministic so CreateSchedule detects a duplicate and
+                # DeleteSchedule can cancel a send.
+                - !Sub "arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/newsletter/ISSUE-SEND-*"
             - Effect: Allow
               Action:
                 - iam:PassRole
-              Resource: !GetAtt SchedulerExecutionRole.Arn
+              Resource:
+                - !GetAtt SchedulerExecutionRole.Arn
+                # Handed to Scheduler as the ISSUE-SEND-* target role.
+                - !GetAtt IssueSendSchedulerRole.Arn
             - Effect: Allow
               Action:
                 - events:PutEvents
@@ -1302,6 +1320,8 @@ Resources:
           CHECK_SENDER_STATUS_FUNCTION_ARN: !GetAtt CheckSenderStatusAutomaticallyFunction.Arn
           GENERATE_OUTREACH_FUNCTION_ARN: !GetAtt GenerateOutreachFunction.Arn
           SCHEDULER_ROLE_ARN: !GetAtt SchedulerExecutionRole.Arn
+          ISSUE_SEND_SCHEDULER_ROLE_ARN: !GetAtt IssueSendSchedulerRole.Arn
+          ISSUE_SEND_LEAD_TIME_MINUTES: !Ref IssueSendLeadTimeMinutes
           MODEL_ID: us.amazon.nova-pro-v1:0
       Events:
         ApiProxy:
@@ -2625,6 +2645,31 @@ Resources:
           Type: Schedule
           Properties:
             Schedule: "cron(0 15 ? * WED *)"
+
+  # Assumed by EventBridge Scheduler to start an issue's publish workflow at its
+  # send time. A scheduled issue is an ISSUE-SEND-<tenant>-<issue> entry with
+  # this role rather than an execution parked in the definition's Wait state, so
+  # the workflow reads the issue record at send time and can run ahead of the
+  # send instant when a lead time is configured.
+  IssueSendSchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StartIssueSend
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !Ref StageIssueStateMachine
 
   StageIssueStateMachine:
     Type: AWS::Serverless::StateMachine

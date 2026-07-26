@@ -298,6 +298,22 @@ pub async fn get_send_progress(tenant_id: &str, issue_number: i32) -> Option<Sen
     build_progress_report(result.item()?, chrono::Utc::now())
 }
 
+/// An issue whose send time has not arrived yet.
+///
+/// Two situations produce it, and they should read identically because they are
+/// the same thing to an operator: an execution parked in the definition's `Wait`
+/// (the old shape, still reachable for the GitHub producer), and a scheduled
+/// issue whose execution has not been started yet at all — the API hands the
+/// send instant to EventBridge Scheduler, so between scheduling and firing there
+/// is no execution to describe.
+pub fn waiting_for_send_time() -> WorkflowState {
+    WorkflowState {
+        state: "waiting".to_string(),
+        message: "Scheduled — the publish workflow is waiting for the send time.".to_string(),
+        detail: None,
+    }
+}
+
 /// Translate a Step Functions execution status into an operator-facing state.
 ///
 /// `scheduled_in_future` distinguishes the two reasons an execution is still
@@ -309,11 +325,7 @@ pub fn describe_execution_status(
     scheduled_in_future: bool,
 ) -> Option<WorkflowState> {
     match status {
-        "RUNNING" if scheduled_in_future => Some(WorkflowState {
-            state: "waiting".to_string(),
-            message: "Scheduled — the publish workflow is waiting for the send time.".to_string(),
-            detail: None,
-        }),
+        "RUNNING" if scheduled_in_future => Some(waiting_for_send_time()),
         "RUNNING" => Some(WorkflowState {
             state: "running".to_string(),
             message: "Publishing now.".to_string(),
@@ -730,6 +742,10 @@ mod tests {
         let waiting = describe_execution_status("RUNNING", None, true).unwrap();
         assert_eq!(waiting.state, "waiting");
         assert!(waiting.message.contains("waiting for the send time"));
+        // An execution parked in the Wait and a scheduled issue whose execution
+        // has not started yet are the same thing to read, so they share one
+        // rendering rather than two that can drift apart.
+        assert_eq!(waiting, waiting_for_send_time());
 
         let running = describe_execution_status("RUNNING", None, false).unwrap();
         assert_eq!(running.state, "running");

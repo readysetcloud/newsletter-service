@@ -4,6 +4,7 @@
   "States": {
     "Get Existing Issue": {
       "Type": "Task",
+      "Comment": "The execution input is identifiers, not content: { issueId, tenant: { id, email }, fileName, templateId, contentType } - see start_issue_schedule in functions/src/api/controllers/issues.rs. The issue body and subject are read from the record instead, in 'Mark Issue In Progress', because as of Phase 5 the execution starts at the send instant rather than at schedule time and the record may have been edited in between (D4). templateId, contentType and fileName stay on the input deliberately: they are small scalars the producer owns, the record leaves the first two optional (a '.$' read of an absent attribute is an unretryable States.Runtime error), and the GitHub producer has a real fileName that is nowhere on the record. Two parameters worth their own justification. ConsistentRead, because an immediate publish starts this execution milliseconds after the API writes the record: an eventually-consistent miss would route to 'Save Issue Record', which with an identifiers-only input has no content to write and fails the issue. ProjectionExpression, because status is the only attribute the handshake reads and the whole record - a pre-rendered HTML issue included - would otherwise sit in the execution state for the rest of the run, against a 256KB limit; the content reaches the pipeline as a variable instead.",
       "Resource": "${DynamodbGetItem}",
       "Parameters": {
         "TableName": "${TableName}",
@@ -14,6 +15,11 @@
           "sk": {
             "S": "newsletter"
           }
+        },
+        "ConsistentRead": true,
+        "ProjectionExpression": "#status",
+        "ExpressionAttributeNames": {
+          "#status": "status"
         }
       },
       "Catch": [
@@ -30,6 +36,7 @@
     },
     "Has Issue Been Processed?": {
       "Type": "Choice",
+      "Comment": "Defense in depth against a duplicate send, and now the fork that decides where the content comes from. 'scheduled' joins 'draft' as a sendable status: as of Phase 5 the API leaves a future issue at 'scheduled' and lets an EventBridge Scheduler entry start this execution at the send instant, so 'scheduled' is what the record says when the execution begins (D5 in docs/stage-issue-simplification-plan.md). The two onward edges each bind $content and $callerSubject from a different source - 'Mark Issue In Progress' from the record it just wrote, 'Save Issue Record' from the execution input - which is what keeps a single content source per path.",
       "Choices": [
         {
           "Not": {
@@ -58,8 +65,16 @@
               "IsPresent": true
             },
             {
-              "Variable": "$.existingNewsletter.Item.status.S",
-              "StringEquals": "draft"
+              "Or": [
+                {
+                  "Variable": "$.existingNewsletter.Item.status.S",
+                  "StringEquals": "draft"
+                },
+                {
+                  "Variable": "$.existingNewsletter.Item.status.S",
+                  "StringEquals": "scheduled"
+                }
+              ]
             }
           ],
           "Next": "Mark Issue In Progress"
@@ -69,6 +84,7 @@
     },
     "Mark Issue In Progress": {
       "Type": "Task",
+      "Comment": "The read of the issue content, and the only one: ReturnValues ALL_NEW hands the whole record back from the write that claims it, so $content and $callerSubject are the record as of the moment this issue went 'in progress' rather than whatever the producer captured when it was scheduled (D4). That matters because the execution no longer starts at schedule time - a Scheduler entry starts it at the send instant - and because the content never has to fit in the 256KB execution state. No :content value any more: the record already holds it, and writing the execution input back over it is what made an edit after scheduling send stale content. executionArn is recorded here rather than by the API, which does not have one to record for a scheduled issue; the API's GET reads it to report where the workflow is.",
       "Resource": "${DynamodbUpdateItem}",
       "Parameters": {
         "TableName": "${TableName}",
@@ -80,22 +96,22 @@
             "S": "newsletter"
           }
         },
-        "UpdateExpression": "SET #status = :status, #content = :content, updatedAt = :updatedAt",
+        "UpdateExpression": "SET #status = :status, executionArn = :executionArn, updatedAt = :updatedAt",
         "ExpressionAttributeNames": {
-          "#status": "status",
-          "#content": "content"
+          "#status": "status"
         },
         "ExpressionAttributeValues": {
           ":status": {
             "S": "in progress"
           },
-          ":content": {
-            "S.$": "$$.Execution.Input.content"
+          ":executionArn": {
+            "S.$": "$$.Execution.Id"
           },
           ":updatedAt": {
             "S.$": "$$.State.EnteredTime"
           }
-        }
+        },
+        "ReturnValues": "ALL_NEW"
       },
       "Catch": [
         {
@@ -107,10 +123,15 @@
         }
       ],
       "Next": "Is Scheduled In The Future?",
-      "ResultPath": null
+      "ResultPath": null,
+      "Assign": {
+        "content.$": "$.Attributes.content.S",
+        "callerSubject.$": "$.Attributes.subject.S"
+      }
     },
     "Save Issue Record": {
       "Type": "Task",
+      "Comment": "The producer-supplied side of the fork: there is no record to read the content out of (or it is a 'failed' one being re-staged), so this path creates it from the execution input and binds $content from the same place. import-issue-from-github.mjs is the only producer that reaches it - it starts an execution for an issue the API has never seen, with the file's content in the input. An API-started execution always has a record, so if one ever landed here the missing $$.Execution.Input.content would throw States.Runtime into the Catch below and mark the issue failed, which is the right outcome: identifiers-only input plus no record means there is nothing to publish.",
       "Resource": "${DynamodbPutItem}",
       "Parameters": {
         "TableName": "${TableName}",
@@ -126,6 +147,9 @@
           },
           "content": {
             "S.$": "$$.Execution.Input.content"
+          },
+          "executionArn": {
+            "S.$": "$$.Execution.Id"
           },
           "createdAt": {
             "S.$": "$$.State.EnteredTime"
@@ -145,10 +169,15 @@
         }
       ],
       "Next": "Is Scheduled In The Future?",
-      "ResultPath": null
+      "ResultPath": null,
+      "Assign": {
+        "content.$": "$$.Execution.Input.content",
+        "callerSubject.$": "$$.Execution.Input.subject"
+      }
     },
     "Is Scheduled In The Future?": {
       "Type": "Choice",
+      "Comment": "A no-op for the API, which stopped sending futureDate in Phase 5 - a future issue is now started by a Scheduler entry at the send instant instead of holding an execution open for days. It stays because import-issue-from-github.mjs still sends futureDate (a frontmatter date it resolved itself), and because it is what makes the Phase 5 rollback a producer-side flip: point the API back at StartExecution with a futureDate and this branch waits again, no definition change.",
       "Choices": [
         {
           "Variable": "$.futureDate",
@@ -160,6 +189,7 @@
     },
     "Wait For Future Date": {
       "Type": "Wait",
+      "Comment": "Deliberately still here. See 'Is Scheduled In The Future?' - this state is the rollback for Phase 5 and the entry point the GitHub producer still uses. Note what waiting here costs, and why the API no longer does it: everything downstream, including the read of the issue content, happens after the Wait, so a week-long execution pins whatever the producer sent and nothing can run before the send instant - which is what blocks local send for timezones east of the base zone (D9).",
       "TimestampPath": "$.futureDate",
       "Next": "Trigger Site Rebuild"
     },
@@ -246,7 +276,7 @@
       "Resource": "${LambdaInvoke}",
       "Parameters": {
         "Payload": {
-          "content.$": "$$.Execution.Input.content",
+          "content.$": "$content",
           "contentType.$": "$contentType",
           "tenantId.$": "$$.Execution.Input.tenant.id",
           "issueId.$": "$$.Execution.Input.issueId"
@@ -287,11 +317,11 @@
       "Parameters": {
         "FunctionName": "${ParseIssue}",
         "Payload": {
-          "content.$": "$$.Execution.Input.content",
+          "content.$": "$content",
           "fileName.$": "$$.Execution.Input.fileName",
           "issueId.$": "$$.Execution.Input.issueId",
           "tenantId.$": "$$.Execution.Input.tenant.id",
-          "subject.$": "$$.Execution.Input.subject",
+          "subject.$": "$callerSubject",
           "contentType.$": "$contentType"
         }
       },
@@ -592,7 +622,7 @@
       "Parameters": {
         "FunctionName": "${GenerateSocialPost}",
         "Payload": {
-          "content.$": "$$.Execution.Input.content",
+          "content.$": "$content",
           "tenantId.$": "$$.Execution.Input.tenant.id",
           "issueId.$": "States.Format('{}', $$.Execution.Input.issueId)"
         }

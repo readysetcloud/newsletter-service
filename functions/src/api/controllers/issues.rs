@@ -555,13 +555,22 @@ async fn get_workflow_state_for(
         return None;
     }
 
-    let execution_arn = issue.execution_arn.as_deref()?;
     let scheduled_in_future = issue
         .scheduled_at
         .as_deref()
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
         .map(|parsed| parsed.with_timezone(&chrono::Utc) > chrono::Utc::now())
         .unwrap_or(false);
+
+    // A scheduled issue has no execution to describe: a Scheduler entry starts
+    // one at the send instant, and until it does the record carries no ARN (the
+    // execution records its own — the API never sees it). "Waiting for the send
+    // time" is still the right thing to report, and it is now the record, not an
+    // execution parked in a `Wait`, that says so.
+    let Some(execution_arn) = issue.execution_arn.as_deref() else {
+        return (issue.status == "scheduled" && scheduled_in_future)
+            .then(send_progress::waiting_for_send_time);
+    };
 
     send_progress::get_workflow_state(execution_arn, scheduled_in_future).await
 }
@@ -640,11 +649,9 @@ async fn handle_resend_issue(
         tenant_id: &tenant_id,
         tenant_email: user_context.email.as_str(),
         issue_number: issue.issue_number,
-        content: &issue.content,
         scheduled_at: None,
         template_id: issue.template_id.as_deref(),
         content_type: &normalize_content_type(issue.content_type.as_deref()),
-        subject: &issue.subject,
     })
     .await?;
 
@@ -1953,7 +1960,7 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
         )
     });
 
-    let issue = create_issue_record(
+    let mut issue = create_issue_record(
         &tenant_id,
         issue_number,
         &body,
@@ -1982,13 +1989,18 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
             tenant_id: &tenant_id,
             tenant_email: user_context.email.as_str(),
             issue_number,
-            content: &body.content,
             scheduled_at: normalized_scheduled_at.as_deref(),
             template_id: body.template_id.as_deref(),
             content_type: &normalize_content_type(body.content_type.as_deref()),
-            subject: &body.subject,
         })
         .await?;
+
+        // A future send leaves the record at `scheduled` (the workflow starts at
+        // the send time and claims it then), so say so rather than reporting the
+        // `draft` the record was created as a moment ago.
+        if normalized_scheduled_at.is_some() {
+            issue.status = "scheduled".to_string();
+        }
     } else if let Some(ttl_seconds) = body.ttl_seconds {
         schedule_draft_deletion(&tenant_id, issue_number, ttl_seconds).await?;
     }
@@ -2099,11 +2111,33 @@ async fn handle_update_issue(
                 )));
             }
         }
+    } else if body.status.as_deref() == Some("draft") {
+        // Unscheduling: the one transition out of `scheduled`, and the reason
+        // that status is otherwise not updatable at all.
+        match existing.status.as_str() {
+            "scheduled" => {}
+            other => {
+                return Err(AppError::BadRequest(format!(
+                    "Cannot return issue to draft from status '{}'. Only 'scheduled' issues can be unscheduled",
+                    other
+                )));
+            }
+        }
     } else {
         check_update_allowed(&existing)?;
     }
 
     let is_publishing = body.status.as_deref() == Some("published");
+    let is_unscheduling = body.status.as_deref() == Some("draft");
+
+    // Cancel the send before the record says `draft`, not after. The state
+    // machine treats a `draft` record as sendable, so a schedule that outlived
+    // the status write would fire and publish an issue the operator cancelled —
+    // whereas a cancelled schedule with the record still on `scheduled` sends
+    // nothing and can be unscheduled again.
+    if is_unscheduling {
+        delete_issue_send_schedule(&tenant_id, existing.issue_number).await?;
+    }
 
     let updated = update_issue_record(
         &tenant_id,
@@ -2151,6 +2185,13 @@ async fn handle_delete_issue(
 
     let existing = get_issue_by_id(&tenant_id, &issue_id).await?;
     check_delete_allowed(&existing)?;
+
+    // Only drafts can be deleted, and a draft should have no send schedule — but
+    // "should" is doing real work there. `schedule_issue_send` creates the
+    // schedule before it moves the record off `draft`, so a failure between the
+    // two leaves exactly that pair, and deleting the record without cancelling
+    // would leave a schedule firing at an issue that no longer exists.
+    delete_issue_send_schedule(&tenant_id, existing.issue_number).await?;
 
     delete_issue_records(&tenant_id, &issue_id).await?;
 
@@ -2718,10 +2759,13 @@ fn validate_update_request(body: &UpdateIssueRequest, has_ab_test: bool) -> Resu
         }
     }
 
+    // The only two statuses a caller can set: `published` marks an in-progress
+    // or failed issue as sent, `draft` unschedules a scheduled one (cancelling
+    // its send). Everything else is the pipeline's to write.
     if let Some(status) = &body.status {
-        if status != "published" {
+        if status != "published" && status != "draft" {
             return Err(AppError::BadRequest(
-                "Status can only be set to 'published'".to_string(),
+                "Status can only be set to 'published' or 'draft'".to_string(),
             ));
         }
     }
@@ -3702,71 +3746,323 @@ async fn save_idempotency_record(
     }
 }
 
-/// Everything the stage-issue state machine needs in its execution input.
-/// Grouped rather than passed positionally because several fields are bare
-/// `&str` — named struct fields make a transposed pair a compile error instead
-/// of an issue published under the wrong tenant.
+/// Everything the stage-issue state machine needs to find the issue it is
+/// publishing. Grouped rather than passed positionally because several fields
+/// are bare `&str` — named struct fields make a transposed pair a compile error
+/// instead of an issue published under the wrong tenant.
+///
+/// Identifiers only, deliberately: the execution reads the issue record when it
+/// starts, so the content and subject are not in here. See
+/// `build_execution_input`.
 struct IssueScheduleInput<'a> {
     tenant_id: &'a str,
     tenant_email: &'a str,
     issue_number: i32,
-    content: &'a str,
     scheduled_at: Option<&'a str>,
     template_id: Option<&'a str>,
     content_type: &'a str,
-    subject: &'a str,
 }
 
-async fn start_issue_schedule(input: IssueScheduleInput<'_>) -> Result<(), AppError> {
-    let IssueScheduleInput {
-        tenant_id,
-        tenant_email,
-        issue_number,
-        content,
-        scheduled_at,
-        template_id,
-        content_type,
-        subject,
-    } = input;
+/// Environment variable holding the publish lead time, in minutes.
+const LEAD_TIME_ENV: &str = "ISSUE_SEND_LEAD_TIME_MINUTES";
 
+/// Prefix of the one-shot Scheduler entry that starts an issue's publish
+/// workflow. Matched literally by an IAM resource pattern in template.yaml
+/// (`schedule/newsletter/ISSUE-SEND-*`), so changing it needs that changed too.
+const ISSUE_SEND_SCHEDULE_PREFIX: &str = "ISSUE-SEND";
+
+/// The stage-issue execution input: identifiers, never content.
+///
+/// The execution used to be handed the whole issue body. It no longer is, for
+/// four reasons: the record is the only thing that can be *current* when the
+/// execution starts (a scheduled issue is started by a Scheduler entry at the
+/// send instant, long after this runs), the execution state has a 256 KB
+/// ceiling a large HTML issue can reach, the Scheduler entry's target input has
+/// a much smaller limit of its own, and a copy of the content pinned in
+/// execution state is a second source of truth for what got published.
+///
+/// `templateId`, `contentType` and `fileName` stay: they are small scalars this
+/// API owns, and the state machine reads them with unconditional `.$` paths —
+/// which the record cannot support for the first two, since it leaves both
+/// attributes off entirely when they are unset.
+fn build_execution_input(input: &IssueScheduleInput<'_>) -> serde_json::Value {
+    serde_json::json!({
+        "fileName": format!("issue-{}", input.issue_number),
+        "issueId": input.issue_number,
+        "tenant": {
+            "id": input.tenant_id,
+            "email": input.tenant_email
+        },
+        // Always present (null when no template selected) so the state machine
+        // can reference it unconditionally.
+        "templateId": input.template_id,
+        // Routes the publish pipeline between the markdown and json parsers.
+        "contentType": input.content_type
+    })
+}
+
+/// Starts an issue's publish workflow — now, or at its send time.
+///
+/// An immediate publish still starts an execution directly. A scheduled one
+/// creates a one-shot EventBridge Scheduler entry that starts the execution at
+/// (send instant − lead time) instead, rather than starting an execution that
+/// sits in the definition's `Wait For Future Date` state for days. Three things
+/// come out of that: the execution reads the issue record at send time instead
+/// of publishing a copy taken at schedule time, work can happen *before* the
+/// send instant (which is what timezone-correct local send needs — see
+/// `issue_send_lead_time`), and the schedule name is a per-issue lock.
+///
+/// Rollback is producer-side: send `futureDate` in the execution input and call
+/// `start_execution` unconditionally. `Wait For Future Date` is still in the
+/// definition for exactly that reason.
+async fn start_issue_schedule(input: IssueScheduleInput<'_>) -> Result<(), AppError> {
+    let execution_input = build_execution_input(&input);
+
+    match input.scheduled_at {
+        Some(scheduled_at) => schedule_issue_send(&input, scheduled_at, &execution_input).await,
+        None => start_issue_execution(&input, &execution_input).await,
+    }
+}
+
+/// Starts the publish workflow immediately.
+async fn start_issue_execution(
+    input: &IssueScheduleInput<'_>,
+    execution_input: &serde_json::Value,
+) -> Result<(), AppError> {
     let sfn_client = aws_clients::get_sfn_client().await;
     let state_machine_arn = std::env::var("STATE_MACHINE_ARN")
         .map_err(|_| AppError::InternalError("STATE_MACHINE_ARN not set".to_string()))?;
 
-    let mut input = serde_json::json!({
-        "content": content,
-        "fileName": format!("issue-{}", issue_number),
-        "issueId": issue_number,
-        "tenant": {
-            "id": tenant_id,
-            "email": tenant_email
-        },
-        "isPreview": false,
-        // Always present (null when no template selected) so the state machine
-        // can reference it unconditionally.
-        "templateId": template_id,
-        // Routes the publish pipeline between the markdown and json paths.
-        "contentType": content_type,
-        // The issue subject is used directly as the email subject in json mode
-        // (where there is no markdown frontmatter to derive it from).
-        "subject": subject
-    });
-
-    if let Some(scheduled_at) = scheduled_at {
-        input["futureDate"] = serde_json::Value::String(scheduled_at.to_string());
-    }
-
     let execution = sfn_client
         .start_execution()
         .state_machine_arn(state_machine_arn)
-        .input(input.to_string())
+        .input(execution_input.to_string())
         .send()
         .await
         .map_err(|e| AppError::AwsError(format!("Failed to start schedule workflow: {}", e)))?;
 
-    record_execution_arn(tenant_id, issue_number, execution.execution_arn()).await;
+    record_execution_arn(
+        input.tenant_id,
+        input.issue_number,
+        execution.execution_arn(),
+    )
+    .await;
 
     Ok(())
+}
+
+/// Hands the send instant to EventBridge Scheduler and leaves the record at
+/// `scheduled` until the execution it starts claims it.
+///
+/// Ordering matters and is the opposite of what reads naturally: the schedule is
+/// created first, then the record is moved off `draft`. The other order can lose
+/// a send outright — a record that says `scheduled` with no schedule behind it
+/// never fires and nothing is watching for that — whereas a schedule with a
+/// record still on `draft` sends anyway, because the state machine's handshake
+/// treats `draft` as sendable.
+async fn schedule_issue_send(
+    input: &IssueScheduleInput<'_>,
+    scheduled_at: &str,
+    execution_input: &serde_json::Value,
+) -> Result<(), AppError> {
+    let scheduler = aws_clients::get_scheduler_client().await;
+    let state_machine_arn = std::env::var("STATE_MACHINE_ARN")
+        .map_err(|_| AppError::InternalError("STATE_MACHINE_ARN not set".to_string()))?;
+    let role_arn = std::env::var("ISSUE_SEND_SCHEDULER_ROLE_ARN").map_err(|_| {
+        AppError::InternalError("ISSUE_SEND_SCHEDULER_ROLE_ARN not set".to_string())
+    })?;
+
+    let send_instant = chrono::DateTime::parse_from_rfc3339(scheduled_at)
+        .map_err(|_| {
+            AppError::InternalError(format!("Unparseable scheduled send time: {scheduled_at}"))
+        })?
+        .with_timezone(&chrono::Utc);
+
+    let fire_at = issue_send_fire_at(send_instant, issue_send_lead_time(), chrono::Utc::now());
+    let schedule_name = build_issue_send_schedule_name(input.tenant_id, input.issue_number);
+
+    scheduler
+        .create_schedule()
+        .name(&schedule_name)
+        .group_name("newsletter")
+        .schedule_expression(format!("at({})", fire_at.format("%Y-%m-%dT%H:%M:%S")))
+        .action_after_completion(aws_sdk_scheduler::types::ActionAfterCompletion::Delete)
+        .flexible_time_window(
+            aws_sdk_scheduler::types::FlexibleTimeWindow::builder()
+                .mode(aws_sdk_scheduler::types::FlexibleTimeWindowMode::Off)
+                .build()
+                .map_err(|e| {
+                    AppError::InternalError(format!("Failed to build time window: {}", e))
+                })?,
+        )
+        .target(
+            aws_sdk_scheduler::types::Target::builder()
+                .arn(&state_machine_arn)
+                .role_arn(&role_arn)
+                .input(execution_input.to_string())
+                .build()
+                .map_err(|e| AppError::InternalError(format!("Failed to build target: {}", e)))?,
+        )
+        .send()
+        .await
+        .map_err(|err| {
+            // The name is deterministic per (tenant, issue), which makes this a
+            // duplicate-send guard rather than a naming collision: a second
+            // request to schedule the same issue cannot create a second send.
+            // The state machine's `Has Issue Been Processed?` handshake still
+            // backs it up, since the GitHub producer does not come through here.
+            let is_conflict = err
+                .as_service_error()
+                .is_some_and(|service_err| service_err.is_conflict_exception());
+
+            if is_conflict {
+                return AppError::Conflict(format!(
+                    "Issue {} already has a send scheduled",
+                    input.issue_number
+                ));
+            }
+
+            AppError::AwsError(format!("Failed to schedule issue send: {}", err))
+        })?;
+
+    mark_issue_scheduled(input.tenant_id, input.issue_number).await
+}
+
+/// Moves a freshly created issue from `draft` to `scheduled`, where it stays
+/// until the execution starts and claims it as `in progress`. It used to report
+/// `in progress` for its entire wait, which said "publishing now" for days.
+///
+/// Drops any `executionArn` from a previous run at the same time: it names an
+/// execution that has nothing to do with this send, and the GET endpoint would
+/// describe it as this issue's workflow state.
+async fn mark_issue_scheduled(tenant_id: &str, issue_number: i32) -> Result<(), AppError> {
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+    let table_name = std::env::var("TABLE_NAME")
+        .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
+
+    ddb_client
+        .update_item()
+        .table_name(&table_name)
+        .key(
+            "pk",
+            AttributeValue::S(format!("{tenant_id}#{issue_number}")),
+        )
+        .key("sk", AttributeValue::S("newsletter".to_string()))
+        .update_expression("SET #status = :status, updatedAt = :updatedAt REMOVE executionArn")
+        // Never resurrect a record that has been deleted from under us: an
+        // UpdateItem on a missing key would create a ghost issue.
+        .condition_expression("attribute_exists(pk)")
+        .expression_attribute_names("#status", "status")
+        .expression_attribute_values(":status", AttributeValue::S("scheduled".to_string()))
+        .expression_attribute_values(
+            ":updatedAt",
+            AttributeValue::S(chrono::Utc::now().to_rfc3339()),
+        )
+        .send()
+        .await?;
+
+    Ok(())
+}
+
+/// How far ahead of the send instant the publish workflow starts.
+///
+/// **The lead time is the content freeze point.** The execution reads the issue
+/// record when it starts, so what goes out is whatever the record said at
+/// (send instant − lead time); an edit after that is not in the issue.
+///
+/// It exists because the local-send fan-out cannot schedule a group whose local
+/// send time has already passed, so with a zero lead time every timezone east
+/// of the base zone is sent immediately instead of at its own 9am. A lead time
+/// wide enough to cover the largest eastward offset (24h covers everything,
+/// including UTC+14) puts the fan-out ahead of the base instant and lets those
+/// groups be scheduled properly.
+///
+/// Default 0, which is today's behaviour: the execution starts at the send
+/// instant, exactly where the `Wait` used to end.
+///
+/// **Raising it above 0 needs one more change first.** The parse step derives
+/// `sendAtDate` from the issue's own send instant and returns `now` when that
+/// instant has passed — true at a zero lead time, false the moment the
+/// execution starts early. Until the send instant is forwarded to `Parse Issue`
+/// (it is not today; `parse-json-issue.mjs` reads it from a `futureDate` the
+/// definition does not pass, and `parse-md-to-json.mjs` only reads it from
+/// markdown frontmatter), an early execution publishes early rather than
+/// scheduling the send. That is Phase 6's first job, not a config change.
+fn issue_send_lead_time() -> chrono::Duration {
+    chrono::Duration::minutes(parse_lead_time_minutes(
+        std::env::var(LEAD_TIME_ENV).ok().as_deref(),
+    ))
+}
+
+/// Parses the configured lead time, falling back to zero for anything that is
+/// not a usable number of minutes. Zero is the safe default in both directions:
+/// it is today's behaviour, and it can never move a send earlier than its
+/// scheduled instant.
+fn parse_lead_time_minutes(raw: Option<&str>) -> i64 {
+    raw.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0)
+        .max(0)
+}
+
+/// When the Scheduler entry fires. Clamped to `now`, so a lead time longer than
+/// the notice an issue was scheduled with starts the workflow immediately rather
+/// than asking Scheduler for a time in the past.
+fn issue_send_fire_at(
+    send_instant: chrono::DateTime<chrono::Utc>,
+    lead_time: chrono::Duration,
+    now: chrono::DateTime<chrono::Utc>,
+) -> chrono::DateTime<chrono::Utc> {
+    (send_instant - lead_time).max(now)
+}
+
+/// Name of the Scheduler entry that starts an issue's publish workflow.
+/// Deterministic per (tenant, issue) on purpose — that is what makes
+/// `CreateSchedule` conflict-detecting and `DeleteSchedule` possible, neither of
+/// which a generated name allows.
+fn build_issue_send_schedule_name(tenant_id: &str, issue_number: i32) -> String {
+    format!(
+        "{}-{}-{}",
+        ISSUE_SEND_SCHEDULE_PREFIX,
+        sanitize_tenant_for_schedule_name(tenant_id),
+        issue_number
+    )
+}
+
+/// Cancels a scheduled send, tolerating a missing schedule.
+///
+/// Missing is the common case and not an error: the entry deletes itself once it
+/// fires, an issue that was never scheduled never had one, and this is called on
+/// delete for any issue. What must not happen is a schedule outliving the record
+/// it would publish, so anything other than a not-found propagates.
+async fn delete_issue_send_schedule(tenant_id: &str, issue_number: i32) -> Result<(), AppError> {
+    let scheduler = aws_clients::get_scheduler_client().await;
+    let schedule_name = build_issue_send_schedule_name(tenant_id, issue_number);
+
+    match scheduler
+        .delete_schedule()
+        .name(&schedule_name)
+        .group_name("newsletter")
+        .send()
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            let is_not_found = err
+                .as_service_error()
+                .is_some_and(|service_err| service_err.is_resource_not_found_exception());
+
+            if is_not_found {
+                return Ok(());
+            }
+
+            Err(AppError::AwsError(format!(
+                "Failed to cancel scheduled send {}: {}",
+                schedule_name, err
+            )))
+        }
+    }
 }
 
 /// Store the publish workflow's execution ARN on the issue record so its state
@@ -3897,12 +4193,22 @@ async fn delete_draft_ttl_schedule(tenant_id: &str, issue_number: i32) -> Result
 /// The name is deterministic per (tenant, issue) so re-staging a draft can
 /// find and replace the previous TTL schedule instead of leaking it.
 fn build_draft_ttl_schedule_name(tenant_id: &str, issue_number: i32) -> String {
-    let tenant_prefix: String = tenant_id
+    format!(
+        "draft-ttl-{}-{}",
+        sanitize_tenant_for_schedule_name(tenant_id),
+        issue_number
+    )
+}
+
+/// The tenant id as it can appear in a schedule name: EventBridge Scheduler
+/// allows `[0-9a-zA-Z-_.]` and 64 characters total, so anything else is dropped
+/// and the id is truncated to leave room for the prefix and issue number.
+fn sanitize_tenant_for_schedule_name(tenant_id: &str) -> String {
+    tenant_id
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
         .take(16)
-        .collect();
-    format!("draft-ttl-{}-{}", tenant_prefix, issue_number)
+        .collect()
 }
 
 async fn get_next_issue_number(tenant_id: &str) -> Result<i32, AppError> {
@@ -6083,6 +6389,250 @@ Thanks!"#;
         assert_ne!(base, with_local_send);
         assert_ne!(base, with_assembly);
         assert_ne!(with_ab, with_local_send);
+    }
+
+    fn scheduled_issue(scheduled_at: &str, execution_arn: Option<&str>) -> IssueRecord {
+        IssueRecord {
+            pk: "tenant-123#42".to_string(),
+            sk: "newsletter".to_string(),
+            gsi1pk: "tenant-123#newsletter".to_string(),
+            gsi1sk: "2026-07-24T18:00:00Z".to_string(),
+            issue_number: 42,
+            subject: "Test Issue".to_string(),
+            status: "scheduled".to_string(),
+            content: "# Test Content".to_string(),
+            created_at: "2026-07-24T18:00:00Z".to_string(),
+            updated_at: "2026-07-24T18:00:00Z".to_string(),
+            published_at: None,
+            scheduled_at: Some(scheduled_at.to_string()),
+            metadata: None,
+            template_id: None,
+            content_type: None,
+            ab_test: None,
+            local_send: None,
+            content_assembly: None,
+            execution_arn: execution_arn.map(str::to_string),
+        }
+    }
+
+    /// A scheduled issue has no execution until the Scheduler starts one, so the
+    /// record is what has to say "waiting for the send time". Reporting nothing
+    /// here would leave the dashboard with no explanation for an issue that is
+    /// scheduled and has no progress record either.
+    #[tokio::test]
+    async fn test_workflow_state_reports_waiting_before_the_execution_exists() {
+        let issue = scheduled_issue(
+            &(chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339(),
+            None,
+        );
+
+        let workflow = get_workflow_state_for(&issue, false).await;
+
+        assert_eq!(
+            workflow,
+            Some(send_progress::waiting_for_send_time()),
+            "a scheduled issue with no execution should still report waiting"
+        );
+    }
+
+    /// The send time has passed and no execution ever recorded itself, which is
+    /// not "waiting" — it is a schedule that did not fire, and claiming the
+    /// workflow is on its way would hide that.
+    #[tokio::test]
+    async fn test_workflow_state_is_silent_when_a_past_send_never_started() {
+        let issue = scheduled_issue("2026-07-24T18:00:00Z", None);
+
+        assert_eq!(get_workflow_state_for(&issue, false).await, None);
+    }
+
+    #[tokio::test]
+    async fn test_workflow_state_is_silent_while_a_local_send_is_reporting() {
+        let issue = scheduled_issue(
+            &(chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339(),
+            None,
+        );
+
+        // Send progress is both more detailed and longer-lived than anything
+        // this could add.
+        assert_eq!(get_workflow_state_for(&issue, true).await, None);
+    }
+
+    /// The execution input is the contract with the state machine, and the whole
+    /// point of Phase 5 is what is *not* in it: an execution started at the send
+    /// instant that carried the content would be publishing whatever the record
+    /// said when the issue was scheduled, days earlier.
+    #[test]
+    fn test_build_execution_input_carries_identifiers_only() {
+        let input = build_execution_input(&IssueScheduleInput {
+            tenant_id: "tenant-123",
+            tenant_email: "owner@example.com",
+            issue_number: 42,
+            scheduled_at: Some("2026-07-27T14:00:00+00:00"),
+            template_id: Some("tmpl-1"),
+            content_type: "markdown",
+        });
+
+        assert_eq!(
+            input,
+            serde_json::json!({
+                "fileName": "issue-42",
+                "issueId": 42,
+                "tenant": { "id": "tenant-123", "email": "owner@example.com" },
+                "templateId": "tmpl-1",
+                "contentType": "markdown"
+            })
+        );
+        // Named individually because each one is a specific bug if it comes
+        // back: content and subject are read off the record now, and futureDate
+        // is what parked the execution in the definition's `Wait`.
+        for absent in ["content", "subject", "futureDate"] {
+            assert!(input.get(absent).is_none(), "{absent} is back on the input");
+        }
+    }
+
+    #[test]
+    fn test_build_execution_input_always_carries_a_template_id() {
+        let input = build_execution_input(&IssueScheduleInput {
+            tenant_id: "tenant-123",
+            tenant_email: "owner@example.com",
+            issue_number: 7,
+            scheduled_at: None,
+            template_id: None,
+            content_type: "json",
+        });
+
+        // Present-but-null, because the definition reads it with an
+        // unconditional `.$` path: an absent field is a runtime error there.
+        assert_eq!(input["templateId"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn test_parse_lead_time_minutes_defaults_to_zero() {
+        assert_eq!(parse_lead_time_minutes(None), 0);
+        assert_eq!(parse_lead_time_minutes(Some("")), 0);
+        assert_eq!(parse_lead_time_minutes(Some("  ")), 0);
+        assert_eq!(parse_lead_time_minutes(Some("soon")), 0);
+        // A negative lead time would move a send *later* than its scheduled
+        // instant, which is never what anyone configuring this means.
+        assert_eq!(parse_lead_time_minutes(Some("-30")), 0);
+    }
+
+    #[test]
+    fn test_parse_lead_time_minutes_reads_a_configured_value() {
+        assert_eq!(parse_lead_time_minutes(Some("1440")), 1440);
+        assert_eq!(parse_lead_time_minutes(Some(" 90 ")), 90);
+    }
+
+    #[test]
+    fn test_issue_send_fire_at_subtracts_the_lead_time() {
+        let send_instant = timestamp("2026-07-27T14:00:00Z");
+        let now = timestamp("2026-07-24T18:00:00Z");
+
+        assert_eq!(
+            issue_send_fire_at(send_instant, chrono::Duration::zero(), now),
+            send_instant
+        );
+        assert_eq!(
+            issue_send_fire_at(send_instant, chrono::Duration::hours(24), now),
+            timestamp("2026-07-26T14:00:00Z")
+        );
+    }
+
+    /// An issue scheduled with less notice than the lead time. Firing at the
+    /// clamped time means the workflow starts as early as it can, rather than
+    /// asking Scheduler for a moment that has already passed.
+    #[test]
+    fn test_issue_send_fire_at_never_asks_for_a_past_time() {
+        let send_instant = timestamp("2026-07-27T14:00:00Z");
+        let now = timestamp("2026-07-27T09:00:00Z");
+
+        assert_eq!(
+            issue_send_fire_at(send_instant, chrono::Duration::hours(24), now),
+            now
+        );
+    }
+
+    /// The name is a per-issue lock: `CreateSchedule` conflicts on it (so a
+    /// second schedule request cannot create a second send) and the cancel path
+    /// has to be able to reconstruct it from (tenant, issue) alone.
+    #[test]
+    fn test_build_issue_send_schedule_name_is_deterministic_and_legal() {
+        let name = build_issue_send_schedule_name("ten@nt/with#bad chars", 42);
+
+        assert_eq!(
+            name,
+            build_issue_send_schedule_name("ten@nt/with#bad chars", 42)
+        );
+        assert_ne!(
+            name,
+            build_issue_send_schedule_name("ten@nt/with#bad chars", 43)
+        );
+        // Matched by the IAM resource pattern in template.yaml.
+        assert!(name.starts_with("ISSUE-SEND-"));
+        assert!(name.ends_with("-42"));
+        assert!(name.len() <= 64);
+        assert!(name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'));
+    }
+
+    #[test]
+    fn test_schedule_names_stay_within_scheduler_limits_for_a_long_tenant_id() {
+        let tenant_id = "a".repeat(200);
+
+        assert!(build_issue_send_schedule_name(&tenant_id, 1_000_000).len() <= 64);
+        assert!(build_draft_ttl_schedule_name(&tenant_id, 1_000_000).len() <= 64);
+    }
+
+    /// `draft` is the unschedule request. It is validated here and gated on the
+    /// issue actually being `scheduled` in `handle_update_issue`.
+    #[test]
+    fn test_validate_update_request_accepts_the_two_settable_statuses() {
+        for status in ["published", "draft"] {
+            let request = UpdateIssueRequest {
+                subject: None,
+                content: None,
+                scheduled_at: None,
+                metadata: None,
+                status: Some(status.to_string()),
+                template_id: None,
+                content_type: None,
+            };
+
+            assert!(
+                validate_update_request(&request, false).is_ok(),
+                "status {status} should be settable"
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_update_request_rejects_pipeline_owned_statuses() {
+        for status in ["scheduled", "in progress", "sending", "failed"] {
+            let request = UpdateIssueRequest {
+                subject: None,
+                content: None,
+                scheduled_at: None,
+                metadata: None,
+                status: Some(status.to_string()),
+                template_id: None,
+                content_type: None,
+            };
+
+            assert!(
+                matches!(
+                    validate_update_request(&request, false),
+                    Err(AppError::BadRequest(_))
+                ),
+                "status {status} should not be settable by a caller"
+            );
+        }
+    }
+
+    fn timestamp(value: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(value)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
     }
 
     #[test]

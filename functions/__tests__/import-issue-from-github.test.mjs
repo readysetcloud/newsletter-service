@@ -70,20 +70,41 @@ const runImport = async () => {
   return JSON.parse(startExecution.mock.calls[0][0].input);
 };
 
-/** Depth-first search for a named state's `Parameters.Payload` in an ASL doc. */
-const findStatePayload = (node, stateName) => {
+/** Depth-first search for a named state in an ASL doc. */
+const findState = (node, stateName) => {
   if (!node || typeof node !== 'object') return undefined;
 
   if (node.States && Object.hasOwn(node.States, stateName)) {
-    return node.States[stateName].Parameters?.Payload;
+    return node.States[stateName];
   }
 
   for (const value of Object.values(node)) {
-    const found = findStatePayload(value, stateName);
+    const found = findState(value, stateName);
     if (found) return found;
   }
 
   return undefined;
+};
+
+/** Every `$$.Execution.Input.<field>` a state dereferences, by field name. */
+const inputFieldsReadBy = (state) => {
+  const fields = new Set();
+
+  const walk = (node) => {
+    if (typeof node === 'string') {
+      const match = /^\$\$\.Execution\.Input\.([a-zA-Z0-9_]+)/.exec(node);
+      if (match) fields.add(match[1]);
+    } else if (node && typeof node === 'object') {
+      // Comment strings mention paths in prose; they are not dereferences.
+      for (const [key, value] of Object.entries(node)) {
+        if (key !== 'Comment') walk(value);
+      }
+    }
+  };
+
+  walk(state.Parameters);
+  walk(state.Assign);
+  return [...fields];
 };
 
 describe('import-issue-from-github', () => {
@@ -98,38 +119,44 @@ describe('import-issue-from-github', () => {
     jest.useRealTimers();
   });
 
-  it('carries every execution-input field the parse step dereferences', async () => {
-    // "Parse Issue" pulls fields off the execution input with `.$` references.
+  it('carries every execution-input field the states it reaches dereference', async () => {
+    // These states pull fields off the execution input with `.$` references.
     // Those are not optional lookups: a missing field fails the whole execution
     // at runtime, and a GitHub import is the one caller that doesn't go through
     // the API's request validation. Reading the contract out of the ASL keeps
-    // this honest when the payload gains a field.
+    // this honest when the payload changes.
     //
-    // Scoped to that one state on purpose. It is now the only parse state -
-    // Phase 3 merged the markdown and json/html paths - and it reads the
-    // content type off the `$contentType` variable rather than the execution
-    // input, precisely because a GitHub import doesn't set that field. The two
-    // Choices that do read it guard the reference with `IsPresent`.
+    // `Save Issue Record` is where the content and subject are read now. Phase 5
+    // moved the API's producer to identifiers only - it stages the record itself,
+    // so the execution reads the content back off it - which leaves a GitHub
+    // import as the one entry point that still supplies them on the input, and
+    // this the one state that reads them there.
+    //
+    // `Parse Issue` is still checked because it is the only parse state (Phase 3
+    // merged the markdown and json/html paths) and it dereferences `fileName`.
+    // It reads the content type off the `$contentType` variable rather than the
+    // execution input, precisely because a GitHub import doesn't set that field;
+    // the two Choices that do read it guard the reference with `IsPresent`.
     const asl = JSON.parse(
       readFileSync(new URL('../../state-machines/stage-issue.asl.json', import.meta.url), 'utf8')
     );
 
-    // Undefined would mean the state was renamed and this test stopped
-    // checking anything, so assert it was found before reading it.
-    const payload = findStatePayload(asl, 'Parse Issue');
-    expect(payload).toBeDefined();
+    const referenced = new Set();
+    for (const stateName of ['Save Issue Record', 'Parse Issue']) {
+      // Undefined would mean the state was renamed and this test stopped
+      // checking anything, so assert it was found before reading it.
+      const state = findState(asl, stateName);
+      expect([stateName, state]).not.toEqual([stateName, undefined]);
 
-    const referenced = Object.values(payload)
-      .filter((value) => typeof value === 'string')
-      .map((value) => /^\$\$\.Execution\.Input\.([a-zA-Z0-9_]+)/.exec(value)?.[1])
-      .filter(Boolean);
+      for (const field of inputFieldsReadBy(state)) referenced.add(field);
+    }
 
-    expect(referenced).toContain('subject');
+    expect([...referenced].sort()).toEqual(['content', 'fileName', 'issueId', 'subject', 'tenant']);
 
     await loadIsolated();
     const input = await runImport();
 
-    const missing = referenced.filter((field) => !Object.hasOwn(input, field));
+    const missing = [...referenced].filter((field) => !Object.hasOwn(input, field));
 
     expect(missing).toEqual([]);
   });

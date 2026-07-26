@@ -143,6 +143,18 @@ const EXPECTED_CATCH_ROUTES = {
 // forces a decision about where its error cause comes from.
 const NON_CATCH_ENTRIES_TO_FAILURE_WRITE = ['Record Publish Rejection'];
 
+// Phase 5: the execution input carries identifiers, and the issue body is read
+// off the record when the execution starts. `Save Issue Record` is the one
+// exception and has to stay the only one - it runs when there is no record to
+// read (import-issue-from-github.mjs starts executions for issues the API has
+// never seen), so the input is the only place its content can come from.
+const CONTENT_FROM_EXECUTION_INPUT = ['Save Issue Record'];
+
+// The two states that bind the content variables, one per side of the
+// `Has Issue Been Processed?` fork. Pinned because a third binder would mean a
+// third answer to "what is this execution publishing".
+const CONTENT_BINDERS = ['Mark Issue In Progress', 'Save Issue Record'];
+
 // Phase 4's two states of interest, and the ceiling on what link classification
 // is allowed to add to a send. The function's own Lambda timeout is 60s
 // (template.yaml: UpdateLinksWithTrackingDataFunction), so the state's timeout
@@ -276,6 +288,55 @@ const variableReferencesIn = (value) => {
 };
 
 const substitutionTokensIn = (value) => [...value.matchAll(/\$\{([^}]+)\}/g)].map((match) => match[1]);
+
+// Names of the states whose own body reads `$<variable>` in a path-valued field.
+const statesReading = (variable) =>
+  new Set(
+    allStates
+      .filter(({ state }) => {
+        let found = false;
+        walkDollarFields(ownBody(state), '$', (value) => {
+          if (typeof value === 'string' && variableReferencesIn(value).includes(variable)) found = true;
+        });
+        return found;
+      })
+      .map(({ name }) => name)
+  );
+
+const declaresVariable = (state, variable) =>
+  Object.keys(state.Assign ?? {}).some((key) => key.replace(/\.\$$/, '') === variable);
+
+// Top-level states that read `$<variable>` on a route from `StartAt` where no
+// `Assign` has bound it yet. Catch edges deliberately inherit the *pre-state*
+// answer: a state's `Assign` does not run when the state throws, so a variable
+// bound by the state that failed is not bound on its catch edge.
+const routesReadingUnbound = (variable) => {
+  const readers = statesReading(variable);
+  const unbound = new Set();
+  const visited = new Set();
+  const queue = [[definition.StartAt, false]];
+
+  while (queue.length > 0) {
+    const [name, bound] = queue.pop();
+    const key = `${name}:${bound}`;
+    if (visited.has(key)) continue;
+    visited.add(key);
+
+    const state = definition.States[name];
+    if (readers.has(name) && !bound) {
+      unbound.add(name);
+      continue;
+    }
+
+    const onward = bound || declaresVariable(state, variable);
+    for (const target of plainTargets(state)) queue.push([target, onward]);
+    for (const catcher of state.Catch ?? []) {
+      if (catcher.Next) queue.push([catcher.Next, bound]);
+    }
+  }
+
+  return [...unbound];
+};
 
 // ===========================================================================
 // template.yaml DefinitionSubstitutions
@@ -534,51 +595,11 @@ describe('stage-issue definition: error handling', () => {
   // email on an issue that had already sent.
   //
   // Walks every route from `StartAt` carrying "has an Assign declared `social`
-  // yet", and asserts no reader of `$social` is reachable with that false.
-  // Catch edges deliberately inherit the *pre-state* answer: a state's `Assign`
-  // does not run when the state throws, which is exactly the trap the
-  // `Social Copy Unavailable` placeholder exists to close.
+  // yet", and asserts no reader of `$social` is reachable with that false. See
+  // `routesReadingUnbound` for why catch edges are walked the way they are.
   it('declares $social on every route into the states that read it', () => {
-    const readsSocial = ({ state }) => {
-      let found = false;
-      walkDollarFields(ownBody(state), '$', (value) => {
-        if (typeof value === 'string' && variableReferencesIn(value).includes('social')) found = true;
-      });
-      return found;
-    };
-
-    const readers = new Set(allStates.filter(readsSocial).map(({ name }) => name));
-    expect(readers.size).toBeGreaterThan(0);
-
-    const declaresSocial = (state) =>
-      Object.keys(state.Assign ?? {}).some((key) => key.replace(/\.\$$/, '') === 'social');
-
-    const undeclared = new Set();
-    const visited = new Set();
-    const queue = [[definition.StartAt, false]];
-
-    while (queue.length > 0) {
-      const [name, declared] = queue.pop();
-      const key = `${name}:${declared}`;
-      if (visited.has(key)) continue;
-      visited.add(key);
-
-      const state = definition.States[name];
-      if (readers.has(name) && !declared) {
-        undeclared.add(name);
-        continue;
-      }
-
-      const onward = declared || declaresSocial(state);
-      for (const target of [state.Next, state.Default, ...(state.Choices ?? []).map((choice) => choice.Next)]) {
-        if (target) queue.push([target, onward]);
-      }
-      for (const catcher of state.Catch ?? []) {
-        if (catcher.Next) queue.push([catcher.Next, declared]);
-      }
-    }
-
-    expect([...undeclared]).toEqual([]);
+    expect(statesReading('social').size).toBeGreaterThan(0);
+    expect(routesReadingUnbound('social')).toEqual([]);
   });
 });
 
@@ -793,6 +814,132 @@ describe('stage-issue definition: link extraction', () => {
       expect([catcher.Next, seen.has(PUBLISH)]).toEqual([catcher.Next, true]);
       expect(touched).not.toContain(FAILURE_WRITE);
     }
+  });
+});
+
+// ===========================================================================
+// Identifiers in, content off the record (Phase 5 of
+// docs/stage-issue-simplification-plan.md). The API now creates an
+// `ISSUE-SEND-<tenant>-<issue>` Scheduler entry that starts this execution at
+// the send instant, so the input can no longer carry the issue body: it would
+// be whatever the record said when the issue was *scheduled*, days earlier.
+// ===========================================================================
+describe('stage-issue definition: identifiers, not content', () => {
+  it('reads the issue content out of the execution input in one state only', () => {
+    // Boundary-matched, because `$$.Execution.Input.contentType` is a different
+    // field and stays on the input on purpose (see 'Get Existing Issue').
+    const readsInputContent = /^\$\$\.Execution\.Input\.content$/;
+    const readers = allStates
+      .filter(({ state }) => {
+        let found = false;
+        walkStrings(ownBody(state), '$', (value) => {
+          if (readsInputContent.test(value)) found = true;
+        });
+        return found;
+      })
+      .map(({ name }) => name)
+      .sort();
+
+    expect(readers).toEqual([...CONTENT_FROM_EXECUTION_INPUT].sort());
+  });
+
+  // Two properties of the one read of the record, both load-bearing. Without
+  // ConsistentRead an immediate publish can start before its own record is
+  // visible, take the no-record path, and fail for want of a content field the
+  // input no longer carries. Without the projection the whole record - a
+  // pre-rendered HTML issue included - rides in the execution state for the rest
+  // of the run, against the 256KB limit this phase is supposed to get out from
+  // under.
+  it('reads the record consistently, and reads only what the handshake needs', () => {
+    const { state } = allStates.find(({ name }) => name === 'Get Existing Issue');
+
+    expect(state.Parameters.ConsistentRead).toBe(true);
+    expect(state.Parameters.ProjectionExpression).toBe('#status');
+    expect(state.Parameters.ExpressionAttributeNames).toEqual({ '#status': 'status' });
+
+    // The projection is only safe while `status` really is the only attribute
+    // anything reads off the state-data copy of the record.
+    const attributes = new Set();
+    for (const { state: body } of allStates) {
+      walkStrings(ownBody(body), '$', (value) => {
+        const match = /\$\.existingNewsletter\.Item\.([A-Za-z0-9_]+)/.exec(value);
+        if (match) attributes.add(match[1]);
+      });
+    }
+
+    expect([...attributes]).toEqual(['status']);
+  });
+
+  // The record read is the write that claims the issue: ALL_NEW hands the whole
+  // item back, so the content published is the content as of the status flip
+  // rather than a copy captured at schedule time (D4).
+  it('reads the content off the record it just claimed', () => {
+    const { state } = allStates.find(({ name }) => name === 'Mark Issue In Progress');
+
+    expect(state.Parameters.ReturnValues).toBe('ALL_NEW');
+    expect(state.Assign).toEqual({
+      'content.$': '$.Attributes.content.S',
+      'callerSubject.$': '$.Attributes.subject.S'
+    });
+    // Writing the input's content back over the record is what made an edit
+    // after scheduling publish stale content.
+    expect(state.Parameters.UpdateExpression).not.toMatch(/:content/);
+  });
+
+  it('binds the content variables on exactly the two sides of the handshake', () => {
+    for (const variable of ['content', 'callerSubject']) {
+      const binders = allStates
+        .filter(({ state }) => declaresVariable(state, variable))
+        .map(({ name }) => name)
+        .sort();
+
+      expect([variable, binders]).toEqual([variable, [...CONTENT_BINDERS].sort()]);
+      expect([variable, routesReadingUnbound(variable)]).toEqual([variable, []]);
+    }
+  });
+
+  // `scheduled` is a sendable status now: the record stays there for the whole
+  // wait instead of claiming `in progress` for days (D5), so the handshake has
+  // to let it through or a scheduled issue would read as already processed and
+  // succeed without sending.
+  it('treats a scheduled record as still to be sent', () => {
+    const { state } = allStates.find(({ name }) => name === 'Has Issue Been Processed?');
+    const sendable = state.Choices.filter((choice) => choice.Next === 'Mark Issue In Progress');
+
+    const statuses = JSON.stringify(sendable);
+    expect(statuses).toContain('"StringEquals":"draft"');
+    expect(statuses).toContain('"StringEquals":"scheduled"');
+    expect(state.Default).toBe('Success - Duplicate Request');
+  });
+
+  // The API cannot record the ARN of an execution it did not start, and
+  // `get_workflow_state_for` in issues.rs reads it to report where the workflow
+  // is. Both entry writes record it themselves instead.
+  it('records its own execution ARN on the issue record', () => {
+    const { state: marked } = allStates.find(({ name }) => name === 'Mark Issue In Progress');
+    const { state: saved } = allStates.find(({ name }) => name === 'Save Issue Record');
+
+    expect(marked.Parameters.UpdateExpression).toMatch(/executionArn = :executionArn/);
+    expect(marked.Parameters.ExpressionAttributeValues[':executionArn']).toEqual({
+      'S.$': '$$.Execution.Id'
+    });
+    expect(saved.Parameters.Item.executionArn).toEqual({ 'S.$': '$$.Execution.Id' });
+  });
+
+  // Transitional safety, and the whole rollback story for this phase: point the
+  // API back at StartExecution with a `futureDate` and the definition waits
+  // again, unchanged. It is also still the live path for
+  // import-issue-from-github.mjs, which resolves its own frontmatter date.
+  it('keeps the Wait state reachable for a producer that still sends futureDate', () => {
+    const { state: choice } = allStates.find(({ name }) => name === 'Is Scheduled In The Future?');
+    const { state: wait } = allStates.find(({ name }) => name === 'Wait For Future Date');
+
+    expect(choice.Choices).toEqual([
+      { Variable: '$.futureDate', IsPresent: true, Next: 'Wait For Future Date' }
+    ]);
+    expect(choice.Default).toBe('Trigger Site Rebuild');
+    expect(wait.Type).toBe('Wait');
+    expect(wait.TimestampPath).toBe('$.futureDate');
   });
 });
 

@@ -37,13 +37,19 @@ const STATE_MACHINE_RESOURCE = 'StageIssueStateMachine';
 // branches, in place of a fork that ran two near-identical tails, and one
 // (`Publish Success?`) replaces the pair that used to check the same thing per
 // path, including the `$[0]`/`$[1]` indexed one.
+//
+// Phase 4 added one Pass. Link extraction became a shared step, so the markdown
+// fork no longer has a Task of its own to hang its `Assign` on and needs a Pass
+// (`Markdown Extras`) mirroring `No Markdown Extras`. The `Task` count is
+// unchanged: `Update Web Links` became `Extract Links` and moved, it did not
+// multiply.
 const EXPECTED_STATE_COUNTS = {
-  topLevel: 23,
-  total: 27,
+  topLevel: 24,
+  total: 28,
   Choice: 5,
   Fail: 1,
   Parallel: 1,
-  Pass: 3,
+  Pass: 4,
   Succeed: 2,
   Task: 14,
   Wait: 1
@@ -106,6 +112,12 @@ const EXPECTED_CATCH_ROUTES = {
   // before publish rather than by a placeholder state on this edge.
   'Generate Social Copy': ['States.ALL -> Notify of Success ($.error)'],
   'Get Existing Issue': ['States.ALL -> Update Issue Record - Failure ($.error)'],
+  // The one catcher in the definition that does not touch the issue record.
+  // Link extraction sits ahead of `Publish` and calls Bedrock, so every outcome
+  // it can have - including States.Timeout - continues down the publish path.
+  // Degraded personalization is acceptable; a missed issue is not. Pinned here
+  // and again in the "cannot block or fail a send" test below.
+  'Extract Links': ['States.ALL -> Parse Issue (error discarded)'],
   'Mark Issue In Progress': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   // Post-publish courtesy email: a failure here must not relabel an issue that
   // published fine, because `Has Issue Been Processed?` treats `failed` as
@@ -116,9 +128,6 @@ const EXPECTED_CATCH_ROUTES = {
   'Save Issue Record': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   'Schedule Tasks and Update': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   'Trigger Site Rebuild': ['States.ALL -> Update Issue Record - Failure ($.error)'],
-  // Link extraction runs ahead of `Publish` now, so this catcher fires with
-  // nothing delivered - failing the issue here costs a rehearsal, not a send.
-  'Update Web Links': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   // The failure writer cannot catch to itself, and there is nothing left to
   // record once recording is what failed.
   'Update Issue Record - Failure': ['States.ALL -> Fail (error discarded)'],
@@ -133,6 +142,16 @@ const EXPECTED_CATCH_ROUTES = {
 // reads it. Kept as a constant so adding a plain `Next` into the failure writer
 // forces a decision about where its error cause comes from.
 const NON_CATCH_ENTRIES_TO_FAILURE_WRITE = ['Record Publish Rejection'];
+
+// Phase 4's two states of interest, and the ceiling on what link classification
+// is allowed to add to a send. The function's own Lambda timeout is 60s
+// (template.yaml: UpdateLinksWithTrackingDataFunction), so the state's timeout
+// has to sit just above it to be a backstop rather than a second, tighter limit -
+// but it must stay bounded and small, because every second of it is a second the
+// issue is late.
+const LINK_EXTRACTION = 'Extract Links';
+const PUBLISH = 'Publish';
+const MAX_LINK_EXTRACTION_TIMEOUT_SECONDS = 90;
 
 // ===========================================================================
 // Definition traversal helpers
@@ -192,6 +211,12 @@ const describeCatchers = (state) =>
     const landing = catcher.ResultPath === null ? 'error discarded' : catcher.ResultPath;
     return `${(catcher.ErrorEquals ?? []).join(',')} -> ${catcher.Next} (${landing})`;
   });
+
+// The transitions a state takes when nothing goes wrong. Catch edges are
+// excluded deliberately: several assertions below are about what the *happy*
+// path is obliged to do, and a catcher is by definition the path where it didn't.
+const plainTargets = (state) =>
+  [state.Next, state.Default, ...(state.Choices ?? []).map((choice) => choice.Next)].filter(Boolean);
 
 const transitionTargets = (state) => {
   const targets = [];
@@ -647,8 +672,9 @@ describe('stage-issue definition: one path per issue', () => {
     expect(assigners[0].state.Assign['listCleanupDate.$']).toBe('$.Payload.listCleanupDate');
   });
 
-  // Link extraction and social copy are the two markdown-only steps, and the
-  // whole reason a content-type branch still exists. Both Choices have to keep
+  // Social copy is the last markdown-only step, and the whole reason a
+  // content-type branch still exists (Phase 4 made link extraction shared). Both
+  // Choices have to keep
   // treating an *absent* contentType as markdown: import-issue-from-github.mjs
   // never sets the field, and an unguarded comparison against a missing path is
   // a runtime error rather than a false rule.
@@ -673,7 +699,99 @@ describe('stage-issue definition: one path per issue', () => {
       // Default is the markdown side on both, so an unrecognized value is
       // parsed as markdown and gets the markdown extras - the same fallback
       // normalizeContentType makes in functions/parse-issue.mjs.
-      expect([name, state.Default]).toEqual([name, name === 'Route By Content Type' ? 'Update Web Links' : 'Generate Social Copy']);
+      expect([name, state.Default]).toEqual([name, name === 'Route By Content Type' ? 'Markdown Extras' : 'Generate Social Copy']);
+    }
+  });
+});
+
+// ===========================================================================
+// Link extraction ahead of publish (Phase 4 of
+// docs/stage-issue-simplification-plan.md). Two properties, pulling against each
+// other, and the reason this phase gets its own block: extraction has to happen
+// before the send for every content type, and it has to be unable to affect the
+// send at all.
+// ===========================================================================
+describe('stage-issue definition: link extraction', () => {
+  it('extracts links in exactly one state, on the shared path', () => {
+    const extractors = allStates
+      .filter(({ state }) => state.Parameters?.FunctionName === '${UpdateLinksWithTrackingData}')
+      .map(({ name }) => name);
+
+    expect(extractors).toEqual([LINK_EXTRACTION]);
+    // Whatever the content type turns out to be, the function is told - it picks
+    // its extractor off this field (markdown links vs `<a href>` anchors), and
+    // before Phase 4 it only ever saw markdown content and only ever matched
+    // markdown links, which is why json and html issues had no `link#` records.
+    const { state } = allStates.find(({ name }) => name === LINK_EXTRACTION);
+    expect(state.Parameters.Payload['contentType.$']).toBe('$contentType');
+  });
+
+  // D7 and D8 together: json and html used to skip extraction entirely, and
+  // markdown ran it as a sibling of the publish branch, so classification raced
+  // the send and topics were usually still unknown when the issue rendered.
+  // Walked rather than asserted on one edge because "every route" is the claim -
+  // a future content-type branch that bypasses extraction is exactly the
+  // regression this catches.
+  it('runs link extraction ahead of Publish on every route into it', () => {
+    const unextracted = [];
+    const visited = new Set();
+    const queue = [[definition.StartAt, false, [definition.StartAt]]];
+
+    while (queue.length > 0) {
+      const [name, extracted, path] = queue.pop();
+      const key = `${name}:${extracted}`;
+      if (visited.has(key)) continue;
+      visited.add(key);
+
+      if (name === PUBLISH) {
+        if (!extracted) unextracted.push(path.join(' -> '));
+        continue;
+      }
+
+      const onward = extracted || name === LINK_EXTRACTION;
+      for (const target of plainTargets(definition.States[name])) {
+        queue.push([target, onward, [...path, target]]);
+      }
+    }
+
+    expect(unextracted).toEqual([]);
+  });
+
+  // The other half, and the constraint the phase turns on: classification calls
+  // Bedrock, so this is LLM latency on the critical path of a send. A bounded
+  // timeout plus a catcher that continues to `Publish` is what keeps "degraded
+  // personalization" from becoming "missed issue".
+  it('cannot let link extraction delay or fail a send', () => {
+    const { state } = allStates.find(({ name }) => name === LINK_EXTRACTION);
+
+    expect(typeof state.TimeoutSeconds).toBe('number');
+    expect(state.TimeoutSeconds).toBeLessThanOrEqual(MAX_LINK_EXTRACTION_TIMEOUT_SECONDS);
+
+    // A retried timeout would multiply the ceiling by the attempt count, so the
+    // Retry list stays limited to transient Lambda-service errors.
+    const retried = (state.Retry ?? []).flatMap((retry) => retry.ErrorEquals ?? []);
+    expect(retried).not.toContain('States.Timeout');
+    expect(retried).not.toContain('States.ALL');
+    expect(retried.length).toBeGreaterThan(0);
+
+    // Every catcher has to land somewhere that still reaches `Publish`, and has
+    // to get there without writing the issue off as failed on the way.
+    expect(state.Catch.length).toBeGreaterThan(0);
+    for (const catcher of state.Catch) {
+      const seen = new Set();
+      const touched = [];
+      const queue = [catcher.Next];
+      while (queue.length > 0) {
+        const name = queue.pop();
+        if (seen.has(name)) continue;
+        seen.add(name);
+        if (name === PUBLISH) continue; // the send is handed off here - stop
+        touched.push(name);
+        queue.push(...plainTargets(definition.States[name]));
+      }
+
+      expect([catcher.Next, seen.has(PUBLISH)]).toEqual([catcher.Next, true]);
+      expect(touched).not.toContain(FAILURE_WRITE);
     }
   });
 });

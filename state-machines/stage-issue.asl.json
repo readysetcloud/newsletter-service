@@ -192,7 +192,7 @@
     },
     "Route By Content Type": {
       "Type": "Choice",
-      "Comment": "The first of the two content-type branches left in this definition (the other is 'Social Copy Applies?'). Everything from 'Parse Issue' on is one shared path; all these decide is whether the two markdown-only extras run. Default is the markdown side so an unrecognized value is treated as markdown, matching normalizeContentType in functions/parse-issue.mjs. The IsPresent guard is load-bearing: import-issue-from-github.mjs omits contentType entirely and a Choice comparison against an absent path is an error.",
+      "Comment": "The first of the two content-type branches left in this definition (the other is 'Social Copy Applies?'). Everything from 'Extract Links' on is one shared path; social copy is the only markdown-only step left, and all the two branches here still do before the shared path begins is bind $contentType and a fallback $social. Default is the markdown side so an unrecognized value is treated as markdown, matching normalizeContentType in functions/parse-issue.mjs. The IsPresent guard is load-bearing: import-issue-from-github.mjs omits contentType entirely and a Choice comparison against an absent path is an error.",
       "Choices": [
         {
           "And": [
@@ -216,31 +216,44 @@
           "Next": "No Markdown Extras"
         }
       ],
-      "Default": "Update Web Links"
+      "Default": "Markdown Extras"
     },
     "No Markdown Extras": {
       "Type": "Pass",
-      "Comment": "json and html issues skip both markdown-only steps. Link extraction is skipped because it matches '[text](url)', which neither a json data object nor a pre-rendered html master contains (Phase 4 of docs/stage-issue-simplification-plan.md revisits that). Social copy is skipped because it is derived from the markdown - which is why $social is stood in here: 'Notify of Success' formats $social.copy into the email on every path, and Assign only runs for states that actually execute. $contentType exists for the same reason it does on 'Update Web Links': see there.",
+      "Comment": "json and html issues skip social copy, which is derived from the markdown - which is why $social is stood in here: 'Notify of Success' formats $social.copy into the email on every path, and Assign only runs for states that actually execute. $contentType exists for the same reason it does on 'Markdown Extras': see there. Link extraction is no longer skipped on this branch - as of Phase 4 it is a shared step, see 'Extract Links'.",
       "Assign": {
         "contentType.$": "$$.Execution.Input.contentType",
         "social": {
           "copy": "(not generated - social copy is only derived from markdown issues)"
         }
       },
-      "Next": "Parse Issue"
+      "Next": "Extract Links"
     },
-    "Update Web Links": {
+    "Markdown Extras": {
+      "Type": "Pass",
+      "Comment": "The markdown counterpart of 'No Markdown Extras', and the only thing the markdown fork still does on its own: bind the two variables the shared path reads. $contentType, because 'Parse Issue', 'Extract Links' and 'Publish' all want the content type in their payload and the GitHub producer never sets it on the execution input, so it cannot be read off $$.Execution.Input with a '.$' path. And a fallback $social, because 'Generate Social Copy' assigns the real one and Assign does not run on a state that threw - the fallback has to already be in place for 'Notify of Success' to format. Its wording is the failure case because that is the only way it can still be the live value when the notification is built.",
+      "Assign": {
+        "contentType": "markdown",
+        "social": {
+          "copy": "(unavailable - social copy generation failed, see the execution history)"
+        }
+      },
+      "Next": "Extract Links"
+    },
+    "Extract Links": {
       "Type": "Task",
-      "Comment": "Markdown only, and sequential now rather than a sibling of the publish branch - the indexed '$[0]'/'$[1]' Parallel output that used to join the two is gone. Running ahead of 'Publish' also means a failure here can no longer land after the send was handed off: it reaches the Catch with nothing delivered. The returned success/linkCount are not read; a failure arrives as a throw. The Assign carries the two things the shared tail needs from this fork: $contentType, because 'Parse Issue' and 'Publish' both want the content type in their payload and the GitHub producer never sets it on the execution input; and a fallback $social, because 'Generate Social Copy' assigns the real one and Assign does not run on a state that threw - the fallback has to already be in place for 'Notify of Success' to format. Its wording is the failure case because that is the only way it can still be the live value when the notification is built.",
+      "Comment": "Link extraction and LLM topic classification, for every content type and ahead of 'Publish' (Phase 4 of docs/stage-issue-simplification-plan.md). It used to be markdown-only and a sibling of the publish branch, which cost two things: json and html issues got no 'link#' records at all, so interest assembly and top-link reporting had nothing to read for them (D7); and for markdown it raced the send, so an issue routinely rendered before its links were classified (D8). Sequential and first, the records exist before anything reads them. The tradeoff is deliberate and is the reason for the timeout below: update-link-tracking calls Bedrock per link, so this puts LLM latency on the critical path of a send. Link classification must never be able to block or fail a send - degraded personalization is acceptable, a missed issue is not. TimeoutSeconds sits just above the function's own 60s Lambda timeout (template.yaml: UpdateLinksWithTrackingDataFunction), so the function's timeout normally reports first with the records it managed to write, and 75 is the backstop for an invoke that never comes back at all. States.Timeout is deliberately absent from the Retry list: a timeout is caught rather than retried, which caps what this state can add to a send at one long attempt plus the Lambda-service retries below.",
       "Resource": "${LambdaInvoke}",
       "Parameters": {
         "Payload": {
           "content.$": "$$.Execution.Input.content",
+          "contentType.$": "$contentType",
           "tenantId.$": "$$.Execution.Input.tenant.id",
           "issueId.$": "$$.Execution.Input.issueId"
         },
         "FunctionName": "${UpdateLinksWithTrackingData}"
       },
+      "TimeoutSeconds": 75,
       "Retry": [
         {
           "ErrorEquals": [
@@ -259,18 +272,13 @@
           "ErrorEquals": [
             "States.ALL"
           ],
-          "Next": "Update Issue Record - Failure",
-          "ResultPath": "$.error"
+          "Comment": "On to 'Parse Issue' - the next state on the happy path - so every outcome here, including States.Timeout, still reaches 'Publish'. This is the only Catch in the definition that does not touch the issue record: a link failure is not an issue failure, and marking the record 'failed' for one would both lie and invite a re-stage, which 'Has Issue Been Processed?' would honor as a second send. The cause stays in the execution history. ResultPath is null rather than '$.error' so a link failure cannot be mistaken for the publish failure a later Catch would record.",
+          "Next": "Parse Issue",
+          "ResultPath": null
         }
       ],
       "ResultPath": null,
-      "Next": "Parse Issue",
-      "Assign": {
-        "contentType": "markdown",
-        "social": {
-          "copy": "(unavailable - social copy generation failed, see the execution history)"
-        }
-      }
+      "Next": "Parse Issue"
     },
     "Parse Issue": {
       "Type": "Task",
@@ -607,7 +615,7 @@
           "ErrorEquals": [
             "States.ALL"
           ],
-          "Comment": "Straight on to the notification: $social already holds the 'generation failed' fallback 'Update Web Links' assigned, so there is nothing for a placeholder state to stand in. $.error rides along so the cause stays in the execution output.",
+          "Comment": "Straight on to the notification: $social already holds the 'generation failed' fallback 'Markdown Extras' assigned, so there is nothing for a placeholder state to stand in. $.error rides along so the cause stays in the execution output.",
           "Next": "Notify of Success",
           "ResultPath": "$.error"
         }
@@ -620,7 +628,7 @@
     },
     "Notify of Success": {
       "Type": "Task",
-      "Comment": "The one success notification, reached by every content type. $social.copy is either the generated copy or the fallback its fork assigned before publish - 'Update Web Links' for markdown, 'No Markdown Extras' for json and html, which used to get a separate notify state with no social copy line at all.",
+      "Comment": "The one success notification, reached by every content type. $social.copy is either the generated copy or the fallback its fork assigned before publish - 'Markdown Extras' for markdown, 'No Markdown Extras' for json and html, which used to get a separate notify state with no social copy line at all.",
       "Resource": "${EventBridgePutEvents}",
       "Parameters": {
         "Entries": [

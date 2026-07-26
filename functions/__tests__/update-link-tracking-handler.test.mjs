@@ -219,6 +219,133 @@ describe('update-link-tracking handler', () => {
     expect(item.primaryTopic).toBeUndefined();
   });
 
+  // Phase 4 of docs/stage-issue-simplification-plan.md: json and html issues run
+  // this step too now, and neither carries markdown, so the `[text](url)` matcher
+  // finds nothing in them. These are the cases that used to produce no records at
+  // all (D7) rather than the wrong ones.
+  describe('non-markdown content types', () => {
+    test('extracts anchors from an html master, in document order', async () => {
+      const result = await handler({
+        tenantId: 'tenant123',
+        issueId: '42',
+        contentType: 'html',
+        content: `<html><body>
+          <p>Read <a href="https://example.com/first" style="color:blue">the first post</a> today.</p>
+          <p>Then <a class="cta" href='https://example.com/second'>the second</a>.</p>
+          <p>Or <a href="mailto:hi@example.com">email us</a> or go <a href="/index">home</a>.</p>
+        </body></html>`
+      });
+
+      // mailto: and relative links consume no position, same rule as markdown.
+      expect(result).toEqual({ success: true, linkCount: 2 });
+
+      const byUrl = Object.fromEntries(putItems(mockSend).map(r => [r.url, r]));
+      expect(byUrl['https://example.com/first'].position).toBe(1);
+      expect(byUrl['https://example.com/second'].position).toBe(2);
+
+      // The anchor's paragraph reaches the classifier as context, not the markup.
+      const [, anchorText, context] = mockClassifyLinkWithLlm.mock.calls
+        .find(([url]) => url === 'https://example.com/first');
+      expect(anchorText).toBe('the first post');
+      expect(context).toContain('Read the first post today.');
+      expect(context).not.toContain('<');
+    });
+
+    test('ignores anchors inside Outlook conditionals and style blocks', async () => {
+      // The mso copy of a link is a duplicate of the visible one - counting it
+      // would shift every later `position` by one against what the issue renders.
+      const result = await handler({
+        tenantId: 'tenant123',
+        issueId: '42',
+        contentType: 'html',
+        content: `<html><head><style>a { color: #000 } /* <a href="https://example.com/css">x</a> */</style></head>
+          <body>
+          <!--[if mso]><a href="https://example.com/outlook">Read it</a><![endif]-->
+          <!--[if !mso]><!--><a href="https://example.com/visible">Read it</a><!--<![endif]-->
+          </body></html>`
+      });
+
+      expect(result.linkCount).toBe(1);
+      expect(putItems(mockSend).map(r => r.url)).toEqual(['https://example.com/visible']);
+    });
+
+    test('extracts anchors from a json issue body and leaves its bare-url fields alone', async () => {
+      // metadata.url / tipOfTheWeek.url are chrome, and the markdown equivalents
+      // (frontmatter, the sponsor record) are not tracked either - tracking them
+      // here would give a json issue a different link set than the same issue
+      // written in markdown.
+      const result = await handler({
+        tenantId: 'tenant123',
+        issueId: '42',
+        contentType: 'json',
+        content: JSON.stringify({
+          metadata: { number: 42, url: 'https://example.com/issue-online' },
+          content: {
+            sections: [
+              { header: 'First', text: '<p>A <a href="https://aws.amazon.com/blogs/">tracked link</a>.</p>' },
+              { header: 'Second', text: '<p>Another <a href="https://docs.aws.amazon.com/scheduler/">link</a>.</p>' }
+            ],
+            tipOfTheWeek: { text: '<p>Rehearse on a weekday.</p>', url: 'https://example.com/tip' }
+          }
+        })
+      });
+
+      expect(result.linkCount).toBe(2);
+      expect(putItems(mockSend).map(r => r.url).sort()).toEqual([
+        'https://aws.amazon.com/blogs/',
+        'https://docs.aws.amazon.com/scheduler/'
+      ]);
+    });
+
+    test('extracts nothing from a json issue whose content will not parse', async () => {
+      // `parse-issue` runs next and throws the honest error about the content.
+      // This step reporting no links is the right answer, not a second failure
+      // ahead of it - its Catch continues to the publish path regardless.
+      const result = await handler({
+        tenantId: 'tenant123',
+        issueId: '42',
+        contentType: 'json',
+        content: '{"content": '
+      });
+
+      expect(result).toEqual({ success: true, linkCount: 0 });
+      expect(putItems(mockSend)).toHaveLength(0);
+    });
+
+    test('treats an absent or unrecognized contentType as markdown', async () => {
+      const result = await handler({
+        tenantId: 'tenant123',
+        issueId: '42',
+        contentType: 'MaRkDoWn',
+        content: 'A [markdown link](https://example.com/md) and an <a href="https://example.com/html">anchor</a>.'
+      });
+
+      expect(result.linkCount).toBe(1);
+      expect(putItems(mockSend).map(r => r.url)).toEqual(['https://example.com/md']);
+    });
+
+    test('classifies a repeated URL once while position still counts every occurrence', async () => {
+      const logo = 'https://example.com/sponsor';
+      const result = await handler({
+        tenantId: 'tenant123',
+        issueId: '42',
+        contentType: 'html',
+        content: `<a href="${logo}"><img src="logo.png"></a>
+          <p>Our sponsor, <a href="${logo}">Example</a>.</p>
+          <p>And <a href="https://example.com/post">a post</a>.</p>`
+      });
+
+      // Three anchors, so the post is the third position; two distinct URLs, so
+      // two classifications - a duplicate Bedrock call is pure latency on the
+      // critical path of a send now.
+      expect(result.linkCount).toBe(3);
+      expect(mockClassifyLinkWithLlm).toHaveBeenCalledTimes(2);
+      const byUrl = Object.fromEntries(putItems(mockSend).map(r => [r.url, r]));
+      expect(byUrl[logo].position).toBe(1);
+      expect(byUrl['https://example.com/post'].position).toBe(3);
+    });
+  });
+
   test('waits for link enrichment writes before returning', async () => {
     let resolveWrite;
     const pendingWrite = new Promise((resolve) => {

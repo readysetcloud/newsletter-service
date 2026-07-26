@@ -32,8 +32,9 @@ reason the verifications below are separate rather than one glance:
   `Update Issue Record - Failure` on an issue that has already gone out. (Before
   Phase 3 this cut the other way too: `Publish` was a sibling branch of
   `Update Web Links`, so a link failure could abort the `Parallel` after the send
-  had left. Link extraction runs ahead of `Publish` now, so that particular
-  ordering is gone.)
+  had left. `Extract Links` runs ahead of `Publish` now and its `Catch` continues
+  down the publish path, so a link failure reaches neither the record nor the
+  send.)
 - **A green execution does not mean the send succeeded.** `publish-issue`
   catches its own errors and returns `{ success: false }`
   (`functions/publish-issue.mjs:97-100`). A failed send therefore shows up as the
@@ -65,12 +66,12 @@ Requirements either way:
   is a real send to real people.
 - **Reserve an issue-number band for rehearsals — 9000 and up.** The stats
   Scheduler entry is named `ISSUE-STATS-<issueId>` with *no tenant prefix*
-  (`state-machines/stage-issue.asl.json:360`, `:607`) and lives in the shared
+  (`state-machines/stage-issue.asl.json:407`) and lives in the shared
   `newsletter` schedule group, so a rehearsal that reuses a live issue number
   collides with that issue's real entry and `CreateSchedule` fails mid-run.
 - **Use a fresh issue number for every rehearsal.** `update-link-tracking` skips
   the Bedrock call when a `link#` record already carries a `primaryTopic`
-  (`functions/update-link-tracking.mjs:155-158`), so re-running against a
+  (`functions/update-link-tracking.mjs:319-321`), so re-running against a
   previously-used number silently stops exercising classification.
 
 ### 2. Fixtures
@@ -123,7 +124,7 @@ Notes:
   obvious.
 - At least three **absolute `http(s)` links in `[text](url)` form**.
   `update-link-tracking` tracks only those and skips relative and `mailto:`
-  links (`functions/update-link-tracking.mjs:88-92`), so the fixture needs one
+  links (`functions/update-link-tracking.mjs:239-252`), so the fixture needs one
   of each to prove `position` stays dense over the tracked set.
 - The `robotVoice` shortcode and the `Tip of the Week` / `Last Words` sections
   exercise the shortcode bridge and the two sections that render outside
@@ -155,11 +156,24 @@ would have produced it. Requires a `templateId` on the request.
 `parse-json-issue` (`functions/parse-json-issue.mjs:41-44`), so it only has to
 be present, not right.
 
+The `<a href>` anchors in the section bodies are load-bearing for verification 5:
+as of Phase 4 `update-link-tracking` extracts anchors out of the HTML that json
+section bodies are made of, so a json fixture whose links are bare URL fields
+(`tipOfTheWeek.url` above) produces no `link#` records — those are chrome and are
+deliberately not tracked, the same way a markdown issue does not track its
+frontmatter or sponsor URLs.
+
 **`issue-html.html`** — a small pre-rendered email master. In `html` mode the
 content is carried through untouched on `data.__master`
 (`functions/parse-json-issue.mjs:24-28`) and sent verbatim, no template render
 (`functions/publish-issue.mjs:19-21`). Include one absolute link and one
 distinctive string you can grep the delivered mail for.
+
+Two things worth putting in the html fixture on purpose, both of which
+verification 5 reads: the same URL twice (once as an image link, once as a text
+link) to confirm `position` still counts both occurrences while only one record is
+written; and an Outlook conditional (`<!--[if mso]>…<![endif]-->`) carrying a
+duplicate of a visible link, which must *not* consume a position.
 
 ### 3. Reference execution histories
 
@@ -300,7 +314,7 @@ aws stepfunctions get-execution-history --execution-arn "$ARN" --max-results 100
 Get Existing Issue → Has Issue Been Processed? → Mark Issue In Progress
   → Is Scheduled In The Future? → Wait For Future Date
   → Trigger Site Rebuild → Route By Content Type
-  → Update Web Links → Parse Issue → Publish → Publish Success?
+  → Markdown Extras → Extract Links → Parse Issue → Publish → Publish Success?
   → Schedule Tasks and Update
        branch 0: Schedule Issue Report
        branch 1: Format List Cleanup Input → Schedule List Cleanup
@@ -309,13 +323,13 @@ Get Existing Issue → Has Issue Been Processed? → Mark Issue In Progress
   → Generate Social Copy → Notify of Success → Success
 ```
 
-**json / html, scheduled** — the same states, minus the two markdown-only ones:
+**json / html, scheduled** — the same states, minus the one markdown-only step:
 
 ```
 Get Existing Issue → Has Issue Been Processed? → Mark Issue In Progress
   → Is Scheduled In The Future? → Wait For Future Date
   → Trigger Site Rebuild → Route By Content Type
-  → No Markdown Extras → Parse Issue → Publish → Publish Success?
+  → No Markdown Extras → Extract Links → Parse Issue → Publish → Publish Success?
   → Schedule Tasks and Update
        branch 0: Schedule Issue Report
        branch 1: Format List Cleanup Input → Schedule List Cleanup
@@ -324,10 +338,13 @@ Get Existing Issue → Has Issue Been Processed? → Mark Issue In Progress
   → Notify of Success → Success
 ```
 
-Phase 3 collapsed the two tails into one, so the two sequences now differ in
-exactly two places — `Update Web Links` vs `No Markdown Extras`, and whether
-`Social Copy Applies?` routes through `Generate Social Copy`. Comparing them
-against each other is itself a check: any *third* difference is a bug.
+Phase 3 collapsed the two tails into one and Phase 4 made link extraction
+shared, so the two sequences now differ in exactly two places — `Markdown Extras`
+vs `No Markdown Extras`, which only bind `$contentType` and a fallback `$social`,
+and whether `Social Copy Applies?` routes through `Generate Social Copy`.
+Comparing them against each other is itself a check: any *third* difference is a
+bug. In particular `Extract Links` must appear on both, and before `Publish` on
+both.
 
 Reading notes:
 
@@ -466,15 +483,17 @@ aws dynamodb query --table-name "$TABLE_NAME" \
   --query 'Items[].{sk:sk.S,url:url.S,position:position.N,topic:primaryTopic.S}'
 ```
 
-Expected for the markdown fixture: one record per **absolute `http(s)`** link,
-each with
+Expected for **every** fixture, markdown, json and html: one record per distinct
+**absolute `http(s)`** link, each with
 
 - `url` — the original URL (the click redirect and the site render hook both key
   off `link#<hash(url)>` of *that* URL);
-- `position` — 1-based, dense, in document order, counting only tracked links.
-  The relative and `mailto:` links must not consume a position: `position` is
-  what aligns these records with the Hugo render hook's wrapping set
-  (`functions/update-link-tracking.mjs:78-81`);
+- `position` — 1-based, in document order. The relative and `mailto:` links must
+  not consume a position: `position` is what aligns these records with the Hugo
+  render hook's wrapping set (`functions/update-link-tracking.mjs:239-242`). It
+  counts *occurrences*, so a URL used twice leaves a gap in the recorded
+  positions — the record keeps the first occurrence's ordinal and the second
+  occurrence still consumes one;
 - `primaryTopic` — plus `secondaryTopics`, `summary`, `confidence` and
   `classifiedBy: "llm"`.
 
@@ -483,10 +502,24 @@ classification failed. That is *by design* fail-open — the base record is stil
 written so click counting works — so it will not redden anything. Check the
 function's logs before accepting it.
 
-**json and html:** no `link#` records today. That is D7 — the non-markdown path
-has no link branch at all — and it is the expected result until Phase 4. After
-Phase 4, records with all three fields must appear for **all three** fixtures,
-and that is the phase's primary acceptance criterion.
+**json and html are the point of this verification since Phase 4.** They used to
+produce no `link#` records at all (D7 — the non-markdown path had no link branch),
+which left interest assembly and top-link reporting with nothing to read for them.
+Extraction is now shared and content-type aware: markdown links for a markdown
+issue, `<a href>` anchors for the HTML a json section body or an html master is
+made of. Records with all three fields appearing for all three fixtures is this
+phase's primary acceptance criterion.
+
+Two coverage limits to expect rather than chase:
+
+- an `html` master's chrome is indistinguishable from its content, so a
+  "view online" or sponsor-logo link gets a record and a classification like any
+  other link. Markdown issues do not track those, so the two content types cannot
+  be expected to produce identical link sets for the same issue;
+- markdown links inside a json section body are not extracted — the documented
+  shape of that field is HTML (it is what `parse-md-to-json` produces) and it is
+  rendered as HTML, so a `[text](url)` in there would not be a link in the
+  delivered email either.
 
 ---
 
@@ -594,9 +627,13 @@ through the `Catch` to `Update Issue Record - Failure`, the record reads
 `failed` with the error cause persisted, and **no email was sent**. Revert the
 throw immediately afterwards.
 
-Phase 4 has its own variant: force the link-classification step to time out and
-confirm the send still goes. Degraded personalization is acceptable; a missed
-issue is not.
+Phase 4 has its own variant, and it is the one that proves the phase is safe
+rather than merely useful: force `Extract Links` to time out — a `sleep` past the
+state's `TimeoutSeconds` in `update-link-tracking`, or a Bedrock model id that
+does not resolve — and confirm the execution goes on through `Parse Issue` to
+`Publish`, the email arrives, and the record reads `published`, not `failed`. The
+`States.Timeout` should appear in the history as a caught error on `Extract Links`
+and nowhere else. Degraded personalization is acceptable; a missed issue is not.
 
 ---
 
@@ -634,8 +671,9 @@ Rehearsed on: <date>   Deployment: <sandbox|stage|production>   Issues: 9001-900
 [ ] Pre-deploy: list-executions --status-filter RUNNING was empty
 [ ] Tenant list confirmed to contain only the rehearsal address
 [ ] markdown: V1 sequence  V2 email  V3 status  V4 scheduler dates  V5 link records
-[ ] json:     V1 sequence  V2 email  V3 status  V4 scheduler dates  V5 (n/a pre-Phase 4)
-[ ] html:     V1 sequence  V2 email  V3 status  V4 scheduler dates  V5 (n/a pre-Phase 4)
+[ ] json:     V1 sequence  V2 email  V3 status  V4 scheduler dates  V5 link records
+[ ] html:     V1 sequence  V2 email  V3 status  V4 scheduler dates  V5 link records
+[ ] Extract Links forced to time out: send still went, record published
 [ ] local send: sendProgress plan, every group reported, published only after catch-all
 [ ] dashboard "Local send delivery" card matched the record
 [ ] Scheduler entries and rehearsal records cleaned up

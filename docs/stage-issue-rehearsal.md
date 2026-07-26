@@ -295,11 +295,11 @@ aws stepfunctions get-execution-history --execution-arn "$ARN" --max-results 100
 
 ```
 Get Existing Issue → Has Issue Been Processed? → Mark Issue In Progress
-  → Is Scheduled In The Future And Not Preview? → Wait For Future Date
+  → Is Scheduled In The Future? → Wait For Future Date
   → Trigger Site Rebuild → Route By Content Type
   → Build Web and Email Versions
        branch 0: Update Web Links
-       branch 1: Parse Markdown to Json → Send email preview? → Publish
+       branch 1: Parse Markdown to Json → Publish
                  → Schedule Tasks and Update
                       branch 0: Schedule Issue Report
                       branch 1: Format List Cleanup Input → Schedule List Cleanup
@@ -312,9 +312,9 @@ Get Existing Issue → Has Issue Been Processed? → Mark Issue In Progress
 
 ```
 Get Existing Issue → Has Issue Been Processed? → Mark Issue In Progress
-  → Is Scheduled In The Future And Not Preview? → Wait For Future Date
+  → Is Scheduled In The Future? → Wait For Future Date
   → Trigger Site Rebuild → Route By Content Type → Parse JSON Issue
-  → Send JSON Preview? → Publish JSON → JSON Publish Success?
+  → Publish JSON → JSON Publish Success?
   → Schedule JSON Tasks
        branch 0: Schedule JSON Issue Report
        branch 1: Format JSON List Cleanup Input → Schedule JSON List Cleanup
@@ -332,9 +332,9 @@ Reading notes:
   means the record was absent or `failed`;
   `Success - Duplicate Request` means the record was already past `draft` and
   **nothing was sent** — usually a re-run against a used issue number.
-- These must **not** appear on any rehearsal: `Send Preview`,
-  `Publish JSON Preview` (the dead preview path — `isPreview` is always `false`
-  from the API, `issues.rs:3744`), and `Update Issue Record - Failure`.
+- `Update Issue Record - Failure` must **not** appear on any rehearsal. The
+  preview states that used to be listed here alongside it (`Send Preview`,
+  `Publish JSON Preview`) are gone — Phase 2 deleted them.
 - `Trigger Site Rebuild` appears only on the scheduled path. An immediate
   publish skips it — that is D6, expected until Phase 3, not a rehearsal
   failure.

@@ -106,7 +106,7 @@
           "ResultPath": "$.error"
         }
       ],
-      "Next": "Is Scheduled In The Future And Not Preview?",
+      "Next": "Is Scheduled In The Future?",
       "ResultPath": null
     },
     "Save Issue Record": {
@@ -144,23 +144,15 @@
           "ResultPath": "$.error"
         }
       ],
-      "Next": "Is Scheduled In The Future And Not Preview?",
+      "Next": "Is Scheduled In The Future?",
       "ResultPath": null
     },
-    "Is Scheduled In The Future And Not Preview?": {
+    "Is Scheduled In The Future?": {
       "Type": "Choice",
       "Choices": [
         {
-          "And": [
-            {
-              "Variable": "$.futureDate",
-              "IsPresent": true
-            },
-            {
-              "Variable": "$.isPreview",
-              "BooleanEquals": false
-            }
-          ],
+          "Variable": "$.futureDate",
+          "IsPresent": true,
           "Next": "Wait For Future Date"
         }
       ],
@@ -279,68 +271,12 @@
               "Resource": "${LambdaInvoke}",
               "Parameters": {
                 "FunctionName": "${ParseMdToJson}",
-          "Payload": {
-            "content.$": "$.content",
-            "fileName.$": "$$.Execution.Input.fileName",
-            "isPreview.$": "$$.Execution.Input.isPreview",
-            "issueId.$": "$$.Execution.Input.issueId",
-            "tenantId.$": "$$.Execution.Input.tenant.id",
-            "subject.$": "$$.Execution.Input.subject"
-          }
-        },
-              "Retry": [
-                {
-                  "ErrorEquals": [
-                    "Lambda.ServiceException",
-                    "Lambda.AWSLambdaException",
-                    "Lambda.SdkClientException",
-                    "Lambda.TooManyRequestsException"
-                  ],
-                  "IntervalSeconds": 2,
-                  "MaxAttempts": 6,
-                  "BackoffRate": 2
-                }
-              ],
-              "OutputPath": "$.Payload",
-              "Next": "Send email preview?",
-              "Assign": {
-                "sendAtDate.$": "$.Payload.sendAtDate",
-                "reportStatsDate.$": "$.Payload.reportStatsDate",
-                "listCleanupDate.$": "$.Payload.listCleanupDate",
-                "subject.$": "$.Payload.subject"
-              }
-            },
-            "Send email preview?": {
-              "Type": "Choice",
-              "Choices": [
-                {
-                  "And": [
-                    {
-                      "Variable": "$$.Execution.Input.isPreview",
-                      "IsPresent": true
-                    },
-                    {
-                      "Variable": "$$.Execution.Input.isPreview",
-                      "BooleanEquals": true
-                    }
-                  ],
-                  "Next": "Send Preview"
-                }
-              ],
-              "Default": "Publish"
-            },
-            "Send Preview": {
-              "Type": "Task",
-              "Resource": "${LambdaInvoke}",
-              "Parameters": {
-                "FunctionName": "${PublishIssue}",
                 "Payload": {
-                  "data.$": "$.data",
-                  "subject.$": "$.subject",
-                  "email.$": "$$.Execution.Input.tenant.email",
-                  "isPreview": true,
+                  "content.$": "$.content",
+                  "fileName.$": "$$.Execution.Input.fileName",
+                  "issueId.$": "$$.Execution.Input.issueId",
                   "tenantId.$": "$$.Execution.Input.tenant.id",
-                  "templateId.$": "$$.Execution.Input.templateId"
+                  "subject.$": "$$.Execution.Input.subject"
                 }
               },
               "Retry": [
@@ -357,7 +293,13 @@
                 }
               ],
               "OutputPath": "$.Payload",
-              "End": true
+              "Next": "Publish",
+              "Assign": {
+                "sendAtDate.$": "$.Payload.sendAtDate",
+                "reportStatsDate.$": "$.Payload.reportStatsDate",
+                "listCleanupDate.$": "$.Payload.listCleanupDate",
+                "subject.$": "$.Payload.subject"
+              }
             },
             "Publish": {
               "Type": "Task",
@@ -544,72 +486,13 @@
         }
       ],
       "OutputPath": "$.Payload",
-      "Next": "Send JSON Preview?",
+      "Next": "Publish JSON",
       "Assign": {
         "sendAtDate.$": "$.Payload.sendAtDate",
         "reportStatsDate.$": "$.Payload.reportStatsDate",
         "listCleanupDate.$": "$.Payload.listCleanupDate",
         "subject.$": "$.Payload.subject"
       }
-    },
-    "Send JSON Preview?": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "And": [
-            {
-              "Variable": "$$.Execution.Input.isPreview",
-              "IsPresent": true
-            },
-            {
-              "Variable": "$$.Execution.Input.isPreview",
-              "BooleanEquals": true
-            }
-          ],
-          "Next": "Publish JSON Preview"
-        }
-      ],
-      "Default": "Publish JSON"
-    },
-    "Publish JSON Preview": {
-      "Type": "Task",
-      "Resource": "${LambdaInvoke}",
-      "Parameters": {
-        "FunctionName": "${PublishIssue}",
-        "Payload": {
-          "data.$": "$.data",
-          "subject.$": "$.subject",
-          "email.$": "$$.Execution.Input.tenant.email",
-          "isPreview": true,
-          "tenantId.$": "$$.Execution.Input.tenant.id",
-          "templateId.$": "$$.Execution.Input.templateId",
-          "contentType.$": "$$.Execution.Input.contentType"
-        }
-      },
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException",
-            "Lambda.TooManyRequestsException"
-          ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 6,
-          "BackoffRate": 2
-        }
-      ],
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "Next": "Update Issue Record - Failure",
-          "ResultPath": "$.error"
-        }
-      ],
-      "OutputPath": "$.Payload",
-      "End": true
     },
     "Publish JSON": {
       "Type": "Task",

@@ -29,39 +29,40 @@ const STATE_MACHINE_RESOURCE = 'StageIssueStateMachine';
 // ===========================================================================
 
 // Counted over the whole tree, including states nested inside Parallel branches.
-// `topLevel` is the 25 states §1 of the plan tracks plus the two Phase 1 added
-// (`Record Publish Rejection`, `Social Copy Unavailable`); `total` includes the
-// 14 states living inside the two Parallel states' branches.
+// `topLevel` is back to 25 by coincidence, not by staying still: the plan's
+// original 25, plus the two Phase 1 added (`Record Publish Rejection`,
+// `Social Copy Unavailable`), minus the two top-level preview states Phase 2
+// deleted. `total` includes the 12 states living inside the two Parallel
+// states' branches.
 const EXPECTED_STATE_COUNTS = {
-  topLevel: 27,
-  total: 41,
-  Choice: 7,
+  topLevel: 25,
+  total: 37,
+  Choice: 5,
   Fail: 1,
   Parallel: 3,
   Pass: 4,
   Succeed: 2,
-  Task: 23,
+  Task: 21,
   Wait: 1
 };
 
 // States that no transition can reach, per scope. MUST BE EMPTY and must stay
 // empty - a state nothing points at is either a bug or leftovers.
 //
-// Note for whoever lands Phase 2: the four dead preview states are NOT in here
-// and never will be. They are graph-reachable (`Send email preview?` and
-// `Send JSON Preview?` route to them when `$$.Execution.Input.isPreview` is
-// true) and merely semantically dead, because no producer sets isPreview. The
-// plan's claim that a reachability check "alone would have flagged the 4 dead
-// preview states" does not hold. They are tracked in DEAD_PREVIEW_STATES below
-// instead.
+// It was already empty before Phase 2, which is worth recording because the
+// plan expected otherwise: the four dead preview states were *graph*-reachable
+// (`Send email preview?` and `Send JSON Preview?` routed to them whenever
+// `$$.Execution.Input.isPreview` was true) and only semantically dead, because
+// no producer set isPreview. A reachability check could never have flagged
+// them; PREVIEW_STATES below is what holds the line now.
 const KNOWN_UNREACHABLE_STATES = [];
 
-// The dead preview path Phase 2 deletes. Asserted to still exist so the list
-// cannot go stale. Once Phase 2 removes these states, empty this constant and
-// adjust EXPECTED_STATE_COUNTS: topLevel -2 (Send JSON Preview?, Publish JSON
-// Preview), total -4, Choice -2, Task -2. EXPECTED_CATCH_ROUTES loses its
-// `Publish JSON Preview` entry at the same time.
-const DEAD_PREVIEW_STATES = [
+// The dead preview path Phase 2 deleted, asserted absent. Kept as a named
+// constant rather than dropped entirely so a reintroduced preview branch fails
+// a test instead of quietly re-adding a second publish path to the definition.
+// The live preview mechanism is `send-test-email.mjs` invoking `publish-issue`
+// with `isPreview: true` directly - it never involved this state machine.
+const PREVIEW_STATES = [
   'Publish JSON Preview',
   'Send JSON Preview?',
   'Send Preview',
@@ -118,7 +119,6 @@ const EXPECTED_CATCH_ROUTES = {
   'Notify of Success': ['States.ALL -> Success ($.error)'],
   'Parse JSON Issue': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   'Publish JSON': ['States.ALL -> Update Issue Record - Failure ($.error)'],
-  'Publish JSON Preview': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   'Save Issue Record': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   'Schedule JSON Tasks': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   'Trigger Site Rebuild': ['States.ALL -> Update Issue Record - Failure ($.error)'],
@@ -561,9 +561,15 @@ describe('stage-issue definition: graph', () => {
     expect(unreachable.sort()).toEqual([...KNOWN_UNREACHABLE_STATES].sort());
   });
 
-  it('still contains the dead preview states the allow-list claims', () => {
-    const present = DEAD_PREVIEW_STATES.filter((name) => stateNames.includes(name)).sort();
-    expect(present).toEqual([...DEAD_PREVIEW_STATES].sort());
+  it('contains no preview states and no isPreview plumbing', () => {
+    const present = PREVIEW_STATES.filter((name) => stateNames.includes(name)).sort();
+    expect(present).toEqual([]);
+
+    // The states are only half of it - a leftover `isPreview` reference would be
+    // a branch condition or a Lambda payload field reading something no producer
+    // is obliged to send. Matched over the raw text so keys count too, not just
+    // string values.
+    expect(readFileSync(definitionPath, 'utf8')).not.toMatch(/isPreview/i);
   });
 });
 

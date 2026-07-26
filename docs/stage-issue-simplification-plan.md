@@ -15,26 +15,43 @@
 | Content-type paths | 2 (near-duplicate tails) | 1 |
 | Dead states | 4 (preview) | 0 |
 | `Catch` blocks | 0 | every Task |
-| Definition tests | 0 | structural lint + golden-path behavioral |
+| Definition tests | 0 | structural lint in CI + a midweek rehearsal protocol |
 | Timers owning the send instant | 4 | 2 (start schedule + local-send groups) |
 
 The state machine keeps the jobs it is genuinely good at — the status handshake, ordered post-send fan-out, and per-issue audit trail — and stops doing the two it is bad at: **waiting**, and **branching on content type**.
 
 ---
 
-## 2. Why this is risky (name the hazards before mitigating them)
+## 2. Operating cadence — the window this work happens in
 
-**H1 — Low iteration count on an irreversible event.** A newsletter send cannot be recalled, and it happens roughly weekly. Real-world validation opportunities arrive ~4× a month, so "deploy and watch" is not a viable test strategy on its own. Everything below is designed to be validated *before* a send, not by one.
+Single operator, single tenant. Issues are staged **Friday** and send **Monday 9am**. That fixed rhythm is the most useful de-risking fact available, because it means there is a guaranteed window every week in which nothing is in flight:
 
-**H2 — In-flight executions pin the old definition, but not the resources it points at.** Updating a Standard state machine does not affect already-running executions; a scheduled issue sitting in `Wait For Future Date` will complete on the definition that was live when it started. That is helpful for *definition* changes and dangerous for *resource* changes: deleting a Lambda, an IAM statement, or a `DefinitionSubstitution` that an in-flight execution still needs breaks it silently at fire time, days later.
+| When | Stage-issue executions | Send path | Safe to deploy |
+|---|---|---|---|
+| Fri (staging) → Mon 09:00 | 1 parked in `Wait` | idle | **No** |
+| Mon ~09:05 onward | drained (the execution ends as soon as `Publish` returns) | local-send groups + catch-all still firing | definition only |
+| Mon ~16:00 → Fri (pre-staging) | none | idle | **Yes — everything** |
 
-> **Rule (applies to every phase):** removing a resource is always a **second** deploy. Deploy (a) "definition no longer references it", wait for the drain window, then deploy (b) "resource deleted". Before any structural deploy, run:
-> ```
-> aws stepfunctions list-executions --state-machine-arn <StageIssue> --status-filter RUNNING
-> ```
-> If anything is running, it is almost certainly parked in `Wait`. Either let it drain or keep the old resources until it clears.
+Two details behind the table:
 
-**H3 — No test coverage of the definition.** There is no SFN Local harness, no structural validation, and no ASL assertions in `__tests__/`. The `$.Execution.Input.tenant.id` typo at line 296 has been sitting in the file undetected precisely because nothing checks it. Phase 0 exists to fix this first.
+- The stage-issue execution **completes Monday morning**, not when the last email lands. `publish-issue` hands off to `send-email-v2`, which fans out to Scheduler entries and returns; the execution is done by ~09:05.
+- The *sends* continue for hours. Westmost group (9am local in UTC−11) plus the 30-minute catch-all puts the last delivery near 20:30Z ≈ 15:30 CDT. Lambda code is **not** versioned per-execution, so changing `send-email-v2` / `publish-issue` before then would alter an in-flight send. Hence the separate "definition only" row.
+
+**The rule this yields: deploy Monday afternoon through Thursday. Never Friday — Friday is staging day.**
+
+### Hazards, in light of that cadence
+
+**H1 — Irreversible event, but a low-stakes and rehearsable one.** A send cannot be recalled. But the audience is your own list, there is a `sandbox | stage | production` environment parameter (`template.yaml:6-8`), and Monday–Friday is entirely free. So a **full end-to-end rehearsal is available five days a week** — stage a throwaway issue against a one-subscriber list, let it actually send. That is higher-fidelity than any simulation and takes minutes. It is the primary validation mechanism for every phase below.
+
+**H2 — Largely neutralized, with one exception.** Updating a Standard state machine does not affect already-running executions: a scheduled issue parked in `Wait For Future Date` completes on the definition live when it started. That would normally force a two-deploy dance for every resource removal. It doesn't here — in the Monday-afternoon-to-Thursday window there are no running executions, so **definition and resource changes can land in a single deploy**. Confirm rather than assume, each time:
+
+```
+aws stepfunctions list-executions --state-machine-arn <StageIssue> --status-filter RUNNING
+```
+
+The exception is **EventBridge Scheduler entries, which outlive their execution by days**: `ISSUE-STATS-<issue>` fires at send +5 days and `<tenant>-CLEAN-<issue>` at +3 (`parse-md-to-json.mjs:137-145`). Both land mid-window for the *previous* issue. They target `ReportStatsStateMachine` and the EventBridge bus directly, so they do not pin the stage-issue definition — but do not delete those targets, their IAM roles, or the schedule-name patterns while entries are outstanding.
+
+**H3 — No test coverage of the definition.** There is no SFN Local harness, no structural validation, and no ASL assertions in `__tests__/`. The `$.Execution.Input.tenant.id` typo at line 296 has been sitting in the file undetected precisely because nothing checks it. Phase 0 fixes this first.
 
 **H4 — Two producers until #358 lands.** PR #358 removes `import-issue-from-github.mjs`. Until it merges, the execution input has two producers with different assumptions (notably `isPreview`), and any input-contract change has to satisfy both.
 
@@ -61,7 +78,7 @@ Tracked here so the refactor and the bug fixes stay distinguishable in review.
 
 ## 4. Phase 0 — Safety net (do this first, ship nothing else with it)
 
-This is the phase that converts "big risk" into "mechanical". Two deliverables, deliberately ordered cheapest-first.
+This is the phase that converts "big risk" into "mechanical". Two deliverables — one automated guard against structural regressions, one high-fidelity behavioral check that the Monday–Friday window makes almost free.
 
 **0a. Definition linter (pure jest, no Docker, ~1 hour).** A test that loads the ASL as JSON and asserts invariants:
 
@@ -71,20 +88,19 @@ This is the phase that converts "big risk" into "mechanical". Two deliverables, 
 - every `Next`/`Default` target resolves to a state in the same scope; no unreachable states (this alone would have flagged the 4 dead preview states);
 - state count and `Choice` count against expected values, so structural change is always deliberate.
 
-**0b. Golden-path behavioral tests (SFN Local + Docker, ~1 day).** Step Functions Local with a `MockConfigFile` stubbing every service integration, run from jest with a Docker service in `pre-deploy-validation.yaml`. Assert the **state sequence and the payload passed to each Lambda** for:
+**0b. A written rehearsal protocol (~2 hours to establish, ~15 minutes to run).** Not a test harness — a checklist, because the cadence means real end-to-end runs are available Monday through Friday and a real run beats a simulated one. Set up once:
 
-1. markdown, immediate,
-2. markdown, scheduled (`futureDate` present),
-3. json, immediate,
-4. html, immediate,
-5. duplicate request (existing `published` record → `Success - Duplicate Request`),
-6. retry of a `failed` record → re-runs,
-7. `publish-issue` returns `success: false` → `Update Issue Record - Failure` → `Fail`,
-8. (after Phase 1) a Lambda throws past its retries → record marked `failed`, not left `in progress`.
+- a throwaway tenant (or the production tenant pointed at a one-subscriber list containing only your own address);
+- a fixture issue per content type — markdown, json, html — kept in `__tests__/fixtures/` so rehearsals are identical run to run;
+- the checklist itself: for each content type, stage the fixture with a send time ~10 minutes out, then verify (1) the execution's state sequence in the console, (2) the email arrives and renders, (3) the record's terminal status is `published`, (4) `ISSUE-STATS-*` and `*-CLEAN-*` Scheduler entries exist with dates at send +5 and +3, (5) `link#` records exist with `url`, `position`, and `primaryTopic`.
 
-Before writing 0b, export 3–5 recent real execution histories from the console as fixtures, so "expected sequence" is grounded in what production actually does rather than in a reading of the JSON.
+Item (4) is the one a simulation would most likely miss, and it is the highest-consequence silent failure in the system: a wrong date there mis-schedules a job three to five days out, where nothing is watching.
 
-**Gate to Phase 1:** 0a and 0b green in CI, and 0b's expected sequences reviewed against the exported histories.
+Also export 3–5 recent real execution histories from the console now, before anything changes, and keep them as reference fixtures. They are what "expected sequence" means.
+
+**On SFN Local:** deliberately deferred, not adopted. Its value is simulating what you cannot run for real — and you can run this for real, any weekday, in minutes. Revisit only if Phase 3 rehearsals turn up something the linter didn't catch, or if this service ever gets a second operator who cannot rehearse against production.
+
+**Gate to Phase 1:** 0a green in CI; rehearsal protocol written and run clean once on all three content types.
 
 ---
 
@@ -101,7 +117,7 @@ Each phase is one PR, independently deployable and reversible. No phase both cha
 
 **Why first:** purely additive to the definition, no states removed, so H2 does not apply and in-flight executions are unaffected either way. It also shrinks the blast radius of every later phase — after this, a mistake in Phase 3 marks the record `failed` instead of leaving it silently wedged.
 
-**Validation:** 0a + 0b, plus new 0b case 8. **Rollback:** revert the definition; no resource or contract change.
+**Validation:** 0a, plus a rehearsal with a deliberately broken Lambda (temporarily throw in `parse-md-to-json` on stage) to prove the record now lands on `failed` instead of wedging at `in progress`. **Rollback:** revert the definition; no resource or contract change.
 
 ### Phase 2 — Delete the dead preview path
 
@@ -124,7 +140,9 @@ The big diff and the big win (~440 lines → ~1 path). Do it after Phase 1 so fa
 - Fix D6 by moving `Trigger Site Rebuild` onto the common path.
 - Retire the now-unused `Build Web and Email Versions` parallel and the `$[0]`/`$[1]` index-based `Success?` choice — indexed parallel output is the most brittle construct in the file.
 
-**Validation:** 0b cases 1–4 must produce identical Lambda payloads before and after (assert on the recorded payloads, not just on success). **Rollback:** revert the definition. Deploy the dispatcher Lambda in a *prior* deploy so the rollback target still has it; delete the two direct substitutions only in a later cleanup deploy (H2).
+**The specific thing to guard:** `reportStatsDate` and `listCleanupDate` are computed in the parse Lambdas and consumed by the two Scheduler entries. The dispatcher must reproduce them **byte-identically** — a wrong value here mis-fires a job three to five days later, with nothing watching. Diff the dispatcher's output against both original parsers on the fixture issues before deploying, and check item (4) of the rehearsal explicitly.
+
+**Validation:** full rehearsal on all three content types, comparing the console's recorded Lambda payloads against the pre-change reference histories. **Rollback:** revert the definition and redeploy — single deploy is fine in-window, since nothing is parked in `Wait` (§2, H2).
 
 ### Phase 4 — Link extraction before publish, for all content types
 
@@ -132,7 +150,7 @@ The big diff and the big win (~440 lines → ~1 path). Do it after Phase 1 so fa
 
 **Constraint (important):** classification calls Bedrock, so this puts LLM latency on the critical path. It must have a bounded `TimeoutSeconds` and a `Catch` that continues to `Publish` regardless. **Link classification must never be able to block or fail a send** — degraded personalization is acceptable, a missed issue is not.
 
-**Validation:** 0b asserts extraction runs before publish on all three content types and that a simulated classification timeout still reaches `Publish`. **Rollback:** revert; the function is unchanged, only its position moves.
+**Validation:** rehearsal item (5) — `link#` records with `url`, `position`, and `primaryTopic` must now appear for **json and html** fixtures, not just markdown. Plus one rehearsal with the classification step forced to time out, proving the send still goes. **Rollback:** revert; the function is unchanged, only its position moves.
 
 ### Phase 5 — Replace `Wait` with a scheduled execution start
 
@@ -147,25 +165,39 @@ The one that unblocks local send, and the only phase that changes the API contra
 
 **Transitional safety:** leave the `Wait For Future Date` state in the definition through this phase. It is a no-op when `futureDate` is absent, so the consumer tolerates both the old and new producer and the flip is a producer-side change you can revert in one deploy. Remove the `Wait` state in a later cleanup PR once no scheduled issue has been created the old way.
 
-**Validation:** 0b gains a "scheduled via Scheduler" case; a staging dry run scheduling an issue ~10 minutes out, verifying the execution starts at the right time, reads current content, and that editing between schedule and fire changes what sends. **Rollback:** flip the API back to immediate `StartExecution` + `futureDate` (the `Wait` is still there).
+**Validation:** rehearsal scheduling ~10 minutes out, verifying the execution starts on time, reads *current* content, and that an edit between schedule and fire changes what sends (the D4 proof). Then one live Friday→Monday cycle with the real issue before Phase 6 raises the lead time.
+
+**Rollback:** flip the API back to immediate `StartExecution` + `futureDate` — the `Wait` is still in the definition, so this is a producer-side revert in one deploy. Worth noting this is the one phase whose rollback may need to happen on a Friday, if staging reveals a problem. Keep it a config/flag flip rather than a code revert if that's cheap to arrange.
 
 ### Phase 6 — Timezone-correct local send
 
 **Gate:** Phase 5 deployed.
 
-**Change** Set `leadTime` to cover the largest eastward offset among confirmed subscriber timezones (or a flat 24h) so the fan-out in `send-email-v2.mjs:347` runs *before* the base instant and can schedule eastward groups instead of firing them immediately (D9). This is the fix for the behavior described in the local-send analysis: today only zones at or west of the base zone get their 9am-local delivery.
+**Change** Set `leadTime` to cover the largest eastward offset among confirmed subscriber timezones (a flat 24h covers everything, including UTC+14) so the fan-out in `send-email-v2.mjs:347` runs *before* the base instant and can schedule eastward groups instead of firing them immediately (D9). This is the fix for the behavior described in the local-send analysis: today only zones at or west of the base zone get their 9am-local delivery.
 
-**Validation:** unit-level coverage already exists in `__tests__/send-email-v2-local-send.test.mjs` (its fan-out tests use a future base, which is exactly the post-Phase-5 shape). Add a case asserting eastward zones are *scheduled*, not emitted immediately. **Rollback:** set `leadTime` back to 0.
+**The tradeoff to accept consciously:** `leadTime` *is* the content freeze point, because the execution reads the record when it starts. With a 24h lead, a Monday 9am send freezes Sunday 9am. Against the Friday-staging cadence that's still a two-day improvement on today (frozen at staging time), but it does mean Phase 5's "edits are respected" property holds only up to T−24h, not T. If you ever want to edit Sunday evening, the lead time is what's stopping you — and it can be tuned down to the actual maximum eastward offset among *confirmed* subscriber zones rather than a flat 24h.
+
+**Validation:** unit-level coverage already exists in `__tests__/send-email-v2-local-send.test.mjs` (its fan-out tests use a future base, which is exactly the post-Phase-5 shape). Add a case asserting eastward zones are *scheduled*, not emitted immediately. Then confirm on a live cycle: the Sunday-morning fan-out should log scheduled groups for eastward zones instead of "sending now". **Rollback:** set `leadTime` back to 0 — degrades to today's behavior, sends nothing twice.
 
 ---
 
-## 6. Sequencing and the one open decision
+## 6. Sequencing — one phase per Mon–Fri window
 
-Recommended order is **0 → 1 → 2 → 3 → 4 → 5 → 6**.
+Recommended order is **0 → 1 → 2 → 3 → 4 → 5 → 6**, at most one phase per weekly window. Each window: deploy Monday afternoon at the earliest, rehearse midweek, land by Thursday, leave Friday clear for staging.
 
-The one call to make: **if timezone-correct local send matters more than the LOC reduction**, Phase 5 can move directly after Phase 1 (it only depends on Phase 1's `Catch` coverage). The cost is that Phase 3 then has to edit a definition Phase 5 just restructured — roughly a day of extra rework, and two risky phases back-to-back instead of separated by two safe ones. My recommendation is to keep 5 where it is; the local-send gap is a quality-of-delivery issue, not a correctness one, and D4 (stale content) is the more urgent of the bugs 5 fixes.
+| Window | Phase | Deploy shape |
+|---|---|---|
+| 1 | 0 — linter + rehearsal protocol | CI only, no runtime change |
+| 2 | 1 — `Catch`, `$$` fix, social copy off critical path | definition only |
+| 3 | 2 — delete dead preview states | definition only; gated on #358 |
+| 4–5 | 3 — unify content-type paths | definition + new dispatcher Lambda; the one that may need two windows |
+| 6 | 4 — link extraction before publish | definition + function position |
+| 7 | 5 — Scheduler-started execution | API contract change; the only phase touching Rust |
+| 8 | 6 — local-send lead time | config value |
 
-Phases 1, 2, and 4 are each small enough to ship in a normal week. Phase 0 and Phase 3 are the two that need real time.
+Roughly two months at one phase a week, and every phase is independently valuable — stopping after Phase 3 still leaves the definition ~half its current size with failures that no longer lie.
+
+**The one call to make:** if timezone-correct local send matters more than the size reduction, Phase 5 can move directly after Phase 1 (it only depends on Phase 1's `Catch` coverage). The cost is that Phase 3 then edits a definition Phase 5 just restructured — about a day of rework, and two risky phases back to back instead of separated by two safe ones. I'd keep 5 where it is: the local-send gap is a delivery-quality issue, while D4 (stale content on edit-after-schedule) is a correctness bug that Phase 5 also fixes, and neither is urgent enough to reorder around given you stage Friday and rarely edit after.
 
 ---
 

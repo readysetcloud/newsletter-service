@@ -83,6 +83,126 @@ describe('handle-email-status click position capture', () => {
   });
 });
 
+// An issue whose 'Extract Links' step never ran has no `link#` records, and the
+// nested `byDay` increment cannot address a record that isn't there. That used to
+// throw straight out of the click branch into the handler's outer catch, which
+// dropped the `clicks` counter and the click event with it — the issue reported
+// zero clicks while SES delivered thousands.
+describe('handle-email-status click tracking without link records', () => {
+  let mockSend;
+  let originalTable;
+
+  const clickEvent = {
+    detail: {
+      eventType: 'Click',
+      click: { link: 'https://example.com/article', timestamp: '2025-01-29T10:05:00.000Z' },
+      mail: {
+        destination: ['reader@example.com'],
+        tags: { referenceNumber: ['tenant123_42'] }
+      }
+    }
+  };
+
+  const conditionalCheckFailed = () => {
+    const err = new Error('The conditional request failed');
+    err.name = 'ConditionalCheckFailedException';
+    return err;
+  };
+
+  const statsUpdate = () =>
+    mockSend.mock.calls
+      .map(([command]) => command)
+      .find(
+        (command) =>
+          command instanceof UpdateItemCommand &&
+          unmarshall(command.input.Key).sk === 'stats'
+      );
+
+  const clickEventPut = () =>
+    mockSend.mock.calls
+      .map(([command]) => command)
+      .find(
+        (command) =>
+          command instanceof PutItemCommand &&
+          unmarshall(command.input.Item).eventType === 'click'
+      );
+
+  beforeEach(() => {
+    originalTable = process.env.TABLE_NAME;
+    process.env.TABLE_NAME = 'test-table';
+    mockSend = jest.fn();
+    DynamoDBClient.prototype.send = mockSend;
+    jest.clearAllMocks();
+  });
+
+  afterEach(() => {
+    process.env.TABLE_NAME = originalTable;
+  });
+
+  test('counts the click when the link record is missing', async () => {
+    mockSend.mockImplementation((command) => {
+      // No link record exists, so the guarded counter update fails its condition.
+      if (command instanceof UpdateItemCommand && unmarshall(command.input.Key).sk.startsWith('link#')) {
+        return Promise.reject(conditionalCheckFailed());
+      }
+      return Promise.resolve({});
+    });
+
+    await expect(handler(clickEvent)).resolves.toBe(true);
+
+    expect(statsUpdate()?.input.ExpressionAttributeNames['#stat']).toBe('clicks');
+    expect(clickEventPut()).toBeDefined();
+  });
+
+  // Belt to the condition's braces: whatever else the per-link counter can fail
+  // on, the click is still counted and still recorded.
+  test('counts the click when the counter update fails outright', async () => {
+    mockSend.mockImplementation((command) => {
+      if (command instanceof UpdateItemCommand && unmarshall(command.input.Key).sk.startsWith('link#')) {
+        return Promise.reject(new Error('ValidationException'));
+      }
+      return Promise.resolve({});
+    });
+
+    await expect(handler(clickEvent)).resolves.toBe(true);
+
+    expect(statsUpdate()?.input.ExpressionAttributeNames['#stat']).toBe('clicks');
+    expect(clickEventPut()).toBeDefined();
+  });
+
+  test('guards the counter update so it cannot create a record link extraction owns', async () => {
+    mockSend.mockResolvedValue({});
+
+    await handler(clickEvent);
+
+    const counterUpdate = mockSend.mock.calls
+      .map(([command]) => command)
+      .find(
+        (command) =>
+          command instanceof UpdateItemCommand &&
+          unmarshall(command.input.Key).sk.startsWith('link#')
+      );
+
+    expect(counterUpdate.input.ConditionExpression).toBe(
+      'attribute_exists(pk) AND attribute_exists(sk)'
+    );
+  });
+
+  // A failed click-event write must not take the counter with it either.
+  test('counts the click when the event capture fails', async () => {
+    mockSend.mockImplementation((command) => {
+      if (command instanceof PutItemCommand && unmarshall(command.input.Item).eventType === 'click') {
+        return Promise.reject(new Error('throughput exceeded'));
+      }
+      return Promise.resolve({});
+    });
+
+    await expect(handler(clickEvent)).resolves.toBe(true);
+
+    expect(statsUpdate()?.input.ExpressionAttributeNames['#stat']).toBe('clicks');
+  });
+});
+
 describe('handle-email-status interest scoring on email click', () => {
   let mockSend;
   let originalTable;

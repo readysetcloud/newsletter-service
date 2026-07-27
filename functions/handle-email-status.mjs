@@ -64,8 +64,24 @@ export const handler = async (event) => {
         break;
       case 'click':
         stat = 'clicks';
-        await trackLinkClick(issueId, detail.click.link, detail.click.ipAddress);
-        await captureClickEvent(issueId, detail.mail.destination[0], detail.click);
+        // Every step below is a side effect of the click, and none of them may
+        // cost the click itself. `stat` is only applied after this switch, so a
+        // throw escaping here takes the counter, the click event, the engagement
+        // update, interest scoring, the timezone observation and the activity
+        // entry down with it — the handler's outer catch swallows the lot and
+        // the issue silently reports zero clicks. That is not hypothetical: an
+        // issue that shipped without its `link#` records lost every one of its
+        // email clicks to a ValidationException out of trackLinkClick.
+        try {
+          await trackLinkClick(issueId, detail.click.link, detail.click.ipAddress);
+        } catch (err) {
+          console.error('Link click counter update failed', { issueId, error: err.message });
+        }
+        try {
+          await captureClickEvent(issueId, detail.mail.destination[0], detail.click);
+        } catch (err) {
+          console.error('Click event capture failed', { issueId, error: err.message });
+        }
         try {
           await updateSubscriberEngagement(tenantId, detail.mail.destination[0], parseInt(issueNumber, 10));
         } catch (err) {
@@ -404,29 +420,59 @@ const trackUniqueOpen = async (issueId, emailAddress, openEvent) => {
   }
 };
 
+/**
+ * Increments the issue's per-link click counters on the `link#<hash(url)>`
+ * record that 'Extract Links' writes at stage time.
+ *
+ * A missing record is a state this has to survive. Link extraction is
+ * best-effort by design — its state catches States.ALL and times out rather than
+ * delay a send — and before the content-type fork was removed it did not run for
+ * json or html issues at all. `SET #by.#day` cannot survive it: the nested path
+ * only resolves when `byDay` already exists, so with no record DynamoDB rejects
+ * the whole update as `ValidationException: The document path provided in the
+ * update expression is invalid for update`.
+ *
+ * The condition turns that into a cheap, explicit miss, matching what
+ * process-link-click already does on the redirect path. It deliberately does not
+ * create the record: a counter-only record carries no url, position or topic
+ * classification, and would then block the real one, which update-link-tracking
+ * writes under `attribute_not_exists(pk)`.
+ */
 const trackLinkClick = async (issueId, link, ipAddress) => {
   const countryData = ipAddress ? await lookupCountry(ipAddress) : null;
   const country = countryData?.countryCode || 'unknown';
 
+  const sk = `link#${hash(link)}`;
   const day = new Date().toISOString().slice(0, 10);
-  await ddb.send(new UpdateItemCommand({
-    TableName: process.env.TABLE_NAME,
-    Key: marshall({
-      pk: issueId,
-      sk: `link#${hash(link)}`
-    }),
-    UpdateExpression: 'ADD clicks_total :one SET #by.#day = if_not_exists(#by.#day, :zero) + :one, #country = if_not_exists(#country, :country)',
-    ExpressionAttributeNames: {
-      '#by': 'byDay',
-      '#day': day,
-      '#country': 'country'
-    },
-    ExpressionAttributeValues: marshall({
-      ':one': 1,
-      ':zero': 0,
-      ':country': country
-    })
-  }));
+
+  try {
+    await ddb.send(new UpdateItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({
+        pk: issueId,
+        sk
+      }),
+      UpdateExpression: 'ADD clicks_total :one SET #by.#day = if_not_exists(#by.#day, :zero) + :one, #country = if_not_exists(#country, :country)',
+      ConditionExpression: 'attribute_exists(pk) AND attribute_exists(sk)',
+      ExpressionAttributeNames: {
+        '#by': 'byDay',
+        '#day': day,
+        '#country': 'country'
+      },
+      ExpressionAttributeValues: marshall({
+        ':one': 1,
+        ':zero': 0,
+        ':country': country
+      })
+    }));
+  } catch (err) {
+    if (err.name !== 'ConditionalCheckFailedException') {
+      throw err;
+    }
+    // The click still counts everywhere else; only this link's own tally and
+    // the top-link reporting built on it lose the event.
+    console.warn('No link record to count this click against', { issueId, sk });
+  }
 };
 
 const getStoredLinkPosition = async (issueId, link) => {

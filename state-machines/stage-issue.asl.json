@@ -85,7 +85,7 @@
     },
     "Content Supplied By Producer?": {
       "Type": "Choice",
-      "Comment": "Which producer started this execution decides where the content comes from, and the input says so directly: only import-issue-from-github.mjs sends content, the API sends identifiers. Routing on that rather than on the record's status is what keeps both producers correct during the GitHub-to-API cutover trial. The GitHub flow stages a draft record on every push to the PR and then starts an execution carrying the file body (see the draft-then-schedule note in start_issue_schedule, functions/src/api/controllers/issues.rs), so it arrives here with a 'draft' record AND content - and reading the record on that path would publish whatever the last draft push happened to store, silently, rather than the file the execution was started for. This whole fork becomes dead code when PR #358 removes the GitHub ingress, at which point 'Claim With Supplied Content' and this Choice can go and 'Mark Issue In Progress' becomes the only path.",
+      "Comment": "Which producer started this execution decides where the content comes from, and the input says so directly: only import-issue-from-github.mjs sends content, the API sends identifiers. Routing on that rather than on the record's status is what keeps both producers correct during the GitHub-to-API cutover trial. The GitHub flow stages a draft record on every push to the PR and then starts an execution carrying the file body (see the draft-then-schedule note in start_issue_schedule, functions/src/api/controllers/issues.rs), so it arrives here with a 'draft' record AND content - and reading the record on that path would publish whatever the last draft push happened to store, silently, rather than the file the execution was started for. That cutover is done: PR #358 removed the GitHub ingress, so no producer sends content any more and this whole fork is now dead code. 'Claim With Supplied Content' and this Choice can go, leaving 'Mark Issue In Progress' as the only path - deliberately left standing here so the removal lands as its own reviewable change rather than riding along with the ingress deletion.",
       "Choices": [
         {
           "Variable": "$$.Execution.Input.content",
@@ -255,7 +255,7 @@
     },
     "Is Scheduled In The Future?": {
       "Type": "Choice",
-      "Comment": "A no-op for the API, which stopped sending futureDate in Phase 5 - a future issue is now started by a Scheduler entry at the send instant instead of holding an execution open for days. It stays because import-issue-from-github.mjs still sends futureDate (a frontmatter date it resolved itself), and because it is what makes the Phase 5 rollback a producer-side flip: point the API back at StartExecution with a futureDate and this branch waits again, no definition change.",
+      "Comment": "A no-op for the API, which stopped sending futureDate in Phase 5 - a future issue is now started by a Scheduler entry at the send instant instead of holding an execution open for days. It no longer has a producer at all: import-issue-from-github.mjs was the last one sending futureDate (a frontmatter date it resolved itself) and PR #358 deleted it with the GitHub ingress. What it still buys is the Phase 5 rollback as a producer-side flip: point the API back at StartExecution with a futureDate and this branch waits again, no definition change. Remove it only together with that rollback path.",
       "Choices": [
         {
           "Variable": "$.futureDate",

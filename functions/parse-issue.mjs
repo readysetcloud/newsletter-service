@@ -39,10 +39,25 @@ export const handler = async (state) => {
   const contentType = normalizeContentType(state?.contentType);
   const delegate = contentType === CONTENT_TYPE_MARKDOWN ? parseMarkdown : parseJsonIssue;
 
+  // The send instant, resolved here rather than in ASL for one reason: an
+  // `ISSUE-SEND-*` Scheduler entry created before `sendAt` existed carries the
+  // execution input it was built with, and a state machine reading
+  // `$$.Execution.Input.sendAt` with a `.$` path would die on it with an
+  // unretryable, uncatchable States.Runtime — a missed send. The state machine
+  // hands over the whole input object instead, which always resolves, and the
+  // absent field lands here as `null`.
+  //
+  // `null` is the correct answer for those entries, not merely a safe one: they
+  // were created when the lead time was zero, so they fire *at* the send
+  // instant and both parsers' "now" fallback is accurate. A direct `sendAt` on
+  // the state wins when present, so callers that are not the state machine
+  // (tests, a manual invoke) keep working unchanged.
+  const sendAt = state?.sendAt ?? state?.executionInput?.sendAt ?? null;
+
   // The delegate sees the *normalized* contentType, not the caller's raw value:
   // parse-json-issue separates html from json with an exact `=== 'html'` check,
   // so `HTML` would otherwise fall through to `JSON.parse` on a pre-rendered
   // email master. Every other field is forwarded untouched — each parser reads
   // what it needs and ignores the rest.
-  return delegate({ ...state, contentType });
+  return delegate({ ...state, contentType, sendAt });
 };

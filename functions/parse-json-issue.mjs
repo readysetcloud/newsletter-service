@@ -44,13 +44,20 @@ export const handler = async (state) => {
   }
 
   const now = new Date();
-  // A `futureDate` that is a bare date gets the tenant's default send time in
-  // the tenant's timezone, the same as a date-only `scheduledAt` on the API.
-  // The state machine waits out the schedule before this step and doesn't
-  // currently forward `futureDate`, so this is a safety net for callers that
-  // do — hence the settings read only happening when there's a date to resolve.
-  const scheduled = state.futureDate
-    ? resolveSendInstant(state.futureDate, await getTenantSettings(state.tenantId))
+  // `sendAt` is the instant the issue was scheduled for, forwarded from the
+  // execution input. It is not optional decoration: with a publish lead time
+  // the workflow runs *before* the send instant (see issue_send_lead_time in
+  // functions/src/api/controllers/issues.rs), and a json issue carries no
+  // send date of its own anywhere else — without this the parse below answers
+  // `now` and an early workflow publishes early.
+  //
+  // `futureDate` stays as the fallback for a caller that still sends one. A
+  // bare date on either gets the tenant's default send time in the tenant's
+  // timezone, the same as a date-only `scheduledAt` on the API — hence the
+  // settings read only happening when there's a date to resolve.
+  const scheduledAt = state.sendAt || state.futureDate;
+  const scheduled = scheduledAt
+    ? resolveSendInstant(scheduledAt, await getTenantSettings(state.tenantId))
     : null;
   const hasFutureSend = scheduled && !Number.isNaN(scheduled.getTime()) && scheduled > now;
 

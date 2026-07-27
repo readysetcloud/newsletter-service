@@ -54,10 +54,20 @@ export const handler = async (state) => {
     delete sponsor.ad;
   }
 
-  // The frontmatter `date` is the day the issue goes out. A bare date carries
-  // no time, so it is anchored to the tenant's default send time in the
-  // tenant's timezone; a date that already names a time is respected as-is.
-  const sendInstant = resolveSendInstant(newsletter.data.date, settings);
+  // When the issue goes out. `state.sendAt` is the instant the issue was
+  // actually scheduled for, forwarded from the execution input, and it outranks
+  // the frontmatter `date` because it is what the Scheduler entry fired
+  // against — the frontmatter is the author's intent, the record is the
+  // schedule. It is also the only source available once the workflow starts
+  // early: with a lead time (see issue_send_lead_time in
+  // functions/src/api/controllers/issues.rs) "now" is no longer the send
+  // instant, and an issue whose frontmatter carries no date at all would
+  // otherwise publish immediately.
+  //
+  // Either way a bare date carries no time, so it is anchored to the tenant's
+  // default send time in the tenant's timezone; a value that already names a
+  // time is respected as-is.
+  const sendInstant = resolveSendInstant(state.sendAt || newsletter.data.date, settings);
   const formattedDate = sendInstant
     ? sendInstant.toLocaleDateString('en-US', {
       timeZone: settings.timezone,

@@ -266,6 +266,13 @@ What each one puts at risk is different, which is the reason to read both:
   after such a deploy rather than reasoning about it — `PUT /issues/{id}` with
   `status: "draft"` deletes the entry, then re-schedule.
 
+  **Phase 6 is exactly this case, so it is worth being concrete about.** The
+  definition now reads `$$.Execution.Input.sendAt` with an unconditional `.$`,
+  and an entry baked before that deploy has no such field — the execution dies at
+  `Parse Issue` on an unretryable, uncatchable `States.Runtime`, which is a
+  missed send with nothing written to the record. Any `ISSUE-SEND-*` entry
+  outstanding across this deploy must be deleted and re-created.
+
 The exception neither check covers: **the two post-send Scheduler entries outlive
 their execution by days.** `ISSUE-STATS-<issue>` fires at send +5 days and
 `<tenant>-CLEAN-<issue>` at +3, so the previous issue's entries are outstanding
@@ -311,10 +318,28 @@ Per content type, ~15 minutes. Repeat for markdown, json, and html.
    parked before the send, short enough that the whole rehearsal fits in one
    sitting.
 
-4. **Confirm the pending send, before the send time.** Since Phase 5 there is
-   nothing to describe yet — the record stays `scheduled` with no `executionArn`,
-   and the workflow does not exist until the `ISSUE-SEND-*` entry starts it.
-   Check both halves:
+   **With the lead time at its deployed 1560, ten minutes' notice is less than the
+   lead, and that changes the shape of the whole rehearsal.** The workflow is
+   already due, so the API starts the execution itself and creates **no**
+   `ISSUE-SEND-*` entry at all (`is_due_now` in `issues.rs`; an `at()` inside the
+   next minute would land in the past, and a one-time schedule in the past never
+   invokes its target). The send is still deferred to the scheduled instant, by
+   the local-send group schedules or by `send-email-v2`'s own `email-*` entry —
+   so verification 2 still expects the email at the send time, not at once.
+
+   What this costs the rehearsal is step 4 entirely: there is nothing parked to
+   observe, and `get-schedule` will 404 correctly. **To rehearse the scheduled
+   path as production runs it, stage further out than the lead time** (26h+, so
+   the entry exists and fires on its own), or deploy the rehearsal stack with
+   `IssueSendLeadTimeMinutes=0`. Do the long-notice version at least once per
+   phase that touches the definition — the short-notice one exercises a different
+   branch of `start_issue_schedule`.
+
+4. **Confirm the pending send, before the send time.** Only meaningful when the
+   issue was staged with more notice than the lead time — see step 3. Since
+   Phase 5 there is nothing to describe yet: the record stays `scheduled` with no
+   `executionArn`, and the workflow does not exist until the `ISSUE-SEND-*` entry
+   starts it. Check both halves:
 
    ```
    aws dynamodb get-item --table-name "$TABLE_NAME" \
@@ -328,8 +353,17 @@ Per content type, ~15 minutes. Repeat for markdown, json, and html.
    `ScheduleExpression` is `at(<scheduledAt − IssueSendLeadTimeMinutes>)` in UTC
    targeting `StageIssueStateMachine`. A record already at `in progress` before
    the send time is the pre-Phase-5 shape and means the API started an execution
-   directly (D5). No schedule but a `scheduled` record is the one unrecoverable
-   combination — the send will never fire and nothing watches for it.
+   directly (D5) — unless the issue was staged inside the lead window, where that
+   is now the correct behavior. No schedule but a `scheduled` record is the one
+   unrecoverable combination — the send will never fire and nothing watches for
+   it.
+
+   **Unscheduling stops a send only up to this point.** `PUT /issues/{id}` with
+   `status: "draft"` deletes the entry, which works while the entry is still
+   pending; once the workflow has started, the issue is already handed to the
+   send path and there is nothing left to delete. With a 26h lead that boundary
+   is a day before the send, not seconds before it, and for a short-notice
+   schedule it is immediately. Worth knowing before relying on a late cancel.
 
 5. **Grab the execution ARN after the send time.** The execution records it
    itself (`Mark Issue In Progress`), because the API has no ARN for an execution
@@ -360,7 +394,7 @@ aws stepfunctions get-execution-history --execution-arn "$ARN" --max-results 100
 
 ```
 Get Existing Issue → Has Issue Been Processed? → Mark Issue In Progress
-  → Is Scheduled In The Future? → Trigger Site Rebuild → Route By Content Type
+  → Route By Content Type
   → Markdown Extras → Extract Links → Parse Issue → Publish → Publish Success?
   → Schedule Tasks and Update
        branch 0: Schedule Issue Report
@@ -374,7 +408,7 @@ Get Existing Issue → Has Issue Been Processed? → Mark Issue In Progress
 
 ```
 Get Existing Issue → Has Issue Been Processed? → Mark Issue In Progress
-  → Is Scheduled In The Future? → Trigger Site Rebuild → Route By Content Type
+  → Route By Content Type
   → No Markdown Extras → Extract Links → Parse Issue → Publish → Publish Success?
   → Schedule Tasks and Update
        branch 0: Schedule Issue Report
@@ -384,14 +418,14 @@ Get Existing Issue → Has Issue Been Processed? → Mark Issue In Progress
   → Notify of Success → Success
 ```
 
-**`Wait For Future Date` must not appear on either.** Phase 5 moved the waiting
-out of the execution: the API sends no `futureDate`, so
-`Is Scheduled In The Future?` falls through to `Trigger Site Rebuild` and a
-scheduled issue looks exactly like an immediate one from `Get Existing Issue`
-onward. Seeing the `Wait` means the input still carries a `futureDate` — either
-the legacy GitHub ingress produced this execution (it resolves its own
-frontmatter date and still uses the `Wait` deliberately), or the API was rolled
-back to `StartExecution`. On an API-staged rehearsal it is a finding.
+**There is no waiting state left to look for.** Phase 5 moved the waiting out of
+the execution and Phase 6 deleted the states — a scheduled issue now looks
+exactly like an immediate one from `Get Existing Issue` onward, and what makes it
+scheduled lives entirely in the `ISSUE-SEND-*` entry and the `sendAt` on the
+execution input. A `Wait For Future Date` or `Is Scheduled In The Future?` in a
+history means the deployed definition predates that removal; if one ever comes
+back, note that everything after it happens *after* the send instant, which is
+what the publish lead time exists to avoid.
 
 Phase 3 collapsed the two tails into one and Phase 4 made link extraction
 shared, so the two sequences now differ in exactly two places — `Markdown Extras`
@@ -417,11 +451,10 @@ Reading notes:
 - `Update Issue Record - Failure` must **not** appear on any rehearsal. The
   preview states that used to be listed here alongside it (`Send Preview`,
   `Publish JSON Preview`) are gone — Phase 2 deleted them.
-- `Trigger Site Rebuild` must appear on **both** the scheduled and the immediate
-  path. It used to hang off the `Wait` alone, so an immediate publish never
-  rebuilt the site (D6); Phase 3 moved it onto the common path, which makes its
-  absence from an immediate-publish rehearsal a regression rather than the
-  expected result it was before.
+- `Trigger Site Rebuild` must **not** appear on either path. It emitted a
+  `Trigger Site Rebuild` event for a domain-specific site this stack no longer
+  serves, so the event had no consumer left and the state was removed. Seeing it
+  means the deployed definition predates that removal.
 - After Phase 1, also check that every `Task` that failed routed through its
   `Catch` rather than failing the execution.
 
@@ -465,6 +498,28 @@ aws dynamodb get-item --table-name "$TABLE_NAME" \
 The first row is Phase 5's fix for D5 and reads like a stall if you are used to
 the old shape: the record used to claim `in progress` from the moment it was
 staged, for days. `scheduled` until the send instant is now correct.
+
+With a non-zero lead time the second and third rows part company, and this is the
+known rough edge of Phase 6 rather than a rehearsal failure. A **local-send**
+issue is fine: the fan-out marks the record `sending` when it runs, and the
+workflow's success write is conditional on `#status <> :sending`, so it stays
+`sending` until the last group lands. An issue **without** local send goes
+`published` when `Publish` returns — at (send instant − lead time), while the
+send is still a pending `email-*` Scheduler entry. Nothing later corrects it,
+because the workflow's write is the only one on that path. Raising the lead time
+for a tenant that does not use local send buys nothing and costs exactly this.
+
+**The record's `publishedAt` and the stats record's are deliberately different
+values, and only one of them is load-bearing.** The record's comes from the
+workflow (`$$.State.EnteredTime`), so it carries the same lead-time skew as the
+status above. The stats record's is the send instant, resolved in
+`publish-issue.mjs` from `sendAtDate`, because that field dates the whole
+analytics timeline: `schedule-aggregation` fires consolidation at
+`publishedAt + 24h`, and open/click attribution reads it. Anchoring it on the
+workflow would consolidate empty analytics before the first email went out and
+`aggregate-issue-analytics` would refuse to run again (`statsPhase <>
+:consolidated`). On a rehearsal, check the `aggregate-<tenant>-<issue>-24h`
+entry lands 24h after the *send*, not 24h after the execution.
 
 `in progress` after the execution finished is the wedged-record failure mode
 (D2): the send may or may not have happened, so check the inbox before touching
@@ -510,26 +565,30 @@ Assert on each:
   in `Format List Cleanup Input` is trivially breakable when the paths are
   merged.
 
-**The base instant differs by content type today, and both are correct-by-design
-— know which one you are checking:**
+**The base instant is the scheduled send instant, on every content type.** Phase 6
+put it on the execution input (`sendAt` in `build_execution_input`,
+`functions/src/api/controllers/issues.rs`) and the definition forwards it to
+`Parse Issue`, so both parsers anchor on the same value:
 
-- **markdown:** base is the resolved frontmatter `date`. If the fixture's date
-  is stale, both entries land in the *past* and `sendAtDate` is `'now'`.
-- **json / html:** base is the moment `Parse Issue` runs — i.e. when the
-  execution starts, within seconds of the real send. The state machine does not
-  forward `futureDate` to the parse step, so `hasFutureSend` is false and
-  `baseDate` is `now` (`functions/parse-json-issue.mjs:52-62`). The dispatcher
-  changed nothing here: it forwards the payload it is given and returns the
-  parser's values verbatim (`functions/parse-issue.mjs`).
+- **markdown:** `sendAt` outranks the frontmatter `date`, which is now only the
+  fallback for a caller that supplies no schedule. A stale fixture date no longer
+  drags the entries into the past on a scheduled rehearsal — but it still sets the
+  *display* date if `sendAt` is absent, so keep bumping it.
+- **json / html:** `sendAt` is the only send instant these have. Without it
+  `hasFutureSend` is false and `baseDate` collapses to `now`
+  (`functions/parse-json-issue.mjs`).
+- **Immediate publish (`action: "send"`):** `sendAt` is null and `now` is the
+  correct base on both paths.
 
-  **This is why `IssueSendLeadTimeMinutes` cannot simply be raised.** For json and
-  html the base instant *is* the execution's start time, so a lead time of `L`
-  moves both entries `L` earlier — and moves the send itself earlier, because
-  `sendAtDate` comes out as `'now'` too. The parameter defaults to `0` and Phase 6
-  has to forward the send instant to `Parse Issue` before it can be raised; see
-  `issue_send_lead_time` in `functions/src/api/controllers/issues.rs`. If a
-  rehearsal runs with a non-zero lead time, verification 4's expected values shift
-  by it and verification 2 will show an email that arrived early.
+**Check this against a non-zero lead time, because that is the whole point of the
+field.** `IssueSendLeadTimeMinutes` is deployed at 1560, so the workflow runs a day
+before the send and `now` is *not* the send instant. Both entries must still land
++3 / +5 days from the **scheduled** instant, not from when the workflow ran; an
+offset of exactly the lead time means `sendAt` is not reaching the parse step, and
+the same failure sends the issue a day early (verification 2 shows it). Note the
+clamp: `issue_send_fire_at` never asks Scheduler for a past time, so a rehearsal
+staged ten minutes out starts the workflow immediately and defers the send, which
+is the shape to expect rather than a fault.
 
 Compute expectations **in UTC**, because `setDate()` does its arithmetic in the
 runtime's local zone — UTC in Lambda, but your laptop's zone on your laptop,

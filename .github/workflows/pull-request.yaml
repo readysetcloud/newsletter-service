@@ -187,7 +187,7 @@ jobs:
           --resolve-s3 \
           --no-fail-on-empty-changeset \
           --capabilities CAPABILITY_IAM \
-          --parameter-overrides Environment=stage EncryptionKey=${{secrets.ENCRYPTION_KEY}} VerifiedFromEmail=${{vars.VERIFIED_FROM_EMAIL}}
+          --parameter-overrides Environment=stage EncryptionKey=${{secrets.ENCRYPTION_KEY}} VerifiedFromEmail=${{vars.VERIFIED_FROM_EMAIL}} IssueSendLeadTimeMinutes=1560
 
   deploy-frontend:
     name: Deploy Frontend
@@ -262,7 +262,7 @@ jobs:
           --resolve-s3 \
           --no-fail-on-empty-changeset \
           --capabilities CAPABILITY_IAM \
-          --parameter-overrides Environment=stage EncryptionKey=${{secrets.ENCRYPTION_KEY}} VerifiedFromEmail=${{vars.VERIFIED_FROM_EMAIL}}
+          --parameter-overrides Environment=stage EncryptionKey=${{secrets.ENCRYPTION_KEY}} VerifiedFromEmail=${{vars.VERIFIED_FROM_EMAIL}} IssueSendLeadTimeMinutes=1560
 
   deploy-frontend-dependabot:
     name: Deploy Frontend Dependabot Updates

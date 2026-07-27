@@ -338,6 +338,32 @@ describe('parse-md-to-json tenant settings', () => {
     expect(result.reportStatsDate).toBe('2026-06-30T14:00:00');
   });
 
+  // The schedule outranks the author's frontmatter, and it has to: with a
+  // publish lead time the workflow starts before the send instant, so "now" is
+  // no longer the send time and the frontmatter date is only what the author
+  // typed. The Scheduler entry fired against `sendAt`; everything derived from
+  // the send instant follows it, the display date included.
+  it('prefers the forwarded send instant over the frontmatter date', async () => {
+    await loadIsolated([], { timezone: 'America/Chicago', defaultSendTime: '09:00' });
+
+    const result = await handler(issue({ sendAt: '2026-06-29T14:00:00+00:00' }));
+
+    expect(result.sendAtDate).toBe('2026-06-29T14:00:00.000Z');
+    expect(result.listCleanupDate).toBe('2026-07-02T14:00:00');
+    expect(result.reportStatsDate).toBe('2026-07-04T14:00:00');
+    expect(result.data.metadata.date).toBe('June 29, 2026');
+  });
+
+  // An immediate publish carries `sendAt: null` on the execution input, which
+  // must leave the frontmatter path exactly as it was.
+  it('falls back to the frontmatter date when no send instant is forwarded', async () => {
+    await loadIsolated([], { timezone: 'America/Chicago', defaultSendTime: '09:00' });
+
+    const result = await handler(issue({ sendAt: null }));
+
+    expect(result.sendAtDate).toBe('2026-06-25T14:00:00.000Z');
+  });
+
   it('formats the display date in the tenant timezone', async () => {
     await loadIsolated([], { timezone: 'America/Chicago', defaultSendTime: '09:00' });
 

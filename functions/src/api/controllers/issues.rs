@@ -3799,10 +3799,17 @@ const ISSUE_SEND_SCHEDULE_PREFIX: &str = "ISSUE-SEND";
 /// a much smaller limit of its own, and a copy of the content pinned in
 /// execution state is a second source of truth for what got published.
 ///
-/// `templateId`, `contentType` and `fileName` stay: they are small scalars this
-/// API owns, and the state machine reads them with unconditional `.$` paths —
-/// which the record cannot support for the first two, since it leaves both
-/// attributes off entirely when they are unset.
+/// `templateId`, `contentType`, `fileName` and `sendAt` stay: they are small
+/// scalars this API owns, and the state machine reads them with unconditional
+/// `.$` paths — which the record cannot support for the first two, since it
+/// leaves both attributes off entirely when they are unset.
+///
+/// `sendAt` is the one field the execution cannot derive for itself. It is not
+/// content and it is not stale: the send instant is fixed when the issue is
+/// scheduled, and rescheduling replaces the Scheduler entry and its input
+/// together. With a non-zero lead time the execution starts *before* that
+/// instant, so "now" is no longer an honest answer to when the issue sends —
+/// see `issue_send_lead_time`.
 fn build_execution_input(input: &IssueScheduleInput<'_>) -> serde_json::Value {
     serde_json::json!({
         "fileName": format!("issue-{}", input.issue_number),
@@ -3815,24 +3822,44 @@ fn build_execution_input(input: &IssueScheduleInput<'_>) -> serde_json::Value {
         // can reference it unconditionally.
         "templateId": input.template_id,
         // Routes the publish pipeline between the markdown and json parsers.
-        "contentType": input.content_type
+        "contentType": input.content_type,
+        // The issue's send instant, or null for an immediate publish — where
+        // "now" is the honest answer and the parsers' own fallback is correct.
+        // Present-but-null for the same reason templateId is.
+        "sendAt": input.scheduled_at
     })
 }
 
 /// Starts an issue's publish workflow — now, or at its send time.
 ///
-/// An immediate publish still starts an execution directly. A scheduled one
-/// creates a one-shot EventBridge Scheduler entry that starts the execution at
-/// (send instant − lead time) instead, rather than starting an execution that
-/// sits in the definition's `Wait For Future Date` state for days. Three things
+/// An immediate publish starts an execution directly, and so does a schedule
+/// with less notice than the lead time — its workflow is already due, and
+/// `schedule_issue_send` will not create an entry for a time that has
+/// effectively passed. Everything else creates a one-shot EventBridge Scheduler
+/// entry that starts the execution at (send instant − lead time), rather than
+/// starting an execution that sat in the definition's `Wait For Future Date`
+/// state for days. Both direct-start cases still send at the issue's own
+/// instant: the workflow carries `sendAt` and the send path holds it there.
+///
+/// One operator-facing consequence of the lead time, easiest to notice here but
+/// not specific to this branch: **unscheduling only reliably stops a send before
+/// the workflow starts**, i.e. before (send instant − lead time). After that the
+/// issue has been published to the send path and `DeleteSchedule` has nothing
+/// left to delete — for a short-notice schedule that is immediately, and for a
+/// normal one it is a day before the send. See #372.
+///
+/// Three things
 /// come out of that: the execution reads the issue record at send time instead
 /// of publishing a copy taken at schedule time, work can happen *before* the
 /// send instant (which is what timezone-correct local send needs — see
 /// `issue_send_lead_time`), and the schedule name is a per-issue lock.
 ///
-/// Rollback is producer-side: send `futureDate` in the execution input and call
-/// `start_execution` unconditionally. `Wait For Future Date` is still in the
-/// definition for exactly that reason.
+/// There is no rollback to a waiting execution any more. `Wait For Future Date`
+/// was kept in the definition for one, then removed with Phase 6: waiting inside
+/// the execution puts every step *after* the send instant, which is precisely
+/// what makes eastward local send impossible. Rolling back to it would undo the
+/// lead time. The rollback that remains is `ISSUE_SEND_LEAD_TIME_MINUTES: 0`,
+/// which restores an execution that starts at the send instant.
 async fn start_issue_schedule(input: IssueScheduleInput<'_>) -> Result<(), AppError> {
     let execution_input = build_execution_input(&input);
 
@@ -3896,7 +3923,20 @@ async fn schedule_issue_send(
         })?
         .with_timezone(&chrono::Utc);
 
-    let fire_at = issue_send_fire_at(send_instant, issue_send_lead_time(), chrono::Utc::now());
+    let now = chrono::Utc::now();
+    let fire_at = issue_send_fire_at(send_instant, issue_send_lead_time(), now);
+
+    // Scheduled less notice than the lead time, so the workflow is already due:
+    // start it here instead of asking Scheduler to fire at (or a hair before)
+    // this instant. See `is_due_now` for why an `at()` in the past is not an
+    // option. The issue still sends at its own instant - the workflow carries
+    // `sendAt` and the send path holds it - which is the same thing the lead
+    // time does for every other issue, with whatever lead was actually
+    // available.
+    if is_due_now(fire_at, now) {
+        return start_issue_execution(input, execution_input).await;
+    }
+
     let schedule_name = build_issue_send_schedule_name(input.tenant_id, input.issue_number);
 
     scheduler
@@ -4019,21 +4059,45 @@ async fn mark_issue_scheduled(tenant_id: &str, issue_number: i32) -> Result<(), 
 /// It exists because the local-send fan-out cannot schedule a group whose local
 /// send time has already passed, so with a zero lead time every timezone east
 /// of the base zone is sent immediately instead of at its own 9am. A lead time
-/// wide enough to cover the largest eastward offset (24h covers everything,
-/// including UTC+14) puts the fan-out ahead of the base instant and lets those
-/// groups be scheduled properly.
+/// wide enough to cover that gap puts the fan-out ahead of the base instant and
+/// lets those groups be scheduled properly.
 ///
-/// Default 0, which is today's behaviour: the execution starts at the send
-/// instant, exactly where the `Wait` used to end.
+/// The gap is `offset(subscriber) − offset(base zone)`, not the subscriber's
+/// offset from UTC — a base zone of UTC−12 with a subscriber at UTC+14 is 26
+/// hours, so the default is 1560 rather than the 24h that reads like enough.
+/// Tune it down to the real worst case for the configured base zone to buy back
+/// freeze time (America/Chicago against UTC+14 is 19–20h); 0 restores the
+/// pre-Phase-6 behaviour, where the execution starts at the send instant and
+/// eastward groups go out at once.
 ///
-/// **Raising it above 0 needs one more change first.** The parse step derives
-/// `sendAtDate` from the issue's own send instant and returns `now` when that
-/// instant has passed — true at a zero lead time, false the moment the
-/// execution starts early. Until the send instant is forwarded to `Parse Issue`
-/// (it is not today; `parse-json-issue.mjs` reads it from a `futureDate` the
-/// definition does not pass, and `parse-md-to-json.mjs` only reads it from
-/// markdown frontmatter), an early execution publishes early rather than
-/// scheduling the send. That is Phase 6's first job, not a config change.
+/// The value that matters is the deployed one, not this default: CloudFormation
+/// keeps a stack's stored parameter across updates, so `IssueSendLeadTimeMinutes`
+/// is passed explicitly in `.github/workflows/deploy.yaml` and
+/// `pull-request.yaml`. Changing the default alone changes nothing.
+///
+/// What had to land before this could be raised, and now has: the send instant
+/// travels to the parse step on the execution input (`sendAt` in
+/// `build_execution_input`). Without it the parsers fall back to their own
+/// notion of the send instant — markdown frontmatter, or nothing at all for
+/// json — and return `now`, which makes an early execution publish early
+/// instead of scheduling. Keep the two together: dropping `sendAt` from the
+/// input while this is non-zero sends every issue `lead_time` early.
+///
+/// A Scheduler entry created before `sendAt` existed is safe against that, and
+/// it is worth knowing why rather than trusting it. Its input has no `sendAt`,
+/// so `functions/parse-issue.mjs` reads `null` and the parsers answer `now` —
+/// but the entry was also created while the lead time was zero, so it fires at
+/// the send instant and `now` is the truth. The two always move together,
+/// because the entry's fire time and its input are written in the same call.
+///
+/// One consequence worth knowing at the record level. For a local-send issue
+/// the fan-out marks the record `sending` as soon as it runs, and the state
+/// machine's success write refuses to overwrite that, so the status stays
+/// honest for the whole lead. For an issue *without* local send the workflow
+/// still writes `published` when `Publish` returns — at (send instant − lead
+/// time), while the send itself is a deferred Scheduler entry. Raising the lead
+/// time for a tenant that does not use local send therefore buys nothing and
+/// costs both freeze time and an early `published`.
 fn issue_send_lead_time() -> chrono::Duration {
     chrono::Duration::minutes(parse_lead_time_minutes(
         std::env::var(LEAD_TIME_ENV).ok().as_deref(),
@@ -4041,9 +4105,12 @@ fn issue_send_lead_time() -> chrono::Duration {
 }
 
 /// Parses the configured lead time, falling back to zero for anything that is
-/// not a usable number of minutes. Zero is the safe default in both directions:
-/// it is today's behaviour, and it can never move a send earlier than its
-/// scheduled instant.
+/// not a usable number of minutes. Zero is the fail-safe fallback in both
+/// directions: it is the pre-Phase-6 behaviour, and it can never move a send
+/// earlier than its scheduled instant. The configured value is 1560 and lives in
+/// template.yaml and the deploy workflows (`IssueSendLeadTimeMinutes`), not here
+/// — a missing or garbled env var should degrade to "no lead", not to somebody's
+/// idea of one.
 fn parse_lead_time_minutes(raw: Option<&str>) -> i64 {
     raw.map(str::trim)
         .filter(|value| !value.is_empty())
@@ -4052,9 +4119,27 @@ fn parse_lead_time_minutes(raw: Option<&str>) -> i64 {
         .max(0)
 }
 
+/// The minimum notice worth handing to EventBridge Scheduler.
+///
+/// `at()` has second granularity and the expression is rendered before the
+/// request goes out, so a fire time within a second or two of now is already in
+/// the past by the time Scheduler stores it — and a one-time schedule in the
+/// past does not invoke its target. (Scheduler may refuse it outright instead;
+/// `fanOutLocalSendGroups` in send-email-v2.mjs assumes refusal and keeps a
+/// 60-second guard of its own for the same reason.) Refusal fails the request
+/// and leaves the issue a draft; acceptance loses the send silently. Neither is
+/// worth risking for a schedule that is about to fire anyway.
+const SCHEDULER_MIN_NOTICE_SECONDS: i64 = 60;
+
+/// Whether a computed fire time is too close to now to be worth scheduling.
+fn is_due_now(fire_at: chrono::DateTime<chrono::Utc>, now: chrono::DateTime<chrono::Utc>) -> bool {
+    fire_at - now <= chrono::Duration::seconds(SCHEDULER_MIN_NOTICE_SECONDS)
+}
+
 /// When the Scheduler entry fires. Clamped to `now`, so a lead time longer than
-/// the notice an issue was scheduled with starts the workflow immediately rather
-/// than asking Scheduler for a time in the past.
+/// the notice an issue was scheduled with cannot ask Scheduler for a time in the
+/// past — `schedule_issue_send` reads the clamped value through `is_due_now` and
+/// starts the workflow itself instead.
 fn issue_send_fire_at(
     send_instant: chrono::DateTime<chrono::Utc>,
     lead_time: chrono::Duration,
@@ -6647,15 +6732,50 @@ Thanks!"#;
                 "issueId": 42,
                 "tenant": { "id": "tenant-123", "email": "owner@example.com" },
                 "templateId": "tmpl-1",
-                "contentType": "markdown"
+                "contentType": "markdown",
+                "sendAt": "2026-07-27T14:00:00+00:00"
             })
         );
         // Named individually because each one is a specific bug if it comes
         // back: content and subject are read off the record now, and futureDate
-        // is what parked the execution in the definition's `Wait`.
+        // is what parked the execution in the definition's `Wait` — a state the
+        // definition no longer has. `sendAt` is deliberately not one of these:
+        // it is an identifier for *when*, not a copy of what gets published.
         for absent in ["content", "subject", "futureDate"] {
             assert!(input.get(absent).is_none(), "{absent} is back on the input");
         }
+    }
+
+    /// The lead time is only usable because this field exists. An execution
+    /// that starts early has no way to tell that it is early, so a missing or
+    /// dropped `sendAt` means the parse step answers "now" and the issue goes
+    /// out `ISSUE_SEND_LEAD_TIME_MINUTES` ahead of its send time.
+    #[test]
+    fn test_build_execution_input_carries_the_send_instant() {
+        let scheduled = build_execution_input(&IssueScheduleInput {
+            tenant_id: "tenant-123",
+            tenant_email: "owner@example.com",
+            issue_number: 42,
+            scheduled_at: Some("2026-07-27T14:00:00+00:00"),
+            template_id: None,
+            content_type: "markdown",
+        });
+        assert_eq!(scheduled["sendAt"], "2026-07-27T14:00:00+00:00");
+
+        let immediate = build_execution_input(&IssueScheduleInput {
+            tenant_id: "tenant-123",
+            tenant_email: "owner@example.com",
+            issue_number: 42,
+            scheduled_at: None,
+            template_id: None,
+            content_type: "markdown",
+        });
+        // Present-but-null, like templateId: the definition reads it with an
+        // unconditional `.$` path, where an absent field is an unretryable
+        // States.Runtime error. Null is also the honest value — an immediate
+        // publish sends now, and the parsers' own fallback says so.
+        assert!(immediate.get("sendAt").is_some());
+        assert_eq!(immediate["sendAt"], serde_json::Value::Null);
     }
 
     #[test]
@@ -6718,6 +6838,35 @@ Thanks!"#;
             issue_send_fire_at(send_instant, chrono::Duration::hours(24), now),
             now
         );
+    }
+
+    /// The clamp alone is not enough, and this is the pairing that says why: a
+    /// clamped fire time IS now, and `at(now)` renders to whole seconds and
+    /// travels over the network before Scheduler stores it, so it lands in the
+    /// past. A one-time schedule in the past never invokes its target, which
+    /// would leave the issue `scheduled` and unsent. `schedule_issue_send`
+    /// starts the execution itself instead.
+    #[test]
+    fn test_is_due_now_covers_the_clamped_fire_time() {
+        let send_instant = timestamp("2026-07-27T14:00:00Z");
+        let now = timestamp("2026-07-27T09:00:00Z");
+        let lead = chrono::Duration::hours(26);
+
+        assert!(is_due_now(issue_send_fire_at(send_instant, lead, now), now));
+    }
+
+    /// The margin, from both sides. Anything inside it is started directly;
+    /// anything past it is Scheduler's job, including a send whose whole lead
+    /// is only a few minutes.
+    #[test]
+    fn test_is_due_now_only_covers_the_notice_margin() {
+        let now = timestamp("2026-07-27T09:00:00Z");
+
+        assert!(is_due_now(now, now));
+        assert!(is_due_now(now - chrono::Duration::seconds(30), now));
+        assert!(is_due_now(now + chrono::Duration::seconds(60), now));
+        assert!(!is_due_now(now + chrono::Duration::seconds(61), now));
+        assert!(!is_due_now(now + chrono::Duration::hours(26), now));
     }
 
     /// The name is a per-issue lock: `CreateSchedule` conflicts on it (so a

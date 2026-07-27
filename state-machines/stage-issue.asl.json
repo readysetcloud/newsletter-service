@@ -116,57 +116,12 @@
           "ResultPath": "$.error"
         }
       ],
-      "Next": "Is Scheduled In The Future?",
+      "Next": "Route By Content Type",
       "ResultPath": null,
       "Assign": {
         "content.$": "$.Attributes.content.S",
         "callerSubject.$": "$.Attributes.subject.S"
       }
-    },
-    "Is Scheduled In The Future?": {
-      "Type": "Choice",
-      "Comment": "A no-op for the API, which stopped sending futureDate in Phase 5 - a future issue is now started by a Scheduler entry at the send instant instead of holding an execution open for days. It no longer has a producer at all: import-issue-from-github.mjs was the last one sending futureDate (a frontmatter date it resolved itself) and PR #358 deleted it with the GitHub ingress. What it still buys is the Phase 5 rollback as a producer-side flip: point the API back at StartExecution with a futureDate and this branch waits again, no definition change. Remove it only together with that rollback path.",
-      "Choices": [
-        {
-          "Variable": "$.futureDate",
-          "IsPresent": true,
-          "Next": "Wait For Future Date"
-        }
-      ],
-      "Default": "Trigger Site Rebuild"
-    },
-    "Wait For Future Date": {
-      "Type": "Wait",
-      "Comment": "Deliberately still here. See 'Is Scheduled In The Future?' - this state is the rollback for Phase 5 and the entry point the GitHub producer still uses. Note what waiting here costs, and why the API no longer does it: everything downstream, including the read of the issue content, happens after the Wait, so a week-long execution pins whatever the producer sent and nothing can run before the send instant - which is what blocks local send for timezones east of the base zone (D9).",
-      "TimestampPath": "$.futureDate",
-      "Next": "Trigger Site Rebuild"
-    },
-    "Trigger Site Rebuild": {
-      "Type": "Task",
-      "Comment": "On the common path, not only after the Wait: an immediate publish rebuilds the site too. It used to hang off 'Wait For Future Date' alone, so an issue published on demand left the web version stale until the next scheduled issue came through (D6 in docs/stage-issue-simplification-plan.md). The Detail is unchanged, including the 'reason' string, because the rebuild consumer lives outside this stack and may filter on it.",
-      "Resource": "${EventBridgePutEvents}",
-      "Parameters": {
-        "Entries": [
-          {
-            "Detail": {
-              "reason": "Scheduled newsletter issue"
-            },
-            "DetailType": "Trigger Site Rebuild",
-            "Source": "user.StageIssueStateMachine"
-          }
-        ]
-      },
-      "Catch": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "Next": "Update Issue Record - Failure",
-          "ResultPath": "$.error"
-        }
-      ],
-      "Next": "Route By Content Type",
-      "ResultPath": null
     },
     "Route By Content Type": {
       "Type": "Choice",
@@ -260,7 +215,7 @@
     },
     "Parse Issue": {
       "Type": "Task",
-      "Comment": "One parse for every content type: functions/parse-issue.mjs switches on contentType and delegates to parse-md-to-json or parse-json-issue, which already return the identical contract - { data, sendAtDate, listCleanupDate, reportStatsDate, subject }. The two date fields become the Scheduler entries below and fire three and five days after the send, so the dispatcher hands the parser's values back verbatim rather than re-deriving them; __tests__/parse-issue.test.mjs deep-compares its output against both parsers to keep it that way.",
+      "Comment": "One parse for every content type: functions/parse-issue.mjs switches on contentType and delegates to parse-md-to-json or parse-json-issue, which already return the identical contract - { data, sendAtDate, listCleanupDate, reportStatsDate, subject }. The two date fields become the Scheduler entries below and fire three and five days after the send, so the dispatcher hands the parser's values back verbatim rather than re-deriving them; __tests__/parse-issue.test.mjs deep-compares its output against both parsers to keep it that way. The whole execution input rides along as one object so the dispatcher can read 'sendAt' off it, which is what makes the lead time usable (D9): the execution now starts at (send instant - IssueSendLeadTimeMinutes), so 'when this issue sends' is no longer 'about now' and cannot be inferred here. Without it both parsers fall back to their own notion of the send instant - markdown frontmatter, or nothing at all for json - and return 'now', which publishes an early execution immediately instead of scheduling it. It also re-anchors listCleanupDate and reportStatsDate on the real send instant rather than on parse time. The object, not '$$.Execution.Input.sendAt' directly, and that is the whole point: an ISSUE-SEND-* Scheduler entry created before this deploy carries the execution input baked into it at schedule time, which has no sendAt field, and a '.$' path to an absent field raises States.Runtime - not retriable, not catchable, a missed send with nothing written to the record. A path to the object always resolves; the dispatcher treats an absent sendAt as 'now', which is exactly right for those entries because they were created when the lead time was zero and therefore fire at the send instant.",
       "Resource": "${LambdaInvoke}",
       "Parameters": {
         "FunctionName": "${ParseIssue}",
@@ -270,7 +225,8 @@
           "issueId.$": "$$.Execution.Input.issueId",
           "tenantId.$": "$$.Execution.Input.tenant.id",
           "subject.$": "$callerSubject",
-          "contentType.$": "$contentType"
+          "contentType.$": "$contentType",
+          "executionInput.$": "$$.Execution.Input"
         }
       },
       "Retry": [

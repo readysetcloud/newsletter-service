@@ -170,6 +170,69 @@ describe('parse-issue dispatcher: output matches the delegate exactly', () => {
     expect(dispatched.sendAtDate).toBe('2026-08-03T09:00:00.000Z');
   });
 
+  // `sendAt` reaches both parsers through the dispatcher, which forwards every
+  // field it does not itself normalize. It is the field a publish lead time
+  // depends on - an execution that starts early and does not receive it parses
+  // to `sendAtDate: 'now'` and publishes early - so pin that the dispatcher is
+  // not the place it gets dropped, on both delegates.
+  it('forwards sendAt to whichever parser it delegates to', async () => {
+    const sendAt = '2026-08-03T09:00:00+00:00';
+
+    for (const [contentType, content, delegate] of [
+      ['markdown', MARKDOWN_CONTENT, parseMarkdown],
+      ['json', JSON_CONTENT, parseJsonIssue]
+    ]) {
+      const state = { ...baseState, contentType, content, sendAt };
+
+      const dispatched = await dispatch(state);
+
+      expect(dispatched).toEqual(await delegate(state));
+      expect(dispatched.sendAtDate).toBe('2026-08-03T09:00:00.000Z');
+    }
+  });
+
+  // The shape the state machine actually sends: the whole execution input as one
+  // object, because a `.$` path to `sendAt` would break every `ISSUE-SEND-*`
+  // Scheduler entry created before that field existed.
+  it('reads the send instant off the execution input object', async () => {
+    const state = {
+      ...baseState,
+      contentType: 'json',
+      content: JSON_CONTENT,
+      executionInput: { issueId: 412, sendAt: '2026-08-03T09:00:00+00:00' }
+    };
+
+    expect((await dispatch(state)).sendAtDate).toBe('2026-08-03T09:00:00.000Z');
+  });
+
+  // A pending entry from before the field existed. It carries no `sendAt`
+  // anywhere, and the answer has to be "now" rather than a crash - which is also
+  // correct for it, since an entry created back then fires at the send instant.
+  it('treats an execution input without sendAt as an immediate send', async () => {
+    const state = {
+      ...baseState,
+      contentType: 'json',
+      content: JSON_CONTENT,
+      executionInput: { issueId: 412, templateId: null, contentType: 'json' }
+    };
+
+    expect((await dispatch(state)).sendAtDate).toBe('now');
+  });
+
+  // Null is what an immediate publish puts on the input, and it must not shadow
+  // a caller that passed the instant directly.
+  it('prefers a direct sendAt over the execution input', async () => {
+    const state = {
+      ...baseState,
+      contentType: 'json',
+      content: JSON_CONTENT,
+      sendAt: '2026-08-03T09:00:00+00:00',
+      executionInput: { sendAt: null }
+    };
+
+    expect((await dispatch(state)).sendAtDate).toBe('2026-08-03T09:00:00.000Z');
+  });
+
   // Teeth for the deep-equals above: they only mean something if the two parsers
   // actually disagree on these fields for the same input. They do - the
   // markdown parser reads the send instant out of the frontmatter `date`, the
@@ -303,12 +366,16 @@ describe('parse-issue dispatcher: delegation', () => {
 
     await dispatchStubbed(state);
 
-    expect(jsonStub).toHaveBeenCalledWith({ ...state, contentType: 'html' });
+    // `sendAt` is the second field the dispatcher normalizes rather than
+    // forwards: null here because this payload carries neither a direct
+    // `sendAt` nor an `executionInput`. `futureDate` is untouched - it stays
+    // the json parser's own fallback rather than being folded in here.
+    expect(jsonStub).toHaveBeenCalledWith({ ...state, contentType: 'html', sendAt: null });
   });
 
   it('tolerates a missing payload rather than throwing before the parser sees it', async () => {
     await dispatchStubbed(undefined);
 
-    expect(markdownStub).toHaveBeenCalledWith({ contentType: 'markdown' });
+    expect(markdownStub).toHaveBeenCalledWith({ contentType: 'markdown', sendAt: null });
   });
 });

@@ -44,14 +44,29 @@ Parameters:
     Description: Route 53 Hosted Zone ID for frontend custom domain (optional)
   IssueSendLeadTimeMinutes:
     Type: String
-    Default: "0"
+    Default: "1560"
     Description: >
-      How long before its send time an issue's publish workflow starts. This is
-      the content freeze point - the workflow reads the issue record when it
-      starts. 0 keeps the workflow starting at the send instant; raising it lets
-      the local-send fan-out schedule timezones east of the base zone instead of
-      sending them immediately. Raising it above 0 needs one code change first:
-      see issue_send_lead_time in functions/src/api/controllers/issues.rs.
+      How long before its send time an issue's publish workflow starts, in
+      minutes. This is the content freeze point - the workflow reads the issue
+      record when it starts, so an edit inside the lead window is not in the
+      issue. It has to cover the gap between the base zone and the most eastward
+      subscriber zone, which is offset(subscriber) - offset(base zone), NOT the
+      subscriber's offset from UTC: a base zone of UTC-12 and a subscriber at
+      UTC+14 are 26 hours apart, so 1560 is the unconditional worst case and 24h
+      would leave that pairing 2 hours late. That is what lets the local-send
+      fan-out schedule eastward groups for their own local time instead of
+      sending them the moment it runs. Tune it down to the real worst-case gap
+      for the tenant's configured base zone to buy back freeze time - with a
+      base zone of America/Chicago and subscribers no further east than UTC+14,
+      that is 19-20h. 0 restores the pre-Phase-6 behaviour, where the workflow
+      starts at the send instant and every eastward zone is sent at once. The
+      workflow needs the send instant on its execution input for any of this to
+      be safe - see issue_send_lead_time in
+      functions/src/api/controllers/issues.rs.
+      NOTE: this default only applies to a stack's FIRST deploy. CloudFormation
+      keeps a parameter's stored value on update unless it is overridden, so the
+      deploy workflows pass it explicitly - change it in both places or not at
+      all.
 
 Metadata:
   esbuild-properties: &esbuild-properties
@@ -2658,10 +2673,11 @@ Resources:
                 - !GetAtt ParseIssueFunction.Arn
                 # The definition no longer invokes either parser directly - the
                 # dispatcher above does, in-process. These two grants stay until
-                # the functions themselves are retired, because an execution
-                # started on the pre-dispatcher definition can sit in
-                # `Wait For Future Date` for days and still has to be able to
-                # finish after this deploys.
+                # the functions themselves are retired. The reason they were kept
+                # (an execution parked in `Wait For Future Date` for days,
+                # finishing on the pre-dispatcher definition) is gone with that
+                # state, but a long-running execution can still outlive a deploy
+                # and these cost nothing.
                 - !GetAtt ParseMdToJsonFunction.Arn
                 - !GetAtt ParseJsonIssueFunction.Arn
                 - !GetAtt UpdateLinksWithTrackingDataFunction.Arn

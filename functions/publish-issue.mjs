@@ -31,7 +31,7 @@ export const handler = async (state) => {
       });
     } else {
       const tenant = await getTenant(state.tenantId);
-      const publishedAt = new Date().toISOString();
+      const publishedAt = resolvePublishedAt(state.sendAtDate);
       await setupIssueStats(tenant, state.data.metadata.number, state.subject, publishedAt);
 
       // Send configs (abTest, localSend, contentAssembly) are persisted on the
@@ -260,6 +260,40 @@ const sendEmail = async (params) => {
 
 const padIssueNumber = (issueNumber) => {
   return String(issueNumber).padStart(5, '0');
+};
+
+/**
+ * When the issue actually goes out — which is not when this function runs.
+ *
+ * The publish workflow starts `IssueSendLeadTimeMinutes` before the send instant
+ * so the local-send fan-out can schedule eastward timezone groups for their own
+ * morning, and only the *delivery* is deferred from here: this code renders,
+ * seeds the stats record and announces the publish immediately. Anchoring
+ * `publishedAt` on the current time therefore dated the whole analytics timeline
+ * a lead time early, and the consequence was not cosmetic. `schedule-aggregation`
+ * schedules consolidation for `publishedAt + 24h`, so with a 26h lead it ran two
+ * hours *before* the first email went out, wrote empty analytics, and stamped
+ * `statsPhase: consolidated` — which `aggregate-issue-analytics` treats as a
+ * refusal to run again (`statsPhase <> :consolidated`). The issue's analytics
+ * would have been permanently empty. Open and click attribution reads the same
+ * field.
+ *
+ * `sendAtDate` is the parse step's answer for the same question and already
+ * carries the scheduled instant, so this only has to distinguish a real future
+ * send from its `'now'` sentinel. A past or unparseable value falls back to now:
+ * the send is going out immediately in that case, which is exactly what the old
+ * behavior assumed and the only thing it was ever right about.
+ *
+ * @param {string|undefined} sendAtDate - `'now'`, or the send instant as ISO
+ * @returns {string} ISO instant to date the issue's analytics from
+ */
+const resolvePublishedAt = (sendAtDate) => {
+  const now = new Date();
+  const sendInstant = sendAtDate && sendAtDate !== 'now' ? new Date(sendAtDate) : null;
+
+  return sendInstant && !Number.isNaN(sendInstant.getTime()) && sendInstant > now
+    ? sendInstant.toISOString()
+    : now.toISOString();
 };
 
 const setupIssueStats = async (tenant, issueNumber, subject, publishedAt) => {

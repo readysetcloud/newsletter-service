@@ -4424,10 +4424,16 @@ Resources:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
           Statement:
+            # GetItem was missing, and three call sites needed it: the abTest
+            # config and its per-variant counters (so every consolidated
+            # analytics record has been written without its A/B summary, the
+            # AccessDenied swallowed by calculateAbTestSummary's own catch), and
+            # the tenant lookup the anomaly warning sends to.
             - Effect: Allow
               Action:
                 - dynamodb:Query
                 - dynamodb:UpdateItem
+                - dynamodb:GetItem
               Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
               Action:
@@ -4435,6 +4441,10 @@ Resources:
                 - dynamodb:GetItem
                 - dynamodb:Query
               Resource: !GetAtt SubscribersTable.Arn
+            # Emits 'Send Email v2' when an issue's counters can't be real.
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1

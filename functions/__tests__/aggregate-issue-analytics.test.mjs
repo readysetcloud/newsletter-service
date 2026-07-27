@@ -2,9 +2,11 @@ import { jest } from '@jest/globals';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 
 const { DynamoDBClient, QueryCommand, UpdateItemCommand, GetItemCommand } = await import('@aws-sdk/client-dynamodb');
+const { EventBridgeClient, PutEventsCommand } = await import('@aws-sdk/client-eventbridge');
 const { encrypt } = await import('../utils/helpers.mjs');
 const {
   handler,
+  describeCounterAnomaly,
   queryEventsByType,
   queryAllEventsParallel,
   calculateLinkPerformance,
@@ -1205,6 +1207,151 @@ describe('aggregate-issue-analytics', () => {
       expect(b.openRate).toBeCloseTo(40, 5);
       expect(b.clickRate).toBeCloseTo(4, 5);
       expect(b.subject).toBe('Challenger');
+    });
+  });
+});
+
+// Issue 226 sat at 949 opens and no clicks for a week without anyone noticing,
+// because nothing failed: handle-email-status swallowed the error, so no metric
+// moved and the dashboard just drew nothing. Consolidation already has the
+// counters in hand, so it is the one place that can notice.
+describe('aggregate-issue-analytics counter anomaly detection', () => {
+  describe('describeCounterAnomaly', () => {
+    test('flags opens with no clicks at all', () => {
+      // The shape of the bug: link scanners alone put clicks on any issue that
+      // was really opened, so zero is a broken pipeline, not a bad week.
+      expect(describeCounterAnomaly({ deliveries: 2280, opens: 949, clicks: 0 }))
+        .toMatch(/949 opens.*2,280 delivered.*not one click/);
+    });
+
+    test('flags a missing clicks attribute the same as a zero', () => {
+      expect(describeCounterAnomaly({ deliveries: 2280, opens: 949 })).not.toBeNull();
+    });
+
+    test('flags deliveries with no opens at all', () => {
+      expect(describeCounterAnomaly({ deliveries: 2280, opens: 0, clicks: 0 }))
+        .toMatch(/2,280 emails were delivered, but not one open/);
+    });
+
+    test('stays quiet for a healthy issue', () => {
+      expect(describeCounterAnomaly({ deliveries: 2280, opens: 949, clicks: 12 })).toBeNull();
+    });
+
+    test('stays quiet when nothing was delivered', () => {
+      expect(describeCounterAnomaly({ deliveries: 0, opens: 0, clicks: 0 })).toBeNull();
+      expect(describeCounterAnomaly({})).toBeNull();
+    });
+
+    // A zero only carries information when there is enough volume above it. Left
+    // unbounded this fires on every quiet issue, and a warning that cries wolf
+    // is one the reader learns to delete — the only way this feature can fail.
+    describe('needs volume before a zero means anything', () => {
+      test('a lightly-opened issue with no clicks is not an anomaly', () => {
+        expect(describeCounterAnomaly({ deliveries: 2280, opens: 1, clicks: 0 })).toBeNull();
+        expect(describeCounterAnomaly({ deliveries: 2280, opens: 24, clicks: 0 })).toBeNull();
+      });
+
+      test('a small send with no opens is not an anomaly', () => {
+        expect(describeCounterAnomaly({ deliveries: 12, opens: 0, clicks: 0 })).toBeNull();
+        expect(describeCounterAnomaly({ deliveries: 49, opens: 0, clicks: 0 })).toBeNull();
+      });
+
+      test('fires once the volume makes the zero implausible', () => {
+        expect(describeCounterAnomaly({ deliveries: 2280, opens: 25, clicks: 0 })).not.toBeNull();
+        expect(describeCounterAnomaly({ deliveries: 50, opens: 0, clicks: 0 })).not.toBeNull();
+      });
+    });
+
+    // Checked against this tenant's real history: these five are every issue the
+    // check would ever have fired on, and all five were genuinely broken.
+    describe('against real history', () => {
+      test.each([
+        ['#174', { deliveries: 1272, opens: 45, clicks: 0 }],
+        ['#175', { deliveries: 1268, opens: 68, clicks: 0 }],
+        ['#176', { deliveries: 1268, opens: 81, clicks: 0 }],
+        ['#177', { deliveries: 1269, opens: 163, clicks: 0 }],
+        ['#226', { deliveries: 2280, opens: 954, clicks: 0 }]
+      ])('fires on %s, which was broken', (_label, counters) => {
+        expect(describeCounterAnomaly(counters)).not.toBeNull();
+      });
+
+      // The smallest issue that did record clicks. Nothing about it should alarm.
+      test('stays quiet on #200, the smallest healthy issue on record', () => {
+        expect(describeCounterAnomaly({ deliveries: 64, opens: 30, clicks: 23 })).toBeNull();
+      });
+    });
+  });
+
+  describe('handler', () => {
+    let mockSend;
+    let mockPutEvents;
+    let originalEnv;
+
+    const runWith = async (statsRecord) => {
+      mockSend.mockImplementation((command) => {
+        // The claim returns the counters the anomaly check reads.
+        if (command instanceof UpdateItemCommand && command.input.ReturnValues === 'ALL_NEW') {
+          return Promise.resolve({ Attributes: marshall(statsRecord) });
+        }
+        if (command instanceof GetItemCommand && unmarshall(command.input.Key).sk === 'tenant') {
+          return Promise.resolve({ Item: marshall({ pk: 'tenant1', sk: 'tenant', email: 'owner@example.com' }) });
+        }
+        if (command instanceof QueryCommand) {
+          return Promise.resolve({ Items: [] });
+        }
+        return Promise.resolve({});
+      });
+
+      return handler({ tenantId: 'tenant1', issueNumber: 226, publishedAt: '2026-07-27T00:00:01.876Z' });
+    };
+
+    beforeEach(() => {
+      originalEnv = process.env.TABLE_NAME;
+      process.env.TABLE_NAME = 'test-table';
+      mockSend = jest.fn();
+      mockPutEvents = jest.fn().mockResolvedValue({});
+      DynamoDBClient.prototype.send = mockSend;
+      EventBridgeClient.prototype.send = mockPutEvents;
+      jest.clearAllMocks();
+    });
+
+    afterEach(() => {
+      process.env.TABLE_NAME = originalEnv;
+    });
+
+    test('emails the tenant when the counters cannot be real', async () => {
+      const result = await runWith({ deliveries: 2280, opens: 949 });
+
+      expect(result.success).toBe(true);
+
+      const [command] = mockPutEvents.mock.calls.at(-1);
+      expect(command).toBeInstanceOf(PutEventsCommand);
+
+      const entry = command.input.Entries[0];
+      expect(entry.Source).toBe('newsletter-service');
+      expect(entry.DetailType).toBe('Send Email v2');
+
+      const detail = JSON.parse(entry.Detail);
+      expect(detail.to.email).toBe('owner@example.com');
+      expect(detail.tenantId).toBe('tenant1');
+      expect(detail.subject).toContain('226');
+      expect(detail.html).toContain('not one click');
+    });
+
+    test('sends nothing for a healthy issue', async () => {
+      await runWith({ deliveries: 2280, opens: 949, clicks: 12 });
+
+      expect(mockPutEvents).not.toHaveBeenCalled();
+    });
+
+    // The analytics are already written by the time this runs. A warning that
+    // fails must not take the consolidation down with it.
+    test('still reports success when the warning cannot be sent', async () => {
+      mockPutEvents.mockRejectedValue(new Error('event bus unavailable'));
+
+      const result = await runWith({ deliveries: 2280, opens: 949 });
+
+      expect(result.success).toBe(true);
     });
   });
 });

@@ -347,6 +347,41 @@ describe('IssueFormPage local send', () => {
     expect(subscriberService.getTimeZoneCoverage).toHaveBeenCalledTimes(1);
   });
 
+  it('still shows coverage when the toggle is switched off and on mid-request', async () => {
+    // Regression: cleanup runs on every localSendEnabled change, not just on
+    // unmount. Discarding the in-flight response on toggle-off used to strand
+    // the one-shot guard — re-enabling never retried, so the box sat on
+    // "Checking audience coverage…" for the rest of the session.
+    let resolveCoverage: (value: never) => void;
+    vi.mocked(subscriberService.getTimeZoneCoverage).mockReturnValue(
+      new Promise((resolve) => {
+        resolveCoverage = resolve as (value: never) => void;
+      })
+    );
+
+    render(<IssueFormPage />);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /local send/i }));
+    await waitFor(() => {
+      expect(subscriberService.getTimeZoneCoverage).toHaveBeenCalledTimes(1);
+    });
+
+    // Off and back on while the request is still outstanding.
+    fireEvent.click(screen.getByRole('checkbox', { name: /local send/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /local send/i }));
+
+    await act(async () => {
+      resolveCoverage!({
+        success: true,
+        data: { totalSubscribers: 200, confirmedTimeZone: 50, peakHourEligible: 120 },
+      } as never);
+    });
+
+    expect(await screen.findByText(/50 of 200 subscribers/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Checking audience coverage/i)).not.toBeInTheDocument();
+    expect(subscriberService.getTimeZoneCoverage).toHaveBeenCalledTimes(1);
+  });
+
   it('reports timezone coverage and who falls back for timezone mode', async () => {
     render(<IssueFormPage />);
 

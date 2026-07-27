@@ -162,26 +162,30 @@ export const IssueFormPage: React.FC = () => {
   // whole subscriber partition, so it fires on first interest — the author
   // switching local send on, or an edited issue loading with it already on — and
   // is then kept for the life of the form rather than refetched per toggle.
+  //
+  // Deliberately not cancelled on cleanup. Cleanup here runs on every change of
+  // `localSendEnabled`, not only on unmount, so discarding the response when the
+  // author toggles local send back off would strand the one-shot guard: the
+  // result and the loading reset would both be dropped, and re-enabling would
+  // hit the guard instead of retrying, leaving "Checking audience coverage…" up
+  // for the rest of the form session. The count isn't toggle-scoped — it is just
+  // as true after a toggle as before — so letting it land is both correct and
+  // cheaper than re-querying the partition.
   useEffect(() => {
     if (!localSendEnabled || tzCoverageRequested.current) return;
     tzCoverageRequested.current = true;
 
-    let cancelled = false;
     setTzCoverageLoading(true);
     subscriberService
       .getTimeZoneCoverage()
       .then((response) => {
-        if (!cancelled && response.success && response.data) {
+        if (response.success && response.data) {
           setTzCoverage(response.data);
         }
       })
       .finally(() => {
-        if (!cancelled) setTzCoverageLoading(false);
+        setTzCoverageLoading(false);
       });
-
-    return () => {
-      cancelled = true;
-    };
   }, [localSendEnabled]);
 
   // What the selected mode can actually place, and who falls back. Null when

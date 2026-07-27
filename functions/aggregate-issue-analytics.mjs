@@ -1,8 +1,10 @@
 import { DynamoDBClient, QueryCommand, UpdateItemCommand, GetItemCommand } from '@aws-sdk/client-dynamodb';
+import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { unmarshall, marshall } from '@aws-sdk/util-dynamodb';
-import { decrypt } from './utils/helpers.mjs';
+import { decrypt, getTenant } from './utils/helpers.mjs';
 
 const ddb = new DynamoDBClient();
+const eventBridge = new EventBridgeClient();
 
 export const handler = async (event) => {
   const { tenantId, issueNumber, publishedAt } = event;
@@ -19,8 +21,11 @@ export const handler = async (event) => {
     const pk = `${tenantId}#${issueNumber}`;
     const sk = 'stats';
 
+    // ALL_NEW so the realtime counters come back on the claim itself — the
+    // anomaly check below reads them and would otherwise need its own GetItem.
+    let counters = {};
     try {
-      await ddb.send(new UpdateItemCommand({
+      const claim = await ddb.send(new UpdateItemCommand({
         TableName: process.env.TABLE_NAME,
         Key: marshall({ pk, sk }),
         UpdateExpression: 'SET statsPhase = :aggregating',
@@ -28,8 +33,10 @@ export const handler = async (event) => {
         ExpressionAttributeValues: marshall({
           ':aggregating': 'aggregating',
           ':consolidated': 'consolidated'
-        })
+        }),
+        ReturnValues: 'ALL_NEW'
       }));
+      counters = claim.Attributes ? unmarshall(claim.Attributes) : {};
     } catch (err) {
       if (err.name === 'ConditionalCheckFailedException') {
         console.log(`Aggregation already in progress or completed for ${pk}`);
@@ -76,6 +83,8 @@ export const handler = async (event) => {
 
     console.log(`Successfully consolidated analytics for ${pk}`);
 
+    await reportCounterAnomalies(tenantId, issueNumber, counters);
+
     return {
       success: true,
       issueNumber,
@@ -106,6 +115,98 @@ export const handler = async (event) => {
       statusCode: 500,
       body: JSON.stringify({ message: 'Aggregation failed', error: err.message })
     };
+  }
+};
+
+/**
+ * Decides whether an issue's realtime counters are shaped like a broken
+ * pipeline rather than a quiet week.
+ *
+ * The conditions are deliberately narrow enough that firing means something is
+ * actually wrong. An issue that was delivered and opened always picks up clicks
+ * — corporate link scanners alone guarantee it, they prefetch every link in the
+ * mail within seconds of delivery — and an issue that was delivered always picks
+ * up opens. Anything looser trains the reader to ignore the mail, which is the
+ * only way this can fail.
+ *
+ * Counters, not events: the click *events* for a broken issue are not
+ * necessarily zero, because the web-version redirect path writes its own and is
+ * unaffected by anything on the email path. Issue 226 had 52 of them while its
+ * `clicks` counter did not exist at all.
+ *
+ * @param {Object} counters - The issue's stats record
+ * @returns {string|null} Human-readable description of the anomaly, or null
+ */
+export function describeCounterAnomaly(counters) {
+  const deliveries = counters?.deliveries || 0;
+  const opens = counters?.opens || 0;
+  const clicks = counters?.clicks || 0;
+
+  // Nothing was delivered, so nothing downstream is expected either.
+  if (deliveries === 0) {
+    return null;
+  }
+
+  if (opens === 0) {
+    return `${deliveries.toLocaleString('en-US')} emails were delivered but not one open was recorded.`;
+  }
+
+  if (clicks === 0) {
+    return `${opens.toLocaleString('en-US')} opens were recorded across ${deliveries.toLocaleString('en-US')} delivered emails, but not one click.`;
+  }
+
+  return null;
+}
+
+/**
+ * Emails the tenant when consolidation finds counters that can't be real.
+ *
+ * Issue 226 recorded 949 opens and zero clicks for a week before anyone noticed:
+ * handle-email-status threw on every SES click event and swallowed it, so no
+ * invocation failed, the Lambda error metric never moved, and the dashboard
+ * simply had nothing to draw. A CloudWatch alarm would have been just as
+ * invisible — so this reuses the 'Send Email v2' path the publish workflow
+ * already notifies on, and the warning lands in the same inbox as the issue's
+ * own scheduling mail.
+ *
+ * Never throws: a warning that fails must not fail the consolidation it rode in
+ * on, which has already been written by this point.
+ */
+const reportCounterAnomalies = async (tenantId, issueNumber, counters) => {
+  try {
+    const anomaly = describeCounterAnomaly(counters);
+    if (!anomaly) {
+      return;
+    }
+
+    const tenant = await getTenant(tenantId);
+    if (!tenant?.email) {
+      console.warn('Counter anomaly found but the tenant has no email', { tenantId, issueNumber });
+      return;
+    }
+
+    console.warn(`Counter anomaly for ${tenantId}#${issueNumber}: ${anomaly}`);
+
+    await eventBridge.send(new PutEventsCommand({
+      Entries: [{
+        Source: 'newsletter-service',
+        DetailType: 'Send Email v2',
+        Detail: JSON.stringify({
+          to: { email: tenant.email },
+          subject: `[Check] Issue ${issueNumber} analytics look wrong`,
+          html: [
+            '<div>',
+            `<p>Analytics for issue ${issueNumber} were just consolidated, and the numbers don't look possible:</p>`,
+            `<p><b>${anomaly}</b></p>`,
+            '<p>That pattern usually means a tracking pipeline is dropping events rather than that the issue underperformed. Worth a look at the issue in the dashboard, and at the CloudWatch logs for the stat handler.</p>',
+            '</div>'
+          ].join(''),
+          tenantId
+        })
+      }]
+    }));
+  } catch (err) {
+    console.error('Failed to report counter anomaly', { tenantId, issueNumber, error: err.message });
   }
 };
 

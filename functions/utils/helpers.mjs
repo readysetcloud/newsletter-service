@@ -30,9 +30,18 @@ export const getOctokit = async (tenantId) => {
   return octokit;
 };
 
+/**
+ * Loads a tenant record, memoized for the life of the execution environment.
+ *
+ * The cache is keyed by `tenantId`, which it previously was not: it wrote every
+ * tenant to a property literally named `tenantId`, so the first tenant a warm
+ * container saw was returned for every tenant after it. That is a cross-tenant
+ * leak, not just a stale read — callers use this for the address outbound mail
+ * is sent to and for `apiKeyParameter`, the tenant's own GitHub credential.
+ */
 export const getTenant = async (tenantId) => {
-  if (tenants.tenantId) {
-    return tenants.tenantId;
+  if (tenants[tenantId]) {
+    return tenants[tenantId];
   } else {
     const result = await ddb.send(new GetItemCommand({
       TableName: process.env.TABLE_NAME,
@@ -47,7 +56,7 @@ export const getTenant = async (tenantId) => {
     }
 
     const data = unmarshall(result.Item);
-    tenants.tenantId = data;
+    tenants[tenantId] = data;
     return data;
   }
 };

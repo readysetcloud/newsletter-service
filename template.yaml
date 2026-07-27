@@ -72,9 +72,6 @@ Metadata:
 
 Conditions:
   DeployProductionResources: !Equals [!Ref Environment, "production"]
-  DeployStageResources:
-    Fn::Not:
-      - !Equals [!Ref Environment, "production"]
   HasDomainName: !Not [!Equals [!Ref DomainName, ""]]
   HasHostedZoneId: !Not [!Equals [!Ref HostedZoneId, ""]]
   DeployCustomDomain: !And
@@ -2455,64 +2452,6 @@ Resources:
                 jobStatus:
                   - SUCCEED
 
-  ImportFromGitHubFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - import-issue-from-github.mjs
-    Properties:
-      Runtime: nodejs24.x
-      CodeUri: functions
-      Handler: import-issue-from-github.handler
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action: ssm:GetParameter
-              Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/rsc/*
-            - Effect: Allow
-              Action: dynamodb:GetItem
-              Resource: !GetAtt NewsletterTable.Arn
-            - Effect: Allow
-              Action: states:StartExecution
-              Resource: !Ref StageIssueStateMachine
-            - Effect: Allow
-              Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
-      Environment:
-        Variables:
-          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
-          SECRET_ID: "{{resolve:ssm:/readysetcloud/secrets}}"
-          STATE_MACHINE_ARN: !Ref StageIssueStateMachine
-          # NO LONGER A GUARD - READ BEFORE DEPLOYING TO SANDBOX OR STAGE.
-          # This made every non-production GitHub import a preview: the importer
-          # put `isPreview: true` on the execution input and the state machine
-          # sent one [Preview] email to the tenant, with no list send, no
-          # Scheduler entries and no `published` write. Phase 2 of
-          # docs/stage-issue-simplification-plan.md deleted those preview states
-          # on the premise that nothing set the field, and its gate (PR #358,
-          # which deletes this whole function) is still open - so the premise is
-          # wrong and the flag now does nothing. A GitHub import in sandbox or
-          # stage runs the real publish path and really sends to that stack's
-          # subscriber list. Production is unaffected; it never set this.
-          # Resolve it deliberately: merge #358, restore a preview mechanism for
-          # this ingress, or accept the real send and delete this variable.
-          IS_PREVIEW: !If [DeployStageResources, true, false]
-      Events:
-        AmplifyBuildSuccessful:
-          Type: EventBridgeRule
-          Properties:
-            Pattern:
-              detail-type:
-                - Create Newsletter Issue
-              detail:
-                source:
-                  - github
-
   ReportStatsRole:
     Type: AWS::IAM::Role
     Properties:
@@ -2692,7 +2631,6 @@ Resources:
       DefinitionSubstitutions:
         DynamodbGetItem: !Sub arn:${AWS::Partition}:states:::dynamodb:getItem
         TableName: !Ref NewsletterTable
-        DynamodbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
         LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
         ParseIssue: !GetAtt ParseIssueFunction.Arn
         PublishIssue: !GetAtt PublishIssueFunction.Arn

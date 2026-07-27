@@ -196,7 +196,15 @@ pub fn build_progress_report(
         .find(|group| group.status == "pending")
         .map(|group| group.send_at.clone());
 
-    let state = if completed_at.is_some() {
+    // Completion is derived from the group map, not only from the stamp. The
+    // stamp is written after the status transition and its failure is
+    // swallowed, so if it never lands there is no later event guaranteed to
+    // retry it - and reading completion solely from the stamp would report a
+    // fully delivered issue as `sending` forever. Every group having reported
+    // is the same fact, recorded per group rather than once.
+    let all_groups_reported = groups_total > 0 && groups_delivered == groups_total;
+
+    let state = if completed_at.is_some() || all_groups_reported {
         "complete"
     } else if overdue.is_empty() {
         "sending"
@@ -675,6 +683,54 @@ mod tests {
             "Delivered to 50 subscribers across 3 local send groups."
         );
         assert!(report.next_send_at.is_none());
+    }
+
+    #[test]
+    fn reports_complete_when_every_group_reported_but_the_stamp_never_landed() {
+        // The stamp is written after the status transition and its failure is
+        // swallowed, with no later event guaranteed to retry it. Reading
+        // completion only from the stamp would leave a fully delivered issue
+        // reporting `sending` forever - the group map says the same thing.
+        let item = progress_item(vec![
+            (
+                "America/Chicago",
+                group("2026-07-27T14:00:00.000Z", "sent", Some(38), Some(40)),
+            ),
+            (
+                "America/Los_Angeles",
+                group("2026-07-27T16:00:00.000Z", "sent", Some(12), Some(12)),
+            ),
+            (
+                "__catch_all__",
+                group("2026-07-27T20:30:00.000Z", "empty", Some(0), None),
+            ),
+        ]);
+        assert!(item.get("completedAt").is_none());
+
+        let report = build_progress_report(&item, now("2026-07-28T09:00:00Z")).unwrap();
+
+        assert_eq!(report.state, "complete");
+        assert_eq!(report.groups_delivered, 3);
+        // No stamp to report, but the state is right.
+        assert!(report.completed_at.is_none());
+    }
+
+    #[test]
+    fn one_group_short_is_not_complete() {
+        let item = progress_item(vec![
+            (
+                "America/Chicago",
+                group("2026-07-27T14:00:00.000Z", "sent", Some(38), Some(40)),
+            ),
+            (
+                "__catch_all__",
+                group("2026-07-27T20:30:00.000Z", "pending", None, None),
+            ),
+        ]);
+
+        let report = build_progress_report(&item, now("2026-07-27T14:10:00Z")).unwrap();
+
+        assert_eq!(report.state, "sending");
     }
 
     #[test]

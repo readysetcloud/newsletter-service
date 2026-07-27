@@ -50,7 +50,7 @@ const checkCondition = (condition, item, values, names) => {
 
   const notExistsMatch = resolved.match(/^attribute_not_exists\((.+)\)$/);
   if (notExistsMatch) {
-    if (item?.[notExistsMatch[1]] !== undefined) throw new ConditionalCheckFailedException();
+    if (item?.[notExistsMatch[1]] !== undefined) throw new ConditionalCheckFailedException(item);
     return;
   }
 
@@ -275,13 +275,18 @@ describe('startProgress', () => {
     expect(items.get(progressKey())).toBeDefined();
   });
 
-  test('clears a prior completion stamp so a resend does not read as finished', async () => {
+  test('refuses to overwrite a completed plan', async () => {
+    // The plan write used to clear completedAt unconditionally, which meant a
+    // redelivered event reopened a finished send. Reopening is now something a
+    // caller has to ask for explicitly, by clearing the record first.
     items.set(progressKey(), { pk: ISSUE_ID, sk: SEND_PROGRESS_SK, completedAt: '2026-07-20T00:00:00.000Z' });
     items.set(issueKey(), { pk: ISSUE_ID, sk: 'newsletter', status: 'published' });
 
     await startProgress(ISSUE_ID, buildFixture());
 
-    expect(items.get(progressKey()).completedAt).toBeUndefined();
+    expect(items.get(progressKey()).completedAt).toBe('2026-07-20T00:00:00.000Z');
+    expect(items.get(progressKey()).groups).toBeUndefined();
+    expect(items.get(issueKey()).status).toBe('published');
   });
 
   test('a write failure is swallowed', async () => {
@@ -447,19 +452,19 @@ describe('markGroupSent', () => {
     expect(attempts).toHaveLength(1);
   });
   test('a refusal against an unexpected status is not treated as settled', async () => {
-    // The transition can lose a race to the state machine's failure write.
-    // Treating the resulting 'failed' as success would strand the issue there
-    // with its delivery complete - and a failed record is sendable, so a
-    // re-stage would send it a second time.
+    // `failed` is reclaimable - the fan-out knows better than the state machine
+    // whether mail went out. A status outside the transition's from-set is not,
+    // and treating a refusal as success would stamp completion over a record
+    // that never reached `published`, hiding the mismatch permanently.
     await markGroupSent(ISSUE_ID, 'America/Chicago', { recipients: 38 });
     await markGroupSent(ISSUE_ID, 'America/Los_Angeles', { recipients: 12 });
     await markGroupSent(ISSUE_ID, '__default__', { recipients: 100 });
 
-    items.get(issueKey()).status = 'failed';
+    items.get(issueKey()).status = 'draft';
 
     await markGroupSent(ISSUE_ID, '__catch_all__', { recipients: 0 });
 
-    expect(items.get(issueKey()).status).toBe('failed');
+    expect(items.get(issueKey()).status).toBe('draft');
     // Completion must stay unstamped so the mismatch is still repairable.
     expect(items.get(progressKey()).completedAt).toBeUndefined();
   });
@@ -472,6 +477,68 @@ describe('markGroupSent', () => {
     // The state machine got there first - a legitimate outcome, not a conflict.
     items.get(issueKey()).status = 'published';
 
+    await markGroupSent(ISSUE_ID, '__catch_all__', { recipients: 0 });
+
+    expect(items.get(issueKey()).status).toBe('published');
+    expect(items.get(progressKey()).completedAt).toBeDefined();
+  });
+
+  test('a duplicate fan-out event cannot reopen a completed plan', async () => {
+    // EventBridge delivers at least once. Without the guard, a redelivered
+    // original event resets every group to pending, clears completedAt, and
+    // takes a fully delivered issue back to `sending` for hours.
+    for (const label of ['America/Chicago', 'America/Los_Angeles', '__default__', '__catch_all__']) {
+      await markGroupSent(ISSUE_ID, label, { recipients: 1 });
+    }
+    expect(items.get(issueKey()).status).toBe('published');
+    const completedAt = items.get(progressKey()).completedAt;
+
+    await startProgress(ISSUE_ID, buildFixture());
+
+    expect(items.get(progressKey()).completedAt).toBe(completedAt);
+    expect(items.get(issueKey()).status).toBe('published');
+    expect(items.get(progressKey()).groups['America/Chicago'].status).toBe('sent');
+  });
+
+  test('a fresh plan still applies once the previous one is cleared', async () => {
+    // What a deliberate resend does: the API deletes the progress record, so
+    // the guard has nothing to refuse.
+    for (const label of ['America/Chicago', 'America/Los_Angeles', '__default__', '__catch_all__']) {
+      await markGroupSent(ISSUE_ID, label, { recipients: 1 });
+    }
+
+    items.delete(progressKey());
+    await startProgress(ISSUE_ID, buildFixture());
+
+    expect(items.get(progressKey()).completedAt).toBeUndefined();
+    expect(items.get(progressKey()).groups['America/Chicago'].status).toBe('pending');
+    expect(items.get(issueKey()).status).toBe('sending');
+  });
+
+  test('the fan-out reclaims an issue the state machine marked failed', async () => {
+    // A post-publish task can fail in the gap before the `sending` claim lands.
+    // The emails are going out regardless, so the fan-out's view wins - and
+    // without reclaiming it, the terminal transition could never apply and a
+    // failed record is sendable, so re-staging would send twice.
+    items.set(issueKey(), { pk: ISSUE_ID, sk: 'newsletter', status: 'failed' });
+
+    await startProgress(ISSUE_ID, buildFixture());
+    expect(items.get(issueKey()).status).toBe('sending');
+
+    for (const label of ['America/Chicago', 'America/Los_Angeles', '__default__', '__catch_all__']) {
+      await markGroupSent(ISSUE_ID, label, { recipients: 1 });
+    }
+    expect(items.get(issueKey()).status).toBe('published');
+  });
+
+  test('a failed issue whose delivery completed is still published', async () => {
+    // The failure lands after the claim, so the terminal transition has to
+    // accept `failed` as well as `sending`.
+    await markGroupSent(ISSUE_ID, 'America/Chicago', { recipients: 38 });
+    await markGroupSent(ISSUE_ID, 'America/Los_Angeles', { recipients: 12 });
+    await markGroupSent(ISSUE_ID, '__default__', { recipients: 100 });
+
+    items.get(issueKey()).status = 'failed';
     await markGroupSent(ISSUE_ID, '__catch_all__', { recipients: 0 });
 
     expect(items.get(issueKey()).status).toBe('published');

@@ -156,6 +156,15 @@ export const startProgress = async (issueId, progress) => {
       UpdateExpression: 'SET #mode = :mode, defaultTimeZone = :defaultTimeZone, baseAt = :baseAt, '
         + 'catchAllAt = :catchAllAt, startedAt = :startedAt, totalSubscribers = :totalSubscribers, '
         + '#groups = :groups REMOVE completedAt',
+      // A finished plan is never reopened by a redelivered event. EventBridge
+      // delivers at least once, and this write resets every group to pending
+      // and clears the completion stamp - so a duplicate of the original
+      // local-send event would take a fully delivered issue back to `sending`
+      // and recreate every group schedule. No duplicate email results (the
+      // recipient filter sees to that), but the issue reads as in flight for
+      // hours. A deliberate resend clears the record first, so it still gets a
+      // fresh plan.
+      ConditionExpression: 'attribute_not_exists(completedAt)',
       ExpressionAttributeNames: { '#mode': 'mode', '#groups': 'groups' },
       ExpressionAttributeValues: marshall({
         ':mode': progress.mode,
@@ -168,6 +177,10 @@ export const startProgress = async (issueId, progress) => {
       })
     }));
   } catch (error) {
+    if (error.name === 'ConditionalCheckFailedException') {
+      console.log('[PROGRESS] Plan already completed - ignoring a duplicate fan-out', { issueId });
+      return;
+    }
     console.error('[PROGRESS] Failed to write fan-out plan', { issueId, error: error.message });
     return;
   }
@@ -177,7 +190,16 @@ export const startProgress = async (issueId, progress) => {
     // A resend re-runs the fan-out for an already-published issue, so
     // `published` is a legitimate starting point. `draft` is not: a stray
     // event must never resurrect an unsent issue.
-    from: ['in progress', 'published', 'sending']
+    //
+    // `failed` is here because the fan-out is ground truth about delivery and
+    // the state machine is not. A post-publish task can fail in the gap between
+    // the plan write above and this transition, and the failure write only
+    // refuses once the record already reads `sending` - so it can land first
+    // and leave a genuinely-sending issue marked `failed`. Without reclaiming
+    // it, the terminal `sending -> published` transition can never apply
+    // either: the issue stays `failed` with its delivery complete, and a failed
+    // record is sendable, so re-staging it would send twice.
+    from: ['in progress', 'published', 'sending', 'failed']
   });
 };
 
@@ -252,7 +274,10 @@ export const markGroupSent = async (issueId, label, { recipients, skipped = 0 })
   console.log(`[PROGRESS] All groups delivered for ${issueId} - marking published`);
   const settled = await setIssueStatus(issueId, {
     status: 'published',
-    from: ['sending'],
+    // `failed` for the same reason the claim above accepts it: if the state
+    // machine concluded failure while the send was in fact going out, the
+    // completed delivery is the truer statement.
+    from: ['sending', 'failed'],
     // The state machine may already have stamped publishedAt when it finished;
     // the first stamp is the more meaningful one (when the issue went out),
     // so it wins.

@@ -645,6 +645,12 @@ async fn handle_resend_issue(
         ));
     }
 
+    // Clear the previous send's progress so the new fan-out can write a fresh
+    // plan. The plan write refuses to overwrite a completed one, which is what
+    // stops a redelivered event from reopening a finished send - a deliberate
+    // resend has to say so explicitly, and this is where it says it.
+    clear_send_progress(&tenant_id, issue.issue_number).await;
+
     start_issue_schedule(IssueScheduleInput {
         tenant_id: &tenant_id,
         tenant_email: user_context.email.as_str(),
@@ -3931,7 +3937,35 @@ async fn schedule_issue_send(
             AppError::AwsError(format!("Failed to schedule issue send: {}", err))
         })?;
 
-    mark_issue_scheduled(input.tenant_id, input.issue_number).await
+    // The schedule is live from here, so a failure to record `scheduled` cannot
+    // just be returned: the caller is told scheduling failed while a one-shot
+    // entry sits waiting to fire, and the state machine treats the still-`draft`
+    // record as sendable when it does. Retrying does not heal it either - the
+    // deterministic name makes the second CreateSchedule a conflict, which
+    // returns before the status write is reached. So the schedule is torn back
+    // down and the caller's error is the truth again.
+    if let Err(status_error) = mark_issue_scheduled(input.tenant_id, input.issue_number).await {
+        if let Err(cleanup_error) =
+            delete_issue_send_schedule(input.tenant_id, input.issue_number).await
+        {
+            // Both failed: the entry is live and the record does not say so.
+            // Say that plainly rather than reporting only the first error.
+            tracing::error!(
+                "Failed to roll back the send schedule for issue {}: {cleanup_error}. \
+                 A schedule is live for an issue that is still a draft.",
+                input.issue_number
+            );
+            return Err(AppError::InternalError(format!(
+                "Issue {} could not be scheduled, and the send schedule created for it could not \
+                 be removed. Unschedule and retry before this issue's send time.",
+                input.issue_number
+            )));
+        }
+
+        return Err(status_error);
+    }
+
+    Ok(())
 }
 
 /// Moves a freshly created issue from `draft` to `scheduled`, where it stays
@@ -4166,12 +4200,67 @@ async fn schedule_draft_deletion(
 /// (the normal case). Any other failure propagates: leaving a stale schedule
 /// behind would let it fire later and delete a freshly re-staged draft.
 async fn delete_draft_ttl_schedule(tenant_id: &str, issue_number: i32) -> Result<(), AppError> {
+    // Both names are tried during the migration. Adding the tenant digest
+    // changed this name, and a draft TTL can be set as far out as a year, so
+    // entries created by the previous version will outlive this deploy by a
+    // long way. Missing one is not cosmetic: the stale schedule stays live and
+    // later fires against a REPLACEMENT draft at the same issue number,
+    // deleting an issue nobody asked it to. Drop the legacy arm once no
+    // schedule created before this deploy can still be pending.
+    for schedule_name in [
+        build_draft_ttl_schedule_name(tenant_id, issue_number),
+        build_legacy_draft_ttl_schedule_name(tenant_id, issue_number),
+    ] {
+        delete_schedule_if_present(&schedule_name, "draft TTL").await?;
+    }
+
+    Ok(())
+}
+
+/// Remove an issue's local-send progress record.
+///
+/// Best-effort: failing to clear it costs the resend its progress reporting,
+/// which is not worth refusing the resend over.
+async fn clear_send_progress(tenant_id: &str, issue_number: i32) {
+    let Ok(table_name) = std::env::var("TABLE_NAME") else {
+        return;
+    };
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+
+    if let Err(error) = ddb_client
+        .delete_item()
+        .table_name(&table_name)
+        .key(
+            "pk",
+            AttributeValue::S(format!("{tenant_id}#{issue_number}")),
+        )
+        .key("sk", AttributeValue::S("sendProgress".to_string()))
+        .send()
+        .await
+    {
+        tracing::warn!("Failed to clear send progress before resend: {error}");
+    }
+}
+
+/// The pre-digest draft TTL name: a bare 16-character tenant prefix.
+/// Exists only so the migration can still find and delete those entries.
+fn build_legacy_draft_ttl_schedule_name(tenant_id: &str, issue_number: i32) -> String {
+    let readable: String = tenant_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(16)
+        .collect();
+
+    format!("draft-ttl-{readable}-{issue_number}")
+}
+
+/// Delete a schedule, treating "already gone" as success.
+async fn delete_schedule_if_present(schedule_name: &str, kind: &str) -> Result<(), AppError> {
     let scheduler = aws_clients::get_scheduler_client().await;
-    let schedule_name = build_draft_ttl_schedule_name(tenant_id, issue_number);
 
     match scheduler
         .delete_schedule()
-        .name(&schedule_name)
+        .name(schedule_name)
         .group_name("newsletter")
         .send()
         .await
@@ -4187,8 +4276,8 @@ async fn delete_draft_ttl_schedule(tenant_id: &str, issue_number: i32) -> Result
             }
 
             Err(AppError::AwsError(format!(
-                "Failed to delete draft TTL schedule {}: {}",
-                schedule_name, err
+                "Failed to delete {} schedule {}: {}",
+                kind, schedule_name, err
             )))
         }
     }

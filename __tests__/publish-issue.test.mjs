@@ -444,4 +444,67 @@ describe('publish-issue', () => {
       expect(getSentDetail().contentAssembly).toBeUndefined();
     });
   });
+
+  // `publishedAt` dates the issue's whole analytics timeline: schedule-aggregation
+  // fires consolidation at `publishedAt + 24h`, and open/click attribution reads
+  // the same field. Since the publish workflow now runs a lead time ahead of the
+  // send, "when this ran" and "when this sends" are different questions and only
+  // the second one is the right answer here.
+  describe('analytics are dated from the send instant, not the workflow', () => {
+    const statsWrite = () =>
+      ddbSend.mock.calls
+        .map(([cmd]) => cmd)
+        .find((cmd) => cmd.__type === 'PutItem' && cmd.Item?.sk?.S === 'stats');
+
+    const publishEvent = (sendAtDate) => ({
+      data: sampleData,
+      subject: 'Subject',
+      tenantId: 'tenant-1',
+      sendAtDate
+    });
+
+    // The regression this exists for: with a 26h lead, consolidation would have
+    // run two hours before the first email went out, written empty analytics and
+    // stamped `statsPhase: consolidated`, which aggregate-issue-analytics treats
+    // as a refusal to ever run again.
+    it('uses the scheduled send instant when the workflow starts early', async () => {
+      const sendAt = new Date(Date.now() + 26 * 60 * 60 * 1000).toISOString();
+
+      await handler(publishEvent(sendAt));
+
+      expect(statsWrite().Item.publishedAt.S).toBe(sendAt);
+      expect(publishIssueEvent).toHaveBeenCalledWith(
+        'tenant-1',
+        expect.anything(),
+        'ISSUE_PUBLISHED',
+        expect.objectContaining({ publishedAt: sendAt })
+      );
+    });
+
+    it('uses now for an immediate publish', async () => {
+      const before = Date.now();
+
+      await handler(publishEvent('now'));
+
+      const publishedAt = Date.parse(statsWrite().Item.publishedAt.S);
+      expect(publishedAt).toBeGreaterThanOrEqual(before);
+      expect(publishedAt).toBeLessThanOrEqual(Date.now());
+    });
+
+    // A send instant that has already passed is an immediate send, and an
+    // unparseable one must not put `Invalid Date` on the analytics record.
+    it.each([
+      ['a past instant', new Date(Date.now() - 60 * 60 * 1000).toISOString()],
+      ['an unparseable value', 'whenever'],
+      ['nothing at all', undefined]
+    ])('falls back to now for %s', async (_label, sendAtDate) => {
+      const before = Date.now();
+
+      await handler(publishEvent(sendAtDate));
+
+      const publishedAt = Date.parse(statsWrite().Item.publishedAt.S);
+      expect(Number.isNaN(publishedAt)).toBe(false);
+      expect(publishedAt).toBeGreaterThanOrEqual(before);
+    });
+  });
 });

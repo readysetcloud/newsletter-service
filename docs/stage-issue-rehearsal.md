@@ -509,6 +509,18 @@ send is still a pending `email-*` Scheduler entry. Nothing later corrects it,
 because the workflow's write is the only one on that path. Raising the lead time
 for a tenant that does not use local send buys nothing and costs exactly this.
 
+**The record's `publishedAt` and the stats record's are deliberately different
+values, and only one of them is load-bearing.** The record's comes from the
+workflow (`$$.State.EnteredTime`), so it carries the same lead-time skew as the
+status above. The stats record's is the send instant, resolved in
+`publish-issue.mjs` from `sendAtDate`, because that field dates the whole
+analytics timeline: `schedule-aggregation` fires consolidation at
+`publishedAt + 24h`, and open/click attribution reads it. Anchoring it on the
+workflow would consolidate empty analytics before the first email went out and
+`aggregate-issue-analytics` would refuse to run again (`statsPhase <>
+:consolidated`). On a rehearsal, check the `aggregate-<tenant>-<issue>-24h`
+entry lands 24h after the *send*, not 24h after the execution.
+
 `in progress` after the execution finished is the wedged-record failure mode
 (D2): the send may or may not have happened, so check the inbox before touching
 anything. `GSI1PK` should be `<tenant>#newsletter` and `subject` should be set —

@@ -318,7 +318,7 @@ Per content type, ~15 minutes. Repeat for markdown, json, and html.
    parked before the send, short enough that the whole rehearsal fits in one
    sitting.
 
-   **With the lead time at its 1440 default, ten minutes' notice is less than the
+   **With the lead time at its deployed 1560, ten minutes' notice is less than the
    lead**, so `issue_send_fire_at` clamps the entry to *now* and the workflow
    starts immediately — the send is still deferred to the scheduled instant, by
    the local-send group schedules or by `send-email-v2`'s own `email-*` entry.
@@ -551,7 +551,7 @@ put it on the execution input (`sendAt` in `build_execution_input`,
   correct base on both paths.
 
 **Check this against a non-zero lead time, because that is the whole point of the
-field.** `IssueSendLeadTimeMinutes` defaults to 1440, so the workflow runs a day
+field.** `IssueSendLeadTimeMinutes` is deployed at 1560, so the workflow runs a day
 before the send and `now` is *not* the send instant. Both entries must still land
 +3 / +5 days from the **scheduled** instant, not from when the workflow ran; an
 offset of exactly the lead time means `sendAt` is not reaching the parse step, and

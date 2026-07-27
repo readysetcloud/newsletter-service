@@ -215,7 +215,7 @@
     },
     "Parse Issue": {
       "Type": "Task",
-      "Comment": "One parse for every content type: functions/parse-issue.mjs switches on contentType and delegates to parse-md-to-json or parse-json-issue, which already return the identical contract - { data, sendAtDate, listCleanupDate, reportStatsDate, subject }. The two date fields become the Scheduler entries below and fire three and five days after the send, so the dispatcher hands the parser's values back verbatim rather than re-deriving them; __tests__/parse-issue.test.mjs deep-compares its output against both parsers to keep it that way. sendAt is what makes the lead time usable (D9): the execution now starts at (send instant - IssueSendLeadTimeMinutes), so 'when this issue sends' is no longer 'about now' and cannot be inferred here. Without it both parsers fall back to their own notion of the send instant - markdown frontmatter, or nothing at all for json - and return 'now', which publishes an early execution immediately instead of scheduling it. It also re-anchors listCleanupDate and reportStatsDate on the real send instant rather than on parse time. Read with an unconditional '.$' like templateId, so build_execution_input in issues.rs always emits the field, null for an immediate publish.",
+      "Comment": "One parse for every content type: functions/parse-issue.mjs switches on contentType and delegates to parse-md-to-json or parse-json-issue, which already return the identical contract - { data, sendAtDate, listCleanupDate, reportStatsDate, subject }. The two date fields become the Scheduler entries below and fire three and five days after the send, so the dispatcher hands the parser's values back verbatim rather than re-deriving them; __tests__/parse-issue.test.mjs deep-compares its output against both parsers to keep it that way. The whole execution input rides along as one object so the dispatcher can read 'sendAt' off it, which is what makes the lead time usable (D9): the execution now starts at (send instant - IssueSendLeadTimeMinutes), so 'when this issue sends' is no longer 'about now' and cannot be inferred here. Without it both parsers fall back to their own notion of the send instant - markdown frontmatter, or nothing at all for json - and return 'now', which publishes an early execution immediately instead of scheduling it. It also re-anchors listCleanupDate and reportStatsDate on the real send instant rather than on parse time. The object, not '$$.Execution.Input.sendAt' directly, and that is the whole point: an ISSUE-SEND-* Scheduler entry created before this deploy carries the execution input baked into it at schedule time, which has no sendAt field, and a '.$' path to an absent field raises States.Runtime - not retriable, not catchable, a missed send with nothing written to the record. A path to the object always resolves; the dispatcher treats an absent sendAt as 'now', which is exactly right for those entries because they were created when the lead time was zero and therefore fire at the send instant.",
       "Resource": "${LambdaInvoke}",
       "Parameters": {
         "FunctionName": "${ParseIssue}",
@@ -226,7 +226,7 @@
           "tenantId.$": "$$.Execution.Input.tenant.id",
           "subject.$": "$callerSubject",
           "contentType.$": "$contentType",
-          "sendAt.$": "$$.Execution.Input.sendAt"
+          "executionInput.$": "$$.Execution.Input"
         }
       },
       "Retry": [

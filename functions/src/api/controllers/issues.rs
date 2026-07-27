@@ -4033,14 +4033,21 @@ async fn mark_issue_scheduled(tenant_id: &str, issue_number: i32) -> Result<(), 
 /// It exists because the local-send fan-out cannot schedule a group whose local
 /// send time has already passed, so with a zero lead time every timezone east
 /// of the base zone is sent immediately instead of at its own 9am. A lead time
-/// wide enough to cover the largest eastward offset (24h covers everything,
-/// including UTC+14) puts the fan-out ahead of the base instant and lets those
-/// groups be scheduled properly.
+/// wide enough to cover that gap puts the fan-out ahead of the base instant and
+/// lets those groups be scheduled properly.
 ///
-/// Defaults to 1440 (24h), which covers every eastward offset including UTC+14.
-/// It can be tuned down to the largest offset among *confirmed* subscriber
-/// zones to buy back freeze time; 0 restores the pre-Phase-6 behaviour, where
-/// the execution starts at the send instant and eastward groups go out at once.
+/// The gap is `offset(subscriber) − offset(base zone)`, not the subscriber's
+/// offset from UTC — a base zone of UTC−12 with a subscriber at UTC+14 is 26
+/// hours, so the default is 1560 rather than the 24h that reads like enough.
+/// Tune it down to the real worst case for the configured base zone to buy back
+/// freeze time (America/Chicago against UTC+14 is 19–20h); 0 restores the
+/// pre-Phase-6 behaviour, where the execution starts at the send instant and
+/// eastward groups go out at once.
+///
+/// The value that matters is the deployed one, not this default: CloudFormation
+/// keeps a stack's stored parameter across updates, so `IssueSendLeadTimeMinutes`
+/// is passed explicitly in `.github/workflows/deploy.yaml` and
+/// `pull-request.yaml`. Changing the default alone changes nothing.
 ///
 /// What had to land before this could be raised, and now has: the send instant
 /// travels to the parse step on the execution input (`sendAt` in
@@ -4049,6 +4056,13 @@ async fn mark_issue_scheduled(tenant_id: &str, issue_number: i32) -> Result<(), 
 /// json — and return `now`, which makes an early execution publish early
 /// instead of scheduling. Keep the two together: dropping `sendAt` from the
 /// input while this is non-zero sends every issue `lead_time` early.
+///
+/// A Scheduler entry created before `sendAt` existed is safe against that, and
+/// it is worth knowing why rather than trusting it. Its input has no `sendAt`,
+/// so `functions/parse-issue.mjs` reads `null` and the parsers answer `now` —
+/// but the entry was also created while the lead time was zero, so it fires at
+/// the send instant and `now` is the truth. The two always move together,
+/// because the entry's fire time and its input are written in the same call.
 ///
 /// One consequence worth knowing at the record level. For a local-send issue
 /// the fan-out marks the record `sending` as soon as it runs, and the state
@@ -4067,9 +4081,10 @@ fn issue_send_lead_time() -> chrono::Duration {
 /// Parses the configured lead time, falling back to zero for anything that is
 /// not a usable number of minutes. Zero is the fail-safe fallback in both
 /// directions: it is the pre-Phase-6 behaviour, and it can never move a send
-/// earlier than its scheduled instant. The configured default is 1440 and lives
-/// in template.yaml (`IssueSendLeadTimeMinutes`), not here — a missing or
-/// garbled env var should degrade to "no lead", not to somebody's idea of one.
+/// earlier than its scheduled instant. The configured value is 1560 and lives in
+/// template.yaml and the deploy workflows (`IssueSendLeadTimeMinutes`), not here
+/// — a missing or garbled env var should degrade to "no lead", not to somebody's
+/// idea of one.
 fn parse_lead_time_minutes(raw: Option<&str>) -> i64 {
     raw.map(str::trim)
         .filter(|value| !value.is_empty())

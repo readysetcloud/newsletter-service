@@ -1036,13 +1036,36 @@ describe('stage-issue definition: identifiers, not content', () => {
   // to raise: an execution that starts early has to be *told* when the issue
   // sends. Both parsers fall back to "now" without it (markdown reads its
   // frontmatter date, json has no date of its own), and "now" makes an early
-  // execution publish early instead of scheduling. Read with an unconditional
-  // `.$`, which build_execution_input in issues.rs supports by always emitting
-  // the field - null for an immediate publish.
-  it('forwards the send instant to the parse step', () => {
+  // execution publish early instead of scheduling.
+  //
+  // It is the whole input object rather than `$$.Execution.Input.sendAt`, and
+  // that distinction is the test. An `ISSUE-SEND-*` Scheduler entry carries the
+  // execution input baked into it when the issue was scheduled and starts it
+  // against whatever definition is live when it fires, so an entry predating
+  // `sendAt` would meet a `.$` path to a field it does not have - States.Runtime,
+  // unretryable and uncatchable, a missed send with nothing written to the
+  // record. A path to the object always resolves; parse-issue.mjs reads the
+  // field off it and treats absent as "now".
+  it('hands the whole execution input to the parse step', () => {
     const { state: parse } = allStates.find(({ name }) => name === 'Parse Issue');
 
-    expect(parse.Parameters.Payload['sendAt.$']).toBe('$$.Execution.Input.sendAt');
+    expect(parse.Parameters.Payload['executionInput.$']).toBe('$$.Execution.Input');
+  });
+
+  // The same rule, stated as a ban so it covers states this file does not know
+  // about yet. Every field named here is one the API has always emitted; a new
+  // one is only safe to read this way once every outstanding Scheduler entry
+  // carries it, which is never true in the deploy that introduces it.
+  it('reads no execution-input field that a pending Scheduler entry may lack', () => {
+    const ALWAYS_PRESENT = ['fileName', 'issueId', 'tenant', 'templateId', 'contentType'];
+    const reads = [];
+
+    walkStrings(definition, '$', (value) => {
+      const match = /^\$\$\.Execution\.Input\.([A-Za-z0-9_]+)/.exec(value);
+      if (match && !ALWAYS_PRESENT.includes(match[1])) reads.push(value);
+    });
+
+    expect(reads).toEqual([]);
   });
 });
 

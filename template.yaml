@@ -72,9 +72,6 @@ Metadata:
 
 Conditions:
   DeployProductionResources: !Equals [!Ref Environment, "production"]
-  DeployStageResources:
-    Fn::Not:
-      - !Equals [!Ref Environment, "production"]
   HasDomainName: !Not [!Equals [!Ref DomainName, ""]]
   HasHostedZoneId: !Not [!Equals [!Ref HostedZoneId, ""]]
   DeployCustomDomain: !And

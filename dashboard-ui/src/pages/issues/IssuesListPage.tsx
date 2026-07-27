@@ -241,6 +241,7 @@ export const IssuesListPage: React.FC = () => {
     { value: 'draft', label: 'Draft' },
     { value: 'scheduled', label: 'Scheduled' },
     { value: 'in progress', label: 'In Progress' },
+    { value: 'sending', label: 'Sending' },
     { value: 'published', label: 'Published' },
     { value: 'failed', label: 'Failed' }
   ], []);

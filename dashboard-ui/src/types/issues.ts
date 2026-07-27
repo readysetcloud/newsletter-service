@@ -1,4 +1,10 @@
-export type IssueStatus = 'draft' | 'scheduled' | 'in progress' | 'published' | 'failed';
+/**
+ * `sending` is a local-send issue whose per-timezone groups are still going
+ * out. It sits between `in progress` (the publish workflow is running) and
+ * `published` (every group has been delivered), and can persist for hours —
+ * a 9am issue is still reaching UTC-11 subscribers in the afternoon.
+ */
+export type IssueStatus = 'draft' | 'scheduled' | 'in progress' | 'sending' | 'published' | 'failed';
 
 /**
  * How an issue's `content` should be authored and interpreted.
@@ -44,6 +50,65 @@ export interface Issue extends IssueListItem {
   variantStats?: VariantStats[];
   localSend?: LocalSendConfig;
   contentAssembly?: ContentAssembly;
+  sendProgress?: SendProgress;
+  workflow?: WorkflowState;
+}
+
+/** Delivery state of a single local-send group. */
+export interface SendProgressGroup {
+  /**
+   * Raw group key: an IANA timezone name, `hour-<0-23>` in peak-hour mode,
+   * `__default__` for subscribers with no confirmed timezone, or
+   * `__catch_all__` for the final sweep.
+   */
+  label: string;
+  /** Human-readable rendering of `label`. */
+  name: string;
+  sendAt: string;
+  /** `empty` means the group ran with nothing left to send. */
+  status: 'pending' | 'sent' | 'empty';
+  /** Subscribers planned for this group. Absent for the catch-all sweep. */
+  size?: number;
+  recipients?: number;
+  sentAt?: string;
+  /** Still pending well past its scheduled time. */
+  overdue: boolean;
+}
+
+/**
+ * Group-by-group delivery state for a local send. Present from fan-out onward.
+ *
+ * Timestamps are UTC ISO strings and are deliberately absent from `message` so
+ * they can be rendered in the reader's timezone.
+ */
+export interface SendProgress {
+  state: 'sending' | 'complete' | 'stalled';
+  /** One-line summary, safe to display verbatim. */
+  message: string;
+  mode: 'timezone' | 'peak-hour';
+  defaultTimeZone?: string;
+  groupsTotal: number;
+  groupsDelivered: number;
+  recipientsSent: number;
+  totalSubscribers?: number;
+  startedAt?: string;
+  /** When the catch-all sweep runs — everything should be done by then. */
+  expectedCompleteAt?: string;
+  completedAt?: string;
+  /** Scheduled time of the earliest group still outstanding. */
+  nextSendAt?: string;
+  groups: SendProgressGroup[];
+}
+
+/**
+ * Where the publish workflow is. Only returned when there is no send progress
+ * to report — before a local-send fan-out, or when the workflow failed.
+ */
+export interface WorkflowState {
+  state: 'waiting' | 'running' | 'failed' | 'stopped';
+  message: string;
+  /** Failure cause, when the execution reports one. */
+  detail?: string;
 }
 
 /**

@@ -7,6 +7,7 @@ pub mod pricing;
 pub mod profile;
 pub mod reports;
 pub mod segments;
+pub mod send_progress;
 pub mod senders;
 pub mod settings;
 pub mod snippets;

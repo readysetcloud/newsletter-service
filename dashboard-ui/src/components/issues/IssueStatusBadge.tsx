@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertTriangle, CheckCircle2, Clock, PencilLine, Send } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Clock, PencilLine, Send, SendHorizonal } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import type { IssueStatus } from '../../types/issues';
 
@@ -43,6 +43,14 @@ const statusConfig: Record<IssueStatus, StatusConfig> = {
     label: 'In Progress',
     className: 'bg-yellow-100 text-yellow-800 border-yellow-300 dark:bg-yellow-800/60 dark:text-yellow-100 dark:border-yellow-400',
     icon: Send
+  },
+  sending: {
+    label: 'Sending',
+    // Deliberately not green: a local send is still in flight for hours, and
+    // reading it as finished is how an issue that is half-delivered gets
+    // mistaken for one that is done.
+    className: 'bg-sky-100 text-sky-800 border-sky-300 dark:bg-sky-800/60 dark:text-sky-100 dark:border-sky-400',
+    icon: SendHorizonal
   },
   published: {
     label: 'Published',

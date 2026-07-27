@@ -18,6 +18,7 @@ import {
   CATCH_ALL_GROUP
 } from './utils/local-send.mjs';
 import { extractSections, prepareAssembly, assembleForSubscriber } from './utils/interest-assembly.mjs';
+import { buildInitialProgress, startProgress, markGroupSent, issueIdFromReference } from './utils/send-progress.mjs';
 
 // Key patterns for DynamoDB (previously from ./senders/types.mjs)
 const KEY_PATTERNS = {
@@ -309,6 +310,45 @@ const createLocalSendSchedule = async (payload, sendTime, referenceNumber, label
 };
 
 /**
+ * The progress key for a local-send group, derived from the re-entry payload.
+ *
+ * Must agree with the labels `fanOutLocalSendGroups` plans under, since those
+ * are the keys the progress record is created with — a mismatch would leave the
+ * group permanently pending and the issue stuck at `sending`.
+ *
+ * @param {{timeZone?: string, peakHour?: number|null}} localSendGroup
+ * @returns {string|null}
+ */
+const progressLabelForGroup = (localSendGroup) => {
+  if (!localSendGroup) {
+    return null;
+  }
+  if ('peakHour' in localSendGroup) {
+    return localSendGroup.peakHour === null ? 'default' : `hour-${localSendGroup.peakHour}`;
+  }
+  return localSendGroup.timeZone ?? null;
+};
+
+/**
+ * Report a finished local-send group against the issue's progress record.
+ * A no-op for every other kind of send.
+ *
+ * @param {Object} data - The Send Email v2 event detail
+ * @param {{recipients: number, skipped?: number}} result
+ */
+const reportGroupProgress = async (data, { recipients, skipped = 0 }) => {
+  const label = progressLabelForGroup(data.localSendGroup);
+  if (!label) {
+    return;
+  }
+  await markGroupSent(
+    issueIdFromReference(data.tenantId, data.referenceNumber),
+    label,
+    { recipients, skipped }
+  );
+};
+
+/**
  * Fan a local-send issue out into per-group sends.
  *
  * Group semantics depend on localSend.mode:
@@ -392,13 +432,29 @@ const fanOutLocalSendGroups = async ({ data, localSend }) => {
   delete template.sendAt;
   delete template.localSend;
 
+  const latestMs = plans.reduce((latest, plan) => Math.max(latest, plan.sendTime.getTime()), base.getTime());
+  const catchAllAt = new Date(latestMs + 30 * 60 * 1000);
+
+  // Record the plan BEFORE emitting anything. A group whose target time has
+  // already passed is emitted immediately and can finish within milliseconds;
+  // if it reported back before the plan existed, its progress would be dropped
+  // and the issue would never leave `sending`.
+  const issueId = issueIdFromReference(data.tenantId, data.referenceNumber);
+  await startProgress(issueId, buildInitialProgress({
+    mode: localSend.mode,
+    defaultTimeZone: localSend.mode === 'timezone' ? localSend.defaultTimeZone : undefined,
+    base,
+    catchAllAt,
+    plans,
+    catchAllLabel: CATCH_ALL_GROUP,
+    totalSubscribers: subscribers.length
+  }));
+
   let scheduled = 0;
   let immediate = 0;
-  let latestMs = base.getTime();
 
   for (const { label, sendTime, localSendGroup, size } of plans) {
     const payload = { ...template, localSendGroup };
-    latestMs = Math.max(latestMs, sendTime.getTime());
 
     // Anything due within the next minute is sent now; Scheduler rejects
     // schedule times in the past.
@@ -413,7 +469,6 @@ const fanOutLocalSendGroups = async ({ data, localSend }) => {
     }
   }
 
-  const catchAllAt = new Date(latestMs + 30 * 60 * 1000);
   await createLocalSendSchedule(
     { ...template, localSendGroup: { timeZone: CATCH_ALL_GROUP } },
     catchAllAt,
@@ -1005,6 +1060,10 @@ export const handler = async (event) => {
 
     if (emailAddresses.length === 0) {
       console.log('[EXECUTION COMPLETE] No recipients to send after idempotency filtering');
+      // A local-send group with nothing left to do still has to report, or the
+      // issue never completes. This is the common case for the catch-all, whose
+      // whole job is to find that everyone has already been sent to.
+      await reportGroupProgress(data, { recipients: 0, skipped: skippedCount });
       return {
         sent: true,
         recipients: 0,
@@ -1125,6 +1184,10 @@ export const handler = async (event) => {
         await markAbTestTesting({ tenantId, referenceNumber: data.referenceNumber, abTest });
       });
     }
+
+    // Phase 6: Local-send progress. Last, so the group is only reported once
+    // its emails are actually out.
+    await reportGroupProgress(data, { recipients: sentCount, skipped: skippedCount });
 
     const executionDuration = Date.now() - executionStart;
     console.log(`[EXECUTION COMPLETE] Total sent: ${sentCount}, Duration: ${executionDuration}ms, Sender: ${senderEmail}`);

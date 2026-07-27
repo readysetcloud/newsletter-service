@@ -21,6 +21,12 @@ export const handler = async (event) => {
         id: tenant.pk,
         email: tenant.email
       },
+      // Inert since Phase 2 of docs/stage-issue-simplification-plan.md deleted
+      // the state machine's preview states: nothing reads this field any more,
+      // so a non-production import runs the real publish path and really sends.
+      // Kept rather than dropped because removing it would make the state
+      // machine's loss of preview support invisible, and it is not this file's
+      // call to make - see the IS_PREVIEW comment in template.yaml.
       isPreview: process.env.IS_PREVIEW === true || process.env.IS_PREVIEW === 'true',
       // Always present (null when no template selected) so the state machine can
       // reference it unconditionally; GitHub-imported issues use the default template.

@@ -3832,10 +3832,23 @@ fn build_execution_input(input: &IssueScheduleInput<'_>) -> serde_json::Value {
 
 /// Starts an issue's publish workflow — now, or at its send time.
 ///
-/// An immediate publish still starts an execution directly. A scheduled one
-/// creates a one-shot EventBridge Scheduler entry that starts the execution at
-/// (send instant − lead time) instead, rather than starting an execution that
-/// sat in the definition's `Wait For Future Date` state for days. Three things
+/// An immediate publish starts an execution directly, and so does a schedule
+/// with less notice than the lead time — its workflow is already due, and
+/// `schedule_issue_send` will not create an entry for a time that has
+/// effectively passed. Everything else creates a one-shot EventBridge Scheduler
+/// entry that starts the execution at (send instant − lead time), rather than
+/// starting an execution that sat in the definition's `Wait For Future Date`
+/// state for days. Both direct-start cases still send at the issue's own
+/// instant: the workflow carries `sendAt` and the send path holds it there.
+///
+/// One operator-facing consequence of the lead time, easiest to notice here but
+/// not specific to this branch: **unscheduling only reliably stops a send before
+/// the workflow starts**, i.e. before (send instant − lead time). After that the
+/// issue has been published to the send path and `DeleteSchedule` has nothing
+/// left to delete — for a short-notice schedule that is immediately, and for a
+/// normal one it is a day before the send. See #372.
+///
+/// Three things
 /// come out of that: the execution reads the issue record at send time instead
 /// of publishing a copy taken at schedule time, work can happen *before* the
 /// send instant (which is what timezone-correct local send needs — see
@@ -3910,7 +3923,20 @@ async fn schedule_issue_send(
         })?
         .with_timezone(&chrono::Utc);
 
-    let fire_at = issue_send_fire_at(send_instant, issue_send_lead_time(), chrono::Utc::now());
+    let now = chrono::Utc::now();
+    let fire_at = issue_send_fire_at(send_instant, issue_send_lead_time(), now);
+
+    // Scheduled less notice than the lead time, so the workflow is already due:
+    // start it here instead of asking Scheduler to fire at (or a hair before)
+    // this instant. See `is_due_now` for why an `at()` in the past is not an
+    // option. The issue still sends at its own instant - the workflow carries
+    // `sendAt` and the send path holds it - which is the same thing the lead
+    // time does for every other issue, with whatever lead was actually
+    // available.
+    if is_due_now(fire_at, now) {
+        return start_issue_execution(input, execution_input).await;
+    }
+
     let schedule_name = build_issue_send_schedule_name(input.tenant_id, input.issue_number);
 
     scheduler
@@ -4093,9 +4119,27 @@ fn parse_lead_time_minutes(raw: Option<&str>) -> i64 {
         .max(0)
 }
 
+/// The minimum notice worth handing to EventBridge Scheduler.
+///
+/// `at()` has second granularity and the expression is rendered before the
+/// request goes out, so a fire time within a second or two of now is already in
+/// the past by the time Scheduler stores it — and a one-time schedule in the
+/// past does not invoke its target. (Scheduler may refuse it outright instead;
+/// `fanOutLocalSendGroups` in send-email-v2.mjs assumes refusal and keeps a
+/// 60-second guard of its own for the same reason.) Refusal fails the request
+/// and leaves the issue a draft; acceptance loses the send silently. Neither is
+/// worth risking for a schedule that is about to fire anyway.
+const SCHEDULER_MIN_NOTICE_SECONDS: i64 = 60;
+
+/// Whether a computed fire time is too close to now to be worth scheduling.
+fn is_due_now(fire_at: chrono::DateTime<chrono::Utc>, now: chrono::DateTime<chrono::Utc>) -> bool {
+    fire_at - now <= chrono::Duration::seconds(SCHEDULER_MIN_NOTICE_SECONDS)
+}
+
 /// When the Scheduler entry fires. Clamped to `now`, so a lead time longer than
-/// the notice an issue was scheduled with starts the workflow immediately rather
-/// than asking Scheduler for a time in the past.
+/// the notice an issue was scheduled with cannot ask Scheduler for a time in the
+/// past — `schedule_issue_send` reads the clamped value through `is_due_now` and
+/// starts the workflow itself instead.
 fn issue_send_fire_at(
     send_instant: chrono::DateTime<chrono::Utc>,
     lead_time: chrono::Duration,
@@ -6794,6 +6838,35 @@ Thanks!"#;
             issue_send_fire_at(send_instant, chrono::Duration::hours(24), now),
             now
         );
+    }
+
+    /// The clamp alone is not enough, and this is the pairing that says why: a
+    /// clamped fire time IS now, and `at(now)` renders to whole seconds and
+    /// travels over the network before Scheduler stores it, so it lands in the
+    /// past. A one-time schedule in the past never invokes its target, which
+    /// would leave the issue `scheduled` and unsent. `schedule_issue_send`
+    /// starts the execution itself instead.
+    #[test]
+    fn test_is_due_now_covers_the_clamped_fire_time() {
+        let send_instant = timestamp("2026-07-27T14:00:00Z");
+        let now = timestamp("2026-07-27T09:00:00Z");
+        let lead = chrono::Duration::hours(26);
+
+        assert!(is_due_now(issue_send_fire_at(send_instant, lead, now), now));
+    }
+
+    /// The margin, from both sides. Anything inside it is started directly;
+    /// anything past it is Scheduler's job, including a send whose whole lead
+    /// is only a few minutes.
+    #[test]
+    fn test_is_due_now_only_covers_the_notice_margin() {
+        let now = timestamp("2026-07-27T09:00:00Z");
+
+        assert!(is_due_now(now, now));
+        assert!(is_due_now(now - chrono::Duration::seconds(30), now));
+        assert!(is_due_now(now + chrono::Duration::seconds(60), now));
+        assert!(!is_due_now(now + chrono::Duration::seconds(61), now));
+        assert!(!is_due_now(now + chrono::Duration::hours(26), now));
     }
 
     /// The name is a per-issue lock: `CreateSchedule` conflicts on it (so a

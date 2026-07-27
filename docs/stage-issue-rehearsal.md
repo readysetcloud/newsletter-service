@@ -319,18 +319,27 @@ Per content type, ~15 minutes. Repeat for markdown, json, and html.
    sitting.
 
    **With the lead time at its deployed 1560, ten minutes' notice is less than the
-   lead**, so `issue_send_fire_at` clamps the entry to *now* and the workflow
-   starts immediately — the send is still deferred to the scheduled instant, by
-   the local-send group schedules or by `send-email-v2`'s own `email-*` entry.
-   That is the shape to expect, and step 4's "parked" observation is not available
-   in it. To rehearse the parked state instead, stage further out than the lead
-   time, or deploy the rehearsal stack with `IssueSendLeadTimeMinutes=0`.
+   lead, and that changes the shape of the whole rehearsal.** The workflow is
+   already due, so the API starts the execution itself and creates **no**
+   `ISSUE-SEND-*` entry at all (`is_due_now` in `issues.rs`; an `at()` inside the
+   next minute would land in the past, and a one-time schedule in the past never
+   invokes its target). The send is still deferred to the scheduled instant, by
+   the local-send group schedules or by `send-email-v2`'s own `email-*` entry —
+   so verification 2 still expects the email at the send time, not at once.
 
-4. **Confirm the pending send, before the send time.** Since Phase 5 there is
-   nothing to describe yet — the record stays `scheduled` with no `executionArn`,
-   and the workflow does not exist until the `ISSUE-SEND-*` entry starts it.
-   (Only while the entry has not fired: see the clamp note above.) Check both
-   halves:
+   What this costs the rehearsal is step 4 entirely: there is nothing parked to
+   observe, and `get-schedule` will 404 correctly. **To rehearse the scheduled
+   path as production runs it, stage further out than the lead time** (26h+, so
+   the entry exists and fires on its own), or deploy the rehearsal stack with
+   `IssueSendLeadTimeMinutes=0`. Do the long-notice version at least once per
+   phase that touches the definition — the short-notice one exercises a different
+   branch of `start_issue_schedule`.
+
+4. **Confirm the pending send, before the send time.** Only meaningful when the
+   issue was staged with more notice than the lead time — see step 3. Since
+   Phase 5 there is nothing to describe yet: the record stays `scheduled` with no
+   `executionArn`, and the workflow does not exist until the `ISSUE-SEND-*` entry
+   starts it. Check both halves:
 
    ```
    aws dynamodb get-item --table-name "$TABLE_NAME" \
@@ -344,8 +353,17 @@ Per content type, ~15 minutes. Repeat for markdown, json, and html.
    `ScheduleExpression` is `at(<scheduledAt − IssueSendLeadTimeMinutes>)` in UTC
    targeting `StageIssueStateMachine`. A record already at `in progress` before
    the send time is the pre-Phase-5 shape and means the API started an execution
-   directly (D5). No schedule but a `scheduled` record is the one unrecoverable
-   combination — the send will never fire and nothing watches for it.
+   directly (D5) — unless the issue was staged inside the lead window, where that
+   is now the correct behavior. No schedule but a `scheduled` record is the one
+   unrecoverable combination — the send will never fire and nothing watches for
+   it.
+
+   **Unscheduling stops a send only up to this point.** `PUT /issues/{id}` with
+   `status: "draft"` deletes the entry, which works while the entry is still
+   pending; once the workflow has started, the issue is already handed to the
+   send path and there is nothing left to delete. With a 26h lead that boundary
+   is a day before the send, not seconds before it, and for a short-notice
+   schedule it is immediately. Worth knowing before relying on a late cancel.
 
 5. **Grab the execution ARN after the send time.** The execution records it
    itself (`Mark Issue In Progress`), because the API has no ARN for an execution

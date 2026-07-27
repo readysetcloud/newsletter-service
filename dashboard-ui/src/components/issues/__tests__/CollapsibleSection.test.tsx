@@ -57,7 +57,7 @@ describe('CollapsibleSection', () => {
 
       expect(screen.queryByText('Test Content')).not.toBeInTheDocument();
       const contentContainer = document.getElementById('test-section-content');
-      expect(contentContainer).toHaveClass('max-h-0');
+      expect(contentContainer).toHaveClass('grid-rows-[0fr]');
       expect(contentContainer).toHaveClass('opacity-0');
     });
 
@@ -269,7 +269,7 @@ describe('CollapsibleSection', () => {
       render(<CollapsibleSection {...defaultProps} isExpanded={false} />);
 
       const content = document.getElementById('test-section-content');
-      expect(content).toHaveClass('max-h-0');
+      expect(content).toHaveClass('grid-rows-[0fr]');
       expect(content).toHaveClass('opacity-0');
       expect(content).toHaveClass('transition-all');
       expect(content).toHaveClass('duration-300');
@@ -279,10 +279,14 @@ describe('CollapsibleSection', () => {
       render(<CollapsibleSection {...defaultProps} isExpanded={true} />);
 
       const content = screen.getByText('Test Content').closest('[id$="-content"]');
-      expect(content).toHaveClass('max-h-[5000px]');
+      expect(content).toHaveClass('grid-rows-[1fr]');
       expect(content).toHaveClass('opacity-100');
       expect(content).toHaveClass('transition-all');
       expect(content).toHaveClass('duration-300');
+
+      // Expanded content must not be height-capped: these sections stack charts
+      // and tables that easily run past any fixed max-height on a phone.
+      expect(content?.className).not.toMatch(/max-h-\[/);
     });
 
     it('should apply hover styles to header', () => {

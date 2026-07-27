@@ -1514,7 +1514,7 @@ paths:
           required: false
           schema:
             type: string
-            enum: [draft, scheduled, published, failed]
+            enum: [draft, scheduled, "in progress", sending, published, failed]
           description: Filter issues by status
       responses:
         "200":
@@ -1728,7 +1728,11 @@ paths:
 
     put:
       summary: Update an issue
-      description: Updates an existing issue. Draft issues can have their content modified. Issues with 'in progress' or 'failed' status can be marked as published.
+      description: >-
+        Updates an existing issue. Draft issues can have their content modified.
+        Issues with 'in progress' or 'failed' status can be marked as published.
+        A scheduled issue cannot be edited, but it can be unscheduled by setting
+        status to 'draft', which cancels its send.
       tags:
         - Issues
       requestBody:
@@ -3530,7 +3534,7 @@ components:
           description: Issue subject
         status:
           type: string
-          enum: [draft, scheduled, published, failed]
+          enum: [draft, scheduled, "in progress", sending, published, failed]
           description: Current issue status
         createdAt:
           type: string
@@ -3759,8 +3763,11 @@ components:
           description: Issue subject
         status:
           type: string
-          enum: [draft]
-          description: Issue status (always 'draft' for new issues)
+          enum: [draft, scheduled]
+          description: >-
+            Issue status. 'draft' unless the request scheduled the issue for a
+            future send, in which case it is 'scheduled' and stays there until
+            the publish workflow starts at the send time.
         content:
           type: string
           description: Issue content (markdown or JSON depending on contentType)
@@ -3799,7 +3806,7 @@ components:
           description: Issue subject
         status:
           type: string
-          enum: [draft, scheduled, published, failed]
+          enum: [draft, scheduled, "in progress", sending, published, failed]
           description: Current issue status
         content:
           type: string
@@ -3853,6 +3860,149 @@ components:
           $ref: "#/components/schemas/LocalSend"
         contentAssembly:
           $ref: "#/components/schemas/ContentAssembly"
+        sendProgress:
+          $ref: "#/components/schemas/SendProgress"
+        workflow:
+          $ref: "#/components/schemas/WorkflowState"
+
+    SendProgress:
+      type: object
+      description: >-
+        Group-by-group delivery state for a local send. A local-send issue is
+        fanned out into one scheduled send per timezone (or peak-hour) group plus
+        a final catch-all sweep, so deliveries continue for hours after the
+        publish workflow finishes. Present from fan-out onward; absent for issues
+        that were not sent with local send enabled.
+
+        All timestamps are ISO 8601 in UTC and are deliberately not formatted
+        into `message`, so clients can render them in the reader's timezone.
+      required:
+        - state
+        - message
+        - mode
+        - groupsTotal
+        - groupsDelivered
+        - recipientsSent
+        - groups
+      properties:
+        state:
+          type: string
+          enum: [sending, complete, stalled]
+          description: >-
+            `sending` while groups are outstanding, `complete` once every group
+            has reported, `stalled` when a group is more than 30 minutes past its
+            scheduled time and has not reported back.
+        message:
+          type: string
+          description: One-line human-readable summary, safe to display verbatim
+        mode:
+          type: string
+          enum: [timezone, peak-hour]
+          description: Which grouping the fan-out used
+        defaultTimeZone:
+          type: string
+          description: Zone whose wall clock defined the target time (timezone mode only)
+        groupsTotal:
+          type: integer
+          description: Planned groups, including the catch-all sweep
+        groupsDelivered:
+          type: integer
+          description: Groups that have reported back
+        recipientsSent:
+          type: integer
+          description: Emails sent across all reported groups
+        totalSubscribers:
+          type: integer
+          description: Subscribers the fan-out planned for
+        startedAt:
+          type: string
+          format: date-time
+          description: When the fan-out ran
+        expectedCompleteAt:
+          type: string
+          format: date-time
+          description: When the catch-all sweep runs - the point everything should be done by
+        completedAt:
+          type: string
+          format: date-time
+          description: When the last group reported (absent while sending)
+        nextSendAt:
+          type: string
+          format: date-time
+          description: Scheduled time of the earliest group still outstanding
+        groups:
+          type: array
+          description: Every planned group, ordered by when subscribers receive the issue
+          items:
+            $ref: "#/components/schemas/SendProgressGroup"
+
+    SendProgressGroup:
+      type: object
+      required:
+        - label
+        - name
+        - sendAt
+        - status
+        - overdue
+      properties:
+        label:
+          type: string
+          description: >-
+            Raw group key - an IANA timezone name, `hour-<0-23>` in peak-hour
+            mode, `__default__` for subscribers with no confirmed timezone,
+            or `__catch_all__` for the final sweep
+        name:
+          type: string
+          description: Human-readable rendering of the label
+        sendAt:
+          type: string
+          format: date-time
+          description: When this group is (or was) scheduled to send
+        status:
+          type: string
+          enum: [pending, sent, empty]
+          description: >-
+            `empty` means the group ran with nothing left to send, which is the
+            normal outcome for the catch-all sweep
+        size:
+          type: integer
+          description: Subscribers planned for this group (absent for the catch-all)
+        recipients:
+          type: integer
+          description: Emails this group actually sent
+        sentAt:
+          type: string
+          format: date-time
+          description: When this group reported back
+        overdue:
+          type: boolean
+          description: Still pending well past its scheduled time
+
+    WorkflowState:
+      type: object
+      description: >-
+        Where the issue's publish workflow is. Only returned when there is no
+        send progress to report - before a local-send fan-out has run, or when
+        the workflow failed. Absent once deliveries are underway, since the
+        progress record is both more detailed and longer-lived than the
+        execution history.
+      required:
+        - state
+        - message
+      properties:
+        state:
+          type: string
+          enum: [waiting, running, failed, stopped]
+          description: >-
+            `waiting` is ahead of a future send time - for a scheduled issue the
+            workflow has not started yet, since it is started at the send time
+            rather than when the issue was scheduled; `running` is publishing now
+        message:
+          type: string
+          description: One-line human-readable summary, safe to display verbatim
+        detail:
+          type: string
+          description: Failure cause, when the execution reports one
 
     UpdateIssueRequest:
       type: object
@@ -3887,7 +4037,11 @@ components:
           type: string
           enum:
             - published
-          description: Set to 'published' to manually mark an in-progress or failed issue as published
+            - draft
+          description: >-
+            Set to 'published' to manually mark an in-progress or failed issue as
+            published. Set to 'draft' to unschedule a scheduled issue: this
+            cancels its send and is only valid from status 'scheduled'.
         abTest:
           $ref: "#/components/schemas/AbTest"
         localSend:

@@ -18,6 +18,8 @@ import type {
   BillingInfo,
   SubscriptionCardProps
 } from '@/types';
+import { formatInTimeZone } from '@/utils/dateFormatting';
+import { useTenantDateFormat } from '@/contexts/SettingsContext';
 
 interface SubscriptionStatusCardProps extends SubscriptionCardProps {
   subscription: Subscription | null;
@@ -71,12 +73,15 @@ export function SubscriptionStatusCard({
     }
   };
 
+  // Dates render in the newsletter's timezone, not the viewer's.
+  const { timeZone } = useTenantDateFormat();
+
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
+    return formatInTimeZone(dateString, timeZone, {
       year: 'numeric',
       month: 'long',
       day: 'numeric'
-    });
+    }, 'en-US');
   };
 
   if (loading) {

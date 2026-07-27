@@ -19,13 +19,15 @@ import { segmentService } from '@/services/segmentService';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import type { Segment } from '@/services/segmentService';
 import type { SubscriberTrendsResponse, SubscriberListItem } from '@/types';
+import { useTenantDateFormat } from '@/contexts/SettingsContext';
+import { formatInTimeZone } from '@/utils/dateFormatting';
 
-const formatDate = (dateString: string) =>
-  new Date(dateString).toLocaleDateString('en-US', {
+const formatDate = (dateString: string, timeZone?: string) =>
+  formatInTimeZone(dateString, timeZone, {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
-  });
+  }, 'en-US');
 
 /** Skeleton for the subscriber count metric card (Row 1) */
 const MetricSkeleton: React.FC = () => (
@@ -88,6 +90,8 @@ const SectionError: React.FC<{ message: string; onRetry: () => void }> = ({ mess
 );
 
 export const SubscribersPage: React.FC = () => {
+  // Dates render in the newsletter's timezone, not the viewer's.
+  const { timeZone } = useTenantDateFormat();
   const navigate = useNavigate();
   const { addToast } = useToast();
   // Below Tailwind's `sm` breakpoint we swap the multi-column table for a
@@ -297,7 +301,7 @@ export const SubscribersPage: React.FC = () => {
                 >
                   {label.text}
                 </span>
-                <span>{sub.addedAt ? formatDate(sub.addedAt) : '—'}</span>
+                <span>{sub.addedAt ? formatDate(sub.addedAt, timeZone) : '—'}</span>
               </div>
             </div>
           );
@@ -332,7 +336,7 @@ export const SubscribersPage: React.FC = () => {
         ),
       },
     ],
-    [sortDirection, toggleSortDirection, SortIcon, getEngagementLabel, renderBotBadge, handleUnsubscribe]
+    [sortDirection, toggleSortDirection, SortIcon, getEngagementLabel, renderBotBadge, handleUnsubscribe, timeZone]
   );
 
   const subscriberColumns: VirtualTableColumn<SubscriberListItem>[] = useMemo(
@@ -402,7 +406,7 @@ export const SubscribersPage: React.FC = () => {
         ),
         render: (sub) => (
           <span className="text-muted-foreground">
-            {sub.addedAt ? formatDate(sub.addedAt) : '—'}
+            {sub.addedAt ? formatDate(sub.addedAt, timeZone) : '—'}
           </span>
         ),
       },
@@ -433,7 +437,7 @@ export const SubscribersPage: React.FC = () => {
         ),
       },
     ],
-    [sortDirection, toggleSortDirection, SortIcon, getEngagementLabel, renderBotBadge, handleUnsubscribe]
+    [sortDirection, toggleSortDirection, SortIcon, getEngagementLabel, renderBotBadge, handleUnsubscribe, timeZone]
   );
 
   const segmentColumns: DataListColumn<Segment>[] = useMemo(
@@ -470,12 +474,12 @@ export const SubscribersPage: React.FC = () => {
         headerClassName: 'hidden md:table-cell',
         render: (segment) => (
           <span className="text-muted-foreground">
-            {formatDate(segment.createdAt)}
+            {formatDate(segment.createdAt, timeZone)}
           </span>
         ),
       },
     ],
-    []
+    [timeZone]
   );
 
   const handleSegmentClick = useCallback(

@@ -4,6 +4,7 @@
 
 import type { IssueMetrics } from '../types/issues';
 import { STORAGE_KEYS } from '@/constants/brand';
+import { formatInTimeZone } from './dateFormatting';
 
 /**
  * Comparison result for metrics
@@ -52,26 +53,35 @@ export function calculateComparison(
 }
 
 /**
- * Format a date string
+ * Format a date string.
+ *
+ * `timeZone` should be the newsletter's zone (components get it from
+ * `useTenantDateFormat`). It falls back to the viewer's browser zone when
+ * omitted, which is only correct for callers with no tenant context.
  */
-export function formatDate(dateString: string, includeTime: boolean = true): string {
-  const date = new Date(dateString);
-
-  if (includeTime) {
-    return date.toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  }
-
-  return date.toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  });
+export function formatDate(
+  dateString: string,
+  includeTime: boolean = true,
+  timeZone?: string
+): string {
+  return formatInTimeZone(
+    dateString,
+    timeZone,
+    includeTime
+      ? {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      }
+      : {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      },
+    'en-US'
+  );
 }
 
 /**
@@ -104,6 +114,33 @@ export function formatNumber(value: number): string {
  */
 export function formatPercentageValue(percentage: number, decimals: number = 1): string {
   return `${percentage.toFixed(decimals)}%`;
+}
+
+/**
+ * The DOM id for a collapsible section on the issue detail page. Used for
+ * anchors, scroll targets and the intersection observers.
+ *
+ * `CollapsibleSection` echoes its DOM id back through `onToggle`, so anything
+ * keyed by section id has to run the value through `toSectionKey` first —
+ * otherwise the toggle writes `section-engagement` while the render reads
+ * `engagement`, and the section never opens.
+ *
+ * @param sectionKey - Section identifier, e.g. 'engagement'
+ * @returns The DOM id, e.g. 'section-engagement'
+ */
+export function toSectionDomId(sectionKey: string): string {
+  return `section-${sectionKey}`;
+}
+
+/**
+ * Inverse of `toSectionDomId`. Tolerates values that are already section keys,
+ * which also migrates DOM ids persisted by older builds.
+ *
+ * @param id - A section DOM id or section key
+ * @returns The section key
+ */
+export function toSectionKey(id: string): string {
+  return id.replace(/^section-/, '');
 }
 
 /**

@@ -1,15 +1,17 @@
 import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Pencil, Trash, RefreshCw, AlertCircle, TrendingUp, Users, Shield, FileText, CheckCircle, Flame, Hash, CalendarDays, Clock, Send } from 'lucide-react';
+import { ArrowLeft, Pencil, PencilLine, Trash, RefreshCw, AlertCircle, TrendingUp, Users, Shield, FileText, CheckCircle, Flame, Hash, CalendarDays, Clock, Send } from 'lucide-react';
 import { PageHero, PageHeroTitle, PageHeroChips, PageHeroChip, SegmentedControl } from '@readysetcloud/ui';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { useToast } from '../../components/ui/Toast';
+import { cn } from '../../utils/cn';
 import { IssueStatusBadge } from '../../components/issues/IssueStatusBadge';
 import { MarkdownPreview } from '../../components/issues/MarkdownPreview';
 import { DeleteIssueDialog } from '../../components/issues/DeleteIssueDialog';
 import { SubscriberMetricsPanel } from '../../components/issues/SubscriberMetricsPanel';
 import { AbTestResults } from '../../components/issues/AbTestResults';
+import { SendProgressCard } from '../../components/issues/SendProgressCard';
 import {
   IssueDetailSkeleton,
   InsightsHeroSkeleton,
@@ -40,6 +42,8 @@ import {
   saveScrollPosition,
   loadScrollPosition,
   clearScrollPosition,
+  toSectionDomId,
+  toSectionKey,
   type UserPreferences
 } from '../../utils/issueDetailUtils';
 import { getErrorDetails, validateAnalyticsData } from '../../utils/errorMessages';
@@ -73,6 +77,9 @@ interface SectionConfig {
   defaultExpanded: boolean;
   requiredData: string[];
 }
+
+/** Room left above a section when scrolling to it, for the sticky nav bar. */
+const SECTION_SCROLL_OFFSET = 88;
 
 const SECTION_CONFIGS: SectionConfig[] = [
   {
@@ -282,13 +289,17 @@ export const IssueDetailPage: React.FC = () => {
     };
   }, [id]);
 
-  // Initialize expanded sections based on screen size, defaults, and user preferences
+  // Initialize expanded sections based on screen size, defaults, and user preferences.
+  // Deliberately no resize listener: mobile browsers fire `resize` every time the
+  // address bar hides or shows while scrolling, and collapsing sections out from
+  // under someone mid-scroll is worse than leaving them as they were.
   useEffect(() => {
     const isMobile = window.innerWidth < 768;
     const defaultExpanded = new Set<string>();
 
-    // Load user preferences for expanded sections
-    const savedExpandedSections = userPreferences.expandedSections;
+    // Load user preferences for expanded sections. Older builds saved DOM ids
+    // ("section-engagement") here, so normalize whatever we read back.
+    const savedExpandedSections = userPreferences.expandedSections.map(toSectionKey);
 
     if (savedExpandedSections.length > 0) {
       // Use saved preferences if available
@@ -306,18 +317,6 @@ export const IssueDetailPage: React.FC = () => {
 
     // Load comparison mode preference
     setComparisonMode(userPreferences.defaultComparison);
-
-    // Handle window resize to adjust section states
-    const handleResize = () => {
-      const isNowMobile = window.innerWidth < 768;
-      if (isNowMobile && expandedSections.size > 0) {
-        // Collapse all sections when switching to mobile
-        setExpandedSections(new Set());
-      }
-    };
-
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Only run on mount
 
@@ -325,7 +324,7 @@ export const IssueDetailPage: React.FC = () => {
   useEffect(() => {
     const keyMetricsElement = document.getElementById('key-metrics-summary');
     const sectionElements = SECTION_CONFIGS.map(config =>
-      document.getElementById(`section-${config.id}`)
+      document.getElementById(toSectionDomId(config.id))
     ).filter(Boolean);
 
     // Observer for sticky navigation trigger
@@ -345,8 +344,7 @@ export const IssueDetailPage: React.FC = () => {
       (entries) => {
         entries.forEach((entry) => {
           if (entry.isIntersecting) {
-            const sectionId = entry.target.id.replace('section-', '');
-            setActiveSection(sectionId);
+            setActiveSection(toSectionKey(entry.target.id));
           }
         });
       },
@@ -371,45 +369,71 @@ export const IssueDetailPage: React.FC = () => {
     updatePreference('defaultComparison', mode);
   }, []);
 
-  // Handler for section toggle
-  const handleSectionToggle = useCallback((sectionId: string) => {
-    setExpandedSections(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(sectionId)) {
-        newSet.delete(sectionId);
-      } else {
-        newSet.add(sectionId);
-      }
+  // Mirror of expandedSections so the toggle handler can read current state
+  // without taking it as a dependency (the sections are memoized on identity).
+  const expandedSectionsRef = useRef(expandedSections);
+  useEffect(() => {
+    expandedSectionsRef.current = expandedSections;
+  }, [expandedSections]);
 
-      // Save expanded sections to preferences
-      const expandedArray = Array.from(newSet);
-      updatePreference('expandedSections', expandedArray);
+  // Bring a section's header to just under the sticky nav
+  const scrollSectionIntoView = useCallback((sectionKey: string) => {
+    const element = document.getElementById(toSectionDomId(sectionKey));
+    if (!element) return;
 
-      return newSet;
+    const offsetPosition =
+      element.getBoundingClientRect().top + window.pageYOffset - SECTION_SCROLL_OFFSET;
+
+    window.scrollTo({
+      top: Math.max(offsetPosition, 0),
+      behavior: 'smooth',
     });
   }, []);
 
+  // Handler for section toggle. `CollapsibleSection` hands back its DOM id, so
+  // normalize it to the section key the expanded-set is keyed by.
+  const handleSectionToggle = useCallback((id: string) => {
+    const sectionId = toSectionKey(id);
+    const next = new Set(expandedSectionsRef.current);
+    const isExpanding = !next.has(sectionId);
+
+    if (isExpanding) {
+      next.add(sectionId);
+    } else {
+      next.delete(sectionId);
+    }
+
+    expandedSectionsRef.current = next;
+    setExpandedSections(next);
+    updatePreference('expandedSections', Array.from(next));
+
+    // On a phone the drawer header often sits near the bottom of the screen, so
+    // the content it just revealed opens entirely below the fold and the tap
+    // reads as "nothing happened". Pull the header up when that's the case.
+    if (isExpanding) {
+      const element = document.getElementById(toSectionDomId(sectionId));
+      if (element && element.getBoundingClientRect().top > window.innerHeight * 0.4) {
+        // Wait a frame so the expand animation has started before we scroll.
+        requestAnimationFrame(() => scrollSectionIntoView(sectionId));
+      }
+    }
+  }, [scrollSectionIntoView]);
+
   // Handler for navigation click with smooth scrolling
   const handleNavigationClick = useCallback((sectionId: string) => {
-    const element = document.getElementById(`section-${sectionId}`);
-    if (element) {
-      const offset = 100; // Account for sticky header
-      const elementPosition = element.getBoundingClientRect().top + window.pageYOffset;
-      const offsetPosition = elementPosition - offset;
+    const sectionKey = toSectionKey(sectionId);
+    if (!document.getElementById(toSectionDomId(sectionKey))) return;
 
-      window.scrollTo({
-        top: offsetPosition,
-        behavior: 'smooth'
-      });
-
-      // Expand the section if it's collapsed
-      setExpandedSections(prev => {
-        const newSet = new Set(prev);
-        newSet.add(sectionId);
-        return newSet;
-      });
+    // Expand the section if it's collapsed
+    if (!expandedSectionsRef.current.has(sectionKey)) {
+      const next = new Set(expandedSectionsRef.current).add(sectionKey);
+      expandedSectionsRef.current = next;
+      setExpandedSections(next);
+      updatePreference('expandedSections', Array.from(next));
     }
-  }, []);
+
+    scrollSectionIntoView(sectionKey);
+  }, [scrollSectionIntoView]);
 
   const handleRebuildAnalytics = useCallback(async () => {
     if (!id) return;
@@ -513,6 +537,19 @@ export const IssueDetailPage: React.FC = () => {
 
   const isDraft = useMemo(() => issue?.status === 'draft', [issue?.status]);
   const isPublished = useMemo(() => issue?.status === 'published', [issue?.status]);
+  /**
+   * Whether the issue has reached the point where things actually happen —
+   * mail goes out, an A/B sample is measured. A draft or a scheduled issue
+   * hasn't sent anything yet, so panels must not report on it as if it had.
+   */
+  const hasStartedSending = useMemo(
+    () =>
+      issue?.status === 'in progress' ||
+      issue?.status === 'sending' ||
+      issue?.status === 'published' ||
+      issue?.status === 'failed',
+    [issue?.status]
+  );
   const canMarkAsPublished = useMemo(() => issue?.status === 'in progress' || issue?.status === 'failed', [issue?.status]);
 
   // The content heatmap overlays click data on the rendered markdown, so it only
@@ -703,7 +740,10 @@ export const IssueDetailPage: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-background overflow-x-hidden">
+    // `overflow-x-clip` rather than `overflow-x-hidden`: hidden makes this a
+    // scroll container, which silently breaks `position: sticky` for the quick
+    // nav inside it. Clip contains the same overflow without that side effect.
+    <div className="min-h-screen bg-background overflow-x-clip">
       {/* Skip to main content link for keyboard navigation */}
       <a
         href="#main-content"
@@ -748,7 +788,7 @@ export const IssueDetailPage: React.FC = () => {
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-3 mb-3 flex-wrap">
                   <PageHeroTitle className="break-words">{issue.subject}</PageHeroTitle>
-                  <IssueStatusBadge status={issue.status} />
+                  <IssueStatusBadge status={issue.status} size="lg" />
                 </div>
                 <PageHeroChips>
                   <PageHeroChip icon={<Hash className="w-3.5 h-3.5" />}>
@@ -915,6 +955,58 @@ export const IssueDetailPage: React.FC = () => {
           </div>
         )}
 
+        {/* Unsent-state notice. The badge alone sits inline with the title and is
+            easy to read past; this states plainly that nothing has gone out,
+            which is the thing that matters when previewing a draft. */}
+        {!hasStartedSending && (
+          <Card
+            className={cn(
+              'shadow-sm mb-4 sm:mb-6 border-l-4',
+              isDraft ? 'border-l-amber-500' : 'border-l-blue-500'
+            )}
+          >
+            <CardContent className="p-3 sm:p-4">
+              <div className="flex items-start gap-3">
+                {isDraft ? (
+                  <PencilLine className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" aria-hidden="true" />
+                ) : (
+                  <Clock className="h-5 w-5 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" aria-hidden="true" />
+                )}
+                <div>
+                  <p className="text-sm font-semibold text-foreground">
+                    {isDraft ? 'This is a draft — it has not been sent' : 'Scheduled — it has not been sent yet'}
+                  </p>
+                  <p className="text-sm text-muted-foreground mt-0.5">
+                    {isDraft
+                      ? 'Everything below is a preview. No subscriber has received this issue, and there are no results to report.'
+                      : issue.scheduledAt
+                        ? `Everything below is a preview until it sends on ${formatDate(issue.scheduledAt)}.`
+                        : 'Everything below is a preview until it sends.'}
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Local send delivery - a local-send issue keeps delivering for hours
+            after the publish workflow finishes, so this sits above the analytics
+            panels: it answers "is this issue still going out?" before anything
+            about how it performed. Also carries the publish workflow's state for
+            issues that have not fanned out yet. */}
+        {(issue.sendProgress || issue.workflow) && (
+          <div className="mb-4 sm:mb-6">
+            <FadeIn variant="fade" speed="normal">
+              <AsyncErrorBoundary onRetry={loadIssue}>
+                <SendProgressCard
+                  sendProgress={issue.sendProgress}
+                  workflow={issue.workflow}
+                />
+              </AsyncErrorBoundary>
+            </FadeIn>
+          </div>
+        )}
+
         {/* A/B Test Results Panel - Show whenever the issue has a managed A/B test */}
         {issue.abTest && (
           <div className="mb-4 sm:mb-6">
@@ -923,6 +1015,7 @@ export const IssueDetailPage: React.FC = () => {
                 <AbTestResults
                   abTest={issue.abTest}
                   variantStats={issue.variantStats}
+                  hasStarted={hasStartedSending}
                 />
               </AsyncErrorBoundary>
             </FadeIn>
@@ -949,7 +1042,7 @@ export const IssueDetailPage: React.FC = () => {
         {/* Engagement Analytics Section */}
         {isPublished && analytics && shouldShowSection('engagement', analytics, issue?.stats) && (
           <CollapsibleSection
-            id="section-engagement"
+            id={toSectionDomId('engagement')}
             title="Engagement Analytics"
             description="Link performance, geographic distribution, and engagement over time"
             icon={<TrendingUp className="w-5 h-5" />}
@@ -1057,7 +1150,7 @@ export const IssueDetailPage: React.FC = () => {
         {/* Audience Insights Section */}
         {isPublished && analytics && shouldShowSection('audience', analytics, issue?.stats) && (
           <CollapsibleSection
-            id="section-audience"
+            id={toSectionDomId('audience')}
             title="Audience Insights"
             description="Device breakdown, geography, and engagement timing"
             icon={<Users className="w-5 h-5" />}
@@ -1098,7 +1191,7 @@ export const IssueDetailPage: React.FC = () => {
         {/* Deliverability & Quality Section */}
         {isPublished && analytics && shouldShowSection('deliverability', analytics, issue?.stats) && (
           <CollapsibleSection
-            id="section-deliverability"
+            id={toSectionDomId('deliverability')}
             title="Deliverability & Quality"
             description="Bounce analysis, complaints, and quality signals"
             icon={<Shield className="w-5 h-5" />}

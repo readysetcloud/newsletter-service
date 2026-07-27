@@ -118,9 +118,11 @@ export const handler = async (state) => {
   // and therefore stay fixed. The config is read from the issue record (like
   // publish-issue reads abTest) instead of being threaded through the state
   // machine, so every state-machine entry point stays unchanged. Markers carry
-  // NO topic hint: link classification runs in a parallel state-machine branch
-  // and may not have finished yet — topics are derived at send time from the
-  // issue's link# records. Fail-open: any error just skips marker injection.
+  // NO topic hint — topics are derived at send time from the issue's link#
+  // records, which the state machine now writes before publish rather than in a
+  // branch racing this render (Phase 4 of
+  // docs/stage-issue-simplification-plan.md). Fail-open: any error just skips
+  // marker injection.
   try {
     const contentAssembly = await getContentAssemblyConfig(state.tenantId, issueNumber);
     if (contentAssembly?.enabled === true) {

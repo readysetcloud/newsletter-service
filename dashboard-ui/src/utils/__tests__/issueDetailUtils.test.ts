@@ -12,7 +12,37 @@ import {
   saveScrollPosition,
   loadScrollPosition,
   clearScrollPosition,
+  formatDate,
+  toSectionDomId,
+  toSectionKey,
 } from '../issueDetailUtils';
+
+describe('Section ids', () => {
+  it('should build the DOM id for a section key', () => {
+    expect(toSectionDomId('engagement')).toBe('section-engagement');
+  });
+
+  it('should recover the section key from a DOM id', () => {
+    expect(toSectionKey('section-engagement')).toBe('engagement');
+    expect(toSectionKey('section-deliverability')).toBe('deliverability');
+  });
+
+  it('should leave a value that is already a section key alone', () => {
+    // Preferences persisted by older builds stored DOM ids; both forms have to
+    // normalize to the same key or the section renders collapsed forever.
+    expect(toSectionKey('engagement')).toBe('engagement');
+  });
+
+  it('should round-trip every section key', () => {
+    ['engagement', 'audience', 'deliverability'].forEach(key => {
+      expect(toSectionKey(toSectionDomId(key))).toBe(key);
+    });
+  });
+
+  it('should only strip a leading section prefix', () => {
+    expect(toSectionKey('audience-section-extra')).toBe('audience-section-extra');
+  });
+});
 
 describe('User Preferences', () => {
   beforeEach(() => {
@@ -205,5 +235,36 @@ describe('Scroll Position', () => {
       const loaded = loadScrollPosition('issue-123');
       expect(loaded).toBeNull();
     });
+  });
+});
+
+describe('formatDate', () => {
+  // 14:00Z is 9am in Chicago during daylight saving, and still Jul 31 there
+  // when it is already Aug 1 in UTC.
+  const instant = '2026-08-01T14:00:00Z';
+
+  it('formats in the timezone it is given', () => {
+    expect(formatDate(instant, false, 'America/Chicago')).toBe('Aug 1, 2026');
+    expect(formatDate(instant, true, 'America/Chicago')).toContain('09:00');
+    expect(formatDate(instant, true, 'UTC')).toContain('02:00');
+  });
+
+  it('can put an instant on a different calendar day per zone', () => {
+    const lateEvening = '2026-08-01T04:00:00Z';
+
+    expect(formatDate(lateEvening, false, 'UTC')).toBe('Aug 1, 2026');
+    expect(formatDate(lateEvening, false, 'America/Chicago')).toBe('Jul 31, 2026');
+  });
+
+  it('falls back to the browser zone when no timezone is supplied', () => {
+    // Callers without tenant context keep the old behavior rather than
+    // silently formatting against UTC.
+    expect(formatDate(instant, false)).toBe(
+      new Date(instant).toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      })
+    );
   });
 });

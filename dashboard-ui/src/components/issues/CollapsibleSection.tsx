@@ -102,7 +102,7 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = React.memo(
       <header
         className={cn(
           'flex items-center justify-between p-4 sm:p-6 cursor-pointer select-none',
-          'hover:bg-muted/50 transition-colors',
+          'hover:bg-muted/50 active:bg-muted transition-colors touch-manipulation',
           'focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 rounded-t-lg',
           'min-h-[60px]' // Ensure minimum touch target height
         )}
@@ -157,20 +157,28 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = React.memo(
         </div>
       </header>
 
-      {/* Collapsible content */}
+      {/* Collapsible content.
+
+          Animated with grid-template-rows rather than a max-height cap: these
+          sections stack charts, maps and tables, and on a narrow screen they run
+          far past any height we could guess at, so a cap would silently clip the
+          bottom of the section. `overflow-hidden` on the inner wrapper is what
+          lets the grid row actually collapse to 0. */}
       <div
         id={`${id}-content`}
         ref={contentRef}
         className={cn(
-          'overflow-hidden transition-all duration-300 ease-in-out',
-          isExpanded ? 'max-h-[5000px] opacity-100' : 'max-h-0 opacity-0'
+          'grid transition-all duration-300 ease-in-out',
+          isExpanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
         )}
         aria-hidden={!isExpanded}
         role="region"
         aria-labelledby={`${id}-title`}
       >
-        <div className="px-4 sm:px-6 pb-4 sm:pb-6 pt-0">
-          {isExpanded && children}
+        <div className="overflow-hidden">
+          <div className="px-4 sm:px-6 pb-4 sm:pb-6 pt-0">
+            {isExpanded && children}
+          </div>
         </div>
       </div>
     </section>

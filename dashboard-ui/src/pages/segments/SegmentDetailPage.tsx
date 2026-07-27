@@ -7,8 +7,12 @@ import { Card, CardContent } from '@/components/ui/Card';
 import { segmentService } from '@/services/segmentService';
 import type { Segment, SegmentMember } from '@/services/segmentService';
 import { getSortedInterestProfile, RECENCY_STYLES } from './interestProfileUtils';
+import { useTenantDateFormat } from '@/contexts/SettingsContext';
+import { formatInTimeZone } from '@/utils/dateFormatting';
 
 export const SegmentDetailPage: React.FC = () => {
+  // Dates render in the newsletter's timezone, not the viewer's.
+  const { timeZone } = useTenantDateFormat();
   const { segmentId } = useParams<{ segmentId: string }>();
   const navigate = useNavigate();
   const { addToast } = useToast();
@@ -240,7 +244,8 @@ export const SegmentDetailPage: React.FC = () => {
   const editDescError = editDescription.length > 500 ? 'Description must not exceed 500 characters' : null;
   const canSaveEdit = editName.trim().length >= 1 && !editNameError && !editDescError && !saving;
 
-  const formatDate = (d: string) => new Date(d).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+  const formatDate = (d: string) =>
+    formatInTimeZone(d, timeZone, { year: 'numeric', month: 'short', day: 'numeric' }, 'en-US');
 
   // --- Render: Loading ---
   if (loading) {

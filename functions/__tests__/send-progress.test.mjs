@@ -36,32 +36,52 @@ const keyOf = (command) => {
 const resolveNames = (fragment, names = {}) =>
   fragment.replace(/#[A-Za-z0-9_]+/g, (token) => names[token] ?? token);
 
+/** Read a dotted path out of an unmarshalled item. */
+const readPath = (item, path) =>
+  path.split('.').reduce((cursor, segment) => (cursor == null ? undefined : cursor[segment]), item);
+
+/**
+ * Evaluate the condition forms this module actually writes. Conjunctions are
+ * split first, so a compound condition is checked clause by clause rather than
+ * needing its own case.
+ */
 const checkCondition = (condition, item, values, names) => {
   if (!condition) return;
-  const resolved = resolveNames(condition, names);
 
-  const existsMatch = resolved.match(/^attribute_exists\((.+)\)$/);
-  if (existsMatch) {
-    const [root, leaf] = existsMatch[1].split('.');
-    const present = leaf === undefined ? item?.[root] !== undefined : item?.[root]?.[leaf] !== undefined;
-    if (!present) throw new ConditionalCheckFailedException();
-    return;
+  for (const clause of resolveNames(condition, names).split(' AND ').map((part) => part.trim())) {
+    const exists = clause.match(/^attribute_exists\((.+)\)$/);
+    if (exists) {
+      if (readPath(item, exists[1]) === undefined) throw new ConditionalCheckFailedException(item);
+      continue;
+    }
+
+    const notExists = clause.match(/^attribute_not_exists\((.+)\)$/);
+    if (notExists) {
+      if (readPath(item, notExists[1]) !== undefined) throw new ConditionalCheckFailedException(item);
+      continue;
+    }
+
+    const inList = clause.match(/^(.+) IN \((.+)\)$/);
+    if (inList) {
+      const allowed = inList[2].split(',').map((token) => values[token.trim()]);
+      if (!allowed.includes(readPath(item, inList[1]))) {
+        throw new ConditionalCheckFailedException(item);
+      }
+      continue;
+    }
+
+    const comparison = clause.match(/^(.+?)\s*(<>|=)\s*(:[A-Za-z0-9_]+)$/);
+    if (comparison) {
+      const [, path, operator, token] = comparison;
+      const actual = readPath(item, path);
+      const expected = values[token];
+      const matches = operator === '=' ? actual === expected : actual !== expected;
+      if (!matches) throw new ConditionalCheckFailedException(item);
+      continue;
+    }
+
+    throw new Error(`Test emulator does not handle condition clause: ${clause}`);
   }
-
-  const notExistsMatch = resolved.match(/^attribute_not_exists\((.+)\)$/);
-  if (notExistsMatch) {
-    if (item?.[notExistsMatch[1]] !== undefined) throw new ConditionalCheckFailedException(item);
-    return;
-  }
-
-  const inMatch = resolved.match(/^status IN \((.+)\)$/);
-  if (inMatch) {
-    const allowed = inMatch[1].split(',').map((token) => values[token.trim()]);
-    if (!allowed.includes(item?.status)) throw new ConditionalCheckFailedException(item);
-    return;
-  }
-
-  throw new Error(`Test emulator does not handle condition: ${resolved}`);
 };
 
 /** Apply the SET/REMOVE clauses the module actually uses. */
@@ -543,5 +563,49 @@ describe('markGroupSent', () => {
 
     expect(items.get(issueKey()).status).toBe('published');
     expect(items.get(progressKey()).completedAt).toBeDefined();
+  });
+  test('a redelivered group event keeps the first result instead of zeroing it', async () => {
+    // The redelivery arrives with zero recipients, because the idempotency
+    // filter has already done its job. Overwriting sent/38 with empty/0 would
+    // corrupt both the group's history and the recipient total the report sums.
+    await markGroupSent(ISSUE_ID, 'America/Chicago', { recipients: 38, skipped: 2 });
+    const first = { ...items.get(progressKey()).groups['America/Chicago'] };
+
+    await markGroupSent(ISSUE_ID, 'America/Chicago', { recipients: 0, skipped: 40 });
+
+    expect(items.get(progressKey()).groups['America/Chicago']).toEqual(first);
+  });
+
+  test('a redelivered final group still heals a status write that failed', async () => {
+    // The redelivery must not short-circuit: it is the only thing that can
+    // repair a terminal transition that failed on the first attempt.
+    const realSend = DynamoDBClient.prototype.send;
+    let failing = true;
+    DynamoDBClient.prototype.send = jest.fn(async (command) => {
+      const key = unmarshall(command.input.Key);
+      const setsPublished =
+        key.sk === 'newsletter' &&
+        unmarshall(command.input.ExpressionAttributeValues ?? {})[':status'] === 'published';
+      if (setsPublished && failing) {
+        const error = new Error('InternalServerError');
+        error.name = 'InternalServerError';
+        throw error;
+      }
+      return realSend(command);
+    });
+
+    for (const label of ['America/Chicago', 'America/Los_Angeles', '__default__', '__catch_all__']) {
+      await markGroupSent(ISSUE_ID, label, { recipients: 1 });
+    }
+    expect(items.get(issueKey()).status).toBe('sending');
+
+    failing = false;
+    // Same group again, now with nothing to send - the redelivery shape.
+    await markGroupSent(ISSUE_ID, '__catch_all__', { recipients: 0 });
+
+    expect(items.get(issueKey()).status).toBe('published');
+    expect(items.get(progressKey()).completedAt).toBeDefined();
+    // And the original result survived the heal.
+    expect(items.get(progressKey()).groups.__catch_all__.recipients).toBe(1);
   });
 });

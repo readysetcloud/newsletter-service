@@ -224,32 +224,50 @@ export const markGroupSent = async (issueId, label, { recipients, skipped = 0 })
 
   let updated;
   try {
-    const response = await getClient().send(new UpdateItemCommand({
+    const response = await updateWithRetry({
       TableName: process.env.TABLE_NAME,
       Key: marshall({ pk: issueId, sk: SEND_PROGRESS_SK }),
       UpdateExpression: 'SET #groups.#label.#status = :status, #groups.#label.sentAt = :now, '
         + '#groups.#label.recipients = :recipients, #groups.#label.skipped = :skipped',
-      // Without the group entry there is no plan to update against. That means
-      // the fan-out's write failed, so record nothing rather than inventing a
-      // shape the API would then have to defend against.
-      ConditionExpression: 'attribute_exists(#groups.#label)',
+      // Two things have to hold. The group has to exist, because without a plan
+      // entry there is nothing to update and inventing one gives the API a shape
+      // it would have to defend against. And it has to still be pending: a
+      // group event redelivered after its first success comes back with zero
+      // recipients (the idempotency filter has done its job), and overwriting
+      // `sent`/38 with `empty`/0 would corrupt both the group's own history and
+      // the recipient total the report sums from it.
+      ConditionExpression: 'attribute_exists(#groups.#label) AND #groups.#label.#status = :pending',
       ExpressionAttributeNames: { '#groups': 'groups', '#label': label, '#status': 'status' },
       ExpressionAttributeValues: marshall({
         ':status': recipients > 0 ? GROUP_SENT : GROUP_EMPTY,
+        ':pending': GROUP_PENDING,
         ':now': new Date().toISOString(),
         ':recipients': recipients,
         ':skipped': skipped
       }),
-      ReturnValues: 'ALL_NEW'
-    }));
+      ReturnValues: 'ALL_NEW',
+      ReturnValuesOnConditionCheckFailure: 'ALL_OLD'
+    });
     updated = response.Attributes ? unmarshall(response.Attributes) : null;
   } catch (error) {
     if (error.name === 'ConditionalCheckFailedException') {
-      console.warn('[PROGRESS] No planned group to update - skipping', { issueId, label });
+      const current = error.Item ? unmarshall(error.Item) : null;
+
+      if (!current?.groups?.[label]) {
+        console.warn('[PROGRESS] No planned group to update - skipping', { issueId, label });
+        return;
+      }
+
+      // The group already reported. Its result stands, but the run continues:
+      // a redelivery is the only thing that can heal a terminal status write
+      // that failed the first time round, so it must still reach the completion
+      // check below rather than returning here.
+      console.log('[PROGRESS] Group already reported - keeping the first result', { issueId, label });
+      updated = current;
+    } else {
+      console.error('[PROGRESS] Failed to mark group sent', { issueId, label, error: error.message });
       return;
     }
-    console.error('[PROGRESS] Failed to mark group sent', { issueId, label, error: error.message });
-    return;
   }
 
   if (!isComplete(updated)) {

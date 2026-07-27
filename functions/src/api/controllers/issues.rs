@@ -645,12 +645,18 @@ async fn handle_resend_issue(
         ));
     }
 
-    // Clear the previous send's progress so the new fan-out can write a fresh
-    // plan. The plan write refuses to overwrite a completed one, which is what
-    // stops a redelivered event from reopening a finished send - a deliberate
-    // resend has to say so explicitly, and this is where it says it.
-    clear_send_progress(&tenant_id, issue.issue_number).await;
-
+    // Deliberately does NOT clear the previous send's progress record, even
+    // though the plan write refuses to overwrite a completed plan and a real
+    // resend would need it cleared.
+    //
+    // Resending does not currently send anything. The execution starts while
+    // the issue is still `published`, and `Has Issue Been Processed?` has no
+    // `published` branch - it routes to `Success - Duplicate Request`. That is
+    // true on main too, so it is not a regression, but it means clearing the
+    // record here would destroy the delivery history of the last real send in
+    // exchange for nothing. Whoever fixes resend properly needs to give the
+    // handshake a resend branch AND clear the progress record; doing only the
+    // second half is strictly worse than doing neither.
     start_issue_schedule(IssueScheduleInput {
         tenant_id: &tenant_id,
         tenant_email: user_context.email.as_str(),
@@ -4215,31 +4221,6 @@ async fn delete_draft_ttl_schedule(tenant_id: &str, issue_number: i32) -> Result
     }
 
     Ok(())
-}
-
-/// Remove an issue's local-send progress record.
-///
-/// Best-effort: failing to clear it costs the resend its progress reporting,
-/// which is not worth refusing the resend over.
-async fn clear_send_progress(tenant_id: &str, issue_number: i32) {
-    let Ok(table_name) = std::env::var("TABLE_NAME") else {
-        return;
-    };
-    let ddb_client = aws_clients::get_dynamodb_client().await;
-
-    if let Err(error) = ddb_client
-        .delete_item()
-        .table_name(&table_name)
-        .key(
-            "pk",
-            AttributeValue::S(format!("{tenant_id}#{issue_number}")),
-        )
-        .key("sk", AttributeValue::S("sendProgress".to_string()))
-        .send()
-        .await
-    {
-        tracing::warn!("Failed to clear send progress before resend: {error}");
-    }
 }
 
 /// The pre-digest draft TTL name: a bare 16-character tenant prefix.

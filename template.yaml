@@ -2634,7 +2634,6 @@ Resources:
       DefinitionSubstitutions:
         DynamodbGetItem: !Sub arn:${AWS::Partition}:states:::dynamodb:getItem
         TableName: !Ref NewsletterTable
-        DynamodbPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
         LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
         ParseIssue: !GetAtt ParseIssueFunction.Arn
         PublishIssue: !GetAtt PublishIssueFunction.Arn

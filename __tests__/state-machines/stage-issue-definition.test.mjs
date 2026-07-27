@@ -43,15 +43,22 @@ const STATE_MACHINE_RESOURCE = 'StageIssueStateMachine';
 // (`Markdown Extras`) mirroring `No Markdown Extras`. The `Task` count is
 // unchanged: `Update Web Links` became `Extract Links` and moved, it did not
 // multiply.
+//
+// Removing the GitHub ingress (PR #358) took three states with it: the
+// `Content Supplied By Producer?` Choice and the two Tasks only it reached,
+// `Claim With Supplied Content` and `Save Issue Record`. Every re-processable
+// status now routes to `Mark Issue In Progress`, so the definition has one
+// claim path instead of two and `DynamodbPutItem` is no longer substituted
+// into it at all.
 const EXPECTED_STATE_COUNTS = {
-  topLevel: 26,
-  total: 30,
-  Choice: 6,
+  topLevel: 23,
+  total: 27,
+  Choice: 5,
   Fail: 1,
   Parallel: 1,
   Pass: 4,
   Succeed: 2,
-  Task: 15,
+  Task: 13,
   Wait: 1
 };
 
@@ -105,7 +112,6 @@ const TASKS_WITHOUT_RETRY = [
   'Get Existing Issue',
   'Mark Issue In Progress',
   'Notify of Success',
-  'Save Issue Record',
   'Trigger Site Rebuild',
   'Update Issue Record - Failure'
 ];
@@ -132,7 +138,6 @@ const EXPECTED_CATCH_ROUTES = {
   // it can have - including States.Timeout - continues down the publish path.
   // Degraded personalization is acceptable; a missed issue is not. Pinned here
   // and again in the "cannot block or fail a send" test below.
-  'Claim With Supplied Content': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   'Extract Links': ['States.ALL -> Parse Issue (error discarded)'],
   'Mark Issue In Progress': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   // Post-publish courtesy email: a failure here must not relabel an issue that
@@ -141,7 +146,6 @@ const EXPECTED_CATCH_ROUTES = {
   'Notify of Success': ['States.ALL -> Success ($.error)'],
   'Parse Issue': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   'Publish': ['States.ALL -> Update Issue Record - Failure ($.error)'],
-  'Save Issue Record': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   'Schedule Tasks and Update': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   'Trigger Site Rebuild': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   // The failure writer cannot catch to itself, and there is nothing left to
@@ -163,28 +167,31 @@ const EXPECTED_CATCH_ROUTES = {
 const NON_CATCH_ENTRIES_TO_FAILURE_WRITE = ['Record Publish Rejection'];
 
 // Phase 5: the execution input carries identifiers, and the issue body is read
-// off the record when the execution starts. `Save Issue Record` is the one
-// exception and has to stay the only one - it runs when there is no record to
-// read (import-issue-from-github.mjs starts executions for issues the API has
-// never seen), so the input is the only place its content can come from.
-// Two states, both on the producer-supplied side of the content fork, and that
-// has to stay the boundary: an execution started by import-issue-from-github.mjs
-// carries the file body it was started for, and that body must win over whatever
-// the draft record happens to hold. Everything else reads the record.
-// `Content Supplied By Producer?` only tests the field for presence; the other
-// two read the body itself.
-const CONTENT_FROM_EXECUTION_INPUT = [
+// off the record when the execution starts. This list is now empty, and that is
+// the point - it is the assertion that no state anywhere reads the issue body
+// off `$$.Execution.Input`.
+//
+// It used to hold the three states on the producer-supplied side of the content
+// fork, which existed because import-issue-from-github.mjs started executions
+// carrying a file body that had to win over whatever the draft record held.
+// PR #358 removed that producer, and with it the fork, `Claim With Supplied
+// Content` and `Save Issue Record`. Kept as an empty constant rather than
+// deleted so re-adding an input-content read fails here, with this paragraph
+// attached, instead of quietly reintroducing a second answer to "what is this
+// execution publishing".
+const CONTENT_FROM_EXECUTION_INPUT = [];
+
+// The states that bind the content variables. One, now that the record is the
+// only source. Pinned because a second binder would mean a second answer to
+// "what is this execution publishing".
+const CONTENT_BINDERS = ['Mark Issue In Progress'];
+
+// The GitHub-ingress states PR #358 removed, asserted absent. Named here for
+// the same reason PREVIEW_STATES is: a reintroduced producer-content path
+// should fail a test rather than quietly re-add a second claim path.
+const REMOVED_GITHUB_INGRESS_STATES = [
   'Claim With Supplied Content',
   'Content Supplied By Producer?',
-  'Save Issue Record'
-];
-
-// The two states that bind the content variables, one per side of the
-// `Has Issue Been Processed?` fork. Pinned because a third binder would mean a
-// third answer to "what is this execution publishing".
-const CONTENT_BINDERS = [
-  'Claim With Supplied Content',
-  'Mark Issue In Progress',
   'Save Issue Record'
 ];
 
@@ -194,8 +201,9 @@ const CONTENT_BINDERS = [
 // has to sit just above it to be a backstop rather than a second, tighter limit -
 // but it must stay bounded and small, because every second of it is a second the
 // issue is late.
-// The fork that decides where an execution's content comes from.
-const CONTENT_FORK = 'Content Supplied By Producer?';
+// The single state that claims an issue and binds its content, since the
+// removal of the producer-supplied fork left only one way in.
+const CLAIM_STATE = 'Mark Issue In Progress';
 
 const LINK_EXTRACTION = 'Extract Links';
 const PUBLISH = 'Publish';
@@ -861,7 +869,7 @@ describe('stage-issue definition: link extraction', () => {
 // be whatever the record said when the issue was *scheduled*, days earlier.
 // ===========================================================================
 describe('stage-issue definition: identifiers, not content', () => {
-  it('reads the issue content out of the execution input in one state only', () => {
+  it('never reads the issue content out of the execution input', () => {
     // Boundary-matched, because `$$.Execution.Input.contentType` is a different
     // field and stays on the input on purpose (see 'Get Existing Issue').
     const readsInputContent = /^\$\$\.Execution\.Input\.content$/;
@@ -922,7 +930,7 @@ describe('stage-issue definition: identifiers, not content', () => {
     expect(state.Parameters.UpdateExpression).not.toMatch(/:content/);
   });
 
-  it('binds the content variables on exactly the two sides of the handshake', () => {
+  it('binds the content variables in the one claim state', () => {
     for (const variable of ['content', 'callerSubject']) {
       const binders = allStates
         .filter(({ state }) => declaresVariable(state, variable))
@@ -940,7 +948,7 @@ describe('stage-issue definition: identifiers, not content', () => {
   // succeed without sending.
   it('treats a scheduled record as still to be sent', () => {
     const { state } = allStates.find(({ name }) => name === 'Has Issue Been Processed?');
-    const sendable = state.Choices.filter((choice) => choice.Next === CONTENT_FORK);
+    const sendable = state.Choices.filter((choice) => choice.Next === CLAIM_STATE);
 
     const statuses = JSON.stringify(sendable);
     expect(statuses).toContain('"StringEquals":"draft"');
@@ -948,53 +956,52 @@ describe('stage-issue definition: identifiers, not content', () => {
     expect(state.Default).toBe('Success - Duplicate Request');
   });
 
-  // A re-staged `failed` issue must NOT go to `Save Issue Record`. That state
-  // reads `$$.Execution.Input.content`, which the API stopped sending in Phase 5,
-  // and an absent path raises States.Runtime - neither retriable nor catchable,
+  // A re-staged `failed` issue must NOT go anywhere that reads
+  // `$$.Execution.Input.content`, which the API has never sent since Phase 5,
+  // and whose absence raises States.Runtime - neither retriable nor catchable,
   // so `States.ALL` does not save it. Re-staging a failed API issue used to kill
   // the execution outright and leave the record at `failed` with nothing
-  // recorded. Its record exists and holds the content, so it takes the fork.
+  // recorded. Its record exists and holds the content, so it claims like a draft.
   it('re-stages a failed issue from its record, not from the execution input', () => {
     const { state } = allStates.find(({ name }) => name === 'Has Issue Been Processed?');
     const failedEdge = state.Choices.find((choice) =>
       JSON.stringify(choice).includes('"StringEquals":"failed"')
     );
 
-    expect(failedEdge?.Next).toBe(CONTENT_FORK);
+    expect(failedEdge?.Next).toBe(CLAIM_STATE);
   });
 
-  // Which producer started the execution decides where the content comes from,
-  // and only the input can say: import-issue-from-github.mjs sends the file body
-  // it was started for, the API sends identifiers. Routing on record status
-  // instead would publish whatever the last draft push stored - silently - for
-  // every GitHub-imported issue, because that flow re-stages a draft on every
-  // push and then starts an execution carrying the file.
-  it('routes on who supplied the content, not on the record status', () => {
-    const { state } = allStates.find(({ name }) => name === CONTENT_FORK);
+  // The definition used to fork on which producer started the execution, because
+  // the GitHub ingress carried a file body that had to win over the draft record
+  // while the API sent identifiers only. PR #358 removed that producer, so there
+  // is one way in and one source of content. Asserted as absence, so restoring a
+  // producer-content path is a deliberate act that updates this test rather than
+  // a quiet second answer to "what is this execution publishing".
+  it('has no producer-supplied content path left', () => {
+    const present = allStates
+      .map(({ name }) => name)
+      .filter((name) => REMOVED_GITHUB_INGRESS_STATES.includes(name));
 
-    expect(state.Type).toBe('Choice');
-    expect(state.Choices).toHaveLength(1);
-    expect(state.Choices[0]).toMatchObject({
-      Variable: '$$.Execution.Input.content',
-      IsPresent: true,
-      Next: 'Claim With Supplied Content'
-    });
-    // Absent content is the API, which reads the record.
-    expect(state.Default).toBe('Mark Issue In Progress');
+    expect(present).toEqual([]);
+
+    // Every re-processable status routes to the one claim state.
+    const { state } = allStates.find(({ name }) => name === 'Has Issue Been Processed?');
+    expect(state.Choices.map((choice) => choice.Next)).toEqual(
+      state.Choices.map(() => CLAIM_STATE)
+    );
+    expect(state.Default).toBe('Success - Duplicate Request');
   });
 
   // The API cannot record the ARN of an execution it did not start, and
   // `get_workflow_state_for` in issues.rs reads it to report where the workflow
-  // is. Both entry writes record it themselves instead.
+  // is. The entry write records it itself instead.
   it('records its own execution ARN on the issue record', () => {
-    const { state: marked } = allStates.find(({ name }) => name === 'Mark Issue In Progress');
-    const { state: saved } = allStates.find(({ name }) => name === 'Save Issue Record');
+    const { state: marked } = allStates.find(({ name }) => name === CLAIM_STATE);
 
     expect(marked.Parameters.UpdateExpression).toMatch(/executionArn = :executionArn/);
     expect(marked.Parameters.ExpressionAttributeValues[':executionArn']).toEqual({
       'S.$': '$$.Execution.Id'
     });
-    expect(saved.Parameters.Item.executionArn).toEqual({ 'S.$': '$$.Execution.Id' });
   });
 
   // Transitional safety, and the whole rollback story for this phase: point the

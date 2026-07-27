@@ -705,7 +705,7 @@ mod tests {
                 group("2026-07-27T20:30:00.000Z", "empty", Some(0), None),
             ),
         ]);
-        assert!(item.get("completedAt").is_none());
+        assert!(!item.contains_key("completedAt"));
 
         let report = build_progress_report(&item, now("2026-07-28T09:00:00Z")).unwrap();
 

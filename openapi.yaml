@@ -2444,6 +2444,46 @@ paths:
         "500":
           $ref: "#/components/responses/UnknownError"
 
+  /subscribers/timezone-coverage:
+    get:
+      summary: Get local-send readiness for the audience
+      description: >-
+        Counts how many subscribers each local-send mode can actually place in a
+        real group rather than the default fallback. `confirmedTimeZone` is the
+        audience `mode: "timezone"` can place — subscribers whose IANA timezone
+        has been confirmed from open/click geolocation across 3 consecutive
+        issues (including at least one click). `peakHourEligible` is the audience
+        `mode: "peak-hour"` can place — subscribers whose open-hour histogram has
+        reached the minimum sample count. The two counts are independent: a
+        subscriber may qualify for either, both, or neither.
+      tags:
+        - Subscribers
+      responses:
+        "200":
+          description: Local-send coverage counts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  totalSubscribers:
+                    type: integer
+                    description: Total subscribers on the list
+                  confirmedTimeZone:
+                    type: integer
+                    description: Subscribers with a confirmed, parseable IANA timezone
+                  peakHourEligible:
+                    type: integer
+                    description: Subscribers with enough logged opens for peak-hour placement
+                required:
+                  - totalSubscribers
+                  - confirmedTimeZone
+                  - peakHourEligible
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
   /subscribers/at-risk:
     get:
       summary: Get subscribers at risk of churning, with reasons

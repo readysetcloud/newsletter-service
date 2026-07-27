@@ -20,6 +20,7 @@ import {
 } from '@/components/issues/AbTestConfig';
 import { issuesService } from '@/services/issuesService';
 import { templateService } from '@/services/templateService';
+import { subscriberService } from '@/services/subscriberService';
 import { timezoneOptions } from '@/schemas/profileSchema';
 import { useTenantDateFormat, useTenantSettings } from '@/contexts/SettingsContext';
 import {
@@ -28,6 +29,7 @@ import {
 } from '@/utils/dateFormatting';
 import type { Issue, CreateIssueRequest, UpdateIssueRequest, IssueContentType, AbTest } from '@/types/issues';
 import type { TemplateSummary } from '@/types/api';
+import type { TimeZoneCoverage } from '@/types/subscribers';
 
 // Sentinel value used for the "Default template" option (no templateId persisted).
 const DEFAULT_TEMPLATE_VALUE = '';
@@ -126,6 +128,11 @@ export const IssueFormPage: React.FC = () => {
   const [localSendTimeZone, setLocalSendTimeZone] = useState(timeZone);
   /** Set once the author (or a saved issue) picks a zone explicitly. */
   const localSendTouched = useRef(false);
+  /** Local-send readiness counts; null until fetched (or if the fetch fails). */
+  const [tzCoverage, setTzCoverage] = useState<TimeZoneCoverage | null>(null);
+  const [tzCoverageLoading, setTzCoverageLoading] = useState(false);
+  /** Guards the one-shot coverage fetch against re-renders and re-toggles. */
+  const tzCoverageRequested = useRef(false);
   /** The issue id already fetched, so a re-render can't trigger a second GET. */
   const loadedIssueId = useRef<string | null>(null);
   // Interest-aware assembly: personalized section order (contentAssembly).
@@ -149,6 +156,56 @@ export const IssueFormPage: React.FC = () => {
       setLocalSendTimeZone(timeZone);
     }
   }, [timeZone]);
+
+  // Coverage answers "how much of my list will this actually place?", so it is
+  // only worth fetching once local send is in play. The query walks the tenant's
+  // whole subscriber partition, so it fires on first interest — the author
+  // switching local send on, or an edited issue loading with it already on — and
+  // is then kept for the life of the form rather than refetched per toggle.
+  useEffect(() => {
+    if (!localSendEnabled || tzCoverageRequested.current) return;
+    tzCoverageRequested.current = true;
+
+    let cancelled = false;
+    setTzCoverageLoading(true);
+    subscriberService
+      .getTimeZoneCoverage()
+      .then((response) => {
+        if (!cancelled && response.success && response.data) {
+          setTzCoverage(response.data);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setTzCoverageLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [localSendEnabled]);
+
+  // What the selected mode can actually place, and who falls back. Null when
+  // coverage hasn't loaded or the list is empty — there is no honest percentage
+  // of zero subscribers, and the readiness line stays hidden rather than
+  // rendering "NaN%".
+  const localSendReadiness = useMemo(() => {
+    if (!tzCoverage || tzCoverage.totalSubscribers === 0) return null;
+
+    const placed = localSendMode === 'peak-hour'
+      ? tzCoverage.peakHourEligible
+      : tzCoverage.confirmedTimeZone;
+    const total = tzCoverage.totalSubscribers;
+
+    return {
+      placed,
+      total,
+      fallback: total - placed,
+      percent: Math.round((placed / total) * 100),
+      label: localSendMode === 'peak-hour'
+        ? 'have enough opens for a peak hour'
+        : 'have a detected timezone',
+    };
+  }, [tzCoverage, localSendMode]);
 
   // The local-send picker offers a curated shortlist; the newsletter's own zone
   // may not be on it, and a `<select>` whose value isn't an option silently
@@ -860,6 +917,52 @@ export const IssueFormPage: React.FC = () => {
                     The scheduled time is read as a wall-clock time in this timezone. Defaults to
                     your newsletter&rsquo;s timezone.
                   </p>
+                </div>
+              )}
+
+              {/* Readiness: how much of the list this mode can actually place.
+                  Detection is cumulative across issues, so early on most
+                  subscribers land in the fallback group — saying so here beats
+                  letting the author discover it in the send progress card. */}
+              {localSendEnabled && (
+                <div className="pl-7" aria-live="polite">
+                  {tzCoverageLoading && !localSendReadiness ? (
+                    <p className="text-xs text-muted-foreground">Checking audience coverage&hellip;</p>
+                  ) : localSendReadiness ? (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <div
+                          className="h-1.5 flex-1 rounded-full bg-muted overflow-hidden"
+                          role="progressbar"
+                          aria-valuenow={localSendReadiness.percent}
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-label="Local send audience coverage"
+                        >
+                          <div
+                            className="h-full rounded-full bg-primary-500"
+                            style={{ width: `${localSendReadiness.percent}%` }}
+                          />
+                        </div>
+                        <span className="text-xs font-medium text-foreground tabular-nums">
+                          {localSendReadiness.percent}%
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {localSendReadiness.placed.toLocaleString()} of{' '}
+                        {localSendReadiness.total.toLocaleString()} subscribers{' '}
+                        {localSendReadiness.label}.
+                        {localSendReadiness.fallback > 0 && (
+                          <>
+                            {' '}
+                            The other {localSendReadiness.fallback.toLocaleString()} receive the
+                            issue at the scheduled time in{' '}
+                            {localSendTimeZone.replace(/_/g, ' ')}.
+                          </>
+                        )}
+                      </p>
+                    </>
+                  ) : null}
                 </div>
               )}
 

@@ -359,4 +359,68 @@ describe('SubscribersPage', () => {
 
     expect(mockNavigate).toHaveBeenCalledWith('/segments/seg-1');
   });
+
+  // --- Detected timezone column (local send) ---
+  describe('detected timezone column', () => {
+    const renderWithSubscribers = async (
+      subscribers: { email: string; timeZone?: string | null }[]
+    ) => {
+      vi.mocked(subscriberService.getCount).mockResolvedValue({
+        success: true,
+        data: { totalSubscribers: subscribers.length },
+      });
+      vi.mocked(subscriberService.getTrends).mockResolvedValue({
+        success: true,
+        data: mockTrendsData,
+      });
+      vi.mocked(segmentService.listSegments).mockResolvedValue({
+        success: true,
+        data: { segments: [] },
+      });
+      vi.mocked(subscriberService.getList).mockResolvedValue({
+        success: true,
+        data: {
+          total: subscribers.length,
+          subscribers: subscribers.map((sub) => ({
+            addedAt: '2025-01-01T00:00:00Z',
+            lastEngagedIssue: 5,
+            ...sub,
+          })),
+        },
+      });
+
+      renderPage();
+      await waitFor(() => {
+        expect(screen.getByText(subscribers[0].email)).toBeInTheDocument();
+      });
+    };
+
+    it('shows the city portion of a detected zone, with the full name as a tooltip', async () => {
+      await renderWithSubscribers([{ email: 'reader@example.com', timeZone: 'America/Chicago' }]);
+
+      const cell = screen.getByText('Chicago');
+      expect(cell).toBeInTheDocument();
+      expect(cell).toHaveAttribute('title', expect.stringContaining('America/Chicago'));
+    });
+
+    it('renders multi-segment zone names readably', async () => {
+      await renderWithSubscribers([
+        { email: 'reader@example.com', timeZone: 'America/Argentina/Buenos_Aires' },
+      ]);
+
+      // Underscores are display noise, and the trailing segment is the part that
+      // distinguishes zones at a glance.
+      expect(screen.getByText('Buenos Aires')).toBeInTheDocument();
+    });
+
+    it('explains an undetected zone rather than showing a bare dash', async () => {
+      await renderWithSubscribers([{ email: 'quiet@example.com', timeZone: null }]);
+
+      const dash = screen
+        .getAllByText('—')
+        .find((el) => el.getAttribute('title')?.includes('Not detected yet'));
+      expect(dash).toBeDefined();
+      expect(dash).toHaveAttribute('title', expect.stringContaining('3 consecutive issues'));
+    });
+  });
 });

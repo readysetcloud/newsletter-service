@@ -1,6 +1,6 @@
 import { apiClient } from './api';
 import { validateSubscriberCountResponse, validateSubscriberTrendsResponse } from '@/utils/dataValidation';
-import type { ApiResponse, SubscriberCountResponse, SubscriberTrendsResponse, SubscriberListResponse, SubscriberDetail } from '@/types';
+import type { ApiResponse, SubscriberCountResponse, SubscriberTrendsResponse, SubscriberListResponse, SubscriberDetail, TimeZoneCoverage } from '@/types';
 
 export class SubscriberService {
   /**
@@ -41,6 +41,14 @@ export class SubscriberService {
 
   async getList(): Promise<ApiResponse<SubscriberListResponse>> {
     return apiClient.get<SubscriberListResponse>('/subscribers');
+  }
+
+  /**
+   * How much of the audience each local-send mode can actually place. Read by
+   * the issue form so enabling local send isn't a blind flip.
+   */
+  async getTimeZoneCoverage(): Promise<ApiResponse<TimeZoneCoverage>> {
+    return apiClient.get<TimeZoneCoverage>('/subscribers/timezone-coverage');
   }
 
   /**

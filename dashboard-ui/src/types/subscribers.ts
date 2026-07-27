@@ -55,6 +55,20 @@ export interface SubscriberListResponse {
   total: number;
 }
 
+/**
+ * Local-send readiness, returned by GET /subscribers/timezone-coverage. Each
+ * count is the audience one `localSend.mode` can place in a real group; the
+ * remainder falls back to the issue's default-timezone send time. The two are
+ * independent — a subscriber may qualify for either, both, or neither.
+ */
+export interface TimeZoneCoverage {
+  totalSubscribers: number;
+  /** Subscribers with a confirmed IANA timezone (mode: 'timezone'). */
+  confirmedTimeZone: number;
+  /** Subscribers with enough logged opens to have a peak hour (mode: 'peak-hour'). */
+  peakHourEligible: number;
+}
+
 /** A single behavioral activity entry (an open or a click), newest-first. */
 export interface ActivityEntry {
   type: 'open' | 'click';

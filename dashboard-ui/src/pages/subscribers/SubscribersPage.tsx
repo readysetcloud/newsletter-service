@@ -29,6 +29,39 @@ const formatDate = (dateString: string, timeZone?: string) =>
     day: 'numeric',
   }, 'en-US');
 
+/**
+ * Short label for a subscriber's detected timezone — the city portion of the
+ * IANA name ("America/Argentina/Buenos_Aires" -> "Buenos Aires"), which is the
+ * part that distinguishes zones at a glance in a narrow column. The full name
+ * stays in the cell's title attribute.
+ */
+const formatZoneLabel = (timeZone: string): string =>
+  (timeZone.split('/').pop() ?? timeZone).replace(/_/g, ' ');
+
+/**
+ * A subscriber's detected timezone, or an em dash when it hasn't been confirmed
+ * yet. Detection needs three consecutive issues of agreeing open/click
+ * geolocation including at least one click, so "not detected" is the norm for a
+ * new or open-only subscriber rather than a fault — the tooltip says so, since
+ * an unexplained dash in a timezone column reads like missing data.
+ */
+const TimeZoneCell: React.FC<{ timeZone?: string | null; className?: string }> = ({
+  timeZone,
+  className = '',
+}) =>
+  timeZone ? (
+    <span className={`text-muted-foreground ${className}`} title={`${timeZone} — detected from engagement activity`}>
+      {formatZoneLabel(timeZone)}
+    </span>
+  ) : (
+    <span
+      className={`text-muted-foreground/60 ${className}`}
+      title="Not detected yet — needs engagement across 3 consecutive issues, including at least one click"
+    >
+      —
+    </span>
+  );
+
 /** Skeleton for the subscriber count metric card (Row 1) */
 const MetricSkeleton: React.FC = () => (
   <Card padding="sm">
@@ -302,6 +335,9 @@ export const SubscribersPage: React.FC = () => {
                   {label.text}
                 </span>
                 <span>{sub.addedAt ? formatDate(sub.addedAt, timeZone) : '—'}</span>
+                {/* Only when detected — a dash per undetected subscriber would
+                    be noise on a line this tight. */}
+                {sub.timeZone && <TimeZoneCell timeZone={sub.timeZone} />}
               </div>
             </div>
           );
@@ -390,6 +426,13 @@ export const SubscribersPage: React.FC = () => {
         className: 'hidden lg:block',
         headerClassName: 'hidden lg:block',
         render: (sub) => <InterestChips interestScores={sub.interestScores} max={2} />,
+      },
+      {
+        key: 'timezone',
+        header: 'Timezone',
+        className: 'hidden lg:block',
+        headerClassName: 'hidden lg:block',
+        render: (sub) => <TimeZoneCell timeZone={sub.timeZone} />,
       },
       {
         key: 'subscribed',

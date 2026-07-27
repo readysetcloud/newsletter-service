@@ -1,5 +1,6 @@
 use aws_sdk_dynamodb::types::AttributeValue;
 use aws_smithy_types::error::display::DisplayErrorContext;
+use chrono_tz::Tz;
 use lambda_http::{Body, Error, Request, RequestExt, Response};
 use newsletter::admin::{auth, aws_clients, error::AppError, response};
 use percent_encoding::percent_decode_str;
@@ -60,6 +61,35 @@ struct SubscriberTrendsResponse {
     points: Vec<SubscriberTrendPoint>,
     summary: SubscriberTrendSummary,
 }
+
+/// How ready the audience is for a local send, in the two currencies the
+/// feature actually spends: confirmed timezones and open-hour histograms.
+///
+/// Both counts answer "how many subscribers will land in a real group rather
+/// than the `__default__` fallback", one per `localSend.mode`. Neither is
+/// derivable from the subscriber list the dashboard already loads —
+/// `openHourTotal` is only on the single-subscriber detail response — so this
+/// is its own endpoint rather than a widening of `/subscribers`.
+#[derive(Serialize, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+struct TimeZoneCoverageResponse {
+    total_subscribers: i64,
+    /// Subscribers with a confirmed, parseable IANA `timeZone`. These are the
+    /// ones `mode: "timezone"` can place; everyone else sends at the default
+    /// zone's wall-clock time.
+    confirmed_time_zone: i64,
+    /// Subscribers whose open-hour histogram has reached the minimum sample
+    /// count, i.e. the ones `mode: "peak-hour"` can place.
+    peak_hour_eligible: i64,
+}
+
+/// Minimum recorded opens before a subscriber's open-hour histogram is trusted
+/// for a peak-hour send.
+///
+/// Mirrors `PEAK_HOUR_MIN_SAMPLES` in `functions/utils/local-send.mjs`, which is
+/// what the send path actually enforces. If that changes, change this too or the
+/// dashboard will promise a placement the fan-out won't make.
+const PEAK_HOUR_MIN_SAMPLES: i64 = 5;
 
 #[derive(Serialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -241,6 +271,14 @@ pub async fn get_subscriber_trends(event: Request) -> Result<Response<Body>, Err
     }
 }
 
+/// GET /subscribers/timezone-coverage
+pub async fn get_timezone_coverage(event: Request) -> Result<Response<Body>, Error> {
+    match handle_get_timezone_coverage(event).await {
+        Ok(resp) => Ok(resp),
+        Err(e) => Ok(response::format_error_response(&e)),
+    }
+}
+
 // ── Internal handlers ──────────────────────────────────────────────────
 
 async fn handle_get_audience_health(event: Request) -> Result<Response<Body>, AppError> {
@@ -305,6 +343,20 @@ async fn handle_get_subscriber_trends(event: Request) -> Result<Response<Body>, 
     let summary = calculate_trend_summary(&points);
 
     response::format_response(200, SubscriberTrendsResponse { points, summary })
+}
+
+async fn handle_get_timezone_coverage(event: Request) -> Result<Response<Body>, AppError> {
+    let user_context = auth::get_user_context(&event)?;
+    let tenant_id = user_context
+        .tenant_id
+        .ok_or_else(|| AppError::Forbidden("Tenant access required".to_string()))?;
+
+    let subscribers_table = get_subscribers_table_name()?;
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+
+    let coverage = query_timezone_coverage(ddb_client, &subscribers_table, &tenant_id).await?;
+
+    response::format_response(200, coverage)
 }
 
 async fn handle_get_sunset_candidates(event: Request) -> Result<Response<Body>, AppError> {
@@ -998,6 +1050,83 @@ async fn query_all_subscribers(
     Ok(subscribers)
 }
 
+/// Whether a subscriber record carries a timezone the send path would actually
+/// group on.
+///
+/// The parse is not ceremony: `local-send.mjs` re-validates every stored zone
+/// through `Intl` at fan-out time and drops anything unparseable into
+/// `__default__`. Counting a malformed zone as covered here would overstate
+/// readiness for exactly the subscribers the fan-out is about to give up on.
+fn has_confirmed_time_zone(item: &HashMap<String, AttributeValue>) -> bool {
+    item.get("timeZone")
+        .and_then(|v| v.as_s().ok())
+        .map(|zone| zone.parse::<Tz>().is_ok())
+        .unwrap_or(false)
+}
+
+/// Whether a subscriber has logged enough opens for peak-hour placement.
+fn is_peak_hour_eligible(item: &HashMap<String, AttributeValue>) -> bool {
+    item.get("openHourTotal")
+        .and_then(|v| v.as_n().ok())
+        .and_then(|n| n.parse::<i64>().ok())
+        .map(|total| total >= PEAK_HOUR_MIN_SAMPLES)
+        .unwrap_or(false)
+}
+
+/// Count how much of a tenant's list each local-send mode can actually place.
+///
+/// Walks the same tenant partition as `query_all_subscribers` but accumulates
+/// three counters instead of materializing the list — the answer is three
+/// integers, and a tenant with a large list should not pay to build a Vec of
+/// every subscriber to get them.
+async fn query_timezone_coverage(
+    ddb_client: &aws_sdk_dynamodb::Client,
+    table_name: &str,
+    tenant_id: &str,
+) -> Result<TimeZoneCoverageResponse, AppError> {
+    let mut coverage = TimeZoneCoverageResponse::default();
+    let mut exclusive_start_key = None;
+
+    loop {
+        let mut query = ddb_client
+            .query()
+            .table_name(table_name)
+            .key_condition_expression("tenantId = :tid")
+            .expression_attribute_values(":tid", AttributeValue::S(tenant_id.to_string()));
+
+        if let Some(start_key) = exclusive_start_key.take() {
+            query = query.set_exclusive_start_key(Some(start_key));
+        }
+
+        let result = query.send().await?;
+
+        for item in result.items() {
+            // Segment infrastructure rows share this partition — see
+            // `is_subscriber_record`.
+            if !is_subscriber_record(item) {
+                continue;
+            }
+
+            coverage.total_subscribers += 1;
+            if has_confirmed_time_zone(item) {
+                coverage.confirmed_time_zone += 1;
+            }
+            if is_peak_hour_eligible(item) {
+                coverage.peak_hour_eligible += 1;
+            }
+        }
+
+        match result.last_evaluated_key() {
+            Some(key) if !key.is_empty() => {
+                exclusive_start_key = Some(key.clone());
+            }
+            _ => break,
+        }
+    }
+
+    Ok(coverage)
+}
+
 /// Query all subscribers for a tenant and filter for sunset candidates.
 ///
 /// A subscriber is considered dormant if their lastEngagedIssue is below the cutoff:
@@ -1587,6 +1716,150 @@ mod tests {
         // recentActivity is an empty array; openHourTotal defaults to 0.
         assert_eq!(json["recentActivity"], serde_json::json!([]));
         assert_eq!(json["openHourTotal"], 0);
+    }
+
+    /// A subscriber item carrying just the two fields local-send coverage reads.
+    fn make_coverage_item(
+        email: &str,
+        time_zone: Option<&str>,
+        open_hour_total: Option<i64>,
+    ) -> HashMap<String, AttributeValue> {
+        let mut item = HashMap::new();
+        item.insert("email".to_string(), AttributeValue::S(email.to_string()));
+        if let Some(tz) = time_zone {
+            item.insert("timeZone".to_string(), AttributeValue::S(tz.to_string()));
+        }
+        if let Some(total) = open_hour_total {
+            item.insert(
+                "openHourTotal".to_string(),
+                AttributeValue::N(total.to_string()),
+            );
+        }
+        item
+    }
+
+    #[test]
+    fn test_has_confirmed_time_zone_accepts_iana_names() {
+        assert!(has_confirmed_time_zone(&make_coverage_item(
+            "a@example.com",
+            Some("America/Chicago"),
+            None
+        )));
+        assert!(has_confirmed_time_zone(&make_coverage_item(
+            "b@example.com",
+            Some("UTC"),
+            None
+        )));
+    }
+
+    #[test]
+    fn test_has_confirmed_time_zone_rejects_absent_and_unparseable() {
+        // Never confirmed — the common case until 3 agreeing observations land.
+        assert!(!has_confirmed_time_zone(&make_coverage_item(
+            "a@example.com",
+            None,
+            None
+        )));
+        // The send path re-validates through Intl and would drop these into
+        // __default__, so coverage must not count them.
+        assert!(!has_confirmed_time_zone(&make_coverage_item(
+            "b@example.com",
+            Some(""),
+            None
+        )));
+        assert!(!has_confirmed_time_zone(&make_coverage_item(
+            "c@example.com",
+            Some("CST"),
+            None
+        )));
+        assert!(!has_confirmed_time_zone(&make_coverage_item(
+            "d@example.com",
+            Some("Not/AZone"),
+            None
+        )));
+    }
+
+    #[test]
+    fn test_is_peak_hour_eligible_matches_send_path_threshold() {
+        // The boundary is the one local-send.mjs enforces: >= 5 opens.
+        assert!(!is_peak_hour_eligible(&make_coverage_item(
+            "a@example.com",
+            None,
+            None
+        )));
+        assert!(!is_peak_hour_eligible(&make_coverage_item(
+            "b@example.com",
+            None,
+            Some(0)
+        )));
+        assert!(!is_peak_hour_eligible(&make_coverage_item(
+            "c@example.com",
+            None,
+            Some(PEAK_HOUR_MIN_SAMPLES - 1)
+        )));
+        assert!(is_peak_hour_eligible(&make_coverage_item(
+            "d@example.com",
+            None,
+            Some(PEAK_HOUR_MIN_SAMPLES)
+        )));
+        assert!(is_peak_hour_eligible(&make_coverage_item(
+            "e@example.com",
+            None,
+            Some(50)
+        )));
+    }
+
+    #[test]
+    fn test_timezone_coverage_counts_are_independent() {
+        // The two modes place different subscribers: a clicker can have a
+        // confirmed zone with few opens, and a heavy opener who never clicks can
+        // never confirm a zone. Neither count implies the other.
+        let items = vec![
+            make_coverage_item("both@example.com", Some("America/Chicago"), Some(12)),
+            make_coverage_item("tz-only@example.com", Some("Europe/Berlin"), Some(2)),
+            make_coverage_item("opens-only@example.com", None, Some(9)),
+            make_coverage_item("neither@example.com", None, None),
+        ];
+
+        let mut coverage = TimeZoneCoverageResponse::default();
+        for item in &items {
+            if !is_subscriber_record(item) {
+                continue;
+            }
+            coverage.total_subscribers += 1;
+            if has_confirmed_time_zone(item) {
+                coverage.confirmed_time_zone += 1;
+            }
+            if is_peak_hour_eligible(item) {
+                coverage.peak_hour_eligible += 1;
+            }
+        }
+
+        assert_eq!(coverage.total_subscribers, 4);
+        assert_eq!(coverage.confirmed_time_zone, 2);
+        assert_eq!(coverage.peak_hour_eligible, 2);
+    }
+
+    #[test]
+    fn test_timezone_coverage_skips_segment_rows() {
+        // Segment infrastructure rows share the tenant partition and must not
+        // inflate the denominator.
+        let segment_row = make_coverage_item("SEGMENT#abc", Some("America/Chicago"), Some(20));
+        assert!(!is_subscriber_record(&segment_row));
+    }
+
+    #[test]
+    fn test_timezone_coverage_serializes_camel_case() {
+        let json = serde_json::to_value(TimeZoneCoverageResponse {
+            total_subscribers: 100,
+            confirmed_time_zone: 41,
+            peak_hour_eligible: 58,
+        })
+        .unwrap();
+
+        assert_eq!(json["totalSubscribers"], 100);
+        assert_eq!(json["confirmedTimeZone"], 41);
+        assert_eq!(json["peakHourEligible"], 58);
     }
 
     #[test]

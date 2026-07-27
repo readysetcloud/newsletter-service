@@ -154,9 +154,13 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
         (&Method::GET, "/subscribers/trends") => subscribers::get_subscriber_trends(event).await,
         (&Method::GET, "/subscribers") => subscribers::list_subscribers(event).await,
         (&Method::GET, "/subscribers/health") => subscribers::get_audience_health(event).await,
-        // NOTE: the exact at-risk match must come before the generic
-        // /subscribers/{email} prefix route, or "at-risk" is parsed as an email.
+        // NOTE: the exact at-risk and timezone-coverage matches must come before
+        // the generic /subscribers/{email} prefix route, or the literal segment
+        // is parsed as an email.
         (&Method::GET, "/subscribers/at-risk") => churn::get_at_risk_subscribers(event).await,
+        (&Method::GET, "/subscribers/timezone-coverage") => {
+            subscribers::get_timezone_coverage(event).await
+        }
         (&Method::GET, path) if path.starts_with("/subscribers/") => {
             let email = extract_path_param(path, "/subscribers/");
             subscribers::get_subscriber(event, email).await
@@ -424,6 +428,7 @@ fn is_valid_api_path(path: &str) -> bool {
         || path == "/subscribers/count"
         || path == "/subscribers/trends"
         || path == "/subscribers/health"
+        || path == "/subscribers/timezone-coverage"
         || path.starts_with("/subscribers/")
         // Segments paths
         || path == "/segments"

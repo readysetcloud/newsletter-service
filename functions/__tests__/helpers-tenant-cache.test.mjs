@@ -57,6 +57,18 @@ describe('getTenant cache', () => {
     await expect(getTenant('missing-tenant')).rejects.toThrow("Tenant 'missing-tenant' not found");
   });
 
+  // Tenant ids are external input. On a plain object these hit Object.prototype
+  // and come back as a built-in before DynamoDB is ever consulted.
+  test.each(['constructor', 'toString', 'hasOwnProperty', '__proto__'])(
+    'treats %s as an ordinary tenant id',
+    async (tenantId) => {
+      const tenant = await getTenant(tenantId);
+
+      expect(tenant.email).toBe(`${tenantId}@example.com`);
+      expect(typeof tenant).toBe('object');
+    }
+  );
+
   test('reads the tenant record by its own key', async () => {
     await getTenant('tenant-d');
 

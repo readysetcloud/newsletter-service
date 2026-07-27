@@ -1230,21 +1230,55 @@ describe('aggregate-issue-analytics counter anomaly detection', () => {
 
     test('flags deliveries with no opens at all', () => {
       expect(describeCounterAnomaly({ deliveries: 2280, opens: 0, clicks: 0 }))
-        .toMatch(/2,280 emails were delivered but not one open/);
+        .toMatch(/2,280 emails were delivered, but not one open/);
     });
 
     test('stays quiet for a healthy issue', () => {
       expect(describeCounterAnomaly({ deliveries: 2280, opens: 949, clicks: 12 })).toBeNull();
     });
 
-    // A low-engagement issue must never trigger this, or the mail gets ignored.
-    test('stays quiet for a single open and a single click', () => {
-      expect(describeCounterAnomaly({ deliveries: 2280, opens: 1, clicks: 1 })).toBeNull();
-    });
-
     test('stays quiet when nothing was delivered', () => {
       expect(describeCounterAnomaly({ deliveries: 0, opens: 0, clicks: 0 })).toBeNull();
       expect(describeCounterAnomaly({})).toBeNull();
+    });
+
+    // A zero only carries information when there is enough volume above it. Left
+    // unbounded this fires on every quiet issue, and a warning that cries wolf
+    // is one the reader learns to delete — the only way this feature can fail.
+    describe('needs volume before a zero means anything', () => {
+      test('a lightly-opened issue with no clicks is not an anomaly', () => {
+        expect(describeCounterAnomaly({ deliveries: 2280, opens: 1, clicks: 0 })).toBeNull();
+        expect(describeCounterAnomaly({ deliveries: 2280, opens: 24, clicks: 0 })).toBeNull();
+      });
+
+      test('a small send with no opens is not an anomaly', () => {
+        expect(describeCounterAnomaly({ deliveries: 12, opens: 0, clicks: 0 })).toBeNull();
+        expect(describeCounterAnomaly({ deliveries: 49, opens: 0, clicks: 0 })).toBeNull();
+      });
+
+      test('fires once the volume makes the zero implausible', () => {
+        expect(describeCounterAnomaly({ deliveries: 2280, opens: 25, clicks: 0 })).not.toBeNull();
+        expect(describeCounterAnomaly({ deliveries: 50, opens: 0, clicks: 0 })).not.toBeNull();
+      });
+    });
+
+    // Checked against this tenant's real history: these five are every issue the
+    // check would ever have fired on, and all five were genuinely broken.
+    describe('against real history', () => {
+      test.each([
+        ['#174', { deliveries: 1272, opens: 45, clicks: 0 }],
+        ['#175', { deliveries: 1268, opens: 68, clicks: 0 }],
+        ['#176', { deliveries: 1268, opens: 81, clicks: 0 }],
+        ['#177', { deliveries: 1269, opens: 163, clicks: 0 }],
+        ['#226', { deliveries: 2280, opens: 954, clicks: 0 }]
+      ])('fires on %s, which was broken', (_label, counters) => {
+        expect(describeCounterAnomaly(counters)).not.toBeNull();
+      });
+
+      // The smallest issue that did record clicks. Nothing about it should alarm.
+      test('stays quiet on #200, the smallest healthy issue on record', () => {
+        expect(describeCounterAnomaly({ deliveries: 64, opens: 30, clicks: 23 })).toBeNull();
+      });
     });
   });
 

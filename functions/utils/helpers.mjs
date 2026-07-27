@@ -6,7 +6,10 @@ import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 
 let octokit;
-let tenants = {};
+// A Map, not an object: tenant ids are external input, and on a plain object an
+// id like `constructor` or `toString` hits an inherited property and returns a
+// built-in instead of ever reaching DynamoDB.
+const tenants = new Map();
 const ddb = new DynamoDBClient();
 const ivLength = 16;
 const algorithm = 'aes-256-gcm';
@@ -38,10 +41,13 @@ export const getOctokit = async (tenantId) => {
  * container saw was returned for every tenant after it. That is a cross-tenant
  * leak, not just a stale read — callers use this for the address outbound mail
  * is sent to and for `apiKeyParameter`, the tenant's own GitHub credential.
+ *
+ * A cache miss still throws for an unknown tenant, so a miss is never silently
+ * a success.
  */
 export const getTenant = async (tenantId) => {
-  if (tenants[tenantId]) {
-    return tenants[tenantId];
+  if (tenants.has(tenantId)) {
+    return tenants.get(tenantId);
   } else {
     const result = await ddb.send(new GetItemCommand({
       TableName: process.env.TABLE_NAME,
@@ -56,7 +62,7 @@ export const getTenant = async (tenantId) => {
     }
 
     const data = unmarshall(result.Item);
-    tenants[tenantId] = data;
+    tenants.set(tenantId, data);
     return data;
   }
 };

@@ -118,21 +118,37 @@ export const handler = async (event) => {
   }
 };
 
+// A zero only means something once there is enough volume above it for the zero
+// to be implausible. Below these, zero is ordinary: a handful of recipients can
+// all decline the tracking pixel, and a lightly-opened issue genuinely may go
+// unclicked. Both are set against this tenant's own history, where the lowest
+// issue that recorded clicks did so on 30 opens from 64 deliveries (#200, 23
+// clicks). Every issue these would have fired on — #174-177, all ~1,270
+// delivered with 45-163 opens and no clicks at all, and #226 — was in fact
+// broken.
+const MIN_DELIVERIES_TO_EXPECT_AN_OPEN = 50;
+const MIN_OPENS_TO_EXPECT_A_CLICK = 25;
+
 /**
  * Decides whether an issue's realtime counters are shaped like a broken
  * pipeline rather than a quiet week.
  *
- * The conditions are deliberately narrow enough that firing means something is
- * actually wrong. An issue that was delivered and opened always picks up clicks
- * — corporate link scanners alone guarantee it, they prefetch every link in the
- * mail within seconds of delivery — and an issue that was delivered always picks
- * up opens. Anything looser trains the reader to ignore the mail, which is the
- * only way this can fail.
+ * Firing has to mean something is actually wrong, because the only way this can
+ * fail is by training the reader to ignore it. So it reports a zero only where
+ * the volume above it makes zero implausible — an issue opened by 25+ readers
+ * that records no click at all is a dead click path, not a boring issue, and
+ * corporate link scanners prefetching every link within seconds of delivery put
+ * a floor under it well below that.
  *
  * Counters, not events: the click *events* for a broken issue are not
  * necessarily zero, because the web-version redirect path writes its own and is
  * unaffected by anything on the email path. Issue 226 had 52 of them while its
  * `clicks` counter did not exist at all.
+ *
+ * Known blind spot: an issue with no trackable links in it would read as a dead
+ * click path. That is not a real shape for this product — every issue is a link
+ * roundup — and the cost is one nuisance mail rather than a recurring one, so
+ * it is not worth reading the issue content here to rule out.
  *
  * @param {Object} counters - The issue's stats record
  * @returns {string|null} Human-readable description of the anomaly, or null
@@ -142,17 +158,14 @@ export function describeCounterAnomaly(counters) {
   const opens = counters?.opens || 0;
   const clicks = counters?.clicks || 0;
 
-  // Nothing was delivered, so nothing downstream is expected either.
-  if (deliveries === 0) {
-    return null;
+  const count = (n) => n.toLocaleString('en-US');
+
+  if (opens === 0 && deliveries >= MIN_DELIVERIES_TO_EXPECT_AN_OPEN) {
+    return `${count(deliveries)} emails were delivered, but not one open was recorded.`;
   }
 
-  if (opens === 0) {
-    return `${deliveries.toLocaleString('en-US')} emails were delivered but not one open was recorded.`;
-  }
-
-  if (clicks === 0) {
-    return `${opens.toLocaleString('en-US')} opens were recorded across ${deliveries.toLocaleString('en-US')} delivered emails, but not one click.`;
+  if (clicks === 0 && opens >= MIN_OPENS_TO_EXPECT_A_CLICK) {
+    return `${count(opens)} opens were recorded across ${count(deliveries)} delivered emails, but not one click.`;
   }
 
   return null;
@@ -196,9 +209,9 @@ const reportCounterAnomalies = async (tenantId, issueNumber, counters) => {
           subject: `[Check] Issue ${issueNumber} analytics look wrong`,
           html: [
             '<div>',
-            `<p>Analytics for issue ${issueNumber} were just consolidated, and the numbers don't look possible:</p>`,
+            `<p>Analytics for issue ${issueNumber} were just consolidated, and one of the numbers looks off:</p>`,
             `<p><b>${anomaly}</b></p>`,
-            '<p>That pattern usually means a tracking pipeline is dropping events rather than that the issue underperformed. Worth a look at the issue in the dashboard, and at the CloudWatch logs for the stat handler.</p>',
+            '<p>At this volume that usually means a tracking pipeline is dropping events rather than that the issue underperformed. Worth a look at the issue in the dashboard, and at the CloudWatch logs for the stat handler.</p>',
             '</div>'
           ].join(''),
           tenantId

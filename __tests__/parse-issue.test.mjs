@@ -170,6 +170,27 @@ describe('parse-issue dispatcher: output matches the delegate exactly', () => {
     expect(dispatched.sendAtDate).toBe('2026-08-03T09:00:00.000Z');
   });
 
+  // `sendAt` reaches both parsers through the dispatcher, which forwards every
+  // field it does not itself normalize. It is the field a publish lead time
+  // depends on - an execution that starts early and does not receive it parses
+  // to `sendAtDate: 'now'` and publishes early - so pin that the dispatcher is
+  // not the place it gets dropped, on both delegates.
+  it('forwards sendAt to whichever parser it delegates to', async () => {
+    const sendAt = '2026-08-03T09:00:00+00:00';
+
+    for (const [contentType, content, delegate] of [
+      ['markdown', MARKDOWN_CONTENT, parseMarkdown],
+      ['json', JSON_CONTENT, parseJsonIssue]
+    ]) {
+      const state = { ...baseState, contentType, content, sendAt };
+
+      const dispatched = await dispatch(state);
+
+      expect(dispatched).toEqual(await delegate(state));
+      expect(dispatched.sendAtDate).toBe('2026-08-03T09:00:00.000Z');
+    }
+  });
+
   // Teeth for the deep-equals above: they only mean something if the two parsers
   // actually disagree on these fields for the same input. They do - the
   // markdown parser reads the send instant out of the frontmatter `date`, the

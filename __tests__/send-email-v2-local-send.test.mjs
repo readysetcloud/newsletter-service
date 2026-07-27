@@ -186,6 +186,93 @@ describe('send-email-v2 local send', () => {
       expect(parseScheduleDetail(schedules[0]).localSendGroup.timeZone).toBe('__catch_all__');
     });
 
+    // D9, both halves. A timezone east of the base zone reaches its own 9am
+    // *before* the base instant, so whether it gets one depends entirely on
+    // when the fan-out runs. That is what the publish lead time buys
+    // (IssueSendLeadTimeMinutes in template.yaml): the workflow starts at
+    // (send instant − lead time), and the fan-out is then early enough to
+    // schedule those groups instead of firing them at once.
+    //
+    // The pair is deliberate. The second test is the behavior this system had
+    // for as long as the lead time was 0 — an eastward subscriber got the issue
+    // at whatever hour the send instant happened to be for them, which is the
+    // one thing local send exists to avoid.
+    describe('eastward timezones', () => {
+      const EASTWARD_SUBSCRIBERS = [
+        { email: 'ny@example.com', timeZone: 'America/New_York' },
+        { email: 'london@example.com', timeZone: 'Europe/London' },
+        { email: 'tokyo@example.com', timeZone: 'Asia/Tokyo' }
+      ];
+
+      // 9am New York on 2099-01-15 (EST) = 14:00 UTC.
+      const SEND_AT = '2099-01-15T14:00:00.000Z';
+
+      // Only the clock is faked: the SES pacer and retry backoff still need
+      // real timers, and this suite drives the handler to completion.
+      const freezeAt = (instant) =>
+        jest.useFakeTimers({
+          doNotFake: ['setTimeout', 'setInterval', 'setImmediate', 'nextTick', 'queueMicrotask'],
+          now: new Date(instant)
+        });
+
+      afterEach(() => {
+        jest.useRealTimers();
+      });
+
+      test('are scheduled for their own local morning when the workflow starts early', async () => {
+        mockVerifiedSender();
+        freezeAt('2099-01-14T14:00:00.000Z'); // 24h lead
+        listSubscribers.mockResolvedValue({
+          subscribers: EASTWARD_SUBSCRIBERS,
+          lastEvaluatedKey: undefined
+        });
+
+        const result = await handler(baseEvent({ sendAt: SEND_AT }));
+
+        // Nothing fired at fan-out time: every group has a future target.
+        expect(result).toMatchObject({ groups: 3, immediate: 0, scheduled: 3 });
+        expect(eventBridgeCalls().filter((cmd) => cmd.__type === 'PutEvents')).toHaveLength(0);
+
+        const byZone = new Map(
+          schedulerCalls().map((cmd) => [parseScheduleDetail(cmd).localSendGroup.timeZone, cmd])
+        );
+        // Each eastward group lands ahead of the base instant - 9am London is
+        // 09:00Z, 9am Tokyo is 00:00Z - which is exactly what a zero lead time
+        // cannot express.
+        expect(byZone.get('Europe/London').ScheduleExpression).toBe('at(2099-01-15T09:00:00)');
+        expect(byZone.get('Asia/Tokyo').ScheduleExpression).toBe('at(2099-01-15T00:00:00)');
+        expect(byZone.get('America/New_York').ScheduleExpression).toBe('at(2099-01-15T14:00:00)');
+        // The catch-all still hangs off the latest group, which is the base
+        // instant here rather than a westward zone.
+        expect(byZone.get('__catch_all__').ScheduleExpression).toBe('at(2099-01-15T14:30:00)');
+      });
+
+      test('are sent at once when the workflow starts at the send instant', async () => {
+        mockVerifiedSender();
+        freezeAt(SEND_AT); // lead time 0
+        listSubscribers.mockResolvedValue({
+          subscribers: EASTWARD_SUBSCRIBERS,
+          lastEvaluatedKey: undefined
+        });
+
+        const result = await handler(baseEvent({ sendAt: SEND_AT }));
+
+        // Both eastward groups are already past their local 9am, and so is the
+        // base zone's own group: all three go out together, hours late for
+        // London and Tokyo.
+        expect(result).toMatchObject({ groups: 3, immediate: 3, scheduled: 0 });
+
+        const emitted = eventBridgeCalls()
+          .filter((cmd) => cmd.__type === 'PutEvents')
+          .map((cmd) => parseEventDetail(cmd).localSendGroup.timeZone);
+        expect(new Set(emitted)).toEqual(
+          new Set(['America/New_York', 'Europe/London', 'Asia/Tokyo'])
+        );
+        // Only the catch-all is scheduled.
+        expect(schedulerCalls()).toHaveLength(1);
+      });
+    });
+
     test('schedule names stay unique and within 64 chars for long reference numbers', async () => {
       mockVerifiedSender();
 

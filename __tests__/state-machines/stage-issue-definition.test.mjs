@@ -50,16 +50,33 @@ const STATE_MACHINE_RESOURCE = 'StageIssueStateMachine';
 // status now routes to `Mark Issue In Progress`, so the definition has one
 // claim path instead of two and `DynamodbPutItem` is no longer substituted
 // into it at all.
+// `Trigger Site Rebuild` took one more Task with it. The site it rebuilt is
+// domain-specific and no longer served by this stack, so the event had no
+// consumer left.
+//
+// Phase 6 took the last two: `Is Scheduled In The Future?` and
+// `Wait For Future Date`, which is why there is no `Wait` line below at all and
+// this definition owns no timer. They were kept as Phase 5's rollback - point the
+// API back at `StartExecution` with a `futureDate` and the execution waits
+// again - and Phase 6 is what made that rollback incoherent rather than merely
+// unused. Waiting inside the execution puts every step *after* the send
+// instant; the whole point of the publish lead time is to run the fan-out
+// *before* it, so an eastward timezone group can still be scheduled for its own
+// 9am. The two cannot both be true. The rollback that remains is
+// `ISSUE_SEND_LEAD_TIME_MINUTES: 0`, which is a parameter, not a state.
+//
+// `Wait` has no entry at all rather than a zero: the counts are built from the
+// types actually present, so a reintroduced `Wait` shows up here as an
+// unexpected key.
 const EXPECTED_STATE_COUNTS = {
-  topLevel: 23,
-  total: 27,
-  Choice: 5,
+  topLevel: 20,
+  total: 24,
+  Choice: 4,
   Fail: 1,
   Parallel: 1,
   Pass: 4,
   Succeed: 2,
-  Task: 13,
-  Wait: 1
+  Task: 12
 };
 
 // States that no transition can reach, per scope. MUST BE EMPTY and must stay
@@ -112,7 +129,6 @@ const TASKS_WITHOUT_RETRY = [
   'Get Existing Issue',
   'Mark Issue In Progress',
   'Notify of Success',
-  'Trigger Site Rebuild',
   'Update Issue Record - Failure'
 ];
 
@@ -147,7 +163,6 @@ const EXPECTED_CATCH_ROUTES = {
   'Parse Issue': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   'Publish': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   'Schedule Tasks and Update': ['States.ALL -> Update Issue Record - Failure ($.error)'],
-  'Trigger Site Rebuild': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   // The failure writer cannot catch to itself, and there is nothing left to
   // record once recording is what failed.
   'Update Issue Record - Failure': [
@@ -1004,20 +1019,30 @@ describe('stage-issue definition: identifiers, not content', () => {
     });
   });
 
-  // Transitional safety, and the whole rollback story for this phase: point the
-  // API back at StartExecution with a `futureDate` and the definition waits
-  // again, unchanged. It is also still the live path for
-  // import-issue-from-github.mjs, which resolves its own frontmatter date.
-  it('keeps the Wait state reachable for a producer that still sends futureDate', () => {
-    const { state: choice } = allStates.find(({ name }) => name === 'Is Scheduled In The Future?');
-    const { state: wait } = allStates.find(({ name }) => name === 'Wait For Future Date');
+  // The definition owns no timer. Waiting is EventBridge Scheduler's job now -
+  // the `ISSUE-SEND-*` entry starts the execution at (send instant - lead time)
+  // - and that is not a stylistic preference: a `Wait` inside the execution puts
+  // every subsequent step after the send instant, which is exactly what stops
+  // the local-send fan-out from scheduling a timezone group east of the base
+  // zone for its own local morning (D9). Reintroducing one would silently undo
+  // the lead time for whatever path reached it.
+  it('does not wait inside the execution', () => {
+    expect(allStates.filter(({ state }) => state.Type === 'Wait')).toEqual([]);
+    expect(definition.States['Is Scheduled In The Future?']).toBeUndefined();
+    expect(definition.States['Wait For Future Date']).toBeUndefined();
+  });
 
-    expect(choice.Choices).toEqual([
-      { Variable: '$.futureDate', IsPresent: true, Next: 'Wait For Future Date' }
-    ]);
-    expect(choice.Default).toBe('Trigger Site Rebuild');
-    expect(wait.Type).toBe('Wait');
-    expect(wait.TimestampPath).toBe('$.futureDate');
+  // The other half of removing the Wait, and the reason the lead time is safe
+  // to raise: an execution that starts early has to be *told* when the issue
+  // sends. Both parsers fall back to "now" without it (markdown reads its
+  // frontmatter date, json has no date of its own), and "now" makes an early
+  // execution publish early instead of scheduling. Read with an unconditional
+  // `.$`, which build_execution_input in issues.rs supports by always emitting
+  // the field - null for an immediate publish.
+  it('forwards the send instant to the parse step', () => {
+    const { state: parse } = allStates.find(({ name }) => name === 'Parse Issue');
+
+    expect(parse.Parameters.Payload['sendAt.$']).toBe('$$.Execution.Input.sendAt');
   });
 });
 

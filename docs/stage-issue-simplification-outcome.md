@@ -29,7 +29,7 @@ item 1), and Phase 2's unmet gate, which has already been documented in-tree but
 | 3 — unify content-type paths | `8798b28` | Landed |
 | 4 — link extraction before publish | `c5e9619` | Landed |
 | 5 — Scheduler-started execution | `d229a7d` | Landed |
-| 6 — local-send lead time | — | **Not landed.** Parameter wired, default 0, blocker documented |
+| 6 — local-send lead time | — | **Not landed on this branch.** Parameter wired, default 0, blocker documented. Landed afterwards on `claude/remove-site-rebuild-trigger-b6f7ca` — see the D9 row |
 | reconciliation of the above | `325694e` | Landed (docs, linter, `IS_PREVIEW` comments) |
 
 The plan called for one phase per weekly window (§6 of the plan: eight windows, ~two
@@ -102,10 +102,11 @@ groups + catch-all) and to 2 only after the cleanup PR that removes the `Wait`.
 | D6 | `Trigger Site Rebuild` only on the scheduled path | **Fixed** | Now on the common path. Relative order is unchanged from main (it still runs *before* publish), so no new ordering question |
 | D7 | JSON/HTML issues get no `link#` records | **Fixed** | `update-link-tracking` is content-type aware: `<a href>` extraction for html masters and json section bodies, comments/style/script stripped. Two documented limits remain (markdown links inside a json section body; html chrome links are indistinguishable from content) |
 | D8 | Link classification races the send | **Fixed** | Sequential, ahead of `Publish`, for all content types; `interest-assembly.mjs`'s stale comment updated |
-| D9 | Local send cannot honor eastward zones | **NOT fixed** | Phase 6 did not land. `IssueSendLeadTimeMinutes` exists, defaults to `"0"` = today's behavior. Raising it needs the send instant forwarded to `Parse Issue` first, or an early execution publishes early instead of scheduling — documented on `issue_send_lead_time` in `issues.rs`. **The branch name promises this; the branch does not deliver it.** The plan's requested test ("assert eastward zones are *scheduled*, not emitted immediately") was also not added |
+| D9 | Local send cannot honor eastward zones | **NOT fixed on this branch; fixed in the follow-up** | Phase 6 did not land here. `IssueSendLeadTimeMinutes` existed, defaulted to `"0"` = pre-Phase-6 behavior. **The branch name promised this; the branch did not deliver it.** The follow-up branch does: the send instant now rides on the execution input (`sendAt` in `build_execution_input`) and reaches both parsers, so an early execution schedules instead of publishing; the default is 1440; and the plan's requested test ("assert eastward zones are *scheduled*, not emitted immediately") exists in `__tests__/send-email-v2-local-send.test.mjs` alongside its opposite. Two consequences it does *not* fix: the freeze point moves to T−lead, and an issue without local send reaches `published` a lead time before it sends |
 | D10 | No way to cancel a scheduled issue | **Fixed** | `PUT /issues/{id}` with `status: "draft"` unschedules and deletes the entry; `DELETE` deletes any entry before the record. Schedule always goes first, because the state machine treats a `draft` record as sendable |
 
-Eight of ten fixed; D9 open (Phase 6); D2 fixed but with a new failure mode.
+Eight of ten fixed on this branch; D9 fixed in the follow-up; D2 fixed but with a
+new failure mode.
 
 ---
 

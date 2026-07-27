@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Eye, EyeOff, FileText, FileJson } from 'lucide-react';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
@@ -21,6 +21,11 @@ import {
 import { issuesService } from '@/services/issuesService';
 import { templateService } from '@/services/templateService';
 import { timezoneOptions } from '@/schemas/profileSchema';
+import { useTenantDateFormat, useTenantSettings } from '@/contexts/SettingsContext';
+import {
+  fromDatetimeLocalInTimeZone,
+  toDatetimeLocalInTimeZone
+} from '@/utils/dateFormatting';
 import type { Issue, CreateIssueRequest, UpdateIssueRequest, IssueContentType, AbTest } from '@/types/issues';
 import type { TemplateSummary } from '@/types/api';
 
@@ -70,15 +75,17 @@ const validateContent = (value: string, contentType: IssueContentType): string |
 /**
  * Builds the API-ready A/B test payload from the form's working state:
  * converts variant send times from datetime-local to ISO and strips
- * server-managed fields (testId/status/winner/evaluation).
+ * server-managed fields (testId/status/winner/evaluation). Send times are read
+ * as wall-clock times in `timeZone` — the newsletter's zone — matching the
+ * schedule field above them.
  */
-const buildAbTestRequest = (abTest: AbTest): AbTest => ({
+const buildAbTestRequest = (abTest: AbTest, timeZone: string): AbTest => ({
   dimension: abTest.dimension,
   variants: abTest.variants.map((v) => ({
     variantId: v.variantId,
     ...(abTest.dimension === 'subject'
       ? { subject: v.subject }
-      : { sendAt: v.sendAt ? new Date(v.sendAt).toISOString() : v.sendAt }),
+      : { sendAt: v.sendAt ? fromDatetimeLocalInTimeZone(v.sendAt, timeZone) : v.sendAt }),
   })),
   winMetric: abTest.winMetric,
   confidence: abTest.confidence,
@@ -93,6 +100,8 @@ export const IssueFormPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { addToast } = useToast();
+  const settings = useTenantSettings();
+  const { timeZone, timeZoneLabel } = useTenantDateFormat();
   const isEditMode = !!id;
 
   const [formData, setFormData] = useState<FormData>({
@@ -111,13 +120,14 @@ export const IssueFormPage: React.FC = () => {
 
   const [localSendEnabled, setLocalSendEnabled] = useState(false);
   const [localSendMode, setLocalSendMode] = useState<'timezone' | 'peak-hour'>('timezone');
-  const [localSendTimeZone, setLocalSendTimeZone] = useState(() => {
-    // Default to the author's browser timezone when it's one of the options.
-    const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return timezoneOptions.some((option) => option.value === browserZone)
-      ? browserZone
-      : 'America/New_York';
-  });
+  // Defaults to the newsletter's own timezone — the same zone the schedule
+  // field above is read in, and the one the API falls back to when a local-send
+  // config omits it. An author can still pick a different zone per issue.
+  const [localSendTimeZone, setLocalSendTimeZone] = useState(timeZone);
+  /** Set once the author (or a saved issue) picks a zone explicitly. */
+  const localSendTouched = useRef(false);
+  /** The issue id already fetched, so a re-render can't trigger a second GET. */
+  const loadedIssueId = useRef<string | null>(null);
   // Interest-aware assembly: personalized section order (contentAssembly).
   const [personalizedOrder, setPersonalizedOrder] = useState(false);
 
@@ -132,6 +142,35 @@ export const IssueFormPage: React.FC = () => {
   const [existingIssue, setExistingIssue] = useState<Issue | null>(null);
   const [isFormDisabled, setIsFormDisabled] = useState(false);
 
+  // Follow the tenant setting once it loads, unless this issue already carries
+  // its own saved zone (edit mode sets it explicitly below).
+  useEffect(() => {
+    if (!localSendTouched.current) {
+      setLocalSendTimeZone(timeZone);
+    }
+  }, [timeZone]);
+
+  // The local-send picker offers a curated shortlist; the newsletter's own zone
+  // may not be on it, and a `<select>` whose value isn't an option silently
+  // shows a different one.
+  const localSendTimeZoneOptions = useMemo(() => {
+    if (timezoneOptions.some((option) => option.value === localSendTimeZone)) {
+      return timezoneOptions;
+    }
+    return [
+      { value: localSendTimeZone, label: localSendTimeZone.replace(/_/g, ' ') },
+      ...timezoneOptions
+    ];
+  }, [localSendTimeZone]);
+
+  // Schedule fields work in the newsletter's timezone rather than the author's
+  // browser zone, so what's typed here is the wall-clock time subscribers get
+  // — and matches how the API resolves a date-only schedule.
+  const toDatetimeLocal = useCallback(
+    (isoString: string): string => toDatetimeLocalInTimeZone(isoString, timeZone),
+    [timeZone]
+  );
+
   const loadIssue = useCallback(async (issueId: string) => {
     setIsLoading(true);
     try {
@@ -145,7 +184,10 @@ export const IssueFormPage: React.FC = () => {
           issueNumber: issue.issueNumber ? String(issue.issueNumber) : '',
           scheduledAt: issue.scheduledAt ? toDatetimeLocal(issue.scheduledAt) : '',
           templateId: issue.templateId ?? DEFAULT_TEMPLATE_VALUE,
-          contentType: issue.contentType === 'json' ? 'json' : 'markdown',
+          // Preserve 'html' so editing a pre-rendered issue doesn't silently
+          // flip it to markdown on save (which would send the raw master
+          // through the markdown pipeline).
+          contentType: issue.contentType ?? 'markdown',
         });
 
         // Hydrate A/B test config, converting send times to datetime-local.
@@ -165,6 +207,7 @@ export const IssueFormPage: React.FC = () => {
         if (issue.localSend?.enabled) {
           setLocalSendEnabled(true);
           if (issue.localSend.defaultTimeZone) {
+            localSendTouched.current = true;
             setLocalSendTimeZone(issue.localSend.defaultTimeZone);
           }
           setLocalSendMode(issue.localSend.mode === 'peak-hour' ? 'peak-hour' : 'timezone');
@@ -199,14 +242,48 @@ export const IssueFormPage: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [navigate, addToast]);
+  }, [navigate, addToast, toDatetimeLocal]);
 
-  // Load existing issue data for edit mode
+  // Load existing issue data for edit mode, once per issue. `loadIssue` changes
+  // identity when the tenant timezone resolves (it converts timestamps for
+  // display), and re-running it would fire a second GET, reset the form under
+  // the author, and race the first response. The zone change is handled by
+  // reprojection below instead.
   useEffect(() => {
-    if (isEditMode && id) {
+    if (isEditMode && id && loadedIssueId.current !== id) {
+      loadedIssueId.current = id;
       loadIssue(id);
     }
   }, [isEditMode, id, loadIssue]);
+
+  // Settings can resolve after the issue does, in which case the schedule
+  // fields were converted against the fallback zone. Re-express them from the
+  // issue's stored timestamps — no refetch, and only while the form is
+  // untouched, so this can never overwrite something the author typed.
+  useEffect(() => {
+    if (!existingIssue || isDirty) return;
+
+    setFormData((prev) => ({
+      ...prev,
+      scheduledAt: existingIssue.scheduledAt ? toDatetimeLocal(existingIssue.scheduledAt) : '',
+    }));
+
+    if (existingIssue.abTest) {
+      setAbTest((prev) =>
+        prev
+          ? {
+            ...prev,
+            variants: prev.variants.map((variant, index) => {
+              const saved = existingIssue.abTest?.variants[index];
+              return saved?.sendAt
+                ? { ...variant, sendAt: toDatetimeLocal(saved.sendAt) }
+                : variant;
+            }),
+          }
+          : prev
+      );
+    }
+  }, [existingIssue, isDirty, toDatetimeLocal]);
 
   // Load available templates for the template picker
   useEffect(() => {
@@ -227,18 +304,6 @@ export const IssueFormPage: React.FC = () => {
       cancelled = true;
     };
   }, []);
-
-  // Convert ISO datetime to datetime-local format
-  const toDatetimeLocal = (isoString: string): string => {
-    if (!isoString) return '';
-    const date = new Date(isoString);
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    const hours = String(date.getHours()).padStart(2, '0');
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    return `${year}-${month}-${day}T${hours}:${minutes}`;
-  };
 
   // Handle input changes
   const handleInputChange = useCallback((field: keyof FormData, value: string) => {
@@ -287,10 +352,11 @@ export const IssueFormPage: React.FC = () => {
 
       case 'scheduledAt':
         if (value && value.trim()) {
-          const scheduledDate = new Date(value);
+          const instant = fromDatetimeLocalInTimeZone(value, timeZone);
+          const scheduledDate = new Date(instant);
           const now = new Date();
 
-          if (isNaN(scheduledDate.getTime())) {
+          if (!instant || isNaN(scheduledDate.getTime())) {
             return 'Invalid date format';
           }
 
@@ -301,7 +367,7 @@ export const IssueFormPage: React.FC = () => {
         break;
     }
     return undefined;
-  }, []);
+  }, [timeZone]);
 
   // Validate entire form
   const validateForm = useCallback((): boolean => {
@@ -392,7 +458,7 @@ export const IssueFormPage: React.FC = () => {
         };
 
         if (formData.scheduledAt) {
-          updateData.scheduledAt = new Date(formData.scheduledAt).toISOString();
+          updateData.scheduledAt = fromDatetimeLocalInTimeZone(formData.scheduledAt, timeZone);
         }
 
         // Always send templateId so selecting "Default template" (empty value)
@@ -400,7 +466,7 @@ export const IssueFormPage: React.FC = () => {
         updateData.templateId = formData.templateId ?? DEFAULT_TEMPLATE_VALUE;
 
         if (abTest) {
-          updateData.abTest = buildAbTestRequest(abTest);
+          updateData.abTest = buildAbTestRequest(abTest, timeZone);
         } else if (existingIssue?.abTest) {
           // The test was turned off after being saved — send an explicit null so
           // the API clears the stored config (omitting it leaves it in place).
@@ -474,7 +540,7 @@ export const IssueFormPage: React.FC = () => {
         }
 
         if (formData.scheduledAt) {
-          createData.scheduledAt = new Date(formData.scheduledAt).toISOString();
+          createData.scheduledAt = fromDatetimeLocalInTimeZone(formData.scheduledAt, timeZone);
         }
 
         if (formData.templateId) {
@@ -482,7 +548,7 @@ export const IssueFormPage: React.FC = () => {
         }
 
         if (abTest) {
-          createData.abTest = buildAbTestRequest(abTest);
+          createData.abTest = buildAbTestRequest(abTest, timeZone);
         }
 
         if (localSendEnabled && !abTest) {
@@ -539,7 +605,7 @@ export const IssueFormPage: React.FC = () => {
     } finally {
       setIsSubmitting(false);
     }
-  }, [validateForm, isEditMode, id, formData, abTest, localSendEnabled, localSendTimeZone, localSendMode, personalizedOrder, existingIssue, navigate, addToast]);
+  }, [validateForm, isEditMode, id, formData, abTest, localSendEnabled, localSendTimeZone, localSendMode, personalizedOrder, existingIssue, navigate, addToast, timeZone]);
 
   // Handle cancel with unsaved changes confirmation
   const handleCancel = useCallback(() => {
@@ -684,7 +750,14 @@ export const IssueFormPage: React.FC = () => {
                 </p>
               )}
               <p className="mt-1 text-xs text-muted-foreground">
-                Leave empty to save as draft. Set a future date/time to schedule automatic publication. Time is in your local timezone.
+                Leave empty to save as draft. Set a future date/time to schedule automatic
+                publication. Times are in your newsletter&rsquo;s timezone &mdash; {timeZone}
+                {timeZoneLabel() ? ` (${timeZoneLabel()})` : ''}. An API request that sends a date
+                without a time uses {settings.defaultSendTime} in that zone. Both are set in{' '}
+                <Link to="/settings" className="underline hover:text-foreground">
+                  Settings
+                </Link>
+                .
               </p>
             </div>
 
@@ -770,20 +843,22 @@ export const IssueFormPage: React.FC = () => {
                     id="localSendTimeZone"
                     value={localSendTimeZone}
                     onChange={(e) => {
+                      localSendTouched.current = true;
                       setLocalSendTimeZone(e.target.value);
                       setIsDirty(true);
                     }}
                     disabled={isFormDisabled}
                     className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {timezoneOptions.map((option) => (
+                    {localSendTimeZoneOptions.map((option) => (
                       <option key={option.value} value={option.value}>
                         {option.label}
                       </option>
                     ))}
                   </select>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    The scheduled time is read as a wall-clock time in this timezone.
+                    The scheduled time is read as a wall-clock time in this timezone. Defaults to
+                    your newsletter&rsquo;s timezone.
                   </p>
                 </div>
               )}

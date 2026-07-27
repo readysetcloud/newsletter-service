@@ -47,7 +47,7 @@ export const TopRegionsWidget: React.FC<TopRegionsWidgetProps> = ({ latestIssueI
 
   if (loading) {
     return (
-      <div className="bg-surface rounded-lg shadow p-3 sm:p-4">
+      <div className="bg-surface rounded-xl border border-border shadow-soft p-3 sm:p-4">
         <h3 className="text-sm sm:text-base font-medium text-foreground flex items-center gap-2 mb-3">
           <Globe className="w-4 h-4 text-muted-foreground" />
           Top Regions
@@ -63,7 +63,7 @@ export const TopRegionsWidget: React.FC<TopRegionsWidgetProps> = ({ latestIssueI
 
   if (regions.length === 0) {
     return (
-      <div className="bg-surface rounded-lg shadow p-3 sm:p-4">
+      <div className="bg-surface rounded-xl border border-border shadow-soft p-3 sm:p-4">
         <h3 className="text-sm sm:text-base font-medium text-foreground flex items-center gap-2 mb-3">
           <Globe className="w-4 h-4 text-muted-foreground" />
           Top Regions
@@ -76,7 +76,7 @@ export const TopRegionsWidget: React.FC<TopRegionsWidgetProps> = ({ latestIssueI
   const maxClicks = regions[0].clicks;
 
   return (
-    <div className="bg-surface rounded-lg shadow p-3 sm:p-4">
+    <div className="bg-surface rounded-xl border border-border shadow-soft p-3 sm:p-4">
       <h3 className="text-sm sm:text-base font-medium text-foreground flex items-center gap-2 mb-3">
         <Globe className="w-4 h-4 text-muted-foreground" />
         Top Regions

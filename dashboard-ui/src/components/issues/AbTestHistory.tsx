@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/Card';
 import { formatDate } from '../../utils/issueDetailUtils';
+import { useTenantDateFormat } from '@/contexts/SettingsContext';
 import { cn } from '../../utils/cn';
 import type {
   AbHistoryResponse,
@@ -68,7 +69,10 @@ interface VariantRateProps {
   isWinner: boolean;
 }
 
-const VariantRate: React.FC<VariantRateProps> = ({ variant, dimension, isWinner }) => (
+const VariantRate: React.FC<VariantRateProps> = ({ variant, dimension, isWinner }) => {
+  const { timeZone } = useTenantDateFormat();
+
+  return (
   <div
     className={cn(
       'rounded-md border p-2 text-xs',
@@ -87,7 +91,7 @@ const VariantRate: React.FC<VariantRateProps> = ({ variant, dimension, isWinner 
       {dimension === 'subject'
         ? variant.subject || 'No subject'
         : variant.sendAt
-          ? formatDate(variant.sendAt)
+          ? formatDate(variant.sendAt, true, timeZone)
           : 'No send time'}
     </p>
     <div className="flex items-center gap-3 text-foreground">
@@ -95,13 +99,15 @@ const VariantRate: React.FC<VariantRateProps> = ({ variant, dimension, isWinner 
       <span>Click {formatRate(variant.clickRate)}</span>
     </div>
   </div>
-);
+  );
+};
 
 interface TestRowProps {
   test: AbHistoryTest;
 }
 
 const TestRow: React.FC<TestRowProps> = ({ test }) => {
+  const { timeZone } = useTenantDateFormat();
   const winnerId = test.winnerVariantId ?? null;
   return (
     <li className="rounded-lg border border-border p-4" aria-label={`Issue #${test.issueNumber} A/B test`}>
@@ -117,7 +123,7 @@ const TestRow: React.FC<TestRowProps> = ({ test }) => {
             {dimensionLabel(test.dimension)}
           </span>
           {test.decidedAt && (
-            <span className="text-xs text-muted-foreground">{formatDate(test.decidedAt, false)}</span>
+            <span className="text-xs text-muted-foreground">{formatDate(test.decidedAt, false, timeZone)}</span>
           )}
         </div>
         <div className="flex items-center gap-2 flex-wrap">

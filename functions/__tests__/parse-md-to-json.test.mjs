@@ -7,11 +7,16 @@ import { jest, describe, it, expect, beforeEach } from '@jest/globals';
 let handler;
 let ddbSend;
 
-const loadIsolated = async (snippets = []) => {
+const loadIsolated = async (snippets = [], settingsItem = null) => {
   await jest.isolateModulesAsync(async () => {
     ddbSend = jest.fn((command) => {
       if (command.__type === 'Query') {
         return Promise.resolve({ Items: snippets.map((s) => ({ __snippet: s })) });
+      }
+      // The tenant settings record, when a test supplies one; absent means the
+      // handler falls back to the system defaults.
+      if (command.__type === 'GetItem' && command.Key?.sk === 'settings') {
+        return Promise.resolve(settingsItem ? { Item: settingsItem } : {});
       }
       // GetItem for sponsor/author — not exercised by these tests.
       return Promise.resolve({});
@@ -231,5 +236,128 @@ describe('parse-md-to-json content assembly marker injection', () => {
     for (const section of result.data.content.sections) {
       expect(section.markerStart).toBeUndefined();
     }
+  });
+});
+
+describe('parse-md-to-json tenant settings', () => {
+  beforeEach(() => {
+    jest.resetModules();
+    // The fixture issue is dated 2026-06-25; freeze the clock ahead of that so
+    // it stays a future send and sendAtDate isn't collapsed to "now".
+    jest.useFakeTimers().setSystemTime(new Date('2026-06-01T00:00:00Z'));
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  const issue = (overrides = {}) => ({
+    content: md('Some body copy.'),
+    issueId: 12,
+    tenantId: 'tenant-1',
+    ...overrides,
+  });
+
+  it('builds the subject from the tenant template', async () => {
+    await loadIsolated([], { subjectTemplate: '{{title}} | Picks of the Week #{{number}}' });
+
+    const result = await handler(issue());
+
+    expect(result.subject).toBe('Test Issue | Picks of the Week #12');
+  });
+
+  it('prefers a subject the caller supplied over the tenant template', async () => {
+    // The API sets `subject` on every issue it stages, and the state machine
+    // forwards it here. A tenant template is a default, not an override.
+    await loadIsolated([], { subjectTemplate: '{{title}} | Picks of the Week #{{number}}' });
+
+    const result = await handler(issue({ subject: 'A subject the caller chose' }));
+
+    expect(result.subject).toBe('A subject the caller chose');
+  });
+
+  it('uses the tenant template when the caller subject is null', async () => {
+    // GitHub imports carry `subject: null` so the state machine can reference
+    // the field unconditionally.
+    await loadIsolated([], { subjectTemplate: '{{title}} | Picks of the Week #{{number}}' });
+
+    const result = await handler(issue({ subject: null }));
+
+    expect(result.subject).toBe('Test Issue | Picks of the Week #12');
+  });
+
+  it('falls back to the issue title when no template is configured', async () => {
+    // The subject used to be a hardcoded "Ready, Set, Cloud" string that every
+    // tenant inherited; with nothing configured it is now just the title.
+    await loadIsolated([]);
+
+    const result = await handler(issue());
+
+    expect(result.subject).toBe('Test Issue');
+  });
+
+  it('omits the public URL until the tenant configures where issues live', async () => {
+    await loadIsolated([]);
+
+    const result = await handler(issue());
+
+    expect(result.data.metadata.url).toBeUndefined();
+  });
+
+  it('builds the public URL from the tenant pattern', async () => {
+    await loadIsolated([], { issueUrlPattern: 'https://example.com/newsletter/{{number}}' });
+
+    const result = await handler(issue());
+
+    expect(result.data.metadata.url).toBe('https://example.com/newsletter/12');
+  });
+
+  it('sends a bare frontmatter date at the tenant default send time', async () => {
+    await loadIsolated([], { timezone: 'America/Chicago', defaultSendTime: '09:00' });
+
+    const result = await handler(issue());
+
+    // The frontmatter date is 2026-06-25 with no time; 09:00 CDT is 14:00Z.
+    expect(result.sendAtDate).toBe('2026-06-25T14:00:00.000Z');
+  });
+
+  it('defaults a bare frontmatter date to 09:00 UTC', async () => {
+    await loadIsolated([]);
+
+    const result = await handler(issue());
+
+    expect(result.sendAtDate).toBe('2026-06-25T09:00:00.000Z');
+  });
+
+  it('hangs the cleanup and report jobs off the send instant', async () => {
+    await loadIsolated([], { timezone: 'America/Chicago', defaultSendTime: '09:00' });
+
+    const result = await handler(issue());
+
+    expect(result.listCleanupDate).toBe('2026-06-28T14:00:00');
+    expect(result.reportStatsDate).toBe('2026-06-30T14:00:00');
+  });
+
+  it('formats the display date in the tenant timezone', async () => {
+    await loadIsolated([], { timezone: 'America/Chicago', defaultSendTime: '09:00' });
+
+    const result = await handler(issue());
+
+    expect(result.data.metadata.date).toBe('June 25, 2026');
+  });
+
+  it('still works when the tenant settings read fails', async () => {
+    // A preferences lookup must never take down a publish.
+    await loadIsolated([]);
+    ddbSend.mockImplementation((command) => {
+      if (command.__type === 'Query') return Promise.resolve({ Items: [] });
+      if (command.Key?.sk === 'settings') return Promise.reject(new Error('boom'));
+      return Promise.resolve({});
+    });
+
+    const result = await handler(issue());
+
+    expect(result.subject).toBe('Test Issue');
+    expect(result.sendAtDate).toBe('2026-06-25T09:00:00.000Z');
   });
 });

@@ -1,17 +1,40 @@
-import React, { useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { ExternalLink, Copy, Check, MapPin, ChevronDown, ChevronUp } from 'lucide-react';
 import { InfoTooltip } from '../ui/InfoTooltip';
+import { TablePager } from '../ui/TablePager';
+import { cn } from '../../utils/cn';
 import type { LinkPerformance } from '../../types/issues';
 
 export interface LinkPerformanceTableProps {
   links: LinkPerformance[];
   totalClicks: number;
   onViewOnMap?: (linkUrl: string) => void;
+  /** Rows per page. Exposed for tests; the default suits both phone and desktop. */
+  pageSize?: number;
 }
 
-export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({ links, totalClicks, onViewOnMap }) => {
+const DEFAULT_PAGE_SIZE = 10;
+
+export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({
+  links,
+  totalClicks,
+  onViewOnMap,
+  pageSize = DEFAULT_PAGE_SIZE,
+}) => {
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   const [expandedUrls, setExpandedUrls] = useState<Set<string>>(new Set());
+  const [page, setPage] = useState(0);
+  const listTopRef = useRef<HTMLDivElement>(null);
+
+  // This component survives navigation between issues, so a new set of links can
+  // arrive under a page number from the issue before it — leaving someone on
+  // page 3 of an issue they just opened, past its best-performing links. Reset
+  // during render rather than in an effect so there's no flash of the old page.
+  const [renderedLinks, setRenderedLinks] = useState(links);
+  if (links !== renderedLinks) {
+    setRenderedLinks(links);
+    setPage(0);
+  }
 
   const handleCopyUrl = async (url: string) => {
     try {
@@ -34,6 +57,31 @@ export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({ link
       return newSet;
     });
   };
+
+  const sortedLinks = useMemo(
+    () => [...(links || [])].sort((a, b) => b.clicks - a.clicks),
+    [links]
+  );
+
+  // The pager sits below ten cards, so on a phone the rows it just swapped in
+  // are all above the viewport. Bring the top of the list back into view.
+  const handlePageChange = (nextPage: number) => {
+    setPage(nextPage);
+
+    const listTop = listTopRef.current;
+    if (!listTop || typeof listTop.scrollIntoView !== 'function') return;
+    if (listTop.getBoundingClientRect().top >= 0) return; // already on screen
+
+    listTop.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  // A shorter list (or a different issue) can leave `page` past the end, so the
+  // page actually rendered is always clamped to what exists.
+  const pageCount = Math.max(1, Math.ceil(sortedLinks.length / pageSize));
+  const currentPage = Math.min(page, pageCount - 1);
+  const pageStart = currentPage * pageSize;
+  const visibleLinks = sortedLinks.slice(pageStart, pageStart + pageSize);
+
   if (!links || links.length === 0) {
     return (
       <div className="text-center py-8 text-muted-foreground">
@@ -42,7 +90,6 @@ export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({ link
     );
   }
 
-  const sortedLinks = [...links].sort((a, b) => b.clicks - a.clicks);
   const hasUniqueUsers = sortedLinks.some(link =>
     (link.geoDistribution || []).some(geo =>
       typeof geo.uniqueUsers === 'number' || typeof geo.uniqueClickUsers === 'number'
@@ -66,18 +113,116 @@ export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({ link
   // Helper to get max click count for bar chart scaling
   const maxClicks = sortedLinks.length > 0 ? sortedLinks[0].clicks : 1;
 
+  const actionButtonClasses =
+    'text-muted-foreground hover:text-foreground rounded touch-manipulation ' +
+    'focus:outline-none focus:ring-2 focus:ring-blue-500';
+
   return (
-    <div className="overflow-x-auto -mx-4 sm:mx-0">
-      <div className="inline-block min-w-full align-middle">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <h3 className="text-base sm:text-lg font-semibold">Link Performance</h3>
-            <InfoTooltip
-              label="Link Performance"
-              description="Shows which links in your email received the most clicks. Top 3 performing links are highlighted. Use the map icon to view geographic distribution for each link."
-            />
-          </div>
-        </div>
+    <div>
+      {/* Scroll target for page changes. `scroll-mt-24` keeps the heading clear
+          of the sticky section nav when we scroll back to it. */}
+      <div ref={listTopRef} className="flex items-center gap-2 mb-3 scroll-mt-24">
+        <h3 className="text-base sm:text-lg font-semibold">Link Performance</h3>
+        <InfoTooltip
+          label="Link Performance"
+          description="Shows which links in your email received the most clicks. Top 3 performing links are highlighted. Use the map icon to view geographic distribution for each link."
+        />
+      </div>
+
+      {/* Mobile: a card per link. The desktop table has five columns; squeezing
+          those into a phone-width viewport left the URL unreadable and the
+          numbers cramped, so narrow screens get a stacked layout instead. */}
+      <ol className="sm:hidden space-y-2" aria-label="Link performance">
+        {visibleLinks.map((link, index) => {
+          const rank = pageStart + index + 1;
+          const isTopThree = topThreeUrls.has(link.url);
+
+          return (
+            <li
+              key={`${link.url}-${index}`}
+              className={cn(
+                'rounded-lg border border-border p-3',
+                isTopThree && 'border-blue-200 bg-blue-50/60 dark:border-blue-900 dark:bg-blue-900/20'
+              )}
+            >
+              <div className="flex items-start gap-2">
+                <span
+                  className="flex-shrink-0 mt-0.5 w-6 h-6 rounded-full bg-muted text-[11px] font-semibold text-muted-foreground flex items-center justify-center"
+                  aria-hidden="true"
+                >
+                  {rank}
+                </span>
+                <a
+                  href={link.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex-1 min-w-0 text-sm text-blue-600 dark:text-blue-400 break-all line-clamp-2 focus:outline-none focus:ring-2 focus:ring-blue-500 rounded"
+                  aria-label={`Open link ranked ${rank}: ${link.url}`}
+                >
+                  {link.url}
+                </a>
+              </div>
+
+              <div className="mt-2 flex items-center gap-3">
+                <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-blue-500"
+                    style={{ width: `${(link.clicks / maxClicks) * 100}%` }}
+                    aria-hidden="true"
+                  />
+                </div>
+                <span className="text-sm font-medium whitespace-nowrap">
+                  {link.clicks.toLocaleString()} {link.clicks === 1 ? 'click' : 'clicks'}
+                </span>
+                <span className="text-sm font-medium text-blue-600 dark:text-blue-400 whitespace-nowrap">
+                  {link.percentOfTotal.toFixed(1)}%
+                </span>
+              </div>
+
+              <div className="mt-1 flex items-center gap-1">
+                <a
+                  href={link.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={cn(actionButtonClasses, 'inline-flex items-center justify-center min-w-[44px] min-h-[44px]')}
+                  aria-label={`Open ${link.url} in a new tab`}
+                >
+                  <ExternalLink className="w-4 h-4" aria-hidden="true" />
+                </a>
+                <button
+                  type="button"
+                  onClick={() => handleCopyUrl(link.url)}
+                  className={cn(actionButtonClasses, 'inline-flex items-center justify-center min-w-[44px] min-h-[44px]')}
+                  aria-label="Copy URL to clipboard"
+                >
+                  {copiedUrl === link.url ? (
+                    <Check className="w-4 h-4 text-green-600" aria-hidden="true" />
+                  ) : (
+                    <Copy className="w-4 h-4" aria-hidden="true" />
+                  )}
+                </button>
+                {onViewOnMap && link.geoDistribution && link.geoDistribution.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => onViewOnMap(link.url)}
+                    className={cn(actionButtonClasses, 'inline-flex items-center justify-center min-w-[44px] min-h-[44px]')}
+                    aria-label="View on map"
+                  >
+                    <MapPin className="w-4 h-4" aria-hidden="true" />
+                  </button>
+                )}
+                {link.position > 0 && (
+                  <span className="ml-auto text-xs text-muted-foreground">
+                    Position {link.position}
+                  </span>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+
+      <div className="hidden sm:block overflow-x-auto">
         <table className="min-w-full border-collapse">
           <thead>
             <tr className="border-b-2 border-border bg-muted/30">
@@ -90,7 +235,7 @@ export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({ link
                   />
                 </div>
               </th>
-              <th className="text-right py-2 sm:py-3 px-2 sm:px-4 font-semibold text-xs sm:text-sm text-foreground hidden sm:table-cell">
+              <th className="text-right py-2 sm:py-3 px-2 sm:px-4 font-semibold text-xs sm:text-sm text-foreground">
                 <div className="flex items-center justify-end gap-1">
                   Position
                   <InfoTooltip
@@ -131,7 +276,7 @@ export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({ link
             </tr>
           </thead>
           <tbody>
-            {sortedLinks.map((link, index) => {
+            {visibleLinks.map((link, index) => {
               const isTopThree = topThreeUrls.has(link.url);
               const isTruncated = shouldTruncateUrl(link.url);
               const isExpanded = expandedUrls.has(link.url);
@@ -141,9 +286,10 @@ export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({ link
               return (
                 <tr
                   key={`${link.url}-${index}`}
-                  className={`border-b border-border hover:bg-muted/20 transition-colors ${
-                    isTopThree ? 'bg-blue-50/50' : ''
-                  }`}
+                  className={cn(
+                    'border-b border-border hover:bg-muted/20 transition-colors',
+                    isTopThree && 'bg-blue-50/50 dark:bg-blue-900/20'
+                  )}
                 >
                   <td className="py-2 sm:py-3 px-2 sm:px-4">
                     <div className="flex items-center gap-1 sm:gap-2">
@@ -151,7 +297,7 @@ export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({ link
                         href={link.url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="flex items-center gap-1 text-blue-600 hover:text-blue-700 hover:underline focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 rounded text-xs sm:text-sm touch-manipulation"
+                        className="flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:text-blue-700 hover:underline focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 rounded text-xs sm:text-sm touch-manipulation"
                         aria-label={`Open link: ${link.url}`}
                       >
                         <span className={isTruncated && !isExpanded ? 'truncate max-w-[150px] sm:max-w-xs' : 'break-all'}>
@@ -162,7 +308,7 @@ export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({ link
                       {isTruncated && (
                         <button
                           onClick={() => toggleUrlExpansion(link.url)}
-                          className="text-muted-foreground hover:text-foreground p-1 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          className={cn(actionButtonClasses, 'p-1')}
                           aria-label={isExpanded ? 'Collapse URL' : 'Expand URL'}
                         >
                           {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
@@ -170,7 +316,7 @@ export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({ link
                       )}
                       <button
                         onClick={() => handleCopyUrl(link.url)}
-                        className="text-muted-foreground hover:text-foreground p-1 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 touch-manipulation"
+                        className={cn(actionButtonClasses, 'p-1')}
                         aria-label="Copy URL to clipboard"
                       >
                         {copiedUrl === link.url ? (
@@ -182,7 +328,7 @@ export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({ link
                       {onViewOnMap && link.geoDistribution && link.geoDistribution.length > 0 && (
                         <button
                           onClick={() => onViewOnMap(link.url)}
-                          className="text-muted-foreground hover:text-foreground p-1 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 touch-manipulation"
+                          className={cn(actionButtonClasses, 'p-1')}
                           aria-label="View on map"
                         >
                           <MapPin className="w-3 h-3 sm:w-4 sm:h-4" />
@@ -190,7 +336,7 @@ export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({ link
                       )}
                     </div>
                   </td>
-                  <td className="py-2 sm:py-3 px-2 sm:px-4 text-right text-xs sm:text-sm text-muted-foreground hidden sm:table-cell">
+                  <td className="py-2 sm:py-3 px-2 sm:px-4 text-right text-xs sm:text-sm text-muted-foreground">
                     {link.position > 0 ? link.position : '—'}
                   </td>
                   {hasUniqueUsers && (
@@ -200,7 +346,7 @@ export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({ link
                   )}
                   <td className="py-2 sm:py-3 px-2 sm:px-4 text-right whitespace-nowrap">
                     <div className="flex items-center justify-end gap-2">
-                      <div className="hidden sm:block w-16 h-4 bg-gray-200 rounded-full overflow-hidden">
+                      <div className="hidden sm:block w-16 h-4 bg-muted rounded-full overflow-hidden">
                         <div
                           className="h-full bg-blue-500 transition-all duration-300"
                           style={{ width: `${barWidth}%` }}
@@ -212,10 +358,10 @@ export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({ link
                   </td>
                   <td className="py-2 sm:py-3 px-2 sm:px-4 text-right whitespace-nowrap">
                     <div className="flex flex-col items-end gap-1">
-                      <span className="text-xs sm:text-sm font-medium text-blue-600">
+                      <span className="text-xs sm:text-sm font-medium text-blue-600 dark:text-blue-400">
                         {link.percentOfTotal.toFixed(1)}%
                       </span>
-                      <div className="w-full max-w-[60px] h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                      <div className="w-full max-w-[60px] h-1.5 bg-muted rounded-full overflow-hidden">
                         <div
                           className="h-full bg-blue-600 transition-all duration-300"
                           style={{ width: `${link.percentOfTotal}%` }}
@@ -234,7 +380,7 @@ export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({ link
                 className="py-2 sm:py-3 px-2 sm:px-4 font-semibold text-xs sm:text-sm text-foreground"
                 colSpan={hasUniqueUsers ? 3 : 2}
               >
-                Total
+                Total (all {sortedLinks.length.toLocaleString()} links)
               </td>
               <td className="py-2 sm:py-3 px-2 sm:px-4 text-right font-semibold text-xs sm:text-sm text-foreground whitespace-nowrap">
                 {totalClicks.toLocaleString()}
@@ -247,14 +393,24 @@ export const LinkPerformanceTable: React.FC<LinkPerformanceTableProps> = ({ link
         </table>
       </div>
 
-      <div className="mt-4 text-xs text-muted-foreground bg-muted/30 p-3 rounded-lg">
-        <p className="font-semibold mb-1">Understanding Link Performance:</p>
-        <p>
-          The top 3 performing links are highlighted with a blue background.
-          Links positioned earlier in your email typically receive more clicks.
-          Use the map icon to see geographic distribution for each link and identify regional preferences.
+      <TablePager
+        page={currentPage}
+        pageSize={pageSize}
+        totalItems={sortedLinks.length}
+        onPageChange={handlePageChange}
+        itemLabel="links"
+      />
+
+      <details className="mt-4 text-xs text-muted-foreground bg-muted/30 p-3 rounded-lg">
+        <summary className="font-semibold cursor-pointer touch-manipulation min-h-[24px]">
+          Understanding link performance
+        </summary>
+        <p className="mt-2">
+          The top 3 performing links are highlighted. Links positioned earlier in your email
+          typically receive more clicks. Use the map icon to see geographic distribution for each
+          link and identify regional preferences.
         </p>
-      </div>
+      </details>
     </div>
   );
 };

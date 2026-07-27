@@ -30,22 +30,36 @@ import type {
   CreateSponsorshipRequest,
   UpdateSponsorshipRequest,
 } from '../../services/sponsorService';
+import { formatCalendarDate, formatInTimeZone } from '@/utils/dateFormatting';
+import { useTenantDateFormat } from '@/contexts/SettingsContext';
 
 // --- Helpers ---
 
-const formatDate = (dateString?: string) => {
+const formatDate = (dateString?: string, timeZone?: string) => {
   if (!dateString) return '—';
-  return new Date(dateString).toLocaleDateString('en-US', {
+  return formatInTimeZone(dateString, timeZone, {
     year: 'numeric', month: 'short', day: 'numeric',
-  });
+  }, 'en-US');
 };
 
-const formatDateTime = (dateString?: string) => {
+/**
+ * Sponsorship dates are entered in a `type="date"` field and stored verbatim,
+ * so they name a day, not an instant. Rendering them in the tenant's zone
+ * would move them a day earlier anywhere west of UTC.
+ */
+const formatSponsorshipDate = (dateString?: string) => {
   if (!dateString) return '—';
-  return new Date(dateString).toLocaleString('en-US', {
+  return formatCalendarDate(dateString, {
+    year: 'numeric', month: 'short', day: 'numeric',
+  }, 'en-US');
+};
+
+const formatDateTime = (dateString?: string, timeZone?: string) => {
+  if (!dateString) return '—';
+  return formatInTimeZone(dateString, timeZone, {
     year: 'numeric', month: 'short', day: 'numeric',
     hour: '2-digit', minute: '2-digit',
-  });
+  }, 'en-US');
 };
 
 const formatCurrency = (amount: number) =>
@@ -55,10 +69,10 @@ const formatCurrency = (amount: number) =>
 // --- Sub-components ---
 
 /** Archived status badge */
-const ArchivedBadge: React.FC<{ archivedAt?: string }> = ({ archivedAt }) => (
+const ArchivedBadge: React.FC<{ archivedAt?: string; timeZone?: string }> = ({ archivedAt, timeZone }) => (
   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-warning-100 text-warning-800 dark:bg-warning-900/30 dark:text-warning-300">
     <Archive className="w-3 h-3" />
-    Archived{archivedAt ? ` on ${formatDate(archivedAt)}` : ''}
+    Archived{archivedAt ? ` on ${formatDate(archivedAt, timeZone)}` : ''}
   </span>
 );
 
@@ -131,6 +145,8 @@ const EditableField: React.FC<{
 // --- Main Component ---
 
 export const SponsorDetailPage: React.FC = () => {
+  // Dates render in the newsletter's timezone, not the viewer's.
+  const { timeZone } = useTenantDateFormat();
   const { sponsorId } = useParams<{ sponsorId: string }>();
   const navigate = useNavigate();
   const { addToast } = useToast();
@@ -566,7 +582,7 @@ export const SponsorDetailPage: React.FC = () => {
           <div>
             <div className="flex items-center gap-3 mb-1">
               <h1 className="text-2xl sm:text-3xl font-bold text-foreground">{sponsor.sponsorName}</h1>
-              {sponsor.status === 'archived' && <ArchivedBadge archivedAt={sponsor.archivedAt} />}
+              {sponsor.status === 'archived' && <ArchivedBadge archivedAt={sponsor.archivedAt} timeZone={timeZone} />}
             </div>
             {sponsor.shortDescription && (
               <p className="text-sm text-muted-foreground">{sponsor.shortDescription}</p>
@@ -574,7 +590,7 @@ export const SponsorDetailPage: React.FC = () => {
             {sponsor.lastOutreachAt && (
               <p className="text-xs text-muted-foreground mt-1">
                 <Clock className="w-3 h-3 inline mr-1" />
-                Last outreach: {formatDateTime(sponsor.lastOutreachAt)}
+                Last outreach: {formatDateTime(sponsor.lastOutreachAt, timeZone)}
               </p>
             )}
           </div>
@@ -679,11 +695,11 @@ export const SponsorDetailPage: React.FC = () => {
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">Created</p>
-                <p className="text-sm font-medium text-foreground">{formatDate(sponsor.createdAt)}</p>
+                <p className="text-sm font-medium text-foreground">{formatDate(sponsor.createdAt, timeZone)}</p>
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">Updated</p>
-                <p className="text-sm font-medium text-foreground">{formatDate(sponsor.updatedAt)}</p>
+                <p className="text-sm font-medium text-foreground">{formatDate(sponsor.updatedAt, timeZone)}</p>
               </div>
             </div>
           </CardContent>
@@ -706,7 +722,7 @@ export const SponsorDetailPage: React.FC = () => {
           <Card>
             <CardContent className="text-center py-4">
               <p className="text-xs text-muted-foreground">Last Sponsored</p>
-              <p className="text-xl font-bold text-foreground">{formatDate(sponsor.lastSponsoredDate)}</p>
+              <p className="text-xl font-bold text-foreground">{formatSponsorshipDate(sponsor.lastSponsoredDate)}</p>
             </CardContent>
           </Card>
         </div>
@@ -785,7 +801,7 @@ export const SponsorDetailPage: React.FC = () => {
                         <td className="px-4 py-3 text-sm text-foreground max-w-[200px] truncate" title={entry.issueTitle}>
                           {entry.issueTitle || entry.issueId}
                         </td>
-                        <td className="px-4 py-3 text-sm text-muted-foreground whitespace-nowrap">{formatDate(entry.sponsorshipDate)}</td>
+                        <td className="px-4 py-3 text-sm text-muted-foreground whitespace-nowrap">{formatSponsorshipDate(entry.sponsorshipDate)}</td>
                         <td className="px-4 py-3 text-sm text-foreground whitespace-nowrap">{formatCurrency(entry.amountCharged)}</td>
                         <td className="px-4 py-3">
                           <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${statusColor(entry.status)}`}>
@@ -862,7 +878,7 @@ export const SponsorDetailPage: React.FC = () => {
               <CardTitle>Outreach</CardTitle>
               {sponsor.lastOutreachAt && (
                 <span className="text-xs text-muted-foreground">
-                  Last: {formatDateTime(sponsor.lastOutreachAt)}
+                  Last: {formatDateTime(sponsor.lastOutreachAt, timeZone)}
                 </span>
               )}
             </div>
@@ -873,7 +889,7 @@ export const SponsorDetailPage: React.FC = () => {
               <div className="mb-4">
                 <div className="flex items-center gap-2 mb-2">
                   <p className="text-xs text-muted-foreground">
-                    Generated {formatDateTime(latestOutreach.generatedAt)}
+                    Generated {formatDateTime(latestOutreach.generatedAt, timeZone)}
                   </p>
                   {latestOutreach.isFallback && (
                     <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-warning-100 text-warning-800 dark:bg-warning-900/30 dark:text-warning-300">
@@ -917,7 +933,7 @@ export const SponsorDetailPage: React.FC = () => {
                       <div key={email.generatedAt} className="p-3 rounded-md border border-border bg-muted/10">
                         <div className="flex items-center justify-between mb-1">
                           <div className="flex items-center gap-2">
-                            <p className="text-xs text-muted-foreground">{formatDateTime(email.generatedAt)}</p>
+                            <p className="text-xs text-muted-foreground">{formatDateTime(email.generatedAt, timeZone)}</p>
                             {email.isFallback && (
                               <span className="text-xs text-warning-600">Fallback</span>
                             )}

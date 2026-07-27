@@ -22,6 +22,8 @@ import {
 } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid';
 import { cn } from '@/utils/cn';
+import { formatInTimeZone } from '@/utils/dateFormatting';
+import { useTenantDateFormat } from '@/contexts/SettingsContext';
 
 interface SenderEmailListProps {
   senders: SenderEmail[];
@@ -38,6 +40,8 @@ export const SenderEmailList: React.FC<SenderEmailListProps> = ({
   onSenderUpdated,
   isLoading = false,
 }) => {
+  // Dates render in the newsletter's timezone, not the viewer's.
+  const { timeZone } = useTenantDateFormat();
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
@@ -408,7 +412,7 @@ export const SenderEmailList: React.FC<SenderEmailListProps> = ({
                   )}
 
                   <div className="flex items-center space-x-1">
-                    <span>Added {new Date(sender.createdAt).toLocaleDateString()}</span>
+                    <span>Added {formatInTimeZone(sender.createdAt, timeZone, {})}</span>
                   </div>
                 </div>
               </div>

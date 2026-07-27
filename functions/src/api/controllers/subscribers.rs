@@ -409,7 +409,10 @@ async fn handle_get_subscriber(
         // end user still only ever sees the obscured "Something went wrong" that
         // format_error_response returns for AwsError.
         .map_err(|e| {
-            AppError::AwsError(format!("DynamoDB GetItem failed: {}", DisplayErrorContext(&e)))
+            AppError::AwsError(format!(
+                "DynamoDB GetItem failed: {}",
+                DisplayErrorContext(&e)
+            ))
         })?;
 
     let item = result

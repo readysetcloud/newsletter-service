@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { IssueFormPage } from '../IssueFormPage';
 import { issuesService } from '@/services/issuesService';
 import { templateService } from '@/services/templateService';
+import { settingsService } from '@/services/settingsService';
+import { SettingsProvider } from '@/contexts/SettingsContext';
 
 vi.mock('@/services/issuesService', () => ({
   issuesService: {
@@ -25,11 +27,29 @@ let mockParams: Record<string, string> = {};
 vi.mock('react-router-dom', () => ({
   useNavigate: () => mockNavigate,
   useParams: () => mockParams,
+  // The schedule field links to Settings; render it as a plain anchor so these
+  // tests don't need a Router.
+  Link: ({ to, children, ...props }: { to: string; children: React.ReactNode }) => (
+    <a href={to} {...props}>
+      {children}
+    </a>
+  ),
 }));
 
 const mockAddToast = vi.fn();
 vi.mock('@/components/ui/Toast', () => ({
   useToast: () => ({ addToast: mockAddToast }),
+}));
+
+// Only the tenant-timezone block below renders a SettingsProvider; everywhere
+// else these mocks are inert and the form falls back to UTC as before.
+vi.mock('@/services/settingsService', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/services/settingsService')>()),
+  settingsService: { getSettings: vi.fn(), updateSettings: vi.fn() },
+}));
+
+vi.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({ isAuthenticated: true }),
 }));
 
 // MDXEditor (lexical) is too heavy for jsdom; replace the wrapper with a plain
@@ -475,5 +495,121 @@ describe('IssueFormPage personalized section order (contentAssembly)', () => {
     });
     const payload = vi.mocked(issuesService.updateIssue).mock.calls[0][1];
     expect('contentAssembly' in payload).toBe(false);
+  });
+});
+
+describe('IssueFormPage tenant timezone', () => {
+  const scheduledIssue = {
+    id: '5',
+    issueNumber: 5,
+    subject: 'Existing Issue',
+    content: '# Existing content',
+    status: 'draft' as const,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    // 09:00 in Chicago, 14:00 in UTC — the two render differently, so which
+    // zone the form used is visible in the field.
+    scheduledAt: '2026-08-01T14:00:00Z',
+  };
+
+  const chicagoSettings = {
+    success: true as const,
+    data: {
+      settings: { timezone: 'America/Chicago', defaultSendTime: '09:00' },
+      defaults: { timezone: 'UTC', defaultSendTime: '09:00' },
+      configured: ['timezone', 'defaultSendTime'],
+      updatedAt: '2026-07-25T00:00:00Z',
+    },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockParams = { id: '5' };
+    vi.mocked(templateService.listTemplates).mockResolvedValue({
+      success: true,
+      data: { total: 0, templates: [] },
+    });
+    vi.mocked(issuesService.getIssue).mockResolvedValue({
+      success: true,
+      data: scheduledIssue as never,
+    });
+  });
+
+  const renderWithSettings = () =>
+    render(
+      <SettingsProvider>
+        <IssueFormPage />
+      </SettingsProvider>
+    );
+
+  it('fetches the issue once even though settings arrive afterwards', async () => {
+    // The timezone landing late changes the date formatter, which used to
+    // change `loadIssue` and re-run the load effect: a second GET that reset
+    // the form and could race the first response.
+    let releaseSettings: (value: unknown) => void = () => {};
+    vi.mocked(settingsService.getSettings).mockReturnValue(
+      new Promise((resolve) => {
+        releaseSettings = resolve;
+      }) as never
+    );
+
+    renderWithSettings();
+
+    const field = await screen.findByLabelText<HTMLInputElement>(/schedule publication/i);
+    await waitFor(() => expect(field.value).toBe('2026-08-01T14:00'));
+    expect(issuesService.getIssue).toHaveBeenCalledTimes(1);
+
+    releaseSettings(chicagoSettings);
+
+    await waitFor(() => expect(field.value).toBe('2026-08-01T09:00'));
+    expect(issuesService.getIssue).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-expresses a loaded schedule when the timezone resolves late', async () => {
+    let releaseSettings: (value: unknown) => void = () => {};
+    vi.mocked(settingsService.getSettings).mockReturnValue(
+      new Promise((resolve) => {
+        releaseSettings = resolve;
+      }) as never
+    );
+
+    renderWithSettings();
+
+    const field = await screen.findByLabelText<HTMLInputElement>(/schedule publication/i);
+    await waitFor(() => expect(field.value).toBe('2026-08-01T14:00'));
+
+    releaseSettings(chicagoSettings);
+
+    // Same instant, now shown as the newsletter's wall clock.
+    await waitFor(() => expect(field.value).toBe('2026-08-01T09:00'));
+  });
+
+  it('never overwrites an edit the author already made', async () => {
+    // Reprojection is a correction to an untouched form, not a licence to
+    // discard typing that happened while settings were in flight.
+    let releaseSettings: (value: unknown) => void = () => {};
+    vi.mocked(settingsService.getSettings).mockReturnValue(
+      new Promise((resolve) => {
+        releaseSettings = resolve;
+      }) as never
+    );
+
+    renderWithSettings();
+
+    const field = await screen.findByLabelText<HTMLInputElement>(/schedule publication/i);
+    await waitFor(() => expect(field.value).toBe('2026-08-01T14:00'));
+
+    fireEvent.change(field, { target: { value: '2026-09-15T07:45' } });
+    releaseSettings(chicagoSettings);
+
+    // The helper text under the field names the newsletter's zone, so it only
+    // says "America/Chicago" once settings have landed and re-rendered. Waiting
+    // on that is what makes this a real test rather than a race.
+    expect(await screen.findByText(/America\/Chicago/)).toBeInTheDocument();
+    // Flush anything the zone change queued — without this the assertion can
+    // run before a stray refetch lands and pass for the wrong reason.
+    await act(async () => {});
+
+    expect(field.value).toBe('2026-09-15T07:45');
   });
 });

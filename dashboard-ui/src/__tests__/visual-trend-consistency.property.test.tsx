@@ -132,9 +132,9 @@ describe('Property 16: Visual Trend Consistency', () => {
         <HealthStatusLabel status="healthy" label="Stable" />
       );
 
-      // Property: Healthy status should have green background
+      // Property: Healthy status should have green (success token) background
       const labelElement = container.querySelector('span');
-      expect(labelElement?.className).toMatch(/bg-green-100|text-green-800/);
+      expect(labelElement?.className).toMatch(/bg-(green|success)-100|text-(green|success)-800/);
     });
 
     it('should use yellow for warning status', () => {
@@ -142,9 +142,9 @@ describe('Property 16: Visual Trend Consistency', () => {
         <HealthStatusLabel status="warning" label="Declining" />
       );
 
-      // Property: Warning status should have yellow background
+      // Property: Warning status should have yellow (warning token) background
       const labelElement = container.querySelector('span');
-      expect(labelElement?.className).toMatch(/bg-yellow-100|text-yellow-800/);
+      expect(labelElement?.className).toMatch(/bg-(yellow|warning)-100|text-(yellow|warning)-800/);
     });
 
     it('should use red for critical status', () => {
@@ -152,9 +152,9 @@ describe('Property 16: Visual Trend Consistency', () => {
         <HealthStatusLabel status="critical" label="Declining" />
       );
 
-      // Property: Critical status should have red background
+      // Property: Critical status should have red (error token) background
       const labelElement = container.querySelector('span');
-      expect(labelElement?.className).toMatch(/bg-red-100|text-red-800/);
+      expect(labelElement?.className).toMatch(/bg-(red|error)-100|text-(red|error)-800/);
     });
   });
 

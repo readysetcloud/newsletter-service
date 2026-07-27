@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { FlaskConical, Trophy, Mail, Clock, CheckCircle2, MinusCircle, Loader2, AlertTriangle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/Card';
 import { formatDate } from '../../utils/issueDetailUtils';
+import { useTenantDateFormat } from '@/contexts/SettingsContext';
 import { cn } from '../../utils/cn';
 import type { AbTest, VariantStats, VariantId, AbTestVariant } from '../../types/issues';
 
@@ -10,6 +11,14 @@ export interface AbTestResultsProps {
   abTest: AbTest;
   /** Per-variant engagement counters returned alongside the issue. */
   variantStats?: VariantStats[];
+  /**
+   * Whether the issue has started sending. A test only exists once a sample has
+   * gone out — before that this is a saved configuration, and saying anything
+   * about results (or spinning a progress indicator) is a claim about a test
+   * that hasn't run. Defaults to true so existing published-issue callers are
+   * unaffected.
+   */
+  hasStarted?: boolean;
 }
 
 const VARIANT_LABELS: Record<VariantId, string> = {
@@ -52,6 +61,8 @@ interface VariantCardProps {
   stats?: VariantStats;
   isWinner: boolean;
   winMetric: NonNullable<AbTest['winMetric']>;
+  /** False while the issue is unsent, when there is nothing to measure. */
+  hasStarted: boolean;
 }
 
 const VariantCard: React.FC<VariantCardProps> = ({
@@ -61,7 +72,11 @@ const VariantCard: React.FC<VariantCardProps> = ({
   stats,
   isWinner,
   winMetric,
+  hasStarted,
 }) => {
+  // A variant's send time is a wall clock in the newsletter's zone, not the
+  // viewer's.
+  const { timeZone } = useTenantDateFormat();
   const deliveries = stats?.deliveries ?? 0;
   const opens = stats?.opens ?? 0;
   const clicks = stats?.clicks ?? 0;
@@ -74,7 +89,7 @@ const VariantCard: React.FC<VariantCardProps> = ({
           ? 'border-success-400 bg-success-50 dark:border-success-500 dark:bg-success-900/20'
           : 'border-border bg-muted/40'
       )}
-      aria-label={`${VARIANT_LABELS[variantId]} results`}
+      aria-label={`${VARIANT_LABELS[variantId]}${hasStarted ? ' results' : ''}`}
     >
       <div className="flex items-start justify-between gap-2 mb-3">
         <span className="text-sm font-semibold text-foreground">{VARIANT_LABELS[variantId]}</span>
@@ -94,32 +109,48 @@ const VariantCard: React.FC<VariantCardProps> = ({
         ) : (
           <span className="inline-flex items-center gap-1">
             <Clock className="w-3.5 h-3.5" aria-hidden="true" />
-            {variant?.sendAt ? formatDate(variant.sendAt) : 'No send time set'}
+            {variant?.sendAt ? formatDate(variant.sendAt, true, timeZone) : 'No send time set'}
           </span>
         )}
       </div>
 
-      <dl className="grid grid-cols-2 gap-3">
-        <div className={cn('rounded-md p-2', winMetric === 'openRate' && 'ring-1 ring-primary-300 dark:ring-primary-700')}>
-          <dt className="text-xs text-muted-foreground font-medium">Open rate</dt>
-          <dd className="text-lg sm:text-xl font-bold text-foreground">{formatPercent(opens, deliveries)}</dd>
-          <dd className="text-xs text-muted-foreground">{opens} / {deliveries} delivered</dd>
-        </div>
-        <div className={cn('rounded-md p-2', winMetric === 'clickRate' && 'ring-1 ring-primary-300 dark:ring-primary-700')}>
-          <dt className="text-xs text-muted-foreground font-medium">Click rate</dt>
-          <dd className="text-lg sm:text-xl font-bold text-foreground">{formatPercent(clicks, deliveries)}</dd>
-          <dd className="text-xs text-muted-foreground">{clicks} / {deliveries} delivered</dd>
-        </div>
-      </dl>
+      {hasStarted ? (
+        <dl className="grid grid-cols-2 gap-3">
+          <div className={cn('rounded-md p-2', winMetric === 'openRate' && 'ring-1 ring-primary-300 dark:ring-primary-700')}>
+            <dt className="text-xs text-muted-foreground font-medium">Open rate</dt>
+            <dd className="text-lg sm:text-xl font-bold text-foreground">{formatPercent(opens, deliveries)}</dd>
+            <dd className="text-xs text-muted-foreground">{opens} / {deliveries} delivered</dd>
+          </div>
+          <div className={cn('rounded-md p-2', winMetric === 'clickRate' && 'ring-1 ring-primary-300 dark:ring-primary-700')}>
+            <dt className="text-xs text-muted-foreground font-medium">Click rate</dt>
+            <dd className="text-lg sm:text-xl font-bold text-foreground">{formatPercent(clicks, deliveries)}</dd>
+            <dd className="text-xs text-muted-foreground">{clicks} / {deliveries} delivered</dd>
+          </div>
+        </dl>
+      ) : (
+        // Rendering "—" and "0 / 0 delivered" here would read as a measurement
+        // that came back empty, rather than one that hasn't happened.
+        <p className="text-xs text-muted-foreground">
+          Will be measured on {winMetric === 'openRate' ? 'open rate' : 'click rate'} once sent.
+        </p>
+      )}
     </div>
   );
 };
 
 VariantCard.displayName = 'VariantCard';
 
+/** Shown in place of a lifecycle status while the issue is still unsent. */
+const NOT_STARTED_CONFIG = {
+  label: 'Not started',
+  className:
+    'bg-gray-100 text-gray-800 border-gray-300 dark:bg-gray-700 dark:text-gray-100 dark:border-gray-500',
+};
+
 export const AbTestResults: React.FC<AbTestResultsProps> = ({
   abTest,
   variantStats,
+  hasStarted = true,
 }) => {
   const status = abTest.status ?? 'pending';
   const winMetric = abTest.winMetric ?? 'openRate';
@@ -138,10 +169,11 @@ export const AbTestResults: React.FC<AbTestResultsProps> = ({
     return map;
   }, [abTest.variants]);
 
-  const isDecided = status === 'sent' || status === 'inconclusive' || status === 'evaluating';
+  const isDecided =
+    hasStarted && (status === 'sent' || status === 'inconclusive' || status === 'evaluating');
 
   const dimensionLabel = abTest.dimension === 'subject' ? 'Subject line' : 'Send time';
-  const statusConfig = STATUS_CONFIG[status];
+  const statusConfig = hasStarted ? STATUS_CONFIG[status] : NOT_STARTED_CONFIG;
 
   return (
     <Card>
@@ -149,7 +181,7 @@ export const AbTestResults: React.FC<AbTestResultsProps> = ({
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <CardTitle className="flex items-center gap-2">
             <FlaskConical className="w-5 h-5" aria-hidden="true" />
-            A/B Test Results
+            {hasStarted ? 'A/B Test Results' : 'A/B Test'}
           </CardTitle>
           <div className="flex items-center gap-2">
             <span className="inline-flex items-center gap-1 text-xs sm:text-sm text-muted-foreground font-medium">
@@ -177,7 +209,7 @@ export const AbTestResults: React.FC<AbTestResultsProps> = ({
         <div
           className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4"
           role="region"
-          aria-label="A/B test variant results"
+          aria-label={hasStarted ? 'A/B test variant results' : 'A/B test variants'}
         >
           <VariantCard
             variantId="a"
@@ -186,6 +218,7 @@ export const AbTestResults: React.FC<AbTestResultsProps> = ({
             stats={statsById.get('a')}
             isWinner={winnerVariantId === 'a'}
             winMetric={winMetric}
+            hasStarted={hasStarted}
           />
           <VariantCard
             variantId="b"
@@ -194,6 +227,7 @@ export const AbTestResults: React.FC<AbTestResultsProps> = ({
             stats={statsById.get('b')}
             isWinner={winnerVariantId === 'b'}
             winMetric={winMetric}
+            hasStarted={hasStarted}
           />
         </div>
 
@@ -203,7 +237,20 @@ export const AbTestResults: React.FC<AbTestResultsProps> = ({
           role="status"
           aria-live="polite"
         >
-          {!isDecided ? (
+          {!hasStarted ? (
+            <div className="flex items-start gap-2">
+              <FlaskConical className="w-4 h-4 mt-0.5 text-muted-foreground" aria-hidden="true" />
+              <div>
+                <p className="text-sm font-medium text-foreground">
+                  Configured — the test starts when this issue sends
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Each variant goes to part of the audience, and the winner is sent to the rest.
+                  No results exist yet.
+                </p>
+              </div>
+            </div>
+          ) : !isDecided ? (
             <div className="flex items-start gap-2">
               <Loader2 className="w-4 h-4 mt-0.5 text-blue-600 dark:text-blue-400 animate-spin" aria-hidden="true" />
               <div>
@@ -262,8 +309,8 @@ export const AbTestResults: React.FC<AbTestResultsProps> = ({
           <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 dark:border-amber-500/50 dark:bg-amber-900/20 p-3 mb-4">
             <AlertTriangle className="w-4 h-4 mt-0.5 text-amber-600 dark:text-amber-400 flex-shrink-0" aria-hidden="true" />
             <p className="text-xs text-amber-800 dark:text-amber-200">
-              This test is decided on open rate. Apple Mail Privacy Protection can inflate open rates, so
-              click rate may be a more reliable signal.
+              This test {hasStarted ? 'is' : 'will be'} decided on open rate. Apple Mail Privacy
+              Protection can inflate open rates, so click rate may be a more reliable signal.
             </p>
           </div>
         )}

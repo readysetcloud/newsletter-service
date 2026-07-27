@@ -1,8 +1,15 @@
 import React, { useMemo } from 'react';
-import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { StatTile, SegmentedControl } from '@readysetcloud/ui';
 import { InfoTooltip } from '../ui/InfoTooltip';
 import { calculateComparison, formatPercentageValue, formatNumber } from '../../utils/issueDetailUtils';
 import type { IssueMetrics } from '../../types/issues';
+
+export type ComparisonMode = 'average' | 'last' | 'best';
+
+export type MetricSparklines = Partial<Record<
+  'openRate' | 'clickRate' | 'clickToOpenRate' | 'bounceRate' | 'complaintRate' | 'unsubscribeRate',
+  number[]
+>>;
 
 export interface KeyMetricsSummaryProps {
   metrics: {
@@ -19,7 +26,22 @@ export interface KeyMetricsSummaryProps {
     lastIssue?: IssueMetrics;
     bestIssue?: IssueMetrics;
   };
-  highlightMode?: 'average' | 'last' | 'best';
+  highlightMode?: ComparisonMode;
+  /**
+   * Per-metric history across recent issues (oldest first, current issue
+   * last). When present each tile renders a trend sparkline.
+   */
+  sparklines?: MetricSparklines;
+  /**
+   * When provided, a segmented control lets the user switch the comparison
+   * baseline (average / last issue / best issue).
+   */
+  onHighlightModeChange?: (mode: ComparisonMode) => void;
+}
+
+interface MetricStatus {
+  level: 'warning' | 'critical';
+  label: string;
 }
 
 interface MetricCardProps {
@@ -33,8 +55,11 @@ interface MetricCardProps {
   };
   tooltipLabel: string;
   tooltipDescription: string;
-  colorClass: string;
   comparisonLabel?: string;
+  sparkline?: number[];
+  status?: MetricStatus;
+  /** Set when a falling metric is good (bounce rate, complaints, unsubscribes). */
+  invertDelta?: boolean;
 }
 
 const MetricCard: React.FC<MetricCardProps> = React.memo(({
@@ -44,64 +69,69 @@ const MetricCard: React.FC<MetricCardProps> = React.memo(({
   comparison,
   tooltipLabel,
   tooltipDescription,
-  colorClass,
   comparisonLabel,
-}) => {
-  return (
-    <div className="bg-muted/50 hover:bg-muted hover:shadow-md hover:border-primary-200 dark:hover:border-primary-800 transition-all rounded-lg p-3 sm:p-4 border border-border min-h-[100px] sm:min-h-[120px]">
-      <div className="flex items-start justify-between mb-2">
-        <div className="text-xs sm:text-sm text-muted-foreground font-medium">{label}</div>
+  sparkline,
+  status,
+  invertDelta,
+}) => (
+  <StatTile
+    label={
+      <span className="inline-flex items-center gap-1.5">
+        {label}
         <InfoTooltip label={tooltipLabel} description={tooltipDescription} />
-      </div>
-
-      <div className="flex items-baseline gap-1 sm:gap-2 mb-1">
-        <div className="text-xl sm:text-2xl lg:text-3xl font-bold text-foreground">{value}</div>
-        {percentage && (
-          <div className={`text-xs sm:text-sm font-semibold ${colorClass}`}>{percentage}</div>
+      </span>
+    }
+    value={value}
+    delta={comparison && comparison.direction !== 'neutral' ? comparison.difference : undefined}
+    invertDelta={invertDelta}
+    status={status ? { tone: status.level === 'critical' ? 'error' : 'warning', label: status.label } : undefined}
+    meta={
+      <span className="inline-flex items-center gap-1.5 flex-wrap">
+        {percentage && <span className="whitespace-nowrap">{percentage}</span>}
+        {comparison && comparison.direction !== 'neutral' && comparisonLabel && (
+          <span className="whitespace-nowrap">{comparisonLabel}</span>
         )}
-      </div>
-
-      {comparison && comparison.direction !== 'neutral' && (
-        <div className="flex items-center gap-1 text-xs mt-2">
-          {comparison.direction === 'up' ? (
-            <TrendingUp
-              className={`w-3 h-3 ${comparison.isPositive ? 'text-success-600' : 'text-error-600'}`}
-              aria-hidden="true"
-            />
-          ) : (
-            <TrendingDown
-              className={`w-3 h-3 ${comparison.isPositive ? 'text-success-600' : 'text-error-600'}`}
-              aria-hidden="true"
-            />
-          )}
-          <span
-            className={`font-medium ${comparison.isPositive ? 'text-success-600 dark:text-success-400' : 'text-error-600 dark:text-error-400'}`}
-          >
-            {comparison.difference > 0 ? '+' : ''}
-            {formatPercentageValue(comparison.difference, 1)}
-          </span>
-          {comparisonLabel && (
-            <span className="text-muted-foreground">{comparisonLabel}</span>
-          )}
-        </div>
-      )}
-
-      {comparison && comparison.direction === 'neutral' && comparisonLabel && (
-        <div className="flex items-center gap-1 text-xs mt-2">
-          <Minus className="w-3 h-3 text-muted-foreground" aria-hidden="true" />
-          <span className="text-muted-foreground font-medium">No change {comparisonLabel}</span>
-        </div>
-      )}
-    </div>
-  );
-});
+        {comparison && comparison.direction === 'neutral' && comparisonLabel && (
+          <span className="whitespace-nowrap">No change {comparisonLabel}</span>
+        )}
+      </span>
+    }
+    sparkline={sparkline && sparkline.length >= 2 ? sparkline : undefined}
+  />
+));
 
 MetricCard.displayName = 'MetricCard';
+
+const MODE_OPTIONS: Array<{ mode: ComparisonMode; label: string; comparisonKey: 'average' | 'lastIssue' | 'bestIssue' }> = [
+  { mode: 'average', label: 'Average', comparisonKey: 'average' },
+  { mode: 'last', label: 'Last issue', comparisonKey: 'lastIssue' },
+  { mode: 'best', label: 'Best issue', comparisonKey: 'bestIssue' },
+];
+
+function getBounceStatus(rate: number): MetricStatus | undefined {
+  if (rate > 10) return { level: 'critical', label: 'Critical' };
+  if (rate > 5) return { level: 'warning', label: 'High' };
+  return undefined;
+}
+
+function getComplaintStatus(rate: number): MetricStatus | undefined {
+  if (rate > 0.1) return { level: 'critical', label: 'Critical' };
+  if (rate > 0.05) return { level: 'warning', label: 'High' };
+  return undefined;
+}
+
+function getUnsubscribeStatus(rate: number): MetricStatus | undefined {
+  if (rate > 1) return { level: 'critical', label: 'Critical' };
+  if (rate > 0.5) return { level: 'warning', label: 'High' };
+  return undefined;
+}
 
 export const KeyMetricsSummary: React.FC<KeyMetricsSummaryProps> = React.memo(({
   metrics,
   comparisons,
   highlightMode = 'average',
+  sparklines,
+  onHighlightModeChange,
 }) => {
   const activeComparison = useMemo(() => {
     if (!comparisons) return undefined;
@@ -122,6 +152,13 @@ export const KeyMetricsSummary: React.FC<KeyMetricsSummaryProps> = React.memo(({
         ? 'vs. best'
         : 'vs. avg';
   }, [activeComparison, highlightMode]);
+
+  const availableModes = useMemo(
+    () => MODE_OPTIONS.filter(option => comparisons?.[option.comparisonKey]),
+    [comparisons]
+  );
+
+  const showModeToggle = !!onHighlightModeChange && availableModes.length > 1;
 
   const openRateComparison = useMemo(() =>
     activeComparison
@@ -171,81 +208,102 @@ export const KeyMetricsSummary: React.FC<KeyMetricsSummaryProps> = React.memo(({
   );
 
   return (
-    <div
-      className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4"
-      role="region"
-      aria-label="Key performance metrics"
-    >
-      <MetricCard
-        label="Open Rate"
-        value={formatPercentageValue(metrics.openRate, 1)}
-        percentage={`${formatNumber(Math.round((metrics.openRate / 100) * metrics.deliveries))} opens`}
-        comparison={openRateComparison}
-        comparisonLabel={comparisonLabel}
-        tooltipLabel="Open Rate"
-        tooltipDescription="Percentage of delivered emails that were opened by recipients. Industry average is typically 15-25%."
-        colorClass="text-success-600 dark:text-success-400"
-      />
+    <section aria-label="Key metrics">
+      {showModeToggle && (
+        <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+            Key Metrics
+          </h2>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground hidden sm:inline">Compare to</span>
+            <SegmentedControl
+              options={availableModes.map(option => ({ value: option.mode, label: option.label }))}
+              value={highlightMode}
+              onChange={mode => onHighlightModeChange?.(mode)}
+              aria-label="Comparison baseline"
+            />
+          </div>
+        </div>
+      )}
 
-      <MetricCard
-        label="Click Rate"
-        value={formatPercentageValue(metrics.clickRate, 1)}
-        percentage={`${formatNumber(Math.round((metrics.clickRate / 100) * metrics.deliveries))} clicks`}
-        comparison={clickRateComparison}
-        comparisonLabel={comparisonLabel}
-        tooltipLabel="Click Rate"
-        tooltipDescription="Percentage of delivered emails where recipients clicked at least one link. Industry average is typically 2-5%."
-        colorClass="text-primary-600 dark:text-primary-400"
-      />
+      <div
+        className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4"
+        role="region"
+        aria-label="Key performance metrics"
+      >
+        <MetricCard
+          label="Open Rate"
+          value={formatPercentageValue(metrics.openRate, 1)}
+          percentage={`${formatNumber(Math.round((metrics.openRate / 100) * metrics.deliveries))} opens`}
+          comparison={openRateComparison}
+          comparisonLabel={comparisonLabel}
+          sparkline={sparklines?.openRate}
+          tooltipLabel="Open Rate"
+          tooltipDescription="Percentage of delivered emails that were opened by recipients. Industry average is typically 15-25%."
+        />
 
-      <MetricCard
-        label="Click-to-Open Rate"
-        value={formatPercentageValue(metrics.clickToOpenRate, 1)}
-        percentage="of opens"
-        comparison={clickToOpenRateComparison}
-        comparisonLabel={comparisonLabel}
-        tooltipLabel="Click-to-Open Rate (CTOR)"
-        tooltipDescription="Percentage of recipients who opened the email and then clicked a link. It isolates content and copy effectiveness from subject-line performance. Industry average is typically 10-15%."
-        colorClass="text-primary-600 dark:text-primary-400"
-      />
+        <MetricCard
+          label="Click Rate"
+          value={formatPercentageValue(metrics.clickRate, 1)}
+          percentage={`${formatNumber(Math.round((metrics.clickRate / 100) * metrics.deliveries))} clicks`}
+          comparison={clickRateComparison}
+          comparisonLabel={comparisonLabel}
+          sparkline={sparklines?.clickRate}
+          tooltipLabel="Click Rate"
+          tooltipDescription="Percentage of delivered emails where recipients clicked at least one link. Industry average is typically 2-5%."
+        />
 
-      <MetricCard
-        label="Bounce Rate"
-        value={formatPercentageValue(metrics.bounceRate, 1)}
-        percentage={`${formatNumber(Math.round((metrics.bounceRate / 100) * metrics.deliveries))} bounces`}
-        comparison={bounceRateComparison}
-        comparisonLabel={comparisonLabel}
-        tooltipLabel="Bounce Rate"
-        tooltipDescription="Percentage of emails that could not be delivered. Keep this below 5% to maintain good sender reputation."
-        colorClass="text-warning-600 dark:text-warning-400"
-      />
+        <MetricCard
+          label="Click-to-Open Rate"
+          value={formatPercentageValue(metrics.clickToOpenRate, 1)}
+          percentage="of opens"
+          comparison={clickToOpenRateComparison}
+          comparisonLabel={comparisonLabel}
+          sparkline={sparklines?.clickToOpenRate}
+          tooltipLabel="Click-to-Open Rate (CTOR)"
+          tooltipDescription="Percentage of recipients who opened the email and then clicked a link. It isolates content and copy effectiveness from subject-line performance. Industry average is typically 10-15%."
+        />
 
-      <MetricCard
-        label="Complaint Rate"
-        value={formatPercentageValue(metrics.complaintRate, 2)}
-        percentage={`${formatNumber(Math.round((metrics.complaintRate / 100) * metrics.deliveries))} complaints`}
-        comparison={complaintRateComparison}
-        comparisonLabel={comparisonLabel}
-        tooltipLabel="Complaint Rate"
-        tooltipDescription="Percentage of recipients who marked your email as spam. Keep this below 0.1% to avoid deliverability issues."
-        colorClass={
-          metrics.complaintRate > 0.1
-            ? 'text-error-600 dark:text-error-400'
-            : 'text-error-600 dark:text-error-400'
-        }
-      />
+        <MetricCard
+          label="Bounce Rate"
+          value={formatPercentageValue(metrics.bounceRate, 1)}
+          percentage={`${formatNumber(Math.round((metrics.bounceRate / 100) * metrics.deliveries))} bounces`}
+          comparison={bounceRateComparison}
+          comparisonLabel={comparisonLabel}
+          sparkline={sparklines?.bounceRate}
+          status={getBounceStatus(metrics.bounceRate)}
+          invertDelta
+          tooltipLabel="Bounce Rate"
+          tooltipDescription="Percentage of emails that could not be delivered. Keep this below 5% to maintain good sender reputation."
+        />
 
-      <MetricCard
-        label="Unsubscribe Rate"
-        value={formatPercentageValue(metrics.unsubscribeRate, 2)}
-        percentage={`${formatNumber(Math.round((metrics.unsubscribeRate / 100) * metrics.deliveries))} unsubscribes`}
-        comparison={unsubscribeRateComparison}
-        comparisonLabel={comparisonLabel}
-        tooltipLabel="Unsubscribe Rate"
-        tooltipDescription="Percentage of delivered recipients who opted out after this issue. Keep this below 0.5% — a healthy list typically sees 0.1-0.3%."
-        colorClass="text-warning-600 dark:text-warning-400"
-      />
-    </div>
+        <MetricCard
+          label="Complaint Rate"
+          value={formatPercentageValue(metrics.complaintRate, 2)}
+          percentage={`${formatNumber(Math.round((metrics.complaintRate / 100) * metrics.deliveries))} complaints`}
+          comparison={complaintRateComparison}
+          comparisonLabel={comparisonLabel}
+          sparkline={sparklines?.complaintRate}
+          status={getComplaintStatus(metrics.complaintRate)}
+          invertDelta
+          tooltipLabel="Complaint Rate"
+          tooltipDescription="Percentage of recipients who marked your email as spam. Keep this below 0.1% to avoid deliverability issues."
+        />
+
+        <MetricCard
+          label="Unsubscribe Rate"
+          value={formatPercentageValue(metrics.unsubscribeRate, 2)}
+          percentage={`${formatNumber(Math.round((metrics.unsubscribeRate / 100) * metrics.deliveries))} unsubscribes`}
+          comparison={unsubscribeRateComparison}
+          comparisonLabel={comparisonLabel}
+          sparkline={sparklines?.unsubscribeRate}
+          status={getUnsubscribeStatus(metrics.unsubscribeRate)}
+          invertDelta
+          tooltipLabel="Unsubscribe Rate"
+          tooltipDescription="Percentage of delivered recipients who opted out after this issue. Keep this below 0.5% — a healthy list typically sees 0.1-0.3%."
+        />
+      </div>
+    </section>
   );
 });
 

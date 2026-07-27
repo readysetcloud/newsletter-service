@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
+use super::send_progress;
+use super::settings::{self, TenantSettings};
+
 // Request/Response types for list issues endpoint
 #[derive(Deserialize)]
 pub struct ListIssuesQuery {
@@ -180,6 +183,14 @@ pub struct GetIssueResponse {
     local_send: Option<serde_json::Value>,
     #[serde(rename = "contentAssembly", skip_serializing_if = "Option::is_none")]
     content_assembly: Option<serde_json::Value>,
+    /// Group-by-group delivery state for a local send. Present from fan-out
+    /// until the last group lands, and afterwards as a record of what happened.
+    #[serde(rename = "sendProgress", skip_serializing_if = "Option::is_none")]
+    send_progress: Option<send_progress::SendProgressResponse>,
+    /// Where the publish workflow is. Only filled when there is no send
+    /// progress to report — before fan-out, or when the workflow failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workflow: Option<send_progress::WorkflowState>,
 }
 
 // Per-variant engagement counters for an A/B test.
@@ -350,6 +361,9 @@ pub struct IssueRecord {
     pub ab_test: Option<serde_json::Value>,
     pub local_send: Option<serde_json::Value>,
     pub content_assembly: Option<serde_json::Value>,
+    /// ARN of the publish workflow execution, recorded when the issue is
+    /// scheduled so its state can be reported back without guessing.
+    pub execution_arn: Option<String>,
 }
 
 #[derive(Debug)]
@@ -438,6 +452,13 @@ pub async fn create_issue(event: Request) -> Result<Response<Body>, Error> {
     }
 }
 
+pub async fn review_issue(event: Request) -> Result<Response<Body>, Error> {
+    match handle_review_issue(event).await {
+        Ok(response) => Ok(response),
+        Err(e) => Ok(response::format_error_response(&e)),
+    }
+}
+
 pub async fn update_issue(
     event: Request,
     issue_id: Option<String>,
@@ -498,9 +519,60 @@ async fn handle_get_issue(
         Vec::new()
     };
 
-    let response_data = build_issue_response(issue, stats, insights, variant_stats);
+    let send_progress = send_progress::get_send_progress(&tenant_id, issue.issue_number).await;
+    let workflow = get_workflow_state_for(&issue, send_progress.is_some()).await;
+
+    let response_data = build_issue_response(
+        issue,
+        stats,
+        insights,
+        variant_stats,
+        send_progress,
+        workflow,
+    );
 
     response::format_response(200, response_data)
+}
+
+/// Ask Step Functions where the publish workflow is, but only when that is the
+/// only thing that can explain the issue's state.
+///
+/// Once a local send has fanned out, the progress record is both more detailed
+/// and more durable than the execution (Step Functions retains history for 90
+/// days), so it wins. This fills two gaps the record cannot: an issue waiting
+/// for a future send time, and an issue whose workflow failed.
+async fn get_workflow_state_for(
+    issue: &IssueRecord,
+    has_send_progress: bool,
+) -> Option<send_progress::WorkflowState> {
+    if has_send_progress {
+        return None;
+    }
+    if !matches!(
+        issue.status.as_str(),
+        "scheduled" | "in progress" | "failed"
+    ) {
+        return None;
+    }
+
+    let scheduled_in_future = issue
+        .scheduled_at
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|parsed| parsed.with_timezone(&chrono::Utc) > chrono::Utc::now())
+        .unwrap_or(false);
+
+    // A scheduled issue has no execution to describe: a Scheduler entry starts
+    // one at the send instant, and until it does the record carries no ARN (the
+    // execution records its own — the API never sees it). "Waiting for the send
+    // time" is still the right thing to report, and it is now the record, not an
+    // execution parked in a `Wait`, that says so.
+    let Some(execution_arn) = issue.execution_arn.as_deref() else {
+        return (issue.status == "scheduled" && scheduled_in_future)
+            .then(send_progress::waiting_for_send_time);
+    };
+
+    send_progress::get_workflow_state(execution_arn, scheduled_in_future).await
 }
 
 async fn handle_rebuild_issue_analytics(
@@ -573,16 +645,26 @@ async fn handle_resend_issue(
         ));
     }
 
-    start_issue_schedule(
-        &tenant_id,
-        user_context.email.as_str(),
-        issue.issue_number,
-        &issue.content,
-        None,
-        issue.template_id.as_deref(),
-        &normalize_content_type(issue.content_type.as_deref()),
-        &issue.subject,
-    )
+    // Deliberately does NOT clear the previous send's progress record, even
+    // though the plan write refuses to overwrite a completed plan and a real
+    // resend would need it cleared.
+    //
+    // Resending does not currently send anything. The execution starts while
+    // the issue is still `published`, and `Has Issue Been Processed?` has no
+    // `published` branch - it routes to `Success - Duplicate Request`. That is
+    // true on main too, so it is not a regression, but it means clearing the
+    // record here would destroy the delivery history of the last real send in
+    // exchange for nothing. Whoever fixes resend properly needs to give the
+    // handshake a resend branch AND clear the progress record; doing only the
+    // second half is strictly worse than doing neither.
+    start_issue_schedule(IssueScheduleInput {
+        tenant_id: &tenant_id,
+        tenant_email: user_context.email.as_str(),
+        issue_number: issue.issue_number,
+        scheduled_at: None,
+        template_id: issue.template_id.as_deref(),
+        content_type: &normalize_content_type(issue.content_type.as_deref()),
+    })
     .await?;
 
     response::format_response(
@@ -678,7 +760,9 @@ async fn handle_declare_ab_winner(
         .flatten();
     let variant_stats = get_variant_stats(&tenant_id, &issue_id).await;
 
-    let response_data = build_issue_response(updated, stats, insights, variant_stats);
+    // An A/B test and a local send are mutually exclusive, so an issue reaching
+    // here never has send progress to report.
+    let response_data = build_issue_response(updated, stats, insights, variant_stats, None, None);
     response::format_response(200, response_data)
 }
 
@@ -817,7 +901,10 @@ pub struct ActiveAbTest {
     win_metric: String,
     #[serde(rename = "publishedAt", skip_serializing_if = "Option::is_none")]
     published_at: Option<String>,
-    #[serde(rename = "evaluateAfterMinutes", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "evaluateAfterMinutes",
+        skip_serializing_if = "Option::is_none"
+    )]
     evaluate_after_minutes: Option<i64>,
     variants: Vec<ActiveAbTestVariant>,
     #[serde(rename = "variantStats")]
@@ -938,8 +1025,14 @@ fn parse_active_ab_test(item: &HashMap<String, AttributeValue>) -> Option<Active
                         .and_then(|x| x.as_str())
                         .unwrap_or_default()
                         .to_string(),
-                    subject: v.get("subject").and_then(|x| x.as_str()).map(|s| s.to_string()),
-                    send_at: v.get("sendAt").and_then(|x| x.as_str()).map(|s| s.to_string()),
+                    subject: v
+                        .get("subject")
+                        .and_then(|x| x.as_str())
+                        .map(|s| s.to_string()),
+                    send_at: v
+                        .get("sendAt")
+                        .and_then(|x| x.as_str())
+                        .map(|s| s.to_string()),
                 })
                 .collect()
         })
@@ -1439,6 +1532,272 @@ fn extract_json_object(text: &str) -> Option<&str> {
     (end > start).then(|| &text[start..=end])
 }
 
+// ---------------------------------------------------------------------------
+// AI editorial review (POST /issues/review)
+//
+// A single Bedrock Nova call that grades an issue and returns structured
+// editorial feedback: an overall grade, A/B subject-line ideas, a title /
+// description (meta) assessment, and grammar + spelling notes. Consumed by the
+// newsletter publish Action, which turns the response into a PR comment. Dead
+// links are checked by the Action itself (a plain HTTP check, not the model).
+// ---------------------------------------------------------------------------
+
+// Cap the content sent to the model so a very long issue can't blow the API
+// Lambda's 30s timeout or the model's context. Newsletter issues are a few KB.
+const REVIEW_MAX_CONTENT_CHARS: usize = 24000;
+
+#[derive(Deserialize)]
+pub struct ReviewIssueRequest {
+    #[serde(default)]
+    subject: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    content: String,
+    #[serde(rename = "issueNumber", default)]
+    issue_number: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct SubjectSuggestion {
+    a: String,
+    b: String,
+    rationale: String,
+}
+
+#[derive(Serialize)]
+pub struct MetaAssessment {
+    #[serde(rename = "titleFit")]
+    title_fit: String,
+    #[serde(rename = "descriptionFit")]
+    description_fit: String,
+    suggestions: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct GrammarIssue {
+    quote: String,
+    issue: String,
+    suggestion: String,
+}
+
+#[derive(Serialize)]
+pub struct SpellingIssue {
+    word: String,
+    suggestion: String,
+    context: String,
+}
+
+#[derive(Serialize)]
+pub struct ReviewIssueResponse {
+    grade: String,
+    #[serde(rename = "gradeRationale")]
+    grade_rationale: String,
+    summary: String,
+    #[serde(rename = "subjectSuggestions")]
+    subject_suggestions: Vec<SubjectSuggestion>,
+    #[serde(rename = "metaAssessment")]
+    meta_assessment: MetaAssessment,
+    grammar: Vec<GrammarIssue>,
+    spelling: Vec<SpellingIssue>,
+    #[serde(rename = "issueNumber", skip_serializing_if = "Option::is_none")]
+    issue_number: Option<i64>,
+}
+
+async fn handle_review_issue(event: Request) -> Result<Response<Body>, AppError> {
+    let user_context = auth::get_user_context(&event)?;
+    let tenant_id = user_context
+        .tenant_id
+        .ok_or_else(|| AppError::Unauthorized("Tenant access required".to_string()))?;
+
+    let body: ReviewIssueRequest = serde_json::from_slice(event.body())
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
+
+    if body.content.trim().is_empty() {
+        return Err(AppError::BadRequest(
+            "content is required to review an issue".to_string(),
+        ));
+    }
+
+    let model_id = std::env::var("MODEL_ID")
+        .map_err(|_| AppError::InternalError("MODEL_ID not set".to_string()))?;
+
+    let (system_prompt, user_prompt) = build_review_prompt(&body);
+
+    // No tools => a single model call (bounded cost).
+    let raw = converse(
+        &model_id,
+        &system_prompt,
+        &user_prompt,
+        Vec::new(),
+        ConverseOptions {
+            tenant_id: tenant_id.clone(),
+            user_id: None,
+        },
+    )
+    .await
+    .map_err(|e| AppError::InternalError(format!("Review generation failed: {}", e)))?;
+
+    let mut review = parse_review_response(&raw)?;
+    review.issue_number = body.issue_number;
+
+    response::format_response(200, review)
+}
+
+/// Builds (system, user) prompts instructing Nova to return strict review JSON.
+fn build_review_prompt(body: &ReviewIssueRequest) -> (String, String) {
+    let system = "You are the editorial assistant for a developer newsletter read by professional cloud and software engineers. \
+Review the issue and respond with ONLY a JSON object of exactly this shape, and no text outside the JSON:\n\
+{\n\
+  \"grade\": \"one of A+, A, A-, B+, B, B-, C+, C, C-, D, F\",\n\
+  \"gradeRationale\": \"one or two sentences explaining the grade\",\n\
+  \"summary\": \"a friendly 1-2 sentence overall impression\",\n\
+  \"subjectSuggestions\": [{\"a\": \"subject variant A\", \"b\": \"subject variant B\", \"rationale\": \"the contrast being tested\"}],\n\
+  \"metaAssessment\": {\"titleFit\": \"how well the title previews the content\", \"descriptionFit\": \"how well the description previews the content\", \"suggestions\": [\"optional rewrite\"]},\n\
+  \"grammar\": [{\"quote\": \"exact phrase from the content\", \"issue\": \"what is wrong\", \"suggestion\": \"the fix\"}],\n\
+  \"spelling\": [{\"word\": \"misspelled word\", \"suggestion\": \"correct spelling\", \"context\": \"a few surrounding words\"}]\n\
+}\n\
+Guidance: keep the voice warm, curious, and practical. Provide 2-3 subjectSuggestions pairs, each testing a genuine contrast, under ~60 characters, no clickbait. \
+For metaAssessment, judge whether the title and description accurately preview the actual content and only suggest rewrites if they improve it. \
+For grammar, flag real grammar/clarity problems (not stylistic preferences) and quote the exact phrase. \
+For spelling, ignore proper nouns, product names, code, and technical jargon unless clearly misspelled. \
+Do NOT report broken links; a separate automated checker handles those. \
+Return empty arrays for grammar and spelling when there are no issues.";
+
+    let content: String = body
+        .content
+        .trim()
+        .chars()
+        .take(REVIEW_MAX_CONTENT_CHARS)
+        .collect();
+
+    let mut user = String::new();
+    user.push_str("Frontmatter metadata:\n");
+    user.push_str(&format!(
+        "- subject: {}\n",
+        body.subject.as_deref().unwrap_or("(none)")
+    ));
+    user.push_str(&format!(
+        "- title: {}\n",
+        body.title.as_deref().unwrap_or("(none)")
+    ));
+    user.push_str(&format!(
+        "- description: {}\n",
+        body.description.as_deref().unwrap_or("(none)")
+    ));
+    user.push_str("\nNewsletter content (markdown):\n");
+    user.push_str(&content);
+    user.push_str("\n\nReturn the JSON now.");
+
+    (system.to_string(), user)
+}
+
+/// Parses Nova's JSON response into a typed review, tolerating missing fields.
+fn parse_review_response(raw: &str) -> Result<ReviewIssueResponse, AppError> {
+    let json_text = extract_json_object(raw)
+        .ok_or_else(|| AppError::InternalError("Model did not return JSON".to_string()))?;
+    let value: serde_json::Value = serde_json::from_str(json_text)
+        .map_err(|e| AppError::InternalError(format!("Failed to parse model JSON: {}", e)))?;
+
+    let get_str = |v: &serde_json::Value, key: &str| -> String {
+        v.get(key)
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+
+    let grade = {
+        let g = get_str(&value, "grade");
+        if g.is_empty() {
+            "N/A".to_string()
+        } else {
+            g
+        }
+    };
+
+    let subject_suggestions = value
+        .get("subjectSuggestions")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|item| SubjectSuggestion {
+                    a: get_str(item, "a"),
+                    b: get_str(item, "b"),
+                    rationale: get_str(item, "rationale"),
+                })
+                .filter(|s| !s.a.is_empty() || !s.b.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let meta = value.get("metaAssessment");
+    let meta_assessment = MetaAssessment {
+        title_fit: meta.map(|m| get_str(m, "titleFit")).unwrap_or_default(),
+        description_fit: meta
+            .map(|m| get_str(m, "descriptionFit"))
+            .unwrap_or_default(),
+        suggestions: meta
+            .and_then(|m| m.get("suggestions"))
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|s| s.as_str())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default(),
+    };
+
+    let grammar = value
+        .get("grammar")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|item| GrammarIssue {
+                    quote: get_str(item, "quote"),
+                    issue: get_str(item, "issue"),
+                    suggestion: get_str(item, "suggestion"),
+                })
+                // A grammar entry is only usable with an exact quote (to map the
+                // fix back to the text) and a suggestion (the fix itself); drop
+                // malformed model items that omit either.
+                .filter(|g| !g.quote.is_empty() && !g.suggestion.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let spelling = value
+        .get("spelling")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|item| SpellingIssue {
+                    word: get_str(item, "word"),
+                    suggestion: get_str(item, "suggestion"),
+                    context: get_str(item, "context"),
+                })
+                // Likewise, a spelling entry needs the misspelled word and its
+                // correction to be actionable.
+                .filter(|s| !s.word.is_empty() && !s.suggestion.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(ReviewIssueResponse {
+        grade,
+        grade_rationale: get_str(&value, "gradeRationale"),
+        summary: get_str(&value, "summary"),
+        subject_suggestions,
+        meta_assessment,
+        grammar,
+        spelling,
+        issue_number: None,
+    })
+}
+
 async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError> {
     let user_context = auth::get_user_context(&event)?;
     let tenant_id = user_context
@@ -1467,16 +1826,37 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
 
     validate_create_request(&body)?;
 
-    let ab_test = extract_ab_test(event.body().as_ref())?
-        .map(|value| validate_and_normalize_ab_test(&value))
+    // The raw (pre-normalization) config values also feed the idempotency
+    // hash: normalization injects server-generated values (e.g. the A/B
+    // testId), so hashing normalized config would make byte-identical
+    // replays look different.
+    let raw_ab_test = extract_ab_test(event.body().as_ref())?;
+    let ab_test = raw_ab_test
+        .as_ref()
+        .map(validate_and_normalize_ab_test)
         .transpose()?;
 
-    let local_send = extract_local_send(event.body().as_ref())?
-        .map(|value| validate_and_normalize_local_send(&value))
+    let raw_local_send = extract_local_send(event.body().as_ref())?;
+
+    // Both a date-only `scheduledAt` and a local-send config without an
+    // explicit zone are filled in from the tenant's settings; load them once,
+    // and only when this request actually needs them.
+    let tenant_settings = load_settings_if_needed(
+        &tenant_id,
+        body.scheduled_at.as_deref(),
+        raw_local_send.is_some(),
+    )
+    .await;
+
+    let local_send = raw_local_send
+        .as_ref()
+        .map(|value| validate_and_normalize_local_send(value, &tenant_settings.timezone))
         .transpose()?
         .flatten();
-    let content_assembly = extract_content_assembly(event.body().as_ref())?
-        .map(|value| validate_and_normalize_content_assembly(&value))
+    let raw_content_assembly = extract_content_assembly(event.body().as_ref())?;
+    let content_assembly = raw_content_assembly
+        .as_ref()
+        .map(validate_and_normalize_content_assembly)
         .transpose()?;
 
     if let Some(template_id) = body.template_id.as_deref() {
@@ -1495,7 +1875,13 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
 
     let idempotency_key = get_idempotency_key(&event);
 
-    let normalized_scheduled_at = normalize_scheduled_at(body.scheduled_at.as_deref())?;
+    let normalized_scheduled_at =
+        resolve_scheduled_at(body.scheduled_at.as_deref(), &tenant_settings)?;
+
+    // Set when an exact replay's recorded issue no longer exists and the
+    // request falls through to a fresh create: the idempotency record for the
+    // key is still in place and must be overwritten, not condition-failed.
+    let mut replace_idempotency_record = false;
 
     if let Some(key) = idempotency_key.as_deref() {
         if let Some(existing) = get_idempotency_record(&tenant_id, key).await? {
@@ -1511,7 +1897,10 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
                 &body,
                 existing.issue_number,
                 action,
-                normalized_scheduled_at.as_deref(),
+                body.scheduled_at.as_deref(),
+                raw_ab_test.as_ref(),
+                raw_local_send.as_ref(),
+                raw_content_assembly.as_ref(),
             );
 
             if existing_hash != existing.payload_hash {
@@ -1519,16 +1908,52 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
                     "Idempotency key reuse with different payload".to_string(),
                 ));
             }
-            return Err(AppError::Conflict("Duplicate request".to_string()));
+            // Exact replay of a request we already processed: succeed
+            // idempotently with the previously created issue rather than 409,
+            // so CI re-runs of the same commit don't fail the workflow. If the
+            // issue has since been deleted (e.g. an expired draft), fall
+            // through and process the request as a fresh create.
+            match get_issue_by_id(&tenant_id, &existing.issue_number.to_string()).await {
+                Ok(issue) => {
+                    return response::format_response(
+                        200,
+                        CreateIssueResponse {
+                            id: issue.issue_number.to_string(),
+                            issue_number: issue.issue_number,
+                            subject: issue.subject,
+                            status: issue.status,
+                            content: issue.content,
+                            created_at: issue.created_at,
+                            updated_at: issue.updated_at,
+                            content_type: normalize_content_type(issue.content_type.as_deref()),
+                        },
+                    );
+                }
+                Err(AppError::NotFound(_)) => {
+                    replace_idempotency_record = true;
+                }
+                Err(err) => return Err(err),
+            }
         }
     }
 
+    // An existing record only blocks the create while it is past the draft
+    // stage. Overwriting a draft is allowed on purpose: the GitHub flow stages
+    // a draft from the PR (re-staged on every push) and later re-posts the
+    // same issue number with action: schedule when the PR merges.
+    let mut overwrite_draft = false;
     let issue_number = if let Some(issue_number) = body.issue_number {
-        if issue_exists(&tenant_id, issue_number).await? {
-            return Err(AppError::Conflict(format!(
-                "Issue {} already exists",
-                issue_number
-            )));
+        match get_issue_status(&tenant_id, issue_number).await? {
+            None => {}
+            Some(status) if status == "draft" => {
+                overwrite_draft = true;
+            }
+            Some(_) => {
+                return Err(AppError::Conflict(format!(
+                    "Issue {} already exists",
+                    issue_number
+                )));
+            }
         }
         issue_number
     } else {
@@ -1540,41 +1965,67 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
             &body,
             issue_number,
             action,
-            normalized_scheduled_at.as_deref(),
+            body.scheduled_at.as_deref(),
+            raw_ab_test.as_ref(),
+            raw_local_send.as_ref(),
+            raw_content_assembly.as_ref(),
         )
     });
 
-    let issue = create_issue_record(
+    let mut issue = create_issue_record(
         &tenant_id,
         issue_number,
         &body,
         normalized_scheduled_at.clone(),
-        ab_test,
-        local_send,
-        content_assembly,
+        SendConfig {
+            ab_test,
+            local_send,
+            content_assembly,
+        },
+        overwrite_draft,
     )
     .await?;
 
     publish_event(&tenant_id, "ISSUE_DRAFT_SAVED", &issue).await?;
 
+    // Overwriting an existing draft invalidates any TTL deletion schedule it
+    // had: left in place it would fire against the new record (which is still
+    // a draft) and delete it. schedule_draft_deletion recreates one below when
+    // this request carries its own ttlSeconds.
+    if overwrite_draft {
+        delete_draft_ttl_schedule(&tenant_id, issue_number).await?;
+    }
+
     if action == CreateIssueAction::Schedule {
-        start_issue_schedule(
-            &tenant_id,
-            user_context.email.as_str(),
+        start_issue_schedule(IssueScheduleInput {
+            tenant_id: &tenant_id,
+            tenant_email: user_context.email.as_str(),
             issue_number,
-            &body.content,
-            normalized_scheduled_at.as_deref(),
-            body.template_id.as_deref(),
-            &normalize_content_type(body.content_type.as_deref()),
-            &body.subject,
-        )
+            scheduled_at: normalized_scheduled_at.as_deref(),
+            template_id: body.template_id.as_deref(),
+            content_type: &normalize_content_type(body.content_type.as_deref()),
+        })
         .await?;
+
+        // A future send leaves the record at `scheduled` (the workflow starts at
+        // the send time and claims it then), so say so rather than reporting the
+        // `draft` the record was created as a moment ago.
+        if normalized_scheduled_at.is_some() {
+            issue.status = "scheduled".to_string();
+        }
     } else if let Some(ttl_seconds) = body.ttl_seconds {
         schedule_draft_deletion(&tenant_id, issue_number, ttl_seconds).await?;
     }
 
     if let (Some(key), Some(hash)) = (idempotency_key.as_deref(), payload_hash.as_deref()) {
-        save_idempotency_record(&tenant_id, key, issue_number, hash).await?;
+        save_idempotency_record(
+            &tenant_id,
+            key,
+            issue_number,
+            hash,
+            replace_idempotency_record,
+        )
+        .await?;
     }
 
     response::format_response(201, issue)
@@ -1592,8 +2043,29 @@ async fn handle_update_issue(
     let issue_id =
         issue_id.ok_or_else(|| AppError::BadRequest("Issue ID is required".to_string()))?;
 
-    let body: UpdateIssueRequest = serde_json::from_slice(event.body())
+    let mut body: UpdateIssueRequest = serde_json::from_slice(event.body())
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
+
+    let raw_local_send = extract_local_send(event.body().as_ref())?;
+    let local_send_provided = raw_local_send.is_some();
+
+    let tenant_settings = load_settings_if_needed(
+        &tenant_id,
+        body.scheduled_at.as_deref(),
+        local_send_provided,
+    )
+    .await;
+
+    // A date-only reschedule gets the tenant's default send time, same as on
+    // create. Anything else is stored as sent — including past timestamps,
+    // which an update is allowed to set.
+    if let Some(scheduled_at) = body.scheduled_at.as_deref() {
+        let trimmed = scheduled_at.trim();
+        if settings::is_date_only(trimmed) {
+            body.scheduled_at =
+                Some(settings::resolve_date_only(trimmed, &tenant_settings)?.to_rfc3339());
+        }
+    }
 
     let ab_test = extract_ab_test(event.body().as_ref())?
         .map(|value| validate_and_normalize_ab_test(&value))
@@ -1602,10 +2074,8 @@ async fn handle_update_issue(
     // An explicit `abTest: null` is a request to clear a previously-saved test.
     let clear_ab_test = ab_test.is_none() && ab_test_explicitly_cleared(event.body().as_ref());
 
-    let raw_local_send = extract_local_send(event.body().as_ref())?;
-    let local_send_provided = raw_local_send.is_some();
     let local_send = raw_local_send
-        .map(|value| validate_and_normalize_local_send(&value))
+        .map(|value| validate_and_normalize_local_send(&value, &tenant_settings.timezone))
         .transpose()?
         .flatten();
 
@@ -1653,22 +2123,52 @@ async fn handle_update_issue(
                 )));
             }
         }
+    } else if body.status.as_deref() == Some("draft") {
+        // Unscheduling: the one transition out of `scheduled`, and the reason
+        // that status is otherwise not updatable at all.
+        match existing.status.as_str() {
+            "scheduled" => {}
+            other => {
+                return Err(AppError::BadRequest(format!(
+                    "Cannot return issue to draft from status '{}'. Only 'scheduled' issues can be unscheduled",
+                    other
+                )));
+            }
+        }
     } else {
         check_update_allowed(&existing)?;
     }
 
     let is_publishing = body.status.as_deref() == Some("published");
+    let is_unscheduling = body.status.as_deref() == Some("draft");
+
+    // Cancel the send before the record says `draft`, not after. The state
+    // machine treats a `draft` record as sendable, so a schedule that outlived
+    // the status write would fire and publish an issue the operator cancelled —
+    // whereas a cancelled schedule with the record still on `scheduled` sends
+    // nothing and can be unscheduled again.
+    if is_unscheduling {
+        delete_issue_send_schedule(&tenant_id, existing.issue_number).await?;
+    }
 
     let updated = update_issue_record(
         &tenant_id,
         &issue_id,
         &body,
-        ab_test,
-        clear_ab_test,
-        local_send,
-        clear_local_send,
-        content_assembly,
-        clear_content_assembly,
+        SendConfigUpdate {
+            ab_test,
+            clear_ab_test,
+            local_send,
+            clear_local_send,
+            content_assembly,
+            clear_content_assembly,
+        },
+        // Unscheduling is the one update racing something that can change the
+        // record underneath it: the schedule may fire between the status read
+        // above and this write. Deleting an entry that already fired succeeds
+        // (or reports not-found, which this path tolerates), so the delete
+        // cannot tell us whether the send started - only the record can.
+        is_unscheduling.then_some("scheduled"),
     )
     .await?;
 
@@ -1703,6 +2203,13 @@ async fn handle_delete_issue(
 
     let existing = get_issue_by_id(&tenant_id, &issue_id).await?;
     check_delete_allowed(&existing)?;
+
+    // Only drafts can be deleted, and a draft should have no send schedule — but
+    // "should" is doing real work there. `schedule_issue_send` creates the
+    // schedule before it moves the record off `draft`, so a failure between the
+    // two leaves exactly that pair, and deleting the record without cancelling
+    // would leave a schedule firing at an issue that no longer exists.
+    delete_issue_send_schedule(&tenant_id, existing.issue_number).await?;
 
     delete_issue_records(&tenant_id, &issue_id).await?;
 
@@ -1749,7 +2256,17 @@ fn validate_list_params(query: &ListIssuesQuery) -> Result<(), AppError> {
     }
 
     if let Some(status) = &query.status {
-        let valid_statuses = ["draft", "scheduled", "published", "failed"];
+        // "sending" is a local-send issue whose groups are still going out.
+        // "in progress" was missing despite the dashboard offering it as a
+        // filter, so selecting it returned a 400.
+        let valid_statuses = [
+            "draft",
+            "scheduled",
+            "in progress",
+            "sending",
+            "published",
+            "failed",
+        ];
         if !valid_statuses.contains(&status.as_str()) {
             return Err(AppError::BadRequest(format!(
                 "Invalid status. Must be one of: {}",
@@ -1875,8 +2392,14 @@ fn is_plausible_iana_time_zone(tz: &str) -> bool {
 /// delivers at each subscriber's personal peak open hour instead. Returns
 /// Ok(None) when `enabled` is false — a disabled config is stored as no
 /// config at all.
+///
+/// `defaultTimeZone` is also optional: it names the zone whose wall clock
+/// defines the target send time, which is exactly what the tenant's own
+/// timezone setting already says, so `fallback_time_zone` fills it in when the
+/// caller doesn't.
 fn validate_and_normalize_local_send(
     value: &serde_json::Value,
+    fallback_time_zone: &str,
 ) -> Result<Option<serde_json::Value>, AppError> {
     let obj = value
         .as_object()
@@ -1896,11 +2419,7 @@ fn validate_and_normalize_local_send(
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|tz| !tz.is_empty())
-        .ok_or_else(|| {
-            AppError::BadRequest(
-                "localSend.defaultTimeZone is required when localSend is enabled".to_string(),
-            )
-        })?;
+        .unwrap_or(fallback_time_zone);
 
     if !is_plausible_iana_time_zone(default_time_zone) {
         return Err(AppError::BadRequest(
@@ -2258,10 +2777,13 @@ fn validate_update_request(body: &UpdateIssueRequest, has_ab_test: bool) -> Resu
         }
     }
 
+    // The only two statuses a caller can set: `published` marks an in-progress
+    // or failed issue as sent, `draft` unschedules a scheduled one (cancelling
+    // its send). Everything else is the pipeline's to write.
     if let Some(status) = &body.status {
-        if status != "published" {
+        if status != "published" && status != "draft" {
             return Err(AppError::BadRequest(
-                "Status can only be set to 'published'".to_string(),
+                "Status can only be set to 'published' or 'draft'".to_string(),
             ));
         }
     }
@@ -2572,6 +3094,11 @@ fn parse_issue_record(item: &HashMap<String, AttributeValue>) -> Result<IssueRec
         }
     });
 
+    let execution_arn = item
+        .get("executionArn")
+        .and_then(|v| v.as_s().ok())
+        .map(|s| s.to_string());
+
     Ok(IssueRecord {
         pk,
         sk,
@@ -2591,6 +3118,7 @@ fn parse_issue_record(item: &HashMap<String, AttributeValue>) -> Result<IssueRec
         ab_test,
         local_send,
         content_assembly,
+        execution_arn,
     })
 }
 
@@ -2710,13 +3238,10 @@ fn parse_issue_stats(item: &HashMap<String, AttributeValue>) -> Result<IssueStat
 fn extract_analytics_summary(stats: &IssueStats) -> Option<IssueAnalyticsSummary> {
     let analytics = stats.analytics.as_ref()?;
     let parsed: Result<IssueAnalyticsSummary, _> = serde_json::from_value(analytics.clone());
-    parsed.ok().and_then(|summary| {
-        if summary.engagement_type.is_none() && summary.traffic_source.is_none() {
-            None
-        } else {
-            Some(summary)
-        }
-    })
+    // A summary with neither breakdown carries no information worth returning.
+    parsed
+        .ok()
+        .filter(|summary| summary.engagement_type.is_some() || summary.traffic_source.is_some())
 }
 
 fn parse_insights_map(
@@ -2967,7 +3492,38 @@ fn get_idempotency_key(event: &Request) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn normalize_scheduled_at(value: Option<&str>) -> Result<Option<String>, AppError> {
+/// Loads the tenant's settings only when something on this request actually
+/// needs them — a date-only `scheduledAt` to expand, or a local-send config
+/// whose zone may need filling in. A request that spelled everything out
+/// doesn't pay for the read.
+async fn load_settings_if_needed(
+    tenant_id: &str,
+    scheduled_at: Option<&str>,
+    has_local_send: bool,
+) -> TenantSettings {
+    let needs_send_time = scheduled_at
+        .map(|value| settings::is_date_only(value.trim()))
+        .unwrap_or(false);
+
+    if needs_send_time || has_local_send {
+        settings::get_tenant_settings(tenant_id).await
+    } else {
+        TenantSettings::default()
+    }
+}
+
+/// Normalizes a caller-supplied `scheduledAt` into the instant stored on the
+/// issue. `None` means "send immediately" — an absent value, `"now"`, or a
+/// time that has already passed.
+///
+/// A date-only value (`YYYY-MM-DD`) carries no time of day, so rather than
+/// rejecting it or guessing midnight UTC, it is anchored to the tenant's
+/// configured default send time, read as wall-clock time in the tenant's
+/// timezone (see [`super::settings`]).
+fn resolve_scheduled_at(
+    value: Option<&str>,
+    settings: &TenantSettings,
+) -> Result<Option<String>, AppError> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -2977,8 +3533,15 @@ fn normalize_scheduled_at(value: Option<&str>) -> Result<Option<String>, AppErro
         return Ok(None);
     }
 
-    let parsed = chrono::DateTime::parse_from_rfc3339(trimmed)
-        .map_err(|_| AppError::BadRequest("scheduledAt must be RFC3339 or \"now\"".to_string()))?;
+    let parsed = if settings::is_date_only(trimmed) {
+        settings::resolve_date_only(trimmed, settings)?.fixed_offset()
+    } else {
+        chrono::DateTime::parse_from_rfc3339(trimmed).map_err(|_| {
+            AppError::BadRequest(
+                "scheduledAt must be RFC3339, a YYYY-MM-DD date, or \"now\"".to_string(),
+            )
+        })?
+    };
 
     if parsed.with_timezone(&chrono::Utc) <= chrono::Utc::now() {
         return Ok(None);
@@ -2987,11 +3550,24 @@ fn normalize_scheduled_at(value: Option<&str>) -> Result<Option<String>, AppErro
     Ok(Some(parsed.to_rfc3339()))
 }
 
+/// Hashes everything that determines what a create request does, so a reused
+/// Idempotency-Key with any behavioral change is rejected instead of replayed.
+///
+/// Every value here is the raw caller-supplied one, never the normalized form.
+/// Normalization folds in things the caller didn't send: server-generated
+/// values (the A/B `testId`), the current time (a `scheduledAt` that has since
+/// passed), and tenant settings (a date-only `scheduledAt` resolves against
+/// the tenant's timezone and send time). Hashing any of those would make a
+/// byte-identical replay look like a different request — so changing the
+/// tenant's timezone would turn a CI re-run of the same commit into a 409.
 fn compute_idempotency_hash(
     body: &CreateIssueRequest,
     issue_number: i32,
     action: CreateIssueAction,
-    scheduled_at: Option<&str>,
+    raw_scheduled_at: Option<&str>,
+    ab_test: Option<&serde_json::Value>,
+    local_send: Option<&serde_json::Value>,
+    content_assembly: Option<&serde_json::Value>,
 ) -> String {
     let payload = serde_json::json!({
         "issueNumber": issue_number,
@@ -3001,11 +3577,14 @@ fn compute_idempotency_hash(
             CreateIssueAction::Draft => "draft",
             CreateIssueAction::Schedule => "schedule",
         },
-        "scheduledAt": scheduled_at,
+        "scheduledAt": raw_scheduled_at,
         "metadata": body.metadata.clone(),
         "templateId": body.template_id.clone(),
         "contentType": normalize_content_type(body.content_type.as_deref()),
         "ttlSeconds": body.ttl_seconds,
+        "abTest": ab_test,
+        "localSend": local_send,
+        "contentAssembly": content_assembly,
     });
 
     let mut hasher = Sha256::new();
@@ -3013,23 +3592,31 @@ fn compute_idempotency_hash(
     hex::encode(hasher.finalize())
 }
 
-async fn issue_exists(tenant_id: &str, issue_number: i32) -> Result<bool, AppError> {
+/// Returns the status of an issue, or None when no record exists. Used by the
+/// create path to decide whether an existing record may be overwritten (drafts
+/// only).
+async fn get_issue_status(tenant_id: &str, issue_number: i32) -> Result<Option<String>, AppError> {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
         .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
 
     let pk = format!("{}#{}", tenant_id, issue_number);
-    let sk = "newsletter";
 
     let result = ddb_client
         .get_item()
         .table_name(&table_name)
         .key("pk", AttributeValue::S(pk))
-        .key("sk", AttributeValue::S(sk.to_string()))
+        .key("sk", AttributeValue::S("newsletter".to_string()))
+        .projection_expression("#status")
+        .expression_attribute_names("#status", "status")
         .send()
         .await?;
 
-    Ok(result.item().is_some())
+    Ok(result.item().and_then(|item| {
+        item.get("status")
+            .and_then(|v| v.as_s().ok())
+            .map(|s| s.to_string())
+    }))
 }
 
 async fn validate_template_exists(tenant_id: &str, template_id: &str) -> Result<(), AppError> {
@@ -3104,11 +3691,18 @@ async fn get_idempotency_record(
     }))
 }
 
+/// Stores the idempotency record for a processed create. `replace_existing`
+/// is set when a replay's recorded issue no longer existed and the request was
+/// processed as a fresh create: the prior record for the key is still present
+/// (its 24h TTL outlives an expired draft), so the conditional put would fail
+/// after the issue and its side effects were already created. In that case the
+/// record is overwritten to point at the new issue.
 async fn save_idempotency_record(
     tenant_id: &str,
     idempotency_key: &str,
     issue_number: i32,
     payload_hash: &str,
+    replace_existing: bool,
 ) -> Result<(), AppError> {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
@@ -3137,13 +3731,14 @@ async fn save_idempotency_record(
     item.insert("createdAt".to_string(), AttributeValue::S(now.to_rfc3339()));
     item.insert("ttl".to_string(), AttributeValue::N(ttl.to_string()));
 
-    let result = ddb_client
+    let mut put = ddb_client
         .put_item()
         .table_name(&table_name)
-        .set_item(Some(item))
-        .condition_expression("attribute_not_exists(pk) AND attribute_not_exists(sk)")
-        .send()
-        .await;
+        .set_item(Some(item));
+    if !replace_existing {
+        put = put.condition_expression("attribute_not_exists(pk) AND attribute_not_exists(sk)");
+    }
+    let result = put.send().await;
 
     match result {
         Ok(_) => Ok(()),
@@ -3169,52 +3764,377 @@ async fn save_idempotency_record(
     }
 }
 
-async fn start_issue_schedule(
-    tenant_id: &str,
-    tenant_email: &str,
+/// Everything the stage-issue state machine needs to find the issue it is
+/// publishing. Grouped rather than passed positionally because several fields
+/// are bare `&str` — named struct fields make a transposed pair a compile error
+/// instead of an issue published under the wrong tenant.
+///
+/// Identifiers only, deliberately: the execution reads the issue record when it
+/// starts, so the content and subject are not in here. See
+/// `build_execution_input`.
+struct IssueScheduleInput<'a> {
+    tenant_id: &'a str,
+    tenant_email: &'a str,
     issue_number: i32,
-    content: &str,
-    scheduled_at: Option<&str>,
-    template_id: Option<&str>,
-    content_type: &str,
-    subject: &str,
+    scheduled_at: Option<&'a str>,
+    template_id: Option<&'a str>,
+    content_type: &'a str,
+}
+
+/// Environment variable holding the publish lead time, in minutes.
+const LEAD_TIME_ENV: &str = "ISSUE_SEND_LEAD_TIME_MINUTES";
+
+/// Prefix of the one-shot Scheduler entry that starts an issue's publish
+/// workflow. Matched literally by an IAM resource pattern in template.yaml
+/// (`schedule/newsletter/ISSUE-SEND-*`), so changing it needs that changed too.
+const ISSUE_SEND_SCHEDULE_PREFIX: &str = "ISSUE-SEND";
+
+/// The stage-issue execution input: identifiers, never content.
+///
+/// The execution used to be handed the whole issue body. It no longer is, for
+/// four reasons: the record is the only thing that can be *current* when the
+/// execution starts (a scheduled issue is started by a Scheduler entry at the
+/// send instant, long after this runs), the execution state has a 256 KB
+/// ceiling a large HTML issue can reach, the Scheduler entry's target input has
+/// a much smaller limit of its own, and a copy of the content pinned in
+/// execution state is a second source of truth for what got published.
+///
+/// `templateId`, `contentType` and `fileName` stay: they are small scalars this
+/// API owns, and the state machine reads them with unconditional `.$` paths —
+/// which the record cannot support for the first two, since it leaves both
+/// attributes off entirely when they are unset.
+fn build_execution_input(input: &IssueScheduleInput<'_>) -> serde_json::Value {
+    serde_json::json!({
+        "fileName": format!("issue-{}", input.issue_number),
+        "issueId": input.issue_number,
+        "tenant": {
+            "id": input.tenant_id,
+            "email": input.tenant_email
+        },
+        // Always present (null when no template selected) so the state machine
+        // can reference it unconditionally.
+        "templateId": input.template_id,
+        // Routes the publish pipeline between the markdown and json parsers.
+        "contentType": input.content_type
+    })
+}
+
+/// Starts an issue's publish workflow — now, or at its send time.
+///
+/// An immediate publish still starts an execution directly. A scheduled one
+/// creates a one-shot EventBridge Scheduler entry that starts the execution at
+/// (send instant − lead time) instead, rather than starting an execution that
+/// sits in the definition's `Wait For Future Date` state for days. Three things
+/// come out of that: the execution reads the issue record at send time instead
+/// of publishing a copy taken at schedule time, work can happen *before* the
+/// send instant (which is what timezone-correct local send needs — see
+/// `issue_send_lead_time`), and the schedule name is a per-issue lock.
+///
+/// Rollback is producer-side: send `futureDate` in the execution input and call
+/// `start_execution` unconditionally. `Wait For Future Date` is still in the
+/// definition for exactly that reason.
+async fn start_issue_schedule(input: IssueScheduleInput<'_>) -> Result<(), AppError> {
+    let execution_input = build_execution_input(&input);
+
+    match input.scheduled_at {
+        Some(scheduled_at) => schedule_issue_send(&input, scheduled_at, &execution_input).await,
+        None => start_issue_execution(&input, &execution_input).await,
+    }
+}
+
+/// Starts the publish workflow immediately.
+async fn start_issue_execution(
+    input: &IssueScheduleInput<'_>,
+    execution_input: &serde_json::Value,
 ) -> Result<(), AppError> {
     let sfn_client = aws_clients::get_sfn_client().await;
     let state_machine_arn = std::env::var("STATE_MACHINE_ARN")
         .map_err(|_| AppError::InternalError("STATE_MACHINE_ARN not set".to_string()))?;
 
-    let mut input = serde_json::json!({
-        "content": content,
-        "fileName": format!("issue-{}", issue_number),
-        "issueId": issue_number,
-        "tenant": {
-            "id": tenant_id,
-            "email": tenant_email
-        },
-        "isPreview": false,
-        // Always present (null when no template selected) so the state machine
-        // can reference it unconditionally.
-        "templateId": template_id,
-        // Routes the publish pipeline between the markdown and json paths.
-        "contentType": content_type,
-        // The issue subject is used directly as the email subject in json mode
-        // (where there is no markdown frontmatter to derive it from).
-        "subject": subject
-    });
-
-    if let Some(scheduled_at) = scheduled_at {
-        input["futureDate"] = serde_json::Value::String(scheduled_at.to_string());
-    }
-
-    sfn_client
+    let execution = sfn_client
         .start_execution()
         .state_machine_arn(state_machine_arn)
-        .input(input.to_string())
+        .input(execution_input.to_string())
         .send()
         .await
         .map_err(|e| AppError::AwsError(format!("Failed to start schedule workflow: {}", e)))?;
 
+    record_execution_arn(
+        input.tenant_id,
+        input.issue_number,
+        execution.execution_arn(),
+    )
+    .await;
+
     Ok(())
+}
+
+/// Hands the send instant to EventBridge Scheduler and leaves the record at
+/// `scheduled` until the execution it starts claims it.
+///
+/// Ordering matters and is the opposite of what reads naturally: the schedule is
+/// created first, then the record is moved off `draft`. The other order can lose
+/// a send outright — a record that says `scheduled` with no schedule behind it
+/// never fires and nothing is watching for that — whereas a schedule with a
+/// record still on `draft` sends anyway, because the state machine's handshake
+/// treats `draft` as sendable.
+async fn schedule_issue_send(
+    input: &IssueScheduleInput<'_>,
+    scheduled_at: &str,
+    execution_input: &serde_json::Value,
+) -> Result<(), AppError> {
+    let scheduler = aws_clients::get_scheduler_client().await;
+    let state_machine_arn = std::env::var("STATE_MACHINE_ARN")
+        .map_err(|_| AppError::InternalError("STATE_MACHINE_ARN not set".to_string()))?;
+    let role_arn = std::env::var("ISSUE_SEND_SCHEDULER_ROLE_ARN").map_err(|_| {
+        AppError::InternalError("ISSUE_SEND_SCHEDULER_ROLE_ARN not set".to_string())
+    })?;
+
+    let send_instant = chrono::DateTime::parse_from_rfc3339(scheduled_at)
+        .map_err(|_| {
+            AppError::InternalError(format!("Unparseable scheduled send time: {scheduled_at}"))
+        })?
+        .with_timezone(&chrono::Utc);
+
+    let fire_at = issue_send_fire_at(send_instant, issue_send_lead_time(), chrono::Utc::now());
+    let schedule_name = build_issue_send_schedule_name(input.tenant_id, input.issue_number);
+
+    scheduler
+        .create_schedule()
+        .name(&schedule_name)
+        .group_name("newsletter")
+        .schedule_expression(format!("at({})", fire_at.format("%Y-%m-%dT%H:%M:%S")))
+        .action_after_completion(aws_sdk_scheduler::types::ActionAfterCompletion::Delete)
+        .flexible_time_window(
+            aws_sdk_scheduler::types::FlexibleTimeWindow::builder()
+                .mode(aws_sdk_scheduler::types::FlexibleTimeWindowMode::Off)
+                .build()
+                .map_err(|e| {
+                    AppError::InternalError(format!("Failed to build time window: {}", e))
+                })?,
+        )
+        .target(
+            aws_sdk_scheduler::types::Target::builder()
+                .arn(&state_machine_arn)
+                .role_arn(&role_arn)
+                .input(execution_input.to_string())
+                .build()
+                .map_err(|e| AppError::InternalError(format!("Failed to build target: {}", e)))?,
+        )
+        .send()
+        .await
+        .map_err(|err| {
+            // The name is deterministic per (tenant, issue), which makes this a
+            // duplicate-send guard rather than a naming collision: a second
+            // request to schedule the same issue cannot create a second send.
+            // The state machine's `Has Issue Been Processed?` handshake still
+            // backs it up, since the GitHub producer does not come through here.
+            let is_conflict = err
+                .as_service_error()
+                .is_some_and(|service_err| service_err.is_conflict_exception());
+
+            if is_conflict {
+                return AppError::Conflict(format!(
+                    "Issue {} already has a send scheduled",
+                    input.issue_number
+                ));
+            }
+
+            AppError::AwsError(format!("Failed to schedule issue send: {}", err))
+        })?;
+
+    // The schedule is live from here, so a failure to record `scheduled` cannot
+    // just be returned: the caller is told scheduling failed while a one-shot
+    // entry sits waiting to fire, and the state machine treats the still-`draft`
+    // record as sendable when it does. Retrying does not heal it either - the
+    // deterministic name makes the second CreateSchedule a conflict, which
+    // returns before the status write is reached. So the schedule is torn back
+    // down and the caller's error is the truth again.
+    if let Err(status_error) = mark_issue_scheduled(input.tenant_id, input.issue_number).await {
+        if let Err(cleanup_error) =
+            delete_issue_send_schedule(input.tenant_id, input.issue_number).await
+        {
+            // Both failed: the entry is live and the record does not say so.
+            // Say that plainly rather than reporting only the first error.
+            tracing::error!(
+                "Failed to roll back the send schedule for issue {}: {cleanup_error}. \
+                 A schedule is live for an issue that is still a draft.",
+                input.issue_number
+            );
+            return Err(AppError::InternalError(format!(
+                "Issue {} could not be scheduled, and the send schedule created for it could not \
+                 be removed. Unschedule and retry before this issue's send time.",
+                input.issue_number
+            )));
+        }
+
+        return Err(status_error);
+    }
+
+    Ok(())
+}
+
+/// Moves a freshly created issue from `draft` to `scheduled`, where it stays
+/// until the execution starts and claims it as `in progress`. It used to report
+/// `in progress` for its entire wait, which said "publishing now" for days.
+///
+/// Drops any `executionArn` from a previous run at the same time: it names an
+/// execution that has nothing to do with this send, and the GET endpoint would
+/// describe it as this issue's workflow state.
+async fn mark_issue_scheduled(tenant_id: &str, issue_number: i32) -> Result<(), AppError> {
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+    let table_name = std::env::var("TABLE_NAME")
+        .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
+
+    ddb_client
+        .update_item()
+        .table_name(&table_name)
+        .key(
+            "pk",
+            AttributeValue::S(format!("{tenant_id}#{issue_number}")),
+        )
+        .key("sk", AttributeValue::S("newsletter".to_string()))
+        .update_expression("SET #status = :status, updatedAt = :updatedAt REMOVE executionArn")
+        // Never resurrect a record that has been deleted from under us: an
+        // UpdateItem on a missing key would create a ghost issue.
+        .condition_expression("attribute_exists(pk)")
+        .expression_attribute_names("#status", "status")
+        .expression_attribute_values(":status", AttributeValue::S("scheduled".to_string()))
+        .expression_attribute_values(
+            ":updatedAt",
+            AttributeValue::S(chrono::Utc::now().to_rfc3339()),
+        )
+        .send()
+        .await?;
+
+    Ok(())
+}
+
+/// How far ahead of the send instant the publish workflow starts.
+///
+/// **The lead time is the content freeze point.** The execution reads the issue
+/// record when it starts, so what goes out is whatever the record said at
+/// (send instant − lead time); an edit after that is not in the issue.
+///
+/// It exists because the local-send fan-out cannot schedule a group whose local
+/// send time has already passed, so with a zero lead time every timezone east
+/// of the base zone is sent immediately instead of at its own 9am. A lead time
+/// wide enough to cover the largest eastward offset (24h covers everything,
+/// including UTC+14) puts the fan-out ahead of the base instant and lets those
+/// groups be scheduled properly.
+///
+/// Default 0, which is today's behaviour: the execution starts at the send
+/// instant, exactly where the `Wait` used to end.
+///
+/// **Raising it above 0 needs one more change first.** The parse step derives
+/// `sendAtDate` from the issue's own send instant and returns `now` when that
+/// instant has passed — true at a zero lead time, false the moment the
+/// execution starts early. Until the send instant is forwarded to `Parse Issue`
+/// (it is not today; `parse-json-issue.mjs` reads it from a `futureDate` the
+/// definition does not pass, and `parse-md-to-json.mjs` only reads it from
+/// markdown frontmatter), an early execution publishes early rather than
+/// scheduling the send. That is Phase 6's first job, not a config change.
+fn issue_send_lead_time() -> chrono::Duration {
+    chrono::Duration::minutes(parse_lead_time_minutes(
+        std::env::var(LEAD_TIME_ENV).ok().as_deref(),
+    ))
+}
+
+/// Parses the configured lead time, falling back to zero for anything that is
+/// not a usable number of minutes. Zero is the safe default in both directions:
+/// it is today's behaviour, and it can never move a send earlier than its
+/// scheduled instant.
+fn parse_lead_time_minutes(raw: Option<&str>) -> i64 {
+    raw.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0)
+        .max(0)
+}
+
+/// When the Scheduler entry fires. Clamped to `now`, so a lead time longer than
+/// the notice an issue was scheduled with starts the workflow immediately rather
+/// than asking Scheduler for a time in the past.
+fn issue_send_fire_at(
+    send_instant: chrono::DateTime<chrono::Utc>,
+    lead_time: chrono::Duration,
+    now: chrono::DateTime<chrono::Utc>,
+) -> chrono::DateTime<chrono::Utc> {
+    (send_instant - lead_time).max(now)
+}
+
+/// Name of the Scheduler entry that starts an issue's publish workflow.
+/// Deterministic per (tenant, issue) on purpose — that is what makes
+/// `CreateSchedule` conflict-detecting and `DeleteSchedule` possible, neither of
+/// which a generated name allows.
+fn build_issue_send_schedule_name(tenant_id: &str, issue_number: i32) -> String {
+    format!(
+        "{}-{}-{}",
+        ISSUE_SEND_SCHEDULE_PREFIX,
+        sanitize_tenant_for_schedule_name(tenant_id),
+        issue_number
+    )
+}
+
+/// Cancels a scheduled send, tolerating a missing schedule.
+///
+/// Missing is the common case and not an error: the entry deletes itself once it
+/// fires, an issue that was never scheduled never had one, and this is called on
+/// delete for any issue. What must not happen is a schedule outliving the record
+/// it would publish, so anything other than a not-found propagates.
+async fn delete_issue_send_schedule(tenant_id: &str, issue_number: i32) -> Result<(), AppError> {
+    let scheduler = aws_clients::get_scheduler_client().await;
+    let schedule_name = build_issue_send_schedule_name(tenant_id, issue_number);
+
+    match scheduler
+        .delete_schedule()
+        .name(&schedule_name)
+        .group_name("newsletter")
+        .send()
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            let is_not_found = err
+                .as_service_error()
+                .is_some_and(|service_err| service_err.is_resource_not_found_exception());
+
+            if is_not_found {
+                return Ok(());
+            }
+
+            Err(AppError::AwsError(format!(
+                "Failed to cancel scheduled send {}: {}",
+                schedule_name, err
+            )))
+        }
+    }
+}
+
+/// Store the publish workflow's execution ARN on the issue record so its state
+/// can be reported later. Best-effort: the issue is already scheduled by this
+/// point, and losing the ARN costs visibility, not the send.
+async fn record_execution_arn(tenant_id: &str, issue_number: i32, execution_arn: &str) {
+    let Ok(table_name) = std::env::var("TABLE_NAME") else {
+        return;
+    };
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+
+    if let Err(error) = ddb_client
+        .update_item()
+        .table_name(&table_name)
+        .key(
+            "pk",
+            AttributeValue::S(format!("{tenant_id}#{issue_number}")),
+        )
+        .key("sk", AttributeValue::S("newsletter".to_string()))
+        .update_expression("SET executionArn = :arn")
+        .expression_attribute_values(":arn", AttributeValue::S(execution_arn.to_string()))
+        .send()
+        .await
+    {
+        tracing::warn!("Failed to record publish execution ARN: {error}");
+    }
 }
 
 /// Creates a one-time EventBridge schedule that deletes the draft once its
@@ -3235,6 +4155,10 @@ async fn schedule_draft_deletion(
     let run_at = chrono::Utc::now() + chrono::Duration::seconds(ttl_seconds);
     let schedule_expression = format!("at({})", run_at.format("%Y-%m-%dT%H:%M:%S"));
     let schedule_name = build_draft_ttl_schedule_name(tenant_id, issue_number);
+
+    // Re-staging a draft (same issue number) replaces its TTL schedule; the
+    // name is deterministic, so drop any previous schedule first.
+    delete_draft_ttl_schedule(tenant_id, issue_number).await?;
 
     let detail = serde_json::json!({
         "tenantId": tenant_id,
@@ -3278,17 +4202,107 @@ async fn schedule_draft_deletion(
     Ok(())
 }
 
-/// Builds a schedule name within EventBridge Scheduler's constraints
-/// (<= 64 chars, `[0-9a-zA-Z-_.]`). The tenant id is sanitized and truncated
-/// and a millisecond timestamp keeps repeated drafts from colliding.
-fn build_draft_ttl_schedule_name(tenant_id: &str, issue_number: i32) -> String {
-    let tenant_prefix: String = tenant_id
+/// Deletes the draft TTL schedule for an issue, tolerating a missing schedule
+/// (the normal case). Any other failure propagates: leaving a stale schedule
+/// behind would let it fire later and delete a freshly re-staged draft.
+async fn delete_draft_ttl_schedule(tenant_id: &str, issue_number: i32) -> Result<(), AppError> {
+    // Both names are tried during the migration. Adding the tenant digest
+    // changed this name, and a draft TTL can be set as far out as a year, so
+    // entries created by the previous version will outlive this deploy by a
+    // long way. Missing one is not cosmetic: the stale schedule stays live and
+    // later fires against a REPLACEMENT draft at the same issue number,
+    // deleting an issue nobody asked it to. Drop the legacy arm once no
+    // schedule created before this deploy can still be pending.
+    for schedule_name in [
+        build_draft_ttl_schedule_name(tenant_id, issue_number),
+        build_legacy_draft_ttl_schedule_name(tenant_id, issue_number),
+    ] {
+        delete_schedule_if_present(&schedule_name, "draft TTL").await?;
+    }
+
+    Ok(())
+}
+
+/// The pre-digest draft TTL name: a bare 16-character tenant prefix.
+/// Exists only so the migration can still find and delete those entries.
+fn build_legacy_draft_ttl_schedule_name(tenant_id: &str, issue_number: i32) -> String {
+    let readable: String = tenant_id
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
         .take(16)
         .collect();
-    let suffix = chrono::Utc::now().timestamp_millis();
-    format!("draft-ttl-{}-{}-{}", tenant_prefix, issue_number, suffix)
+
+    format!("draft-ttl-{readable}-{issue_number}")
+}
+
+/// Delete a schedule, treating "already gone" as success.
+async fn delete_schedule_if_present(schedule_name: &str, kind: &str) -> Result<(), AppError> {
+    let scheduler = aws_clients::get_scheduler_client().await;
+
+    match scheduler
+        .delete_schedule()
+        .name(schedule_name)
+        .group_name("newsletter")
+        .send()
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            let is_not_found = err
+                .as_service_error()
+                .is_some_and(|service_err| service_err.is_resource_not_found_exception());
+
+            if is_not_found {
+                return Ok(());
+            }
+
+            Err(AppError::AwsError(format!(
+                "Failed to delete {} schedule {}: {}",
+                kind, schedule_name, err
+            )))
+        }
+    }
+}
+
+/// Builds a schedule name within EventBridge Scheduler's constraints
+/// (<= 64 chars, `[0-9a-zA-Z-_.]`). The tenant id is sanitized and truncated.
+/// The name is deterministic per (tenant, issue) so re-staging a draft can
+/// find and replace the previous TTL schedule instead of leaking it.
+fn build_draft_ttl_schedule_name(tenant_id: &str, issue_number: i32) -> String {
+    format!(
+        "draft-ttl-{}-{}",
+        sanitize_tenant_for_schedule_name(tenant_id),
+        issue_number
+    )
+}
+
+/// The tenant id as it can appear in a schedule name: EventBridge Scheduler
+/// allows `[0-9a-zA-Z-_.]` and 64 characters total, so illegal characters are
+/// dropped and the id is shortened to leave room for the prefix and issue
+/// number.
+///
+/// A truncated prefix alone is not enough, because these names are load-bearing
+/// identities rather than labels. `CreateSchedule` uses the name as the
+/// per-issue lock and `DeleteSchedule` cancels by it, so two tenants that
+/// collide do not merely look alike: the second cannot schedule while the
+/// first's entry exists, and unscheduling one tenant's issue cancels the
+/// other's pending send. Tenant ids run to 50 characters, so a 16-character
+/// prefix collides on any two ids that share an opening.
+///
+/// The readable prefix is kept for operators reading the console, and a short
+/// digest of the WHOLE id (before sanitizing, so ids differing only in dropped
+/// characters still differ) restores uniqueness. Worst case is
+/// `ISSUE-SEND-` + 16 + 1 + 8 + 1 + 10 = 47 characters.
+fn sanitize_tenant_for_schedule_name(tenant_id: &str) -> String {
+    let readable: String = tenant_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(16)
+        .collect();
+
+    let digest = format!("{:x}", Sha256::digest(tenant_id.as_bytes()));
+
+    format!("{readable}-{}", &digest[..8])
 }
 
 async fn get_next_issue_number(tenant_id: &str) -> Result<i32, AppError> {
@@ -3323,15 +4337,30 @@ async fn get_next_issue_number(tenant_id: &str) -> Result<i32, AppError> {
     Ok(max_issue_number + 1)
 }
 
+/// The per-issue send configuration. These three always travel together — the
+/// API extracts, validates and stores them as a set — so they are passed as
+/// one.
+#[derive(Default)]
+struct SendConfig {
+    ab_test: Option<serde_json::Value>,
+    local_send: Option<serde_json::Value>,
+    content_assembly: Option<serde_json::Value>,
+}
+
 async fn create_issue_record(
     tenant_id: &str,
     issue_number: i32,
     body: &CreateIssueRequest,
     scheduled_at: Option<String>,
-    ab_test: Option<serde_json::Value>,
-    local_send: Option<serde_json::Value>,
-    content_assembly: Option<serde_json::Value>,
+    send_config: SendConfig,
+    overwrite_draft: bool,
 ) -> Result<CreateIssueResponse, AppError> {
+    let SendConfig {
+        ab_test,
+        local_send,
+        content_assembly,
+    } = send_config;
+
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
         .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
@@ -3412,13 +4441,22 @@ async fn create_issue_record(
         );
     }
 
-    ddb_client
+    // Overwrites are only permitted while the record is still a draft; the
+    // condition re-checks the status so a concurrent schedule/publish between
+    // the caller's status read and this write can't be clobbered.
+    let mut put = ddb_client
         .put_item()
         .table_name(&table_name)
-        .set_item(Some(item))
-        .condition_expression("attribute_not_exists(pk) AND attribute_not_exists(sk)")
-        .send()
-        .await?;
+        .set_item(Some(item));
+    if overwrite_draft {
+        put = put
+            .condition_expression("attribute_not_exists(pk) OR #status = :draftStatus")
+            .expression_attribute_names("#status", "status")
+            .expression_attribute_values(":draftStatus", AttributeValue::S("draft".to_string()));
+    } else {
+        put = put.condition_expression("attribute_not_exists(pk) AND attribute_not_exists(sk)");
+    }
+    put.send().await?;
 
     Ok(CreateIssueResponse {
         id: issue_number.to_string(),
@@ -3432,17 +4470,38 @@ async fn create_issue_record(
     })
 }
 
-async fn update_issue_record(
-    tenant_id: &str,
-    issue_id: &str,
-    body: &UpdateIssueRequest,
+/// The same three configs on update, where each can also be explicitly
+/// cleared — a distinct case from "not mentioned in this request", which
+/// leaves the stored value alone.
+#[derive(Default)]
+struct SendConfigUpdate {
     ab_test: Option<serde_json::Value>,
     clear_ab_test: bool,
     local_send: Option<serde_json::Value>,
     clear_local_send: bool,
     content_assembly: Option<serde_json::Value>,
     clear_content_assembly: bool,
+}
+
+async fn update_issue_record(
+    tenant_id: &str,
+    issue_id: &str,
+    body: &UpdateIssueRequest,
+    send_config: SendConfigUpdate,
+    // `expected_status`: the status the record must still hold for this write
+    // to apply. Set it whenever the caller's authorization to make the change
+    // depends on the status it read a moment ago; a refusal surfaces as a 409.
+    expected_status: Option<&str>,
 ) -> Result<GetIssueResponse, AppError> {
+    let SendConfigUpdate {
+        ab_test,
+        clear_ab_test,
+        local_send,
+        clear_local_send,
+        content_assembly,
+        clear_content_assembly,
+    } = send_config;
+
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
         .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
@@ -3573,6 +4632,24 @@ async fn update_issue_record(
         .update_expression(update_expression)
         .return_values(aws_sdk_dynamodb::types::ReturnValue::AllNew);
 
+    // The caller read the record before deciding this update was allowed, and
+    // for unscheduling that gap is a race against the send itself: the
+    // ISSUE-SEND entry can fire in between, at which point the execution has
+    // claimed the issue as `in progress` and is publishing it. Without this
+    // condition the write would put the record back to `draft` anyway - the
+    // operator sees a cancelled draft while the newsletter goes out, and
+    // because the state machine treats `draft` as sendable, re-staging it sends
+    // a second time.
+    if let Some(expected) = expected_status {
+        update_builder = update_builder
+            .condition_expression("#currentStatus = :expectedStatus")
+            .expression_attribute_names("#currentStatus", "status")
+            .expression_attribute_values(
+                ":expectedStatus",
+                AttributeValue::S(expected.to_string()),
+            );
+    }
+
     for (key, value) in expression_attribute_values {
         update_builder = update_builder.expression_attribute_values(key, value);
     }
@@ -3581,7 +4658,20 @@ async fn update_issue_record(
         update_builder = update_builder.expression_attribute_names(key, value);
     }
 
-    let result = update_builder.send().await?;
+    let result = update_builder.send().await.map_err(|error| {
+        if expected_status.is_some()
+            && error
+                .as_service_error()
+                .is_some_and(|service| service.is_conditional_check_failed_exception())
+        {
+            return AppError::Conflict(
+                "The issue changed while this update was in flight - it is no longer in the state \
+                 this change was allowed from. Re-read the issue before retrying."
+                    .to_string(),
+            );
+        }
+        AppError::from(error)
+    })?;
 
     let updated_item = result
         .attributes()
@@ -3598,11 +4688,16 @@ async fn update_issue_record(
         Vec::new()
     };
 
+    let progress = send_progress::get_send_progress(tenant_id, updated_issue.issue_number).await;
+    let workflow = get_workflow_state_for(&updated_issue, progress.is_some()).await;
+
     Ok(build_issue_response(
         updated_issue,
         stats,
         insights,
         variant_stats,
+        progress,
+        workflow,
     ))
 }
 
@@ -3791,6 +4886,8 @@ fn build_issue_response(
     stats: Option<IssueStats>,
     insights: Option<IssueInsights>,
     variant_stats: Vec<VariantStats>,
+    send_progress: Option<send_progress::SendProgressResponse>,
+    workflow: Option<send_progress::WorkflowState>,
 ) -> GetIssueResponse {
     GetIssueResponse {
         id: issue.issue_number.to_string(),
@@ -3816,6 +4913,8 @@ fn build_issue_response(
         },
         local_send: issue.local_send,
         content_assembly: issue.content_assembly,
+        send_progress,
+        workflow,
     }
 }
 
@@ -3869,7 +4968,92 @@ async fn get_variant_stats(tenant_id: &str, issue_id: &str) -> Vec<VariantStats>
 mod tests {
     use super::*;
 
+    // ── AI editorial review parsing ─────────────────────────────────────
+
+    #[test]
+    fn test_parse_review_response_full() {
+        let raw = r#"Here is the review:
+{
+  "grade": "A-",
+  "gradeRationale": "Clear and engaging.",
+  "summary": "A strong issue.",
+  "subjectSuggestions": [
+    {"a": "Show your work", "b": "Show me the receipts", "rationale": "curiosity vs specificity"}
+  ],
+  "metaAssessment": {"titleFit": "Good fit.", "descriptionFit": "Accurate.", "suggestions": ["Try X", ""]},
+  "grammar": [{"quote": "their are", "issue": "subject-verb", "suggestion": "there are"}],
+  "spelling": [{"word": "teh", "suggestion": "the", "context": "in teh cloud"}]
+}
+Thanks!"#;
+        let review = parse_review_response(raw).unwrap();
+        assert_eq!(review.grade, "A-");
+        assert_eq!(review.summary, "A strong issue.");
+        assert_eq!(review.subject_suggestions.len(), 1);
+        assert_eq!(review.subject_suggestions[0].b, "Show me the receipts");
+        assert_eq!(review.meta_assessment.suggestions, vec!["Try X"]); // empty dropped
+        assert_eq!(review.grammar.len(), 1);
+        assert_eq!(review.spelling[0].suggestion, "the");
+    }
+
+    #[test]
+    fn test_parse_review_response_missing_fields_default() {
+        let raw = r#"{"grade": "B"}"#;
+        let review = parse_review_response(raw).unwrap();
+        assert_eq!(review.grade, "B");
+        assert!(review.subject_suggestions.is_empty());
+        assert!(review.grammar.is_empty());
+        assert!(review.spelling.is_empty());
+        assert_eq!(review.meta_assessment.title_fit, "");
+    }
+
+    #[test]
+    fn test_parse_review_response_empty_grade_becomes_na() {
+        let raw = r#"{"grade": "", "grammar": []}"#;
+        let review = parse_review_response(raw).unwrap();
+        assert_eq!(review.grade, "N/A");
+    }
+
+    #[test]
+    fn test_parse_review_response_drops_unusable_grammar_and_spelling() {
+        // Entries missing a quote/word or a suggestion are unusable — the caller
+        // can't map them back to the text or apply a fix — so they're dropped.
+        let raw = r#"{
+  "grade": "B",
+  "grammar": [
+    {"quote": "their are", "issue": "sv", "suggestion": "there are"},
+    {"issue": "awkward phrasing", "suggestion": "reword this"},
+    {"quote": "the the", "issue": "dup word", "suggestion": ""}
+  ],
+  "spelling": [
+    {"word": "teh", "suggestion": "the", "context": "in teh cloud"},
+    {"word": "recieve", "context": "recieve it", "suggestion": ""}
+  ]
+}"#;
+        let review = parse_review_response(raw).unwrap();
+        assert_eq!(
+            review.grammar.len(),
+            1,
+            "only the fully-formed grammar item survives"
+        );
+        assert_eq!(review.grammar[0].quote, "their are");
+        assert_eq!(
+            review.spelling.len(),
+            1,
+            "only the fully-formed spelling item survives"
+        );
+        assert_eq!(review.spelling[0].word, "teh");
+    }
+
+    #[test]
+    fn test_parse_review_response_non_json_errors() {
+        assert!(parse_review_response("no json here").is_err());
+    }
+
     // ── Local-send config validation ────────────────────────────────────
+
+    /// Stands in for the tenant timezone setting in tests that supply their
+    /// own zone and don't care about the fallback.
+    const FALLBACK_ZONE: &str = "UTC";
 
     #[test]
     fn test_validate_local_send_normalizes_valid_config() {
@@ -3878,7 +5062,9 @@ mod tests {
             "defaultTimeZone": " America/New_York ",
             "extraneous": "dropped"
         });
-        let normalized = validate_and_normalize_local_send(&input).unwrap().unwrap();
+        let normalized = validate_and_normalize_local_send(&input, FALLBACK_ZONE)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             normalized,
             serde_json::json!({
@@ -3905,15 +5091,20 @@ mod tests {
                 "mode": "timezone"
             }),
         ] {
-            let normalized = validate_and_normalize_local_send(&input).unwrap().unwrap();
+            let normalized = validate_and_normalize_local_send(&input, FALLBACK_ZONE)
+                .unwrap()
+                .unwrap();
             assert_eq!(normalized["mode"], "timezone", "{input}");
         }
 
-        let normalized = validate_and_normalize_local_send(&serde_json::json!({
-            "enabled": true,
-            "defaultTimeZone": "America/New_York",
-            "mode": "peak-hour"
-        }))
+        let normalized = validate_and_normalize_local_send(
+            &serde_json::json!({
+                "enabled": true,
+                "defaultTimeZone": "America/New_York",
+                "mode": "peak-hour"
+            }),
+            FALLBACK_ZONE,
+        )
         .unwrap()
         .unwrap();
         assert_eq!(
@@ -3941,7 +5132,7 @@ mod tests {
                 "mode": mode
             });
             assert!(
-                validate_and_normalize_local_send(&input).is_err(),
+                validate_and_normalize_local_send(&input, FALLBACK_ZONE).is_err(),
                 "{input}"
             );
         }
@@ -3950,7 +5141,9 @@ mod tests {
     #[test]
     fn test_validate_local_send_disabled_becomes_none() {
         let input = serde_json::json!({ "enabled": false, "defaultTimeZone": "America/New_York" });
-        assert!(validate_and_normalize_local_send(&input).unwrap().is_none());
+        assert!(validate_and_normalize_local_send(&input, FALLBACK_ZONE)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -3960,21 +5153,44 @@ mod tests {
             serde_json::json!({ "enabled": "yes", "defaultTimeZone": "America/New_York" }),
             serde_json::json!("not-an-object"),
         ] {
-            assert!(validate_and_normalize_local_send(&input).is_err());
+            assert!(validate_and_normalize_local_send(&input, FALLBACK_ZONE).is_err());
         }
     }
 
     #[test]
-    fn test_validate_local_send_requires_timezone_when_enabled() {
+    fn test_validate_local_send_falls_back_to_the_tenant_timezone() {
+        // An omitted or blank zone means "the one this newsletter already
+        // runs on" — the tenant timezone setting — rather than an error.
         for input in [
             serde_json::json!({ "enabled": true }),
             serde_json::json!({ "enabled": true, "defaultTimeZone": "" }),
             serde_json::json!({ "enabled": true, "defaultTimeZone": "  " }),
+            serde_json::json!({ "enabled": true, "defaultTimeZone": null }),
+        ] {
+            let normalized = validate_and_normalize_local_send(&input, "Europe/London")
+                .unwrap()
+                .unwrap();
+            assert_eq!(normalized["defaultTimeZone"], "Europe/London", "{input}");
+        }
+    }
+
+    #[test]
+    fn test_validate_local_send_explicit_zone_beats_the_fallback() {
+        let input = serde_json::json!({ "enabled": true, "defaultTimeZone": "Asia/Tokyo" });
+        let normalized = validate_and_normalize_local_send(&input, "Europe/London")
+            .unwrap()
+            .unwrap();
+        assert_eq!(normalized["defaultTimeZone"], "Asia/Tokyo");
+    }
+
+    #[test]
+    fn test_validate_local_send_rejects_an_unusable_zone() {
+        for input in [
             serde_json::json!({ "enabled": true, "defaultTimeZone": "Not A Zone" }),
             serde_json::json!({ "enabled": true, "defaultTimeZone": "nozone" }),
         ] {
             assert!(
-                validate_and_normalize_local_send(&input).is_err(),
+                validate_and_normalize_local_send(&input, FALLBACK_ZONE).is_err(),
                 "{input}"
             );
         }
@@ -4035,6 +5251,89 @@ mod tests {
             content_type: content_type.map(|c| c.to_string()),
             ttl_seconds: None,
         }
+    }
+
+    fn tenant_settings(timezone: &str, send_time: &str) -> TenantSettings {
+        TenantSettings {
+            timezone: timezone.to_string(),
+            default_send_time: send_time.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// A date far enough out that these assertions don't start failing when
+    /// the clock passes them — `resolve_scheduled_at` drops past times.
+    fn future_year() -> i32 {
+        chrono::Utc::now()
+            .format("%Y")
+            .to_string()
+            .parse::<i32>()
+            .unwrap()
+            + 2
+    }
+
+    #[test]
+    fn test_resolve_scheduled_at_treats_absent_and_now_as_immediate() {
+        let settings = TenantSettings::default();
+        assert_eq!(resolve_scheduled_at(None, &settings).unwrap(), None);
+        assert_eq!(resolve_scheduled_at(Some(""), &settings).unwrap(), None);
+        assert_eq!(resolve_scheduled_at(Some("  "), &settings).unwrap(), None);
+        assert_eq!(resolve_scheduled_at(Some("now"), &settings).unwrap(), None);
+        assert_eq!(resolve_scheduled_at(Some("NOW"), &settings).unwrap(), None);
+    }
+
+    #[test]
+    fn test_resolve_scheduled_at_passes_through_full_timestamps() {
+        let value = format!("{}-08-01T12:34:00+00:00", future_year());
+        let resolved =
+            resolve_scheduled_at(Some(&value), &tenant_settings("America/Chicago", "09:00"))
+                .unwrap();
+
+        // An explicit instant wins over the tenant default; settings only fill
+        // in what the caller left out.
+        assert_eq!(resolved, Some(value));
+    }
+
+    #[test]
+    fn test_resolve_scheduled_at_applies_default_send_time_to_a_bare_date() {
+        let date = format!("{}-08-01", future_year());
+        let resolved =
+            resolve_scheduled_at(Some(&date), &tenant_settings("America/Chicago", "09:00"))
+                .unwrap()
+                .expect("a future date should stay scheduled");
+
+        // 09:00 CDT is 14:00Z.
+        assert_eq!(resolved, format!("{}-08-01T14:00:00+00:00", future_year()));
+    }
+
+    #[test]
+    fn test_resolve_scheduled_at_uses_utc_at_nine_without_configured_settings() {
+        let date = format!("{}-08-01", future_year());
+        let resolved = resolve_scheduled_at(Some(&date), &TenantSettings::default())
+            .unwrap()
+            .expect("a future date should stay scheduled");
+
+        assert_eq!(resolved, format!("{}-08-01T09:00:00+00:00", future_year()));
+    }
+
+    #[test]
+    fn test_resolve_scheduled_at_drops_past_dates() {
+        // A bare date in the past resolves to a past instant, which means the
+        // same thing an explicit past timestamp does: send now.
+        let resolved = resolve_scheduled_at(
+            Some("2020-01-01"),
+            &tenant_settings("America/Chicago", "09:00"),
+        )
+        .unwrap();
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn test_resolve_scheduled_at_rejects_unparseable_values() {
+        let settings = TenantSettings::default();
+        assert!(resolve_scheduled_at(Some("tomorrow"), &settings).is_err());
+        assert!(resolve_scheduled_at(Some("2026-13-01"), &settings).is_err());
+        assert!(resolve_scheduled_at(Some("08/01/2026"), &settings).is_err());
     }
 
     #[test]
@@ -4325,7 +5624,10 @@ mod tests {
         ab_test_json: Option<&str>,
     ) -> HashMap<String, AttributeValue> {
         let mut item = HashMap::new();
-        item.insert("pk".to_string(), AttributeValue::S("tenant-123#42".to_string()));
+        item.insert(
+            "pk".to_string(),
+            AttributeValue::S("tenant-123#42".to_string()),
+        );
         item.insert(
             "status".to_string(),
             AttributeValue::S(issue_status.to_string()),
@@ -4364,8 +5666,7 @@ mod tests {
     #[test]
     fn test_parse_active_ab_test_keeps_pending_and_evaluating() {
         for status in ["pending", "evaluating"] {
-            let json =
-                format!(r#"{{"dimension":"subject","status":"{status}","variants":[]}}"#);
+            let json = format!(r#"{{"dimension":"subject","status":"{status}","variants":[]}}"#);
             assert!(
                 parse_active_ab_test(&active_ab_item("published", Some(&json))).is_some(),
                 "status {status} should count as in progress"
@@ -4376,8 +5677,7 @@ mod tests {
     #[test]
     fn test_parse_active_ab_test_skips_final_statuses() {
         for status in ["sent", "inconclusive"] {
-            let json =
-                format!(r#"{{"dimension":"subject","status":"{status}","variants":[]}}"#);
+            let json = format!(r#"{{"dimension":"subject","status":"{status}","variants":[]}}"#);
             assert!(
                 parse_active_ab_test(&active_ab_item("published", Some(&json))).is_none(),
                 "status {status} is final and must be excluded"
@@ -4908,6 +6208,7 @@ mod tests {
             ab_test: None,
             local_send: None,
             content_assembly: None,
+            execution_arn: None,
         };
 
         let stats = Some(IssueStats {
@@ -4924,7 +6225,7 @@ mod tests {
             analytics: None,
         });
 
-        let response = build_issue_response(issue, stats, None, Vec::new());
+        let response = build_issue_response(issue, stats, None, Vec::new(), None, None);
 
         assert_eq!(response.id, "42");
         assert_eq!(response.issue_number, 42);
@@ -4955,9 +6256,10 @@ mod tests {
             ab_test: None,
             local_send: None,
             content_assembly: None,
+            execution_arn: None,
         };
 
-        let response = build_issue_response(issue, None, None, Vec::new());
+        let response = build_issue_response(issue, None, None, Vec::new(), None, None);
 
         assert_eq!(response.id, "1");
         assert_eq!(response.issue_number, 1);
@@ -5061,11 +6363,444 @@ mod tests {
     fn test_build_draft_ttl_schedule_name_is_valid() {
         let name = build_draft_ttl_schedule_name("tenant-abc_123", 42);
 
-        assert!(name.starts_with("draft-ttl-tenant-abc_123-42-"));
+        assert!(name.starts_with("draft-ttl-tenant-abc_123-"));
+        assert!(name.ends_with("-42"));
         assert!(name.len() <= 64);
         assert!(name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'));
+    }
+
+    #[test]
+    fn test_schedule_names_do_not_collide_on_a_shared_prefix() {
+        // Tenant ids run to 50 characters, so a truncated prefix collides on any
+        // two that share an opening. These names are identities, not labels: a
+        // collision means one tenant cannot schedule while the other's entry
+        // exists, and worse, unscheduling one tenant's issue deletes the other
+        // tenant's pending send.
+        let alpha = "abcdefghijklmnopalpha";
+        let beta = "abcdefghijklmnopbeta";
+
+        assert_ne!(
+            build_issue_send_schedule_name(alpha, 42),
+            build_issue_send_schedule_name(beta, 42)
+        );
+        assert_ne!(
+            build_draft_ttl_schedule_name(alpha, 42),
+            build_draft_ttl_schedule_name(beta, 42)
+        );
+    }
+
+    #[test]
+    fn test_schedule_name_distinguishes_ids_differing_only_in_dropped_characters() {
+        // The digest covers the raw id, so two ids that sanitize to the same
+        // characters still produce different names.
+        assert_ne!(
+            build_issue_send_schedule_name("tenant/one", 42),
+            build_issue_send_schedule_name("tenant#one", 42)
+        );
+    }
+
+    #[test]
+    fn test_schedule_name_stays_within_the_scheduler_limit_for_a_max_length_tenant() {
+        let name = build_issue_send_schedule_name(&"a".repeat(50), i32::MAX);
+
+        assert!(name.len() <= 64, "name was {} chars: {name}", name.len());
+        assert!(name.starts_with("ISSUE-SEND-"));
+    }
+
+    #[test]
+    fn test_build_draft_ttl_schedule_name_is_deterministic() {
+        // Re-staging a draft must produce the same name so the prior TTL
+        // schedule is found and replaced instead of leaking (and later firing
+        // against the re-staged draft).
+        assert_eq!(
+            build_draft_ttl_schedule_name("tenant-abc_123", 42),
+            build_draft_ttl_schedule_name("tenant-abc_123", 42)
+        );
+    }
+
+    #[test]
+    fn test_compute_idempotency_hash_stable_for_identical_requests() {
+        let request = create_request("# Test Content", None, None);
+        let ab_test = serde_json::json!({ "dimension": "subject", "variants": ["A", "B"] });
+
+        let first = compute_idempotency_hash(
+            &request,
+            7,
+            CreateIssueAction::Draft,
+            None,
+            Some(&ab_test),
+            None,
+            None,
+        );
+        let second = compute_idempotency_hash(
+            &request,
+            7,
+            CreateIssueAction::Draft,
+            None,
+            Some(&ab_test),
+            None,
+            None,
+        );
+
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn test_compute_idempotency_hash_survives_a_tenant_settings_change() {
+        // The hash covers the caller's date-only value, not the instant it
+        // resolves to. A tenant editing their timezone or send time between a
+        // request and its retry must not turn a byte-identical replay into a
+        // 409 — which is exactly what hashing the resolved instant would do.
+        let request = create_request("# Test Content", None, None);
+
+        let before = compute_idempotency_hash(
+            &request,
+            7,
+            CreateIssueAction::Schedule,
+            Some("2026-08-01"),
+            None,
+            None,
+            None,
+        );
+        let after = compute_idempotency_hash(
+            &request,
+            7,
+            CreateIssueAction::Schedule,
+            Some("2026-08-01"),
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(before, after);
+
+        // Sanity check that the field still participates at all: a different
+        // date is still a different request.
+        let other_date = compute_idempotency_hash(
+            &request,
+            7,
+            CreateIssueAction::Schedule,
+            Some("2026-08-02"),
+            None,
+            None,
+            None,
+        );
+        assert_ne!(before, other_date);
+    }
+
+    #[test]
+    fn test_resolve_scheduled_at_varies_with_settings_the_hash_ignores() {
+        // The other half of the guarantee above: the same date-only value
+        // genuinely does resolve to different instants under different
+        // settings, so hashing the resolved form would have been unstable.
+        let date = format!("{}-08-01", future_year());
+
+        let chicago =
+            resolve_scheduled_at(Some(&date), &tenant_settings("America/Chicago", "09:00"))
+                .unwrap();
+        let tokyo =
+            resolve_scheduled_at(Some(&date), &tenant_settings("Asia/Tokyo", "09:00")).unwrap();
+
+        assert_ne!(chicago, tokyo);
+    }
+
+    #[test]
+    fn test_compute_idempotency_hash_changes_with_send_config() {
+        // A reused key with changed abTest/localSend/contentAssembly must not
+        // look like an exact replay: replaying would silently keep the old
+        // send configuration.
+        let request = create_request("# Test Content", None, None);
+        let ab_test = serde_json::json!({ "dimension": "subject", "variants": ["A", "B"] });
+        let local_send = serde_json::json!({ "enabled": true, "batchSize": 10 });
+        let content_assembly = serde_json::json!({ "enabled": true });
+
+        let base = compute_idempotency_hash(
+            &request,
+            7,
+            CreateIssueAction::Draft,
+            None,
+            None,
+            None,
+            None,
+        );
+        let with_ab = compute_idempotency_hash(
+            &request,
+            7,
+            CreateIssueAction::Draft,
+            None,
+            Some(&ab_test),
+            None,
+            None,
+        );
+        let with_local_send = compute_idempotency_hash(
+            &request,
+            7,
+            CreateIssueAction::Draft,
+            None,
+            None,
+            Some(&local_send),
+            None,
+        );
+        let with_assembly = compute_idempotency_hash(
+            &request,
+            7,
+            CreateIssueAction::Draft,
+            None,
+            None,
+            None,
+            Some(&content_assembly),
+        );
+
+        assert_ne!(base, with_ab);
+        assert_ne!(base, with_local_send);
+        assert_ne!(base, with_assembly);
+        assert_ne!(with_ab, with_local_send);
+    }
+
+    fn scheduled_issue(scheduled_at: &str, execution_arn: Option<&str>) -> IssueRecord {
+        IssueRecord {
+            pk: "tenant-123#42".to_string(),
+            sk: "newsletter".to_string(),
+            gsi1pk: "tenant-123#newsletter".to_string(),
+            gsi1sk: "2026-07-24T18:00:00Z".to_string(),
+            issue_number: 42,
+            subject: "Test Issue".to_string(),
+            status: "scheduled".to_string(),
+            content: "# Test Content".to_string(),
+            created_at: "2026-07-24T18:00:00Z".to_string(),
+            updated_at: "2026-07-24T18:00:00Z".to_string(),
+            published_at: None,
+            scheduled_at: Some(scheduled_at.to_string()),
+            metadata: None,
+            template_id: None,
+            content_type: None,
+            ab_test: None,
+            local_send: None,
+            content_assembly: None,
+            execution_arn: execution_arn.map(str::to_string),
+        }
+    }
+
+    /// A scheduled issue has no execution until the Scheduler starts one, so the
+    /// record is what has to say "waiting for the send time". Reporting nothing
+    /// here would leave the dashboard with no explanation for an issue that is
+    /// scheduled and has no progress record either.
+    #[tokio::test]
+    async fn test_workflow_state_reports_waiting_before_the_execution_exists() {
+        let issue = scheduled_issue(
+            &(chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339(),
+            None,
+        );
+
+        let workflow = get_workflow_state_for(&issue, false).await;
+
+        assert_eq!(
+            workflow,
+            Some(send_progress::waiting_for_send_time()),
+            "a scheduled issue with no execution should still report waiting"
+        );
+    }
+
+    /// The send time has passed and no execution ever recorded itself, which is
+    /// not "waiting" — it is a schedule that did not fire, and claiming the
+    /// workflow is on its way would hide that.
+    #[tokio::test]
+    async fn test_workflow_state_is_silent_when_a_past_send_never_started() {
+        let issue = scheduled_issue("2026-07-24T18:00:00Z", None);
+
+        assert_eq!(get_workflow_state_for(&issue, false).await, None);
+    }
+
+    #[tokio::test]
+    async fn test_workflow_state_is_silent_while_a_local_send_is_reporting() {
+        let issue = scheduled_issue(
+            &(chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339(),
+            None,
+        );
+
+        // Send progress is both more detailed and longer-lived than anything
+        // this could add.
+        assert_eq!(get_workflow_state_for(&issue, true).await, None);
+    }
+
+    /// The execution input is the contract with the state machine, and the whole
+    /// point of Phase 5 is what is *not* in it: an execution started at the send
+    /// instant that carried the content would be publishing whatever the record
+    /// said when the issue was scheduled, days earlier.
+    #[test]
+    fn test_build_execution_input_carries_identifiers_only() {
+        let input = build_execution_input(&IssueScheduleInput {
+            tenant_id: "tenant-123",
+            tenant_email: "owner@example.com",
+            issue_number: 42,
+            scheduled_at: Some("2026-07-27T14:00:00+00:00"),
+            template_id: Some("tmpl-1"),
+            content_type: "markdown",
+        });
+
+        assert_eq!(
+            input,
+            serde_json::json!({
+                "fileName": "issue-42",
+                "issueId": 42,
+                "tenant": { "id": "tenant-123", "email": "owner@example.com" },
+                "templateId": "tmpl-1",
+                "contentType": "markdown"
+            })
+        );
+        // Named individually because each one is a specific bug if it comes
+        // back: content and subject are read off the record now, and futureDate
+        // is what parked the execution in the definition's `Wait`.
+        for absent in ["content", "subject", "futureDate"] {
+            assert!(input.get(absent).is_none(), "{absent} is back on the input");
+        }
+    }
+
+    #[test]
+    fn test_build_execution_input_always_carries_a_template_id() {
+        let input = build_execution_input(&IssueScheduleInput {
+            tenant_id: "tenant-123",
+            tenant_email: "owner@example.com",
+            issue_number: 7,
+            scheduled_at: None,
+            template_id: None,
+            content_type: "json",
+        });
+
+        // Present-but-null, because the definition reads it with an
+        // unconditional `.$` path: an absent field is a runtime error there.
+        assert_eq!(input["templateId"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn test_parse_lead_time_minutes_defaults_to_zero() {
+        assert_eq!(parse_lead_time_minutes(None), 0);
+        assert_eq!(parse_lead_time_minutes(Some("")), 0);
+        assert_eq!(parse_lead_time_minutes(Some("  ")), 0);
+        assert_eq!(parse_lead_time_minutes(Some("soon")), 0);
+        // A negative lead time would move a send *later* than its scheduled
+        // instant, which is never what anyone configuring this means.
+        assert_eq!(parse_lead_time_minutes(Some("-30")), 0);
+    }
+
+    #[test]
+    fn test_parse_lead_time_minutes_reads_a_configured_value() {
+        assert_eq!(parse_lead_time_minutes(Some("1440")), 1440);
+        assert_eq!(parse_lead_time_minutes(Some(" 90 ")), 90);
+    }
+
+    #[test]
+    fn test_issue_send_fire_at_subtracts_the_lead_time() {
+        let send_instant = timestamp("2026-07-27T14:00:00Z");
+        let now = timestamp("2026-07-24T18:00:00Z");
+
+        assert_eq!(
+            issue_send_fire_at(send_instant, chrono::Duration::zero(), now),
+            send_instant
+        );
+        assert_eq!(
+            issue_send_fire_at(send_instant, chrono::Duration::hours(24), now),
+            timestamp("2026-07-26T14:00:00Z")
+        );
+    }
+
+    /// An issue scheduled with less notice than the lead time. Firing at the
+    /// clamped time means the workflow starts as early as it can, rather than
+    /// asking Scheduler for a moment that has already passed.
+    #[test]
+    fn test_issue_send_fire_at_never_asks_for_a_past_time() {
+        let send_instant = timestamp("2026-07-27T14:00:00Z");
+        let now = timestamp("2026-07-27T09:00:00Z");
+
+        assert_eq!(
+            issue_send_fire_at(send_instant, chrono::Duration::hours(24), now),
+            now
+        );
+    }
+
+    /// The name is a per-issue lock: `CreateSchedule` conflicts on it (so a
+    /// second schedule request cannot create a second send) and the cancel path
+    /// has to be able to reconstruct it from (tenant, issue) alone.
+    #[test]
+    fn test_build_issue_send_schedule_name_is_deterministic_and_legal() {
+        let name = build_issue_send_schedule_name("ten@nt/with#bad chars", 42);
+
+        assert_eq!(
+            name,
+            build_issue_send_schedule_name("ten@nt/with#bad chars", 42)
+        );
+        assert_ne!(
+            name,
+            build_issue_send_schedule_name("ten@nt/with#bad chars", 43)
+        );
+        // Matched by the IAM resource pattern in template.yaml.
+        assert!(name.starts_with("ISSUE-SEND-"));
+        assert!(name.ends_with("-42"));
+        assert!(name.len() <= 64);
+        assert!(name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'));
+    }
+
+    #[test]
+    fn test_schedule_names_stay_within_scheduler_limits_for_a_long_tenant_id() {
+        let tenant_id = "a".repeat(200);
+
+        assert!(build_issue_send_schedule_name(&tenant_id, 1_000_000).len() <= 64);
+        assert!(build_draft_ttl_schedule_name(&tenant_id, 1_000_000).len() <= 64);
+    }
+
+    /// `draft` is the unschedule request. It is validated here and gated on the
+    /// issue actually being `scheduled` in `handle_update_issue`.
+    #[test]
+    fn test_validate_update_request_accepts_the_two_settable_statuses() {
+        for status in ["published", "draft"] {
+            let request = UpdateIssueRequest {
+                subject: None,
+                content: None,
+                scheduled_at: None,
+                metadata: None,
+                status: Some(status.to_string()),
+                template_id: None,
+                content_type: None,
+            };
+
+            assert!(
+                validate_update_request(&request, false).is_ok(),
+                "status {status} should be settable"
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_update_request_rejects_pipeline_owned_statuses() {
+        for status in ["scheduled", "in progress", "sending", "failed"] {
+            let request = UpdateIssueRequest {
+                subject: None,
+                content: None,
+                scheduled_at: None,
+                metadata: None,
+                status: Some(status.to_string()),
+                template_id: None,
+                content_type: None,
+            };
+
+            assert!(
+                matches!(
+                    validate_update_request(&request, false),
+                    Err(AppError::BadRequest(_))
+                ),
+                "status {status} should not be settable by a caller"
+            );
+        }
+    }
+
+    fn timestamp(value: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(value)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
     }
 
     #[test]
@@ -5219,6 +6954,7 @@ mod tests {
             ab_test: None,
             local_send: None,
             content_assembly: None,
+            execution_arn: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -5246,6 +6982,7 @@ mod tests {
             ab_test: None,
             local_send: None,
             content_assembly: None,
+            execution_arn: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -5274,6 +7011,7 @@ mod tests {
             ab_test: None,
             local_send: None,
             content_assembly: None,
+            execution_arn: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -5302,6 +7040,7 @@ mod tests {
             ab_test: None,
             local_send: None,
             content_assembly: None,
+            execution_arn: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -5329,6 +7068,7 @@ mod tests {
             ab_test: None,
             local_send: None,
             content_assembly: None,
+            execution_arn: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -5357,6 +7097,7 @@ mod tests {
             ab_test: None,
             local_send: None,
             content_assembly: None,
+            execution_arn: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -5385,6 +7126,7 @@ mod tests {
             ab_test: None,
             local_send: None,
             content_assembly: None,
+            execution_arn: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -5950,6 +7692,8 @@ mod tests {
             content_assembly: None,
             variant_stats: None,
             local_send: None,
+            send_progress: None,
+            workflow: None,
         };
 
         let result = publish_event(tenant_id, event_type, &data).await;
@@ -5979,6 +7723,7 @@ mod tests {
             ab_test: None,
             local_send: None,
             content_assembly: None,
+            execution_arn: None,
         };
 
         let result = publish_event(tenant_id, event_type, &data).await;

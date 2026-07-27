@@ -106,4 +106,54 @@ describe('AbTestResults', () => {
     render(<AbTestResults abTest={abTest} variantStats={baseStats} />);
     expect(screen.getByText('Send time')).toBeInTheDocument();
   });
+
+  describe('before the issue has sent', () => {
+    it('does not claim a test is running', async () => {
+      // A draft's saved config used to render "Test in progress — awaiting
+      // results" next to a spinner, describing a test that had not started.
+      render(<AbTestResults abTest={subjectTest({ status: undefined })} hasStarted={false} />);
+
+      expect(screen.queryByText(/test in progress/i)).not.toBeInTheDocument();
+      expect(
+        screen.getByText(/the test starts when this issue sends/i)
+      ).toBeInTheDocument();
+    });
+
+    it('reports the status as not started', () => {
+      render(<AbTestResults abTest={subjectTest({ status: undefined })} hasStarted={false} />);
+
+      expect(screen.getByLabelText(/A\/B test status: Not started/i)).toBeInTheDocument();
+    });
+
+    it('is titled as a configuration, not results', () => {
+      render(<AbTestResults abTest={subjectTest({ status: undefined })} hasStarted={false} />);
+
+      expect(screen.getByText('A/B Test')).toBeInTheDocument();
+      expect(screen.queryByText('A/B Test Results')).not.toBeInTheDocument();
+    });
+
+    it('shows no engagement metrics', () => {
+      // Rendering "—" and "0 / 0 delivered" reads as a measurement that came
+      // back empty rather than one that hasn't happened.
+      render(<AbTestResults abTest={subjectTest({ status: undefined })} hasStarted={false} />);
+
+      expect(screen.queryByText(/delivered/)).not.toBeInTheDocument();
+      expect(screen.getAllByText(/will be measured on open rate once sent/i)).toHaveLength(2);
+    });
+
+    it('still shows what each variant is configured to send', () => {
+      render(<AbTestResults abTest={subjectTest({ status: undefined })} hasStarted={false} />);
+
+      expect(screen.getByText('Variant A (Control)')).toBeInTheDocument();
+      expect(screen.getByText('Variant B (Challenger)')).toBeInTheDocument();
+    });
+
+    it('goes back to reporting results once the issue sends', () => {
+      // The same config, after the send has started, is a live test again.
+      render(<AbTestResults abTest={subjectTest({ status: 'testing' })} variantStats={baseStats} />);
+
+      expect(screen.getByText('A/B Test Results')).toBeInTheDocument();
+      expect(screen.getByText(/test in progress/i)).toBeInTheDocument();
+    });
+  });
 });

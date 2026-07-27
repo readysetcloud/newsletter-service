@@ -1,14 +1,17 @@
 import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Pencil, Trash, RefreshCw, AlertCircle, TrendingUp, Users, Shield, FileText, CheckCircle, Flame } from 'lucide-react';
+import { ArrowLeft, Pencil, PencilLine, Trash, RefreshCw, AlertCircle, TrendingUp, Users, Shield, FileText, CheckCircle, Flame, Hash, CalendarDays, Clock, Send } from 'lucide-react';
+import { PageHero, PageHeroTitle, PageHeroChips, PageHeroChip, SegmentedControl } from '@readysetcloud/ui';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { useToast } from '../../components/ui/Toast';
+import { cn } from '../../utils/cn';
 import { IssueStatusBadge } from '../../components/issues/IssueStatusBadge';
 import { MarkdownPreview } from '../../components/issues/MarkdownPreview';
 import { DeleteIssueDialog } from '../../components/issues/DeleteIssueDialog';
 import { SubscriberMetricsPanel } from '../../components/issues/SubscriberMetricsPanel';
 import { AbTestResults } from '../../components/issues/AbTestResults';
+import { SendProgressCard } from '../../components/issues/SendProgressCard';
 import {
   IssueDetailSkeleton,
   InsightsHeroSkeleton,
@@ -18,7 +21,6 @@ import {
   GeoMapSkeleton,
   LinkPerformanceSkeleton,
   DecayChartSkeleton,
-  ComparisonCardSkeleton,
   ChartSkeleton
 } from '../../components/ui/SkeletonLoader';
 import { MaxMindAttribution } from '../../components/analytics';
@@ -29,6 +31,7 @@ import { CollapsibleSection } from '../../components/issues/CollapsibleSection';
 import { DeliverabilityHealthCard } from '../../components/issues/DeliverabilityHealthCard';
 import { AsyncErrorBoundary } from '../../components/error/AsyncErrorBoundary';
 import { FadeIn } from '../../components/ui/FadeIn';
+import type { ComparisonMode, MetricSparklines } from '../../components/issues/KeyMetricsSummary';
 import { issuesService } from '../../services/issuesService';
 import { dashboardService } from '../../services/dashboardService';
 import { calculateComplaintRate } from '../../utils/analyticsCalculations';
@@ -39,12 +42,15 @@ import {
   saveScrollPosition,
   loadScrollPosition,
   clearScrollPosition,
+  toSectionDomId,
+  toSectionKey,
   type UserPreferences
 } from '../../utils/issueDetailUtils';
 import { getErrorDetails, validateAnalyticsData } from '../../utils/errorMessages';
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 import type { Issue, IssueAnalytics, IssueMetrics, TrendsData } from '../../types/issues';
 import type { NavigationSection } from '../../components/issues/QuickNavigation';
+import { useTenantDateFormat } from '@/contexts/SettingsContext';
 
 // Lazy load analytics components for better performance
 const LinkPerformanceTable = lazy(() => import('../../components/issues/LinkPerformanceTable').then(m => ({ default: m.LinkPerformanceTable })));
@@ -54,9 +60,8 @@ const AudienceInsightsPanel = lazy(() => import('../../components/issues/Audienc
 const ComplaintDetailsTable = lazy(() => import('../../components/issues/ComplaintDetailsTable').then(m => ({ default: m.ComplaintDetailsTable })));
 const BounceReasonsChart = lazy(() => import('../../components/issues/BounceReasonsChart').then(m => ({ default: m.BounceReasonsChart })));
 const EngagementTypeIndicator = lazy(() => import('../../components/issues/EngagementTypeIndicator').then(m => ({ default: m.EngagementTypeIndicator })));
-const IssueComparisonCard = lazy(() => import('../../components/issues/IssueComparisonCard').then(m => ({ default: m.IssueComparisonCard })));
 const TrafficSourceChart = lazy(() => import('../../components/issues/TrafficSourceChart').then(m => ({ default: m.TrafficSourceChart })));
-const DeliveryBreakdownChart = lazy(() => import('../../components/issues/DeliveryBreakdownChart').then(m => ({ default: m.DeliveryBreakdownChart })));
+const EngagementFunnel = lazy(() => import('../../components/issues/EngagementFunnel').then(m => ({ default: m.EngagementFunnel })));
 const TimingMetricsChart = lazy(() => import('../../components/issues/TimingMetricsChart').then(m => ({ default: m.TimingMetricsChart })));
 const GeoMap = lazy(() => import('../../components/analytics/GeoMap').then(m => ({ default: m.GeoMap })));
 const LinkSelector = lazy(() => import('../../components/analytics/LinkSelector').then(m => ({ default: m.LinkSelector })));
@@ -72,6 +77,9 @@ interface SectionConfig {
   defaultExpanded: boolean;
   requiredData: string[];
 }
+
+/** Room left above a section when scrolling to it, for the sticky nav bar. */
+const SECTION_SCROLL_OFFSET = 88;
 
 const SECTION_CONFIGS: SectionConfig[] = [
   {
@@ -124,7 +132,7 @@ export const IssueDetailPage: React.FC = () => {
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
   const [stickyNavVisible, setStickyNavVisible] = useState(false);
   const [activeSection, setActiveSection] = useState<string | null>(null);
-  const [comparisonMode, setComparisonMode] = useState<'average' | 'last' | 'best'>('average');
+  const [comparisonMode, setComparisonMode] = useState<ComparisonMode>('average');
   const [userPreferences] = useState<UserPreferences['issueDetail']>(() => loadPreferences());
 
   // Ref for skip link target
@@ -281,13 +289,17 @@ export const IssueDetailPage: React.FC = () => {
     };
   }, [id]);
 
-  // Initialize expanded sections based on screen size, defaults, and user preferences
+  // Initialize expanded sections based on screen size, defaults, and user preferences.
+  // Deliberately no resize listener: mobile browsers fire `resize` every time the
+  // address bar hides or shows while scrolling, and collapsing sections out from
+  // under someone mid-scroll is worse than leaving them as they were.
   useEffect(() => {
     const isMobile = window.innerWidth < 768;
     const defaultExpanded = new Set<string>();
 
-    // Load user preferences for expanded sections
-    const savedExpandedSections = userPreferences.expandedSections;
+    // Load user preferences for expanded sections. Older builds saved DOM ids
+    // ("section-engagement") here, so normalize whatever we read back.
+    const savedExpandedSections = userPreferences.expandedSections.map(toSectionKey);
 
     if (savedExpandedSections.length > 0) {
       // Use saved preferences if available
@@ -305,18 +317,6 @@ export const IssueDetailPage: React.FC = () => {
 
     // Load comparison mode preference
     setComparisonMode(userPreferences.defaultComparison);
-
-    // Handle window resize to adjust section states
-    const handleResize = () => {
-      const isNowMobile = window.innerWidth < 768;
-      if (isNowMobile && expandedSections.size > 0) {
-        // Collapse all sections when switching to mobile
-        setExpandedSections(new Set());
-      }
-    };
-
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Only run on mount
 
@@ -324,7 +324,7 @@ export const IssueDetailPage: React.FC = () => {
   useEffect(() => {
     const keyMetricsElement = document.getElementById('key-metrics-summary');
     const sectionElements = SECTION_CONFIGS.map(config =>
-      document.getElementById(`section-${config.id}`)
+      document.getElementById(toSectionDomId(config.id))
     ).filter(Boolean);
 
     // Observer for sticky navigation trigger
@@ -344,8 +344,7 @@ export const IssueDetailPage: React.FC = () => {
       (entries) => {
         entries.forEach((entry) => {
           if (entry.isIntersecting) {
-            const sectionId = entry.target.id.replace('section-', '');
-            setActiveSection(sectionId);
+            setActiveSection(toSectionKey(entry.target.id));
           }
         });
       },
@@ -364,45 +363,77 @@ export const IssueDetailPage: React.FC = () => {
     };
   }, [issue, analytics]);
 
-  // Handler for section toggle
-  const handleSectionToggle = useCallback((sectionId: string) => {
-    setExpandedSections(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(sectionId)) {
-        newSet.delete(sectionId);
-      } else {
-        newSet.add(sectionId);
-      }
+  // Handler for the comparison-baseline toggle in the key metrics band
+  const handleComparisonModeChange = useCallback((mode: ComparisonMode) => {
+    setComparisonMode(mode);
+    updatePreference('defaultComparison', mode);
+  }, []);
 
-      // Save expanded sections to preferences
-      const expandedArray = Array.from(newSet);
-      updatePreference('expandedSections', expandedArray);
+  // Mirror of expandedSections so the toggle handler can read current state
+  // without taking it as a dependency (the sections are memoized on identity).
+  const expandedSectionsRef = useRef(expandedSections);
+  useEffect(() => {
+    expandedSectionsRef.current = expandedSections;
+  }, [expandedSections]);
 
-      return newSet;
+  // Bring a section's header to just under the sticky nav
+  const scrollSectionIntoView = useCallback((sectionKey: string) => {
+    const element = document.getElementById(toSectionDomId(sectionKey));
+    if (!element) return;
+
+    const offsetPosition =
+      element.getBoundingClientRect().top + window.pageYOffset - SECTION_SCROLL_OFFSET;
+
+    window.scrollTo({
+      top: Math.max(offsetPosition, 0),
+      behavior: 'smooth',
     });
   }, []);
 
+  // Handler for section toggle. `CollapsibleSection` hands back its DOM id, so
+  // normalize it to the section key the expanded-set is keyed by.
+  const handleSectionToggle = useCallback((id: string) => {
+    const sectionId = toSectionKey(id);
+    const next = new Set(expandedSectionsRef.current);
+    const isExpanding = !next.has(sectionId);
+
+    if (isExpanding) {
+      next.add(sectionId);
+    } else {
+      next.delete(sectionId);
+    }
+
+    expandedSectionsRef.current = next;
+    setExpandedSections(next);
+    updatePreference('expandedSections', Array.from(next));
+
+    // On a phone the drawer header often sits near the bottom of the screen, so
+    // the content it just revealed opens entirely below the fold and the tap
+    // reads as "nothing happened". Pull the header up when that's the case.
+    if (isExpanding) {
+      const element = document.getElementById(toSectionDomId(sectionId));
+      if (element && element.getBoundingClientRect().top > window.innerHeight * 0.4) {
+        // Wait a frame so the expand animation has started before we scroll.
+        requestAnimationFrame(() => scrollSectionIntoView(sectionId));
+      }
+    }
+  }, [scrollSectionIntoView]);
+
   // Handler for navigation click with smooth scrolling
   const handleNavigationClick = useCallback((sectionId: string) => {
-    const element = document.getElementById(`section-${sectionId}`);
-    if (element) {
-      const offset = 100; // Account for sticky header
-      const elementPosition = element.getBoundingClientRect().top + window.pageYOffset;
-      const offsetPosition = elementPosition - offset;
+    const sectionKey = toSectionKey(sectionId);
+    if (!document.getElementById(toSectionDomId(sectionKey))) return;
 
-      window.scrollTo({
-        top: offsetPosition,
-        behavior: 'smooth'
-      });
-
-      // Expand the section if it's collapsed
-      setExpandedSections(prev => {
-        const newSet = new Set(prev);
-        newSet.add(sectionId);
-        return newSet;
-      });
+    // Expand the section if it's collapsed
+    if (!expandedSectionsRef.current.has(sectionKey)) {
+      const next = new Set(expandedSectionsRef.current).add(sectionKey);
+      expandedSectionsRef.current = next;
+      setExpandedSections(next);
+      updatePreference('expandedSections', Array.from(next));
     }
-  }, []);
+
+    scrollSectionIntoView(sectionKey);
+  }, [scrollSectionIntoView]);
 
   const handleRebuildAnalytics = useCallback(async () => {
     if (!id) return;
@@ -500,24 +531,35 @@ export const IssueDetailPage: React.FC = () => {
     navigate('/issues');
   }, [navigate]);
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
+  // Times here carry a zone label: an issue's send time is only meaningful
+  // against the newsletter's timezone, which may not be the viewer's.
+  const { formatDateTime: formatDate } = useTenantDateFormat();
 
   const isDraft = useMemo(() => issue?.status === 'draft', [issue?.status]);
   const isPublished = useMemo(() => issue?.status === 'published', [issue?.status]);
+  /**
+   * Whether the issue has reached the point where things actually happen —
+   * mail goes out, an A/B sample is measured. A draft or a scheduled issue
+   * hasn't sent anything yet, so panels must not report on it as if it had.
+   */
+  const hasStartedSending = useMemo(
+    () =>
+      issue?.status === 'in progress' ||
+      issue?.status === 'sending' ||
+      issue?.status === 'published' ||
+      issue?.status === 'failed',
+    [issue?.status]
+  );
   const canMarkAsPublished = useMemo(() => issue?.status === 'in progress' || issue?.status === 'failed', [issue?.status]);
 
   // The content heatmap overlays click data on the rendered markdown, so it only
   // applies to markdown issues that have per-link analytics.
   const canShowHeatmap = useMemo(
-    () => issue?.contentType !== 'json' && !!analytics?.links && analytics.links.length > 0,
+    () =>
+      issue?.contentType !== 'json' &&
+      issue?.contentType !== 'html' &&
+      !!analytics?.links &&
+      analytics.links.length > 0,
     [issue?.contentType, analytics]
   );
 
@@ -525,27 +567,6 @@ export const IssueDetailPage: React.FC = () => {
     if (!issue?.stats) return 0;
     return calculateComplaintRate(issue.stats.complaints, issue.stats.deliveries);
   }, [issue?.stats]);
-
-  const currentMetrics = useMemo<IssueMetrics | null>(() => {
-    if (!issue?.stats) return null;
-
-    return {
-      openRate: issue.stats.deliveries > 0 ? (issue.stats.opens / issue.stats.deliveries) * 100 : 0,
-      clickRate: issue.stats.deliveries > 0 ? (issue.stats.clicks / issue.stats.deliveries) * 100 : 0,
-      clickToOpenRate: issue.stats.opens > 0 ? (issue.stats.clicks / issue.stats.opens) * 100 : 0,
-      bounceRate: issue.stats.deliveries > 0 ? (issue.stats.bounces / issue.stats.deliveries) * 100 : 0,
-      delivered: issue.stats.deliveries,
-      opens: issue.stats.opens,
-      clicks: issue.stats.clicks,
-      bounces: issue.stats.bounces,
-      complaints: issue.stats.complaints,
-      subscribers: issue.stats.subscribers,
-      subscribes: issue.stats.subscribes ?? 0,
-      unsubscribes: issue.stats.unsubscribes ?? 0,
-      cleaned: issue.stats.cleaned ?? 0,
-      manualRemovals: issue.stats.manualRemovals ?? 0,
-    };
-  }, [issue]);
 
   const averageMetrics = useMemo<IssueMetrics | null>(() => {
     if (!trendsData?.aggregates) return null;
@@ -609,6 +630,37 @@ export const IssueDetailPage: React.FC = () => {
       unsubscribeRate: issue.stats.deliveries > 0 ? ((issue.stats.unsubscribes ?? 0) / issue.stats.deliveries) * 100 : 0,
     };
   }, [issue?.stats, complaintRate]);
+
+  // Per-metric history across recent issues (oldest first, this issue last)
+  // so each metric tile can render a trend sparkline.
+  const metricSparklines = useMemo<MetricSparklines | undefined>(() => {
+    if (!keyMetrics || !trendsData?.issues || trendsData.issues.length === 0) return undefined;
+
+    const history = [...trendsData.issues]
+      .filter(item => item.id !== id)
+      .sort((a, b) => parseInt(a.id) - parseInt(b.id))
+      .slice(-11);
+
+    if (history.length === 0) return undefined;
+
+    const series = (extract: (metrics: IssueMetrics) => number, current: number) =>
+      [...history.map(item => extract(item.metrics)), current];
+
+    return {
+      openRate: series(m => m.openRate, keyMetrics.openRate),
+      clickRate: series(m => m.clickRate, keyMetrics.clickRate),
+      clickToOpenRate: series(m => m.clickToOpenRate, keyMetrics.clickToOpenRate),
+      bounceRate: series(m => m.bounceRate, keyMetrics.bounceRate),
+      complaintRate: series(
+        m => (m.delivered > 0 ? (m.complaints / m.delivered) * 100 : 0),
+        keyMetrics.complaintRate
+      ),
+      unsubscribeRate: series(
+        m => (m.delivered > 0 ? ((m.unsubscribes ?? 0) / m.delivered) * 100 : 0),
+        keyMetrics.unsubscribeRate
+      ),
+    };
+  }, [keyMetrics, trendsData, id]);
 
   const bestIssueMetrics = useMemo<IssueMetrics | null>(() => {
     if (!trendsData?.issues || trendsData.issues.length === 0) return null;
@@ -688,7 +740,10 @@ export const IssueDetailPage: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-background overflow-x-hidden">
+    // `overflow-x-clip` rather than `overflow-x-hidden`: hidden makes this a
+    // scroll container, which silently breaks `position: sticky` for the quick
+    // nav inside it. Clip contains the same overflow without that side effect.
+    <div className="min-h-screen bg-background overflow-x-clip">
       {/* Skip to main content link for keyboard navigation */}
       <a
         href="#main-content"
@@ -728,31 +783,36 @@ export const IssueDetailPage: React.FC = () => {
         </div>
 
         {/* Issue Header */}
-        <Card className="mb-4 sm:mb-6 shadow-sm hover:shadow-md transition-shadow">
-          <CardContent className="py-4 sm:py-6">
+        <PageHero className="mb-4 sm:mb-6">
             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-3 mb-2 flex-wrap">
-                  <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-foreground break-words">{issue.subject}</h1>
-                  <IssueStatusBadge status={issue.status} />
+                <div className="flex items-center gap-3 mb-3 flex-wrap">
+                  <PageHeroTitle className="break-words">{issue.subject}</PageHeroTitle>
+                  <IssueStatusBadge status={issue.status} size="lg" />
                 </div>
-                <div className="flex flex-wrap gap-2 sm:gap-4 text-xs sm:text-sm text-muted-foreground">
-                  <span className="font-medium">Issue #{issue.issueNumber}</span>
-                  <span className="hidden sm:inline">•</span>
-                  <span>Created {formatDate(issue.createdAt)}</span>
+                <PageHeroChips>
+                  <PageHeroChip icon={<Hash className="w-3.5 h-3.5" />}>
+                    Issue #{issue.issueNumber}
+                  </PageHeroChip>
+                  <PageHeroChip icon={<CalendarDays className="w-3.5 h-3.5" />}>
+                    Created {formatDate(issue.createdAt)}
+                  </PageHeroChip>
                   {issue.publishedAt && (
-                    <>
-                      <span className="hidden sm:inline">•</span>
-                      <span className="text-success-600 dark:text-success-400 font-medium">Sent {formatDate(issue.publishedAt)}</span>
-                    </>
+                    <PageHeroChip tone="success" icon={<Send className="w-3.5 h-3.5" />}>
+                      Sent {formatDate(issue.publishedAt)}
+                    </PageHeroChip>
                   )}
                   {issue.scheduledAt && !issue.publishedAt && (
-                    <>
-                      <span className="hidden sm:inline">•</span>
-                      <span className="text-blue-600 dark:text-blue-400 font-medium">Scheduled for {formatDate(issue.scheduledAt)}</span>
-                    </>
+                    <PageHeroChip tone="primary" icon={<Clock className="w-3.5 h-3.5" />}>
+                      Scheduled for {formatDate(issue.scheduledAt)}
+                    </PageHeroChip>
                   )}
-                </div>
+                  {isPublished && issue.stats && issue.stats.subscribers > 0 && (
+                    <PageHeroChip icon={<Users className="w-3.5 h-3.5" />}>
+                      {issue.stats.subscribers.toLocaleString('en-US')} recipients
+                    </PageHeroChip>
+                  )}
+                </PageHeroChips>
               </div>
 
               {/* Action Buttons */}
@@ -811,8 +871,7 @@ export const IssueDetailPage: React.FC = () => {
                 )}
               </div>
             </div>
-          </CardContent>
-        </Card>
+        </PageHero>
 
         {/* InsightsHeroSection - Show at top if insights exist */}
         {isPublished && issue.insightsV2 && issue.insightsV2.length > 0 && (
@@ -831,15 +890,17 @@ export const IssueDetailPage: React.FC = () => {
           </div>
         )}
 
-        {/* DeliveryBreakdownChart - Visual delivery overview (delivered vs bounced of total sent) */}
+        {/* EngagementFunnel - How the audience moved from sent through delivered, opened, and clicked */}
         {isPublished && issue.stats && (issue.stats.deliveries + issue.stats.bounces) > 0 && (
           <div className="mb-4 sm:mb-6">
             <Suspense fallback={<ChartSkeleton />}>
               <FadeIn variant="slideUp" speed="normal" delay={50}>
                 <AsyncErrorBoundary onRetry={loadIssue}>
-                  <DeliveryBreakdownChart
+                  <EngagementFunnel
                     delivered={issue.stats.deliveries}
                     bounced={issue.stats.bounces}
+                    opens={issue.stats.opens}
+                    clicks={issue.stats.clicks}
                   />
                 </AsyncErrorBoundary>
               </FadeIn>
@@ -857,6 +918,8 @@ export const IssueDetailPage: React.FC = () => {
                     metrics={keyMetrics}
                     comparisons={comparisons}
                     highlightMode={comparisonMode}
+                    sparklines={metricSparklines}
+                    onHighlightModeChange={handleComparisonModeChange}
                   />
                 </AsyncErrorBoundary>
               </FadeIn>
@@ -877,24 +940,6 @@ export const IssueDetailPage: React.FC = () => {
           </Suspense>
         )}
 
-        {/* PerformanceComparisonSection */}
-        {isPublished && currentMetrics && (
-          <div className="mb-4 sm:mb-6">
-            <Suspense fallback={<ComparisonCardSkeleton />}>
-              <FadeIn variant="fade" speed="normal">
-                <AsyncErrorBoundary onRetry={loadIssue}>
-                  <IssueComparisonCard
-                    current={currentMetrics}
-                    average={averageMetrics || undefined}
-                    lastIssue={lastIssueMetrics || undefined}
-                    bestIssue={bestIssueMetrics || undefined}
-                  />
-                </AsyncErrorBoundary>
-              </FadeIn>
-            </Suspense>
-          </div>
-        )}
-
         {/* Subscriber Metrics Panel - Show for published issues only */}
         {isPublished && issue.stats && (
           <div className="mb-4 sm:mb-6">
@@ -910,6 +955,58 @@ export const IssueDetailPage: React.FC = () => {
           </div>
         )}
 
+        {/* Unsent-state notice. The badge alone sits inline with the title and is
+            easy to read past; this states plainly that nothing has gone out,
+            which is the thing that matters when previewing a draft. */}
+        {!hasStartedSending && (
+          <Card
+            className={cn(
+              'shadow-sm mb-4 sm:mb-6 border-l-4',
+              isDraft ? 'border-l-amber-500' : 'border-l-blue-500'
+            )}
+          >
+            <CardContent className="p-3 sm:p-4">
+              <div className="flex items-start gap-3">
+                {isDraft ? (
+                  <PencilLine className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" aria-hidden="true" />
+                ) : (
+                  <Clock className="h-5 w-5 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" aria-hidden="true" />
+                )}
+                <div>
+                  <p className="text-sm font-semibold text-foreground">
+                    {isDraft ? 'This is a draft — it has not been sent' : 'Scheduled — it has not been sent yet'}
+                  </p>
+                  <p className="text-sm text-muted-foreground mt-0.5">
+                    {isDraft
+                      ? 'Everything below is a preview. No subscriber has received this issue, and there are no results to report.'
+                      : issue.scheduledAt
+                        ? `Everything below is a preview until it sends on ${formatDate(issue.scheduledAt)}.`
+                        : 'Everything below is a preview until it sends.'}
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Local send delivery - a local-send issue keeps delivering for hours
+            after the publish workflow finishes, so this sits above the analytics
+            panels: it answers "is this issue still going out?" before anything
+            about how it performed. Also carries the publish workflow's state for
+            issues that have not fanned out yet. */}
+        {(issue.sendProgress || issue.workflow) && (
+          <div className="mb-4 sm:mb-6">
+            <FadeIn variant="fade" speed="normal">
+              <AsyncErrorBoundary onRetry={loadIssue}>
+                <SendProgressCard
+                  sendProgress={issue.sendProgress}
+                  workflow={issue.workflow}
+                />
+              </AsyncErrorBoundary>
+            </FadeIn>
+          </div>
+        )}
+
         {/* A/B Test Results Panel - Show whenever the issue has a managed A/B test */}
         {issue.abTest && (
           <div className="mb-4 sm:mb-6">
@@ -918,6 +1015,7 @@ export const IssueDetailPage: React.FC = () => {
                 <AbTestResults
                   abTest={issue.abTest}
                   variantStats={issue.variantStats}
+                  hasStarted={hasStartedSending}
                 />
               </AsyncErrorBoundary>
             </FadeIn>
@@ -944,7 +1042,7 @@ export const IssueDetailPage: React.FC = () => {
         {/* Engagement Analytics Section */}
         {isPublished && analytics && shouldShowSection('engagement', analytics, issue?.stats) && (
           <CollapsibleSection
-            id="section-engagement"
+            id={toSectionDomId('engagement')}
             title="Engagement Analytics"
             description="Link performance, geographic distribution, and engagement over time"
             icon={<TrendingUp className="w-5 h-5" />}
@@ -1052,7 +1150,7 @@ export const IssueDetailPage: React.FC = () => {
         {/* Audience Insights Section */}
         {isPublished && analytics && shouldShowSection('audience', analytics, issue?.stats) && (
           <CollapsibleSection
-            id="section-audience"
+            id={toSectionDomId('audience')}
             title="Audience Insights"
             description="Device breakdown, geography, and engagement timing"
             icon={<Users className="w-5 h-5" />}
@@ -1093,7 +1191,7 @@ export const IssueDetailPage: React.FC = () => {
         {/* Deliverability & Quality Section */}
         {isPublished && analytics && shouldShowSection('deliverability', analytics, issue?.stats) && (
           <CollapsibleSection
-            id="section-deliverability"
+            id={toSectionDomId('deliverability')}
             title="Deliverability & Quality"
             description="Bounce analysis, complaints, and quality signals"
             icon={<Shield className="w-5 h-5" />}
@@ -1166,37 +1264,24 @@ export const IssueDetailPage: React.FC = () => {
                 Content
               </CardTitle>
               {canShowHeatmap && (
-                <div
-                  className="inline-flex rounded-lg border border-border bg-muted/30 p-0.5 self-start"
-                  role="group"
+                <SegmentedControl
+                  className="self-start"
+                  options={[
+                    { value: 'preview', label: 'Preview' },
+                    {
+                      value: 'heatmap',
+                      label: (
+                        <span className="inline-flex items-center gap-1">
+                          <Flame className="w-3.5 h-3.5" aria-hidden="true" />
+                          Heatmap
+                        </span>
+                      ),
+                    },
+                  ]}
+                  value={contentView}
+                  onChange={setContentView}
                   aria-label="Content view mode"
-                >
-                  <button
-                    type="button"
-                    onClick={() => setContentView('preview')}
-                    aria-pressed={contentView === 'preview'}
-                    className={`px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition-colors min-h-[36px] ${
-                      contentView === 'preview'
-                        ? 'bg-background text-foreground shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    Preview
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setContentView('heatmap')}
-                    aria-pressed={contentView === 'heatmap'}
-                    className={`inline-flex items-center gap-1 px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition-colors min-h-[36px] ${
-                      contentView === 'heatmap'
-                        ? 'bg-background text-foreground shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    <Flame className="w-3.5 h-3.5" aria-hidden="true" />
-                    Heatmap
-                  </button>
-                </div>
+                />
               )}
             </div>
           </CardHeader>
@@ -1217,6 +1302,17 @@ export const IssueDetailPage: React.FC = () => {
                   <pre className="overflow-x-auto rounded-lg border border-border bg-muted/40 p-4 text-sm font-mono text-foreground whitespace-pre-wrap break-words">
                     {issue.content}
                   </pre>
+                ) : issue.contentType === 'html' ? (
+                  // Pre-rendered email masters are fully self-styled and assume a
+                  // light, email-client background. The sandboxed iframe keeps the
+                  // app's theme (e.g. dark-mode text color overrides) out of the
+                  // email and the email's <style> block out of the app.
+                  <iframe
+                    srcDoc={issue.content}
+                    sandbox=""
+                    title="Rendered email preview"
+                    className="h-[70vh] w-full rounded-lg border border-border bg-white"
+                  />
                 ) : (
                   <MarkdownPreview content={issue.content} />
                 )}

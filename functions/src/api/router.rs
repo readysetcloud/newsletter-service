@@ -2,8 +2,8 @@ use lambda_http::{http::Method, Body, Error, Request, Response};
 use serde_json::json;
 
 use crate::controllers::{
-    api_keys, brand, churn, domain, issues, pricing, profile, reports, segments, senders, snippets,
-    sponsors, subscribers, templates,
+    api_keys, brand, churn, domain, issues, pricing, profile, reports, segments, senders, settings,
+    snippets, sponsors, subscribers, templates,
 };
 
 pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
@@ -31,6 +31,10 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
             let user_id = extract_path_param(path, "/profile/");
             profile::get_user_profile(event, user_id).await
         }
+
+        // Settings endpoints (tenant-wide defaults)
+        (&Method::GET, "/settings") => settings::get_settings(event).await,
+        (&Method::PUT, "/settings") => settings::update_settings(event).await,
 
         // Brand endpoints
         (&Method::GET, "/brand/check") => brand::check_brand_id(event).await,
@@ -86,6 +90,7 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
         (&Method::GET, "/ab-test/history") => issues::get_ab_history(event).await,
         (&Method::GET, "/ab-test/active") => issues::get_active_ab_tests(event).await,
         (&Method::POST, "/ab-test/suggestions") => issues::suggest_ab_test(event).await,
+        (&Method::POST, "/issues/review") => issues::review_issue(event).await,
         (&Method::POST, "/issues") => issues::create_issue(event).await,
         (&Method::POST, path)
             if path.starts_with("/issues/") && path.ends_with("/analytics/rebuild") =>
@@ -382,6 +387,8 @@ fn is_valid_api_path(path: &str) -> bool {
     // Profile paths
     path == "/me"
         || path.starts_with("/profile/")
+        // Settings paths
+        || path == "/settings"
         // Brand paths
         || path == "/brand"
         || path == "/brand/check"
@@ -626,6 +633,14 @@ mod tests {
         assert!(is_valid_api_path("/brand/check"));
         assert!(is_valid_api_path("/brand/validate"));
         assert!(is_valid_api_path("/brand/logo"));
+    }
+
+    #[test]
+    fn test_is_valid_api_path_settings() {
+        // GET and PUT both live on the bare /settings path; anything deeper is
+        // not a settings route.
+        assert!(is_valid_api_path("/settings"));
+        assert!(!is_valid_api_path("/settings/timezone"));
     }
 
     #[test]

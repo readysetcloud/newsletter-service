@@ -12,7 +12,10 @@ interface MiniSparklineProps {
  */
 export const MiniSparkline: React.FC<MiniSparklineProps> = ({ value, average, color }) => {
   const isAbove = value >= average;
-  const barColor = color ?? (isAbove ? '#14b8a6' : '#c81e22');
+  // Themed token classes so the bar tracks the design system in both modes;
+  // an explicit color prop still wins. Position against the dashed average
+  // marker carries the same signal for color-blind readers.
+  const barClass = isAbove ? 'text-success-500' : 'text-error-500';
   // Normalize to 0-100 range, capping at 2x average
   const maxVal = Math.max(average * 2, 1);
   const pct = Math.min((value / maxVal) * 100, 100);
@@ -30,7 +33,15 @@ export const MiniSparkline: React.FC<MiniSparklineProps> = ({ value, average, co
       {/* Background track */}
       <rect x="0" y="6" width="48" height="4" rx="2" fill="currentColor" className="text-muted/20" />
       {/* Value bar */}
-      <rect x="0" y="6" width={Math.max((pct / 100) * 48, 2)} height="4" rx="2" fill={barColor} />
+      <rect
+        x="0"
+        y="6"
+        width={Math.max((pct / 100) * 48, 2)}
+        height="4"
+        rx="2"
+        fill={color ?? 'currentColor'}
+        className={color ? undefined : barClass}
+      />
       {/* Average marker */}
       <line
         x1={(avgPct / 100) * 48}

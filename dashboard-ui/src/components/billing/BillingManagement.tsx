@@ -11,6 +11,8 @@ import {
 import { Card, CardContent, CardHeader, CardTitle, Button } from '@/components/ui';
 import { billingService } from '@/services';
 import type { Subscription, BillingInfo } from '@/types';
+import { formatInTimeZone } from '@/utils/dateFormatting';
+import { useTenantDateFormat } from '@/contexts/SettingsContext';
 
 interface BillingManagementProps {
   subscription: Subscription | null;
@@ -76,6 +78,8 @@ export function BillingManagement({
   onError,
   onSuccess: _onSuccess
 }: BillingManagementProps) {
+  // Dates render in the newsletter's timezone, not the viewer's.
+  const { timeZone } = useTenantDateFormat();
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   const handleCustomerPortal = async (action: string) => {
@@ -159,7 +163,7 @@ export function BillingManagement({
                 <div>
                   <p className="text-sm font-medium text-primary-900">Active Subscription</p>
                   <p className="text-sm text-primary-700">
-                    {subscription.plan.name} plan &bull; Next billing: {new Date(subscription.currentPeriodEnd).toLocaleDateString()}
+                    {subscription.plan.name} plan &bull; Next billing: {formatInTimeZone(subscription.currentPeriodEnd, timeZone, {})}
                   </p>
                 </div>
               </div>

@@ -18,9 +18,14 @@
 
 // Marker grammar. The start marker optionally carries a topic hint
 // (`<!--ia-section start topic="serverless"-->`). V1 injects markers WITHOUT a
-// topic (link classification runs in a parallel state-machine branch, so topics
-// are not reliably known at render time); topics are derived at send time from
-// the issue's `link#` records via deriveSectionTopics.
+// topic; topics are derived at send time from the issue's `link#` records via
+// deriveSectionTopics. That was originally forced — link classification ran in a
+// parallel state-machine branch and raced the render, so topics were not
+// reliably known when the markers were written. Phase 4 of
+// docs/stage-issue-simplification-plan.md moved extraction ahead of publish, so
+// the records now exist by render time for every content type; deriving at send
+// time is kept because it is the one point that has the subscriber, and because
+// a re-send picks up any classification that has been backfilled since.
 const START_MARKER_RE = /<!--ia-section start(?: topic="([a-zA-Z0-9_-]*)")?-->/g;
 const END_MARKER = '<!--ia-section end-->';
 

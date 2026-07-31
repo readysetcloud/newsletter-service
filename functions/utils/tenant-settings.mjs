@@ -27,6 +27,14 @@ export const DEFAULT_SEND_TIME = '09:00';
 /** A bare calendar date, with no time of day attached. */
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
+/**
+ * A bare calendar date that has been through a serializer: midnight UTC is
+ * what a YAML/JSON date becomes once it is a string, and it means "this day",
+ * not "send at midnight". Midnight with a real offset is left alone — that is
+ * a time somebody chose. Kept in step with `date_only_day` in `settings.rs`.
+ */
+const UTC_MIDNIGHT_PATTERN = /^\d{4}-\d{2}-\d{2}T00:00:00(\.0+)?(Z|[+-]00:00)$/i;
+
 const SEND_TIME_PATTERN = /^([01]?\d|2[0-3]):([0-5]\d)$/;
 
 /**
@@ -86,14 +94,19 @@ const nonEmpty = (value) => {
 /**
  * True when a value names a day but no time of day, and therefore needs the
  * tenant's default send time to become an instant. Accepts the `YYYY-MM-DD`
- * string form and a `Date` that is exactly UTC midnight — which is what a YAML
- * parser produces from a bare frontmatter `date:`.
+ * string form, a `Date` that is exactly UTC midnight — which is what a YAML
+ * parser produces from a bare frontmatter `date:` — and that same instant once
+ * it has been serialized back to a string, which is how it reaches the state
+ * machine's `sendAt`.
  */
 export const isDateOnly = (value) => {
   if (value instanceof Date) {
     return !Number.isNaN(value.getTime()) && value.toISOString().endsWith('T00:00:00.000Z');
   }
-  return typeof value === 'string' && DATE_ONLY_PATTERN.test(value.trim());
+  if (typeof value !== 'string') return false;
+
+  const trimmed = value.trim();
+  return DATE_ONLY_PATTERN.test(trimmed) || UTC_MIDNIGHT_PATTERN.test(trimmed);
 };
 
 /** The `YYYY-MM-DD` day a date-only value refers to. */

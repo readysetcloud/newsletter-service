@@ -7,6 +7,8 @@ import type {
   TrendsData,
   CreateIssueRequest,
   UpdateIssueRequest,
+  RescheduleIssueRequest,
+  RescheduleIssueResponse,
   ListIssuesParams,
   VariantId,
   AbHistoryResponse,
@@ -127,6 +129,29 @@ class IssuesService {
    */
   async updateIssue(issueId: string, data: UpdateIssueRequest): Promise<ApiResponse<Issue>> {
     return apiClient.put(`/issues/${issueId}`, data);
+  }
+
+  /**
+   * Moves a scheduled issue's send time.
+   *
+   * Separate from {@link updateIssue} because the API treats it separately: a
+   * scheduled issue refuses content edits, but its send time can still move
+   * until the publish workflow starts. Passing a bare `YYYY-MM-DD` resolves the
+   * day against the tenant's default send time server-side, which is how an
+   * issue scheduled without one gets corrected.
+   *
+   * @param issueId - Unique identifier of the issue to reschedule
+   * @param scheduledAt - RFC3339 instant, or a date-only `YYYY-MM-DD` value
+   * @returns Promise resolving to the resolved send instant
+   * @throws {Error} 409 Conflict if the send has already started
+   */
+  async rescheduleIssue(
+    issueId: string,
+    scheduledAt: string
+  ): Promise<ApiResponse<RescheduleIssueResponse>> {
+    return apiClient.put<RescheduleIssueResponse>(`/issues/${issueId}/schedule`, {
+      scheduledAt
+    } satisfies RescheduleIssueRequest);
   }
 
   /**

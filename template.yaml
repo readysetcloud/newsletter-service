@@ -1264,8 +1264,9 @@ Resources:
                 - !Sub "arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/newsletter/draft-ttl-*"
                 # One per scheduled issue, named ISSUE-SEND-<tenant>-<issue>:
                 # it starts the publish workflow at the send instant. The name
-                # is deterministic so CreateSchedule detects a duplicate and
-                # DeleteSchedule can cancel a send.
+                # is deterministic so CreateSchedule detects a duplicate,
+                # UpdateSchedule can move a send, and DeleteSchedule can cancel
+                # one.
                 - !Sub "arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/newsletter/ISSUE-SEND-*"
             - Effect: Allow
               Action:

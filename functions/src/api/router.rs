@@ -101,6 +101,13 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
                 .map(|value| value.to_string());
             issues::rebuild_issue_analytics(event, issue_id).await
         }
+        (&Method::PUT, path) if path.starts_with("/issues/") && path.ends_with("/schedule") => {
+            let issue_id = path
+                .strip_prefix("/issues/")
+                .and_then(|value| value.strip_suffix("/schedule"))
+                .map(|value| value.to_string());
+            issues::reschedule_issue(event, issue_id).await
+        }
         (&Method::POST, path) if path.starts_with("/issues/") && path.ends_with("/resend") => {
             let issue_id = path
                 .strip_prefix("/issues/")

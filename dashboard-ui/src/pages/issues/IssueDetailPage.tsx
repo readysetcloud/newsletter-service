@@ -9,6 +9,7 @@ import { cn } from '../../utils/cn';
 import { IssueStatusBadge } from '../../components/issues/IssueStatusBadge';
 import { MarkdownPreview } from '../../components/issues/MarkdownPreview';
 import { DeleteIssueDialog } from '../../components/issues/DeleteIssueDialog';
+import { RescheduleIssueDialog } from '../../components/issues/RescheduleIssueDialog';
 import { SubscriberMetricsPanel } from '../../components/issues/SubscriberMetricsPanel';
 import { AbTestResults } from '../../components/issues/AbTestResults';
 import { SendProgressCard } from '../../components/issues/SendProgressCard';
@@ -123,6 +124,7 @@ export const IssueDetailPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [rescheduleDialogOpen, setRescheduleDialogOpen] = useState(false);
   const [selectedLinkId, setSelectedLinkId] = useState<string | null>(null);
   const [isAnalyticsRebuilding, setIsAnalyticsRebuilding] = useState(false);
   const [isMarkingPublished, setIsMarkingPublished] = useState(false);
@@ -552,6 +554,44 @@ export const IssueDetailPage: React.FC = () => {
   );
   const canMarkAsPublished = useMemo(() => issue?.status === 'in progress' || issue?.status === 'failed', [issue?.status]);
 
+  /**
+   * A scheduled issue is the only one with a send time to move. The API
+   * refuses once the publish workflow has started, which the page can't see
+   * from here — so the button stays offered and the dialog surfaces that
+   * refusal rather than the page guessing at it.
+   */
+  const canReschedule = useMemo(
+    () => issue?.status === 'scheduled' && !!issue?.scheduledAt,
+    [issue?.status, issue?.scheduledAt]
+  );
+
+  /**
+   * Moves the send time of a scheduled issue.
+   *
+   * The value handed over is whatever the dialog decided — a bare date when
+   * the tenant's default send time should apply, an instant otherwise — and
+   * the response, not the request, is what the page adopts: only the API knows
+   * what a bare date resolves to.
+   */
+  const handleReschedule = useCallback(async (scheduledAt: string) => {
+    if (!id) return;
+
+    const response = await issuesService.rescheduleIssue(id, scheduledAt);
+
+    if (!response.success || !response.data) {
+      throw new Error(response.error || 'Could not move the send time.');
+    }
+
+    const resolved = response.data.scheduledAt;
+    setIssue((current) => (current ? { ...current, scheduledAt: resolved } : current));
+    setRescheduleDialogOpen(false);
+    addToast({
+      type: 'success',
+      title: 'Send time updated',
+      message: `This issue now sends ${formatDate(resolved)}.`,
+    });
+  }, [id, addToast, formatDate]);
+
   // The content heatmap overlays click data on the rendered markdown, so it only
   // applies to markdown issues that have per-link analytics.
   const canShowHeatmap = useMemo(
@@ -829,6 +869,18 @@ export const IssueDetailPage: React.FC = () => {
                     <RefreshCw className="h-4 w-4 mr-2" />
                     <span className="hidden sm:inline">{isAnalyticsRebuilding ? 'Queuing…' : 'Refresh insights'}</span>
                     <span className="sm:hidden">{isAnalyticsRebuilding ? 'Queuing…' : 'Refresh'}</span>
+                  </Button>
+                )}
+                {canReschedule && (
+                  <Button
+                    onClick={() => setRescheduleDialogOpen(true)}
+                    variant="outline"
+                    size="sm"
+                    aria-label="Change this issue's send time"
+                    className="hover:bg-primary-50 hover:border-primary-300 dark:hover:bg-primary-900/20 transition-colors min-h-[44px] min-w-[44px]"
+                  >
+                    <Clock className="h-4 w-4 mr-2" />
+                    <span className="hidden sm:inline">Change send time</span>
                   </Button>
                 )}
                 {isDraft && (
@@ -1322,6 +1374,16 @@ export const IssueDetailPage: React.FC = () => {
         </Card>
 
       </main>
+
+      {/* Reschedule Dialog */}
+      {canReschedule && issue && (
+        <RescheduleIssueDialog
+          isOpen={rescheduleDialogOpen}
+          onClose={() => setRescheduleDialogOpen(false)}
+          issue={issue}
+          onSubmit={handleReschedule}
+        />
+      )}
 
       {/* Delete Confirmation Dialog */}
       <DeleteIssueDialog

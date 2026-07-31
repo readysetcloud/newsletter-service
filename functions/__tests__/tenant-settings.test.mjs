@@ -24,6 +24,19 @@ describe('tenant-settings', () => {
       expect(isDateOnly(new Date('2026-08-01T12:00:00.000Z'))).toBe(false);
       expect(isDateOnly(new Date('nope'))).toBe(false);
     });
+
+    it('recognizes that Date once it has been serialized back to a string', () => {
+      // How a bare frontmatter date reaches `sendAt`: through JSON, as a
+      // string. Read literally it is a midnight send, a day early west of UTC.
+      expect(isDateOnly('2026-08-01T00:00:00.000Z')).toBe(true);
+      expect(isDateOnly('2026-08-01T00:00:00Z')).toBe(true);
+      expect(isDateOnly('2026-08-01T00:00:00+00:00')).toBe(true);
+    });
+
+    it('leaves a midnight the caller actually chose alone', () => {
+      expect(isDateOnly('2026-08-01T00:00:00-05:00')).toBe(false);
+      expect(isDateOnly('2026-08-01T00:00:01Z')).toBe(false);
+    });
   });
 
   describe('resolveSendInstant', () => {
@@ -54,6 +67,15 @@ describe('tenant-settings', () => {
     it('resolves the UTC-midnight Date form the same way', () => {
       const resolved = resolveSendInstant(
         new Date('2026-08-01T00:00:00.000Z'),
+        settings({ timezone: 'America/Chicago', defaultSendTime: '09:00' })
+      );
+
+      expect(resolved.toISOString()).toBe('2026-08-01T14:00:00.000Z');
+    });
+
+    it('resolves the serialized UTC-midnight string the same way', () => {
+      const resolved = resolveSendInstant(
+        '2026-08-01T00:00:00.000Z',
         settings({ timezone: 'America/Chicago', defaultSendTime: '09:00' })
       );
 

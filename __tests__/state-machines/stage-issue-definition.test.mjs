@@ -15,7 +15,11 @@ const definitionPath = fileURLToPath(new URL('../../state-machines/stage-issue.a
 const templatePath = fileURLToPath(new URL('../../template.yaml', import.meta.url));
 
 const definition = JSON.parse(readFileSync(definitionPath, 'utf8'));
-const templateText = readFileSync(templatePath, 'utf8');
+// Newlines are normalized because the template is read as *text*: the resource
+// scan below matches whole lines exactly, and a Windows checkout (git's
+// core.autocrlf) leaves a trailing \r on every one of them, which fails every
+// such match and takes the whole suite down before a single test runs.
+const templateText = readFileSync(templatePath, 'utf8').replace(/\r\n/g, '\n');
 
 const STATE_MACHINE_RESOURCE = 'StageIssueStateMachine';
 

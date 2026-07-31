@@ -316,6 +316,26 @@ export interface UpdateIssueRequest {
   contentAssembly?: ContentAssembly | null;
 }
 
+/**
+ * A new send time for an issue that is already scheduled.
+ *
+ * `scheduledAt` takes the same forms the create endpoint accepts, and the
+ * difference between them is the point: a full timestamp names an instant,
+ * while a bare `YYYY-MM-DD` asks the API to anchor the day to the tenant's
+ * default send time and timezone.
+ */
+export interface RescheduleIssueRequest {
+  scheduledAt: string;
+}
+
+/** What a reschedule reports back — chiefly the resolved instant. */
+export interface RescheduleIssueResponse {
+  id: string;
+  issueNumber: number;
+  status: IssueStatus;
+  scheduledAt: string;
+}
+
 export interface ListIssuesParams {
   limit?: number;
   nextToken?: string;

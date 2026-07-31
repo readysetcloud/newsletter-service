@@ -139,6 +139,25 @@ pub struct UpdateIssueRequest {
     content_type: Option<String>,
 }
 
+/// Request body for moving a scheduled issue's send time.
+#[derive(Deserialize)]
+pub struct RescheduleIssueRequest {
+    #[serde(rename = "scheduledAt")]
+    scheduled_at: String,
+}
+
+/// What a reschedule reports back: the resolved instant, which is the point of
+/// the call when the caller sent a bare date.
+#[derive(Serialize)]
+pub struct RescheduleIssueResponse {
+    id: String,
+    #[serde(rename = "issueNumber")]
+    issue_number: i32,
+    status: String,
+    #[serde(rename = "scheduledAt")]
+    scheduled_at: String,
+}
+
 // Request body for declaring an A/B test winner.
 #[derive(Deserialize)]
 pub struct DeclareWinnerRequest {
@@ -464,6 +483,16 @@ pub async fn update_issue(
     issue_id: Option<String>,
 ) -> Result<Response<Body>, Error> {
     match handle_update_issue(event, issue_id).await {
+        Ok(response) => Ok(response),
+        Err(e) => Ok(response::format_error_response(&e)),
+    }
+}
+
+pub async fn reschedule_issue(
+    event: Request,
+    issue_id: Option<String>,
+) -> Result<Response<Body>, Error> {
+    match handle_reschedule_issue(event, issue_id).await {
         Ok(response) => Ok(response),
         Err(e) => Ok(response::format_error_response(&e)),
     }
@@ -2189,6 +2218,93 @@ async fn handle_update_issue(
     response::format_response(200, updated)
 }
 
+/// Moves a scheduled issue's send to a different instant.
+///
+/// Separate from `PUT /issues/{id}` on purpose. That endpoint edits a draft's
+/// content and refuses a `scheduled` issue outright, because an edit whose
+/// window has closed (the workflow reads the record at send instant − lead
+/// time) would silently not be in the issue. Moving the send is the one change
+/// a scheduled issue *can* accept, and it has to do something the content
+/// update never does: re-point the Scheduler entry.
+///
+/// A bare `YYYY-MM-DD` resolves against the tenant's default send time, exactly
+/// as it does on create — which is what makes this the fix for an issue whose
+/// stored instant came from a date that never got that treatment.
+async fn handle_reschedule_issue(
+    event: Request,
+    issue_id: Option<String>,
+) -> Result<Response<Body>, AppError> {
+    let user_context = auth::get_user_context(&event)?;
+    let tenant_id = user_context
+        .tenant_id
+        .ok_or_else(|| AppError::Unauthorized("Tenant access required".to_string()))?;
+
+    let issue_id =
+        issue_id.ok_or_else(|| AppError::BadRequest("Issue ID is required".to_string()))?;
+
+    let body: RescheduleIssueRequest = serde_json::from_slice(event.body())
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
+
+    // The issue is checked before the new time is resolved so an issue that
+    // cannot be rescheduled says so, rather than complaining about a date that
+    // was never going to be used.
+    let existing = get_issue_by_id(&tenant_id, &issue_id).await?;
+
+    if existing.status != "scheduled" {
+        return Err(AppError::BadRequest(format!(
+            "Cannot reschedule an issue with status '{}'. Only scheduled issues have a send time \
+             to move",
+            existing.status
+        )));
+    }
+
+    // The workflow has started, so the send is past the point this can move:
+    // the content is frozen, the Scheduler entry is gone, and the wait that
+    // remains belongs to the execution. Unscheduling is the only way out, and
+    // it is the honest thing to point at.
+    if existing.execution_arn.is_some() {
+        return Err(AppError::Conflict(format!(
+            "Issue {} is already being prepared to send and can no longer be moved. Unschedule it \
+             to stop the send.",
+            existing.issue_number
+        )));
+    }
+
+    let requested = body.scheduled_at.trim();
+    let tenant_settings = load_settings_if_needed(&tenant_id, Some(requested), false).await;
+    let scheduled_at = resolve_reschedule_at(requested, &tenant_settings)?;
+
+    reschedule_issue_send(
+        &IssueScheduleInput {
+            tenant_id: &tenant_id,
+            tenant_email: user_context.email.as_str(),
+            issue_number: existing.issue_number,
+            scheduled_at: Some(&scheduled_at),
+            template_id: existing.template_id.as_deref(),
+            content_type: &normalize_content_type(existing.content_type.as_deref()),
+        },
+        &scheduled_at,
+    )
+    .await?;
+
+    // Deliberately after the send has moved. Either order can fail halfway and
+    // both heal on a retry, but only this one leaves the issue sending when the
+    // caller asked; the other leaves a record promising a time the send won't
+    // honour.
+    update_issue_scheduled_at(&tenant_id, existing.issue_number, &scheduled_at).await?;
+
+    let response = RescheduleIssueResponse {
+        id: existing.issue_number.to_string(),
+        issue_number: existing.issue_number,
+        status: "scheduled".to_string(),
+        scheduled_at,
+    };
+
+    publish_event(&tenant_id, "ISSUE_UPDATED", &response).await?;
+
+    response::format_response(200, response)
+}
+
 async fn handle_delete_issue(
     event: Request,
     issue_id: Option<String>,
@@ -3516,10 +3632,11 @@ async fn load_settings_if_needed(
 /// issue. `None` means "send immediately" — an absent value, `"now"`, or a
 /// time that has already passed.
 ///
-/// A date-only value (`YYYY-MM-DD`) carries no time of day, so rather than
-/// rejecting it or guessing midnight UTC, it is anchored to the tenant's
-/// configured default send time, read as wall-clock time in the tenant's
-/// timezone (see [`super::settings`]).
+/// A date-only value carries no time of day, so rather than rejecting it or
+/// guessing midnight UTC, it is anchored to the tenant's configured default
+/// send time, read as wall-clock time in the tenant's timezone. That covers
+/// both a bare `YYYY-MM-DD` and the exactly-midnight-UTC timestamp a
+/// serialized bare date arrives as (see [`super::settings::date_only_day`]).
 fn resolve_scheduled_at(
     value: Option<&str>,
     settings: &TenantSettings,
@@ -3548,6 +3665,24 @@ fn resolve_scheduled_at(
     }
 
     Ok(Some(parsed.to_rfc3339()))
+}
+
+/// The instant a reschedule names, resolved the same way a create's
+/// `scheduledAt` is — a bare date (in either spelling) picks up the tenant's
+/// default send time.
+///
+/// The one difference is what "no instant" means. [`resolve_scheduled_at`]
+/// answers `None` for an empty value, `"now"`, and a time that has already
+/// passed, all of which mean "send immediately" on create. None of them mean
+/// that here: nobody moving a scheduled send is asking for it to go out this
+/// second, so they are rejected rather than acted on.
+fn resolve_reschedule_at(requested: &str, settings: &TenantSettings) -> Result<String, AppError> {
+    resolve_scheduled_at(Some(requested), settings)?.ok_or_else(|| {
+        AppError::BadRequest(
+            "scheduledAt must be a future time. To send now, unschedule the issue and publish it."
+                .to_string(),
+        )
+    })
 }
 
 /// Hashes everything that determines what a create request does, so a reused
@@ -3943,24 +4078,14 @@ async fn schedule_issue_send(
         .create_schedule()
         .name(&schedule_name)
         .group_name("newsletter")
-        .schedule_expression(format!("at({})", fire_at.format("%Y-%m-%dT%H:%M:%S")))
+        .schedule_expression(issue_send_schedule_expression(fire_at))
         .action_after_completion(aws_sdk_scheduler::types::ActionAfterCompletion::Delete)
-        .flexible_time_window(
-            aws_sdk_scheduler::types::FlexibleTimeWindow::builder()
-                .mode(aws_sdk_scheduler::types::FlexibleTimeWindowMode::Off)
-                .build()
-                .map_err(|e| {
-                    AppError::InternalError(format!("Failed to build time window: {}", e))
-                })?,
-        )
-        .target(
-            aws_sdk_scheduler::types::Target::builder()
-                .arn(&state_machine_arn)
-                .role_arn(&role_arn)
-                .input(execution_input.to_string())
-                .build()
-                .map_err(|e| AppError::InternalError(format!("Failed to build target: {}", e)))?,
-        )
+        .flexible_time_window(issue_send_time_window()?)
+        .target(issue_send_target(
+            &state_machine_arn,
+            &role_arn,
+            execution_input,
+        )?)
         .send()
         .await
         .map_err(|err| {
@@ -4010,6 +4135,171 @@ async fn schedule_issue_send(
 
         return Err(status_error);
     }
+
+    Ok(())
+}
+
+/// The `at()` expression Scheduler stores. Second granularity, no zone suffix —
+/// Scheduler reads it as UTC, which is the zone `fire_at` is already in.
+fn issue_send_schedule_expression(fire_at: chrono::DateTime<chrono::Utc>) -> String {
+    format!("at({})", fire_at.format("%Y-%m-%dT%H:%M:%S"))
+}
+
+/// A send fires at its instant or not at all, so the flexible window is off.
+fn issue_send_time_window() -> Result<aws_sdk_scheduler::types::FlexibleTimeWindow, AppError> {
+    aws_sdk_scheduler::types::FlexibleTimeWindow::builder()
+        .mode(aws_sdk_scheduler::types::FlexibleTimeWindowMode::Off)
+        .build()
+        .map_err(|e| AppError::InternalError(format!("Failed to build time window: {}", e)))
+}
+
+fn issue_send_target(
+    state_machine_arn: &str,
+    role_arn: &str,
+    execution_input: &serde_json::Value,
+) -> Result<aws_sdk_scheduler::types::Target, AppError> {
+    aws_sdk_scheduler::types::Target::builder()
+        .arn(state_machine_arn)
+        .role_arn(role_arn)
+        .input(execution_input.to_string())
+        .build()
+        .map_err(|e| AppError::InternalError(format!("Failed to build target: {}", e)))
+}
+
+/// Moves an already-scheduled issue's send to a new instant.
+///
+/// The entry is *replaced*, not deleted and recreated. `UpdateSchedule` is a
+/// full overwrite of a schedule that keeps existing, so there is no moment
+/// where the issue says `scheduled` with nothing behind it — which a failed
+/// `CreateSchedule` after a successful `DeleteSchedule` would leave, and which
+/// nothing is watching for.
+///
+/// The target input is rewritten along with the fire time, so the execution's
+/// `sendAt` is the new instant. The two must move together: the entry decides
+/// when the workflow starts, `sendAt` decides when the issue goes out, and a
+/// stale `sendAt` sends at the old time from a workflow that started at the new
+/// one.
+async fn reschedule_issue_send(
+    input: &IssueScheduleInput<'_>,
+    scheduled_at: &str,
+) -> Result<(), AppError> {
+    let execution_input = build_execution_input(input);
+
+    let send_instant = chrono::DateTime::parse_from_rfc3339(scheduled_at)
+        .map_err(|_| {
+            AppError::InternalError(format!("Unparseable scheduled send time: {scheduled_at}"))
+        })?
+        .with_timezone(&chrono::Utc);
+
+    let now = chrono::Utc::now();
+    let fire_at = issue_send_fire_at(send_instant, issue_send_lead_time(), now);
+
+    // Moved to inside the lead time, so the workflow is already due. Same
+    // branch the create path takes for a short-notice schedule: cancel the
+    // entry and start the execution here, since Scheduler cannot be asked for a
+    // fire time that has effectively passed. The issue still goes out at its
+    // own instant — the workflow carries `sendAt` and the send path holds it.
+    if is_due_now(fire_at, now) {
+        delete_issue_send_schedule(input.tenant_id, input.issue_number).await?;
+        return start_issue_execution(input, &execution_input).await;
+    }
+
+    let scheduler = aws_clients::get_scheduler_client().await;
+    let state_machine_arn = std::env::var("STATE_MACHINE_ARN")
+        .map_err(|_| AppError::InternalError("STATE_MACHINE_ARN not set".to_string()))?;
+    let role_arn = std::env::var("ISSUE_SEND_SCHEDULER_ROLE_ARN").map_err(|_| {
+        AppError::InternalError("ISSUE_SEND_SCHEDULER_ROLE_ARN not set".to_string())
+    })?;
+    let schedule_name = build_issue_send_schedule_name(input.tenant_id, input.issue_number);
+
+    scheduler
+        .update_schedule()
+        .name(&schedule_name)
+        .group_name("newsletter")
+        .schedule_expression(issue_send_schedule_expression(fire_at))
+        .action_after_completion(aws_sdk_scheduler::types::ActionAfterCompletion::Delete)
+        .flexible_time_window(issue_send_time_window()?)
+        .target(issue_send_target(
+            &state_machine_arn,
+            &role_arn,
+            &execution_input,
+        )?)
+        .send()
+        .await
+        .map_err(|err| {
+            // A `scheduled` record whose entry has gone missing is the one case
+            // this can't fix: the entry deletes itself when it fires, so
+            // not-found here means the send already started (or was cancelled
+            // out from under the record) and there is nothing left to move.
+            // Recreating one would send the issue a second time.
+            let is_not_found = err
+                .as_service_error()
+                .is_some_and(|service_err| service_err.is_resource_not_found_exception());
+
+            if is_not_found {
+                return AppError::Conflict(format!(
+                    "Issue {} no longer has a pending send to move. It may already be on its way \
+                     out; reload the issue to see where it is.",
+                    input.issue_number
+                ));
+            }
+
+            AppError::AwsError(format!("Failed to move the scheduled send: {}", err))
+        })?;
+
+    Ok(())
+}
+
+/// Writes a rescheduled issue's new send instant to its record.
+///
+/// Conditional on the record still saying `scheduled`: the publish workflow
+/// claims the issue by moving it off that status, so the condition is what
+/// keeps a reschedule from rewriting the send time of an issue that started
+/// going out while this request was in flight.
+async fn update_issue_scheduled_at(
+    tenant_id: &str,
+    issue_number: i32,
+    scheduled_at: &str,
+) -> Result<(), AppError> {
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+    let table_name = std::env::var("TABLE_NAME")
+        .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
+
+    ddb_client
+        .update_item()
+        .table_name(&table_name)
+        .key(
+            "pk",
+            AttributeValue::S(format!("{tenant_id}#{issue_number}")),
+        )
+        .key("sk", AttributeValue::S("newsletter".to_string()))
+        .update_expression("SET scheduledAt = :scheduledAt, updatedAt = :updatedAt")
+        .condition_expression("attribute_exists(pk) AND #status = :scheduled")
+        .expression_attribute_names("#status", "status")
+        .expression_attribute_values(":scheduledAt", AttributeValue::S(scheduled_at.to_string()))
+        .expression_attribute_values(
+            ":updatedAt",
+            AttributeValue::S(chrono::Utc::now().to_rfc3339()),
+        )
+        .expression_attribute_values(":scheduled", AttributeValue::S("scheduled".to_string()))
+        .send()
+        .await
+        .map_err(|err| {
+            // The send moved but the record didn't. Reporting it as a plain
+            // failure would be a lie in the operator's favour, so say which
+            // half landed — a retry re-points the entry at the same instant and
+            // writes the record, so the fix is to try again.
+            tracing::error!(
+                "Issue {} send was moved to {scheduled_at} but the record still shows the old \
+                 time: {err}",
+                issue_number
+            );
+            AppError::InternalError(format!(
+                "Issue {} is now set to send at {scheduled_at}, but the issue record could not be \
+                 updated to say so. Retry the reschedule.",
+                issue_number
+            ))
+        })?;
 
     Ok(())
 }
@@ -5392,6 +5682,32 @@ Thanks!"#;
     }
 
     #[test]
+    fn test_resolve_scheduled_at_applies_default_send_time_to_a_serialized_bare_date() {
+        // The GitHub Action forwards a frontmatter `date:` as-is, and a bare
+        // date serializes to midnight UTC. Stored verbatim it sends the
+        // evening before for any tenant west of UTC, so it gets the same
+        // treatment as the date it came from.
+        let value = format!("{}-08-01T00:00:00.000Z", future_year());
+        let resolved =
+            resolve_scheduled_at(Some(&value), &tenant_settings("America/Chicago", "09:00"))
+                .unwrap()
+                .expect("a future date should stay scheduled");
+
+        assert_eq!(resolved, format!("{}-08-01T14:00:00+00:00", future_year()));
+    }
+
+    #[test]
+    fn test_resolve_scheduled_at_keeps_a_deliberate_midnight() {
+        // Midnight with a real offset is a time the caller picked.
+        let value = format!("{}-08-01T00:00:00-05:00", future_year());
+        let resolved =
+            resolve_scheduled_at(Some(&value), &tenant_settings("America/Chicago", "09:00"))
+                .unwrap();
+
+        assert_eq!(resolved, Some(value));
+    }
+
+    #[test]
     fn test_resolve_scheduled_at_uses_utc_at_nine_without_configured_settings() {
         let date = format!("{}-08-01", future_year());
         let resolved = resolve_scheduled_at(Some(&date), &TenantSettings::default())
@@ -5411,6 +5727,47 @@ Thanks!"#;
         )
         .unwrap();
         assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn test_resolve_reschedule_at_applies_the_default_send_time() {
+        let settings = tenant_settings("America/Chicago", "09:00");
+
+        // Both spellings of a bare date, because correcting an issue that was
+        // scheduled from the serialized one is the reason this endpoint exists.
+        for value in [
+            format!("{}-08-01", future_year()),
+            format!("{}-08-01T00:00:00.000Z", future_year()),
+        ] {
+            assert_eq!(
+                resolve_reschedule_at(&value, &settings).unwrap(),
+                format!("{}-08-01T14:00:00+00:00", future_year()),
+                "{value} should resolve to the tenant's default send time"
+            );
+        }
+    }
+
+    #[test]
+    fn test_resolve_reschedule_at_keeps_an_explicit_instant() {
+        let value = format!("{}-08-01T18:30:00+00:00", future_year());
+        assert_eq!(
+            resolve_reschedule_at(&value, &tenant_settings("America/Chicago", "09:00")).unwrap(),
+            value
+        );
+    }
+
+    #[test]
+    fn test_resolve_reschedule_at_refuses_to_mean_now() {
+        // On create these all mean "send immediately". Moving a scheduled send
+        // to "immediately" is never what somebody meant, so they are errors
+        // here rather than a send.
+        let settings = tenant_settings("America/Chicago", "09:00");
+        for value in ["", "   ", "now", "2020-01-01", "2020-01-01T09:00:00Z"] {
+            assert!(
+                resolve_reschedule_at(value, &settings).is_err(),
+                "{value:?} should not be accepted as a new send time"
+            );
+        }
     }
 
     #[test]

@@ -387,14 +387,43 @@ fn validate_tokens(field: &str, value: &str, allowed: &[&str]) -> Result<(), App
 
 // ── Date-only resolution ───────────────────────────────────────────────
 
-/// True when a schedule value carries a date but no time (`YYYY-MM-DD`) and so
-/// needs the tenant's default send time to become an instant.
-pub(crate) fn is_date_only(value: &str) -> bool {
-    NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok()
+/// The day a schedule value names when it carries no time of day, and so needs
+/// the tenant's default send time to become an instant.
+///
+/// Two spellings mean the same thing. `YYYY-MM-DD` is what a caller writes by
+/// hand. Exactly midnight UTC (`…T00:00:00Z`) is what a caller *generates*: a
+/// bare date in YAML or JSON has no time component, so every serializer on the
+/// way here turns it into UTC midnight — which is how the GitHub Action
+/// forwards a date-only frontmatter `date:` (see
+/// `docs/github-api-cutover-spec.md` §6.1.6). Reading that as a real midnight
+/// send is the one interpretation nobody wants: it lands the issue on the
+/// previous evening for every tenant west of UTC.
+///
+/// A tenant who genuinely wants midnight can say so unambiguously — a second
+/// past it (`00:00:01Z`), or midnight in their own zone (`00:00:00-05:00`),
+/// which carries a real offset and is left alone.
+pub(crate) fn date_only_day(value: &str) -> Option<NaiveDate> {
+    if let Ok(date) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+        return Some(date);
+    }
+
+    let parsed = DateTime::parse_from_rfc3339(value).ok()?;
+    if parsed.offset().local_minus_utc() != 0 {
+        return None;
+    }
+
+    let utc = parsed.with_timezone(&Utc);
+    (utc.time() == NaiveTime::MIN).then(|| utc.date_naive())
 }
 
-/// Turns a bare `YYYY-MM-DD` into an instant: the tenant's default send time
-/// on that date, read as a wall-clock time in the tenant's timezone.
+/// True when a schedule value carries a date but no time of day (see
+/// [`date_only_day`]).
+pub(crate) fn is_date_only(value: &str) -> bool {
+    date_only_day(value).is_some()
+}
+
+/// Turns a date-only value into an instant: the tenant's default send time on
+/// that date, read as a wall-clock time in the tenant's timezone.
 ///
 /// Daylight-saving transitions make that wall-clock time either ambiguous
 /// (it happens twice) or nonexistent (it is skipped). Both are resolved
@@ -405,8 +434,8 @@ pub(crate) fn resolve_date_only(
     value: &str,
     settings: &TenantSettings,
 ) -> Result<DateTime<Utc>, AppError> {
-    let date = NaiveDate::parse_from_str(value, "%Y-%m-%d")
-        .map_err(|_| AppError::BadRequest(format!("'{}' is not a valid date", value)))?;
+    let date = date_only_day(value)
+        .ok_or_else(|| AppError::BadRequest(format!("'{}' is not a valid date", value)))?;
 
     let tz = settings.timezone();
     let naive = date.and_time(settings.send_time());
@@ -826,6 +855,38 @@ mod tests {
         assert!(!is_date_only("2026-08-01T09:00:00-05:00"));
         assert!(!is_date_only("now"));
         assert!(!is_date_only("08/01/2026"));
+    }
+
+    #[test]
+    fn is_date_only_matches_a_serialized_bare_date() {
+        // What a YAML/JSON date becomes on the wire: midnight UTC, in every
+        // spelling a serializer produces.
+        assert!(is_date_only("2026-08-01T00:00:00Z"));
+        assert!(is_date_only("2026-08-01T00:00:00.000Z"));
+        assert!(is_date_only("2026-08-01T00:00:00+00:00"));
+    }
+
+    #[test]
+    fn is_date_only_leaves_a_deliberate_midnight_alone() {
+        // Midnight carrying a real offset is a time the caller chose, not a
+        // date a serializer flattened — and one second past midnight UTC is
+        // the escape hatch for a caller who really does want that instant.
+        assert!(!is_date_only("2026-08-01T00:00:00-05:00"));
+        assert!(!is_date_only("2026-08-01T00:00:01Z"));
+        assert!(!is_date_only("2026-08-01T00:01:00Z"));
+    }
+
+    #[test]
+    fn resolve_date_only_reads_a_serialized_bare_date_as_the_day_it_names() {
+        // The bug this closes: stored as-is, midnight UTC sends on July 31 at
+        // 7pm for a Chicago tenant — the wrong day, half a day early.
+        let resolved = resolve_date_only(
+            "2026-08-01T00:00:00.000Z",
+            &settings("America/Chicago", "09:00"),
+        )
+        .unwrap()
+        .to_rfc3339();
+        assert_eq!(resolved, "2026-08-01T14:00:00+00:00");
     }
 
     #[test]

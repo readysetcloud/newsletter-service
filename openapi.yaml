@@ -1813,6 +1813,76 @@ paths:
         "500":
           $ref: "#/components/responses/UnknownError"
 
+  /issues/{id}/schedule:
+    put:
+      summary: Move a scheduled issue's send time
+      description: >-
+        Reschedules an issue that is already scheduled, re-pointing the send at
+        a new instant. Accepts the same values as scheduledAt on create: an
+        RFC3339 timestamp, or a date-only "YYYY-MM-DD" value that is anchored to
+        the tenant's defaultSendTime and timezone (see GET /settings). Sending a
+        bare date is how an issue whose stored instant never got the default
+        send time applied is corrected.
+
+        Only issues with status "scheduled" can be rescheduled, and only until
+        the publish workflow starts — which happens ISSUE_SEND_LEAD_TIME_MINUTES
+        before the send instant. After that the send can be stopped (by
+        unscheduling) but not moved.
+      tags:
+        - Issues
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The issue ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - scheduledAt
+              properties:
+                scheduledAt:
+                  type: string
+                  description: >-
+                    The new send time. Must resolve to a future instant —
+                    "now", a past timestamp, and a past date are all rejected
+                    rather than sending immediately.
+                  example: "2026-08-01"
+      responses:
+        "200":
+          description: The send was moved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  issueNumber:
+                    type: integer
+                  status:
+                    type: string
+                    example: scheduled
+                  scheduledAt:
+                    type: string
+                    format: date-time
+                    description: The resolved send instant
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
   /issues/{id}/resend:
     post:
       summary: Resend a published issue
@@ -3750,8 +3820,12 @@ components:
             timestamp, "now", or a date-only "YYYY-MM-DD" value. A date-only
             value has no time of day, so it is anchored to the tenant's
             defaultSendTime read as wall-clock time in the tenant's timezone
-            (see GET /settings). A resolved time that has already passed sends
-            immediately.
+            (see GET /settings). A timestamp at exactly midnight UTC
+            ("2026-08-01T00:00:00Z") is treated as date-only too — that is what
+            a bare date becomes once serialized. To schedule at midnight
+            deliberately, send it with a zone offset
+            ("2026-08-01T00:00:00-05:00") or a second past the hour. A resolved
+            time that has already passed sends immediately.
           example: "2026-08-01"
         action:
           type: string
@@ -4066,7 +4140,9 @@ components:
           description: >-
             When to schedule the issue for publishing. Accepts an RFC3339
             timestamp or a date-only "YYYY-MM-DD" value, which is anchored to
-            the tenant's defaultSendTime and timezone (see GET /settings).
+            the tenant's defaultSendTime and timezone (see GET /settings). A
+            timestamp at exactly midnight UTC counts as date-only; see the
+            create endpoint for how to schedule midnight deliberately.
         metadata:
           type: object
           description: Optional metadata for the issue

@@ -19,6 +19,9 @@ export type { TemplateJsonEditorProps } from './TemplateJsonEditor';
 export { DeleteIssueDialog } from './DeleteIssueDialog';
 export type { DeleteIssueDialogProps } from './DeleteIssueDialog';
 
+export { RescheduleIssueDialog } from './RescheduleIssueDialog';
+export type { RescheduleIssueDialogProps } from './RescheduleIssueDialog';
+
 export { IssuesEmptyState } from './IssuesEmptyState';
 export type { IssuesEmptyStateProps } from './IssuesEmptyState';
 

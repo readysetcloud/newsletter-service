@@ -586,10 +586,20 @@ export const IssueDetailPage: React.FC = () => {
    * Stats are absent until the issue has a stats record, which a published
    * issue always does — `undefined` therefore means "not loaded yet", not
    * "zero", so the button stays hidden rather than flashing in during load.
+   *
+   * An unfinished fan-out disqualifies the issue no matter what the other two
+   * say. `published` with no sends is also what a local send looks like in the
+   * moments before its first group fires, and resending then would delete the
+   * plan the running fan-out reports against and strand it at `sending`. The
+   * API refuses this case outright; the button hides it so nobody is offered a
+   * repair for an issue that is working correctly.
    */
   const canResend = useMemo(
-    () => issue?.status === 'published' && issue?.stats?.sends === 0,
-    [issue?.status, issue?.stats?.sends]
+    () =>
+      issue?.status === 'published' &&
+      issue?.stats?.sends === 0 &&
+      !(issue?.sendProgress && !issue.sendProgress.completedAt),
+    [issue?.status, issue?.stats?.sends, issue?.sendProgress]
   );
 
   /**

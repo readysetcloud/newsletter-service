@@ -1,7 +1,7 @@
 import Handlebars from 'handlebars';
 import defaultTemplate from '../templates/newsletter.hbs';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
-import { DynamoDBClient, PutItemCommand, GetItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, PutItemCommand, GetItemCommand, QueryCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { getTenant } from './utils/helpers.mjs';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { publishIssueEvent, EVENT_TYPES } from './utils/event-publisher.mjs';
@@ -66,6 +66,31 @@ export const handler = async (state) => {
       if (assemblyEnabled && activeAbTest) {
         console.warn('[ASSEMBLY] Skipping personalized section order - an A/B test is active for this issue');
         assemblyEnabled = false;
+      }
+
+      // Claim `sending` before handing off, not after.
+      //
+      // The state machine's `Update Issue Record - Success` writes `published`
+      // under `#status <> :sending`, and that guard is only load-bearing if the
+      // record already reads `sending` by the time it runs. It did not. The
+      // fan-out sets `sending` from inside send-email-v2, which EventBridge
+      // invokes asynchronously and which first validates the sender and pages
+      // the entire subscriber list — while the state machine has only two
+      // Scheduler entries and one DynamoDB write left to do. The workflow won
+      // that race essentially every time, so a local-send issue read
+      // `published` from the moment the workflow ended until the fan-out caught
+      // up, with deliveries still hours from finishing. Everything downstream
+      // was correct — the fan-out reclaims `sending`, the last group publishes —
+      // but anyone looking in that window was told the issue had gone out when
+      // most of the list had not been mailed.
+      //
+      // Doing it here closes the window rather than narrowing it: the claim is
+      // synchronous and ordered before the event, so the guard cannot be
+      // reached first. Failure is non-fatal — a missed claim restores exactly
+      // the old racy behaviour rather than stopping a send that is otherwise
+      // ready to go.
+      if (activeLocalSend) {
+        await claimSending(state.tenantId, state.data.metadata.number);
       }
 
       await sendEmail({
@@ -279,6 +304,52 @@ const sendEmail = async (params) => {
 
 const padIssueNumber = (issueNumber) => {
   return String(issueNumber).padStart(5, '0');
+};
+
+/**
+ * Moves the issue to `sending` so the state machine's terminal write stands
+ * down and lets the local-send fan-out own the final status.
+ *
+ * Conditional on the issue still being `in progress` — the status the claim
+ * state left it at. Anything else means something has already moved it and is
+ * better informed than this: a redelivered publish event for an issue that has
+ * since completed must not drag it back to `sending`.
+ *
+ * Never throws. A send that is ready to go must not be stopped by a status
+ * write, and the failure mode of not writing it is the pre-existing race, not
+ * a lost or duplicated email.
+ *
+ * @param {string} tenantId
+ * @param {number|string} issueNumber
+ */
+const claimSending = async (tenantId, issueNumber) => {
+  try {
+    await ddb.send(new UpdateItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({ pk: `${tenantId}#${issueNumber}`, sk: 'newsletter' }),
+      UpdateExpression: 'SET #status = :sending, updatedAt = :now',
+      ConditionExpression: '#status = :inProgress',
+      ExpressionAttributeNames: { '#status': 'status' },
+      ExpressionAttributeValues: marshall({
+        ':sending': 'sending',
+        ':inProgress': 'in progress',
+        ':now': new Date().toISOString()
+      })
+    }));
+  } catch (err) {
+    if (err.name === 'ConditionalCheckFailedException') {
+      console.log('[PUBLISH] Issue is no longer in progress - leaving its status alone', {
+        tenantId,
+        issueNumber
+      });
+      return;
+    }
+    console.error('[PUBLISH] Failed to claim sending before the local-send fan-out', {
+      tenantId,
+      issueNumber,
+      error: err.message
+    });
+  }
 };
 
 /**

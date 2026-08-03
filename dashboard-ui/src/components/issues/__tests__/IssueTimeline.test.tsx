@@ -163,6 +163,69 @@ describe('findStalledSend', () => {
     expect(findStalledSend([HANDED_OFF], NOW)).toEqual({ deferredUntil: null });
   });
 
+  // A local send records nothing between planning and its first group firing,
+  // and reaches the last timezone many hours later. That silence is the normal
+  // state of a healthy issue, and warning through it would put the alarm on
+  // screen for every local send there is.
+  it('stays quiet while a fan-out is still working through its groups', () => {
+    expect(
+      findStalledSend(
+        [
+          HANDED_OFF,
+          entry({
+            type: 'fanout_planned',
+            at: '2026-08-02T12:00:01.000Z',
+            detail: { groups: 14, catchAllAt: '2026-08-04T20:30:00.000Z' }
+          })
+        ],
+        NOW
+      )
+    ).toBeNull();
+  });
+
+  it('flags a fan-out that is past its own catch-all with nothing sent', () => {
+    expect(
+      findStalledSend(
+        [
+          HANDED_OFF,
+          entry({
+            type: 'fanout_planned',
+            at: '2026-08-02T12:00:01.000Z',
+            detail: { groups: 14, catchAllAt: '2026-08-03T20:30:00.000Z' }
+          })
+        ],
+        NOW
+      )
+    ).toEqual({ deferredUntil: null });
+  });
+
+  // The send runs in a Lambda invoked after the hand-off is recorded, and it
+  // validates the sender and pages the whole subscriber list before mailing
+  // anybody. A short silence is expected operation.
+  it('stays quiet inside the grace window after a hand-off', () => {
+    expect(
+      findStalledSend(
+        [entry({ type: 'send_handed_off', at: '2026-08-03T23:55:00.000Z' })],
+        NOW
+      )
+    ).toBeNull();
+  });
+
+  // Measuring from the first hand-off would call a resend that started seconds
+  // ago stale, because the original hand-off is days old.
+  it('measures the grace window from the most recent hand-off', () => {
+    expect(
+      findStalledSend(
+        [
+          HANDED_OFF,
+          entry({ type: 'resend_requested', at: '2026-08-03T23:50:00.000Z' }),
+          entry({ type: 'send_handed_off', at: '2026-08-03T23:55:00.000Z' })
+        ],
+        NOW
+      )
+    ).toBeNull();
+  });
+
   it('counts a completed fan-out as having sent', () => {
     expect(
       findStalledSend(

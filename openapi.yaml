@@ -1901,6 +1901,12 @@ paths:
         issue sends with its content as it stands now, and any local-send
         progress from the previous attempt is cleared so the new fan-out can be
         tracked. Rejected with 400 unless the issue is `published`.
+
+
+        Rejected with 409 while a local-send fan-out is still delivering, even
+        though such an issue can read `published` with no sends yet. Clearing
+        the progress record of a running fan-out would leave its groups
+        reporting into nothing and the issue stuck at `sending`.
       tags:
         - Issues
       parameters:
@@ -1929,6 +1935,10 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "409":
+          description: >
+            A local-send fan-out is still delivering this issue. Wait for it to
+            finish; resending now would strand the send in progress.
         "404":
           $ref: "#/components/responses/NotFound"
         "500":

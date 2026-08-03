@@ -2140,6 +2140,9 @@ Resources:
                 - dynamodb:GetItem
                 - dynamodb:PutItem
                 - dynamodb:Query
+                # Claims `sending` ahead of a local-send fan-out, so the state
+                # machine's terminal write stands down instead of racing it.
+                - dynamodb:UpdateItem
               Resource: !GetAtt NewsletterTable.Arn
             # getSnippets() reads tenant snippets via the GSI1 index when a
             # custom template is selected.

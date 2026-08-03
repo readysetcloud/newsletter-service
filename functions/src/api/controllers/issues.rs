@@ -696,6 +696,27 @@ async fn handle_resend_issue(
         ));
     }
 
+    // `published` alone is not proof the send is over. A local-send issue can
+    // read `published` while its fan-out is still working through timezones —
+    // that is the whole reason this endpoint is offered — and resending one
+    // mid-flight is actively destructive: `clear_send_progress` below would
+    // delete the plan the running fan-out reports against, so its groups would
+    // report into nothing, the completion condition would never be met, and the
+    // issue would sit at `sending` forever with no way to finish.
+    //
+    // The progress record answers this where the status cannot: it exists from
+    // fan-out until the last group lands, and gains `completedAt` only when
+    // delivery is genuinely finished.
+    if let Some(progress) = send_progress::get_send_progress(&tenant_id, issue.issue_number).await {
+        if progress.completed_at.is_none() {
+            return Err(AppError::Conflict(format!(
+                "Issue {} is still being delivered ({} of {} groups sent). Wait for the send to \
+                 finish before sending it again.",
+                issue.issue_number, progress.groups_delivered, progress.groups_total
+            )));
+        }
+    }
+
     // Both halves of the fix the old comment here asked for, in the order it
     // asked for them: the handshake now has a `published` + `resend` branch,
     // and the completed progress record is cleared so a local-send fan-out can

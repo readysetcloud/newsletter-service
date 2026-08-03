@@ -707,12 +707,26 @@ async fn handle_resend_issue(
     // The progress record answers this where the status cannot: it exists from
     // fan-out until the last group lands, and gains `completedAt` only when
     // delivery is genuinely finished.
-    if let Some(progress) = send_progress::get_send_progress(&tenant_id, issue.issue_number).await {
-        if progress.completed_at.is_none() {
+    //
+    // Read strictly: an unreadable answer refuses the resend rather than
+    // assuming there is nothing to protect. The lenient read used everywhere
+    // else reports a failed lookup as "no progress record", which here would
+    // mean a transient DynamoDB error is all it takes to delete a live plan.
+    match send_progress::try_get_send_progress(&tenant_id, issue.issue_number).await {
+        Ok(Some(progress)) if progress.completed_at.is_none() => {
             return Err(AppError::Conflict(format!(
                 "Issue {} is still being delivered ({} of {} groups sent). Wait for the send to \
                  finish before sending it again.",
                 issue.issue_number, progress.groups_delivered, progress.groups_total
+            )));
+        }
+        Ok(_) => {}
+        Err(error) => {
+            tracing::error!("Refusing to resend issue {}: {error}", issue.issue_number);
+            return Err(AppError::Conflict(format!(
+                "Could not confirm that issue {} has finished sending, so it was not sent again. \
+                 Try once the delivery status can be read.",
+                issue.issue_number
             )));
         }
     }

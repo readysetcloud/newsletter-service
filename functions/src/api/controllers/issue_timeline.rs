@@ -122,7 +122,13 @@ async fn try_record_event(
         );
 
     if let Some(detail) = detail {
-        request = request.item("detail", AttributeValue::S(detail.to_string()));
+        // A native map, matching what `recordIssueEvent` writes from the send
+        // path. This half used to store a JSON string instead, and because
+        // `parse_entry` only understood strings, every detail the send path
+        // recorded — the deferral's send instant and schedule name above all —
+        // was silently dropped on the way back out. One shape on the way in and
+        // a reader that tolerates both is what stops that recurring.
+        request = request.item("detail", serde_dynamo::to_attribute_value(&detail)?);
     }
 
     request.send().await?;
@@ -177,12 +183,34 @@ fn parse_entry(item: &HashMap<String, AttributeValue>) -> Option<TimelineEntry> 
         event_type: text("type")?,
         at: text("at")?,
         actor: text("actor").unwrap_or_else(|| "system".to_string()),
-        // Stored as a JSON string so the writer does not have to model every
-        // shape a detail can take; a value that will not parse is dropped
-        // rather than failing the entry it belongs to.
-        detail: text("detail").and_then(|raw| serde_json::from_str(&raw).ok()),
+        detail: item.get("detail").and_then(parse_detail),
         derived: false,
     })
+}
+
+/// Reads a detail stored either as a native map or as a JSON string.
+///
+/// Both shapes are accepted on purpose. The two halves of the writer disagreed
+/// once — this side stored a JSON string while the JS send path stored a map —
+/// and because this only understood strings, every detail recorded by the send
+/// path came back empty: a `send_deferred` with no schedule name, a
+/// `fanout_planned` with no group count. Nothing failed and nothing logged; the
+/// entries simply arrived stripped.
+///
+/// Writers now agree on the map form, so the string branch is redundant today.
+/// It stays because the cost is three lines and the failure it prevents is
+/// invisible: a writer that drifts again degrades to a shape mismatch this
+/// absorbs, rather than a silent hole in the record people consult precisely
+/// when something has already gone wrong.
+///
+/// A value that parses as neither is dropped rather than failing the entry that
+/// carries it — a timeline missing one event's detail is worth more than a
+/// timeline missing the event.
+fn parse_detail(value: &AttributeValue) -> Option<serde_json::Value> {
+    if let Ok(raw) = value.as_s() {
+        return serde_json::from_str(raw).ok();
+    }
+    serde_dynamo::from_attribute_value(value.clone()).ok()
 }
 
 /// Facts the issue record already holds, rendered as timeline entries.
@@ -270,10 +298,15 @@ pub fn merge_entries(
             .filter(|entry| !recorded_types.contains(entry.event_type.as_str())),
     );
 
-    // Lexicographic ordering is chronological for RFC3339 instants in the same
-    // offset, which every writer here emits (both halves stamp UTC). Falling
-    // back to a string compare rather than parsing keeps an unparseable
-    // timestamp in the timeline instead of dropping it.
+    // Lexicographic, which is chronological for UTC RFC3339 instants down to
+    // the second. It is not exact below that: recorded entries stamp `...Z`
+    // while derived ones carry whatever wrote the record they came from, and
+    // `mark_issue_scheduled` emits `+00:00` where the state machine emits `Z`.
+    // Two entries inside the same second can therefore order by suffix rather
+    // than by instant. Left as a string compare deliberately — parsing would
+    // have to decide what to do with a timestamp it could not read, and
+    // dropping an event from a page whose purpose is completeness is a worse
+    // outcome than transposing two events that happened together.
     merged.sort_by(|a, b| a.at.cmp(&b.at));
     merged
 }
@@ -281,6 +314,122 @@ pub fn merge_entries(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn item(pairs: Vec<(&str, AttributeValue)>) -> HashMap<String, AttributeValue> {
+        pairs
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value))
+            .collect()
+    }
+
+    fn recorded(detail: AttributeValue) -> HashMap<String, AttributeValue> {
+        item(vec![
+            ("type", AttributeValue::S("send_deferred".to_string())),
+            (
+                "at",
+                AttributeValue::S("2026-08-02T12:00:00.000Z".to_string()),
+            ),
+            ("actor", AttributeValue::S("system".to_string())),
+            ("detail", detail),
+        ])
+    }
+
+    /// The regression this pair exists for. `recordIssueEvent` in
+    /// `functions/utils/issue-timeline.mjs` marshalls `detail` as a plain
+    /// object, which reaches DynamoDB as a map — and this reader used to accept
+    /// only the JSON-string form the Rust writer produced. Every detail the
+    /// send path recorded was therefore dropped here, silently, including the
+    /// schedule name that is the only record a deferred delivery is pending.
+    #[test]
+    fn test_parse_entry_reads_a_detail_written_as_a_map() {
+        let entry = parse_entry(&recorded(AttributeValue::M(item(vec![
+            (
+                "sendAt",
+                AttributeValue::S("2026-08-03T14:00:00.000Z".to_string()),
+            ),
+            (
+                "scheduleName",
+                AttributeValue::S("email-123-abc".to_string()),
+            ),
+        ]))))
+        .expect("a well-formed entry should parse");
+
+        assert_eq!(
+            entry.detail,
+            Some(serde_json::json!({
+                "sendAt": "2026-08-03T14:00:00.000Z",
+                "scheduleName": "email-123-abc"
+            }))
+        );
+    }
+
+    #[test]
+    fn test_parse_entry_reads_a_detail_written_as_a_json_string() {
+        let entry = parse_entry(&recorded(AttributeValue::S(
+            r#"{"groups":14,"mode":"timezone"}"#.to_string(),
+        )))
+        .expect("a well-formed entry should parse");
+
+        assert_eq!(
+            entry.detail,
+            Some(serde_json::json!({ "groups": 14, "mode": "timezone" }))
+        );
+    }
+
+    /// Numbers survive the map form as numbers. DynamoDB stores them as `N`
+    /// with a string payload, so a converter that took the easy path would hand
+    /// the dashboard `"14"` and quietly turn every count into text.
+    #[test]
+    fn test_parse_entry_keeps_a_numeric_detail_numeric() {
+        let entry = parse_entry(&recorded(AttributeValue::M(item(vec![(
+            "groups",
+            AttributeValue::N("14".to_string()),
+        )]))))
+        .expect("a well-formed entry should parse");
+
+        assert_eq!(entry.detail, Some(serde_json::json!({ "groups": 14 })));
+    }
+
+    /// An entry is worth more than its detail: losing the fact that a deferral
+    /// happened is worse than losing what it said.
+    #[test]
+    fn test_parse_entry_survives_an_unreadable_detail() {
+        let entry = parse_entry(&recorded(AttributeValue::S("not json".to_string())))
+            .expect("the entry should still parse");
+
+        assert_eq!(entry.event_type, "send_deferred");
+        assert_eq!(entry.detail, None);
+    }
+
+    #[test]
+    fn test_parse_entry_needs_a_type_and_an_instant() {
+        assert!(parse_entry(&item(vec![(
+            "at",
+            AttributeValue::S("2026-08-02T12:00:00.000Z".to_string())
+        )]))
+        .is_none());
+
+        assert!(parse_entry(&item(vec![(
+            "type",
+            AttributeValue::S("created".to_string())
+        )]))
+        .is_none());
+    }
+
+    #[test]
+    fn test_parse_entry_defaults_a_missing_actor_to_the_system() {
+        let entry = parse_entry(&item(vec![
+            ("type", AttributeValue::S("created".to_string())),
+            (
+                "at",
+                AttributeValue::S("2026-08-02T12:00:00.000Z".to_string()),
+            ),
+        ]))
+        .expect("actor is optional");
+
+        assert_eq!(entry.actor, "system");
+        assert!(!entry.derived);
+    }
 
     #[test]
     fn test_derive_entries_reads_the_record_milestones() {

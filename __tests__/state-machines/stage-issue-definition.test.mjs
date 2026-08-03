@@ -159,7 +159,15 @@ const EXPECTED_CATCH_ROUTES = {
   // Degraded personalization is acceptable; a missed issue is not. Pinned here
   // and again in the "cannot block or fail a send" test below.
   'Extract Links': ['States.ALL -> Parse Issue (error discarded)'],
-  'Mark Issue In Progress': ['States.ALL -> Update Issue Record - Failure ($.error)'],
+  // The claim is a compare-and-swap, so a refused condition means another
+  // execution got there first - the same answer the handshake gives a
+  // duplicate, a moment later. It has to precede the ALL catcher, which would
+  // otherwise stamp `failed` on a healthy issue on behalf of the execution
+  // that is busy publishing it.
+  'Mark Issue In Progress': [
+    'DynamoDB.ConditionalCheckFailedException -> Success - Duplicate Request (error discarded)',
+    'States.ALL -> Update Issue Record - Failure ($.error)'
+  ],
   // Post-publish courtesy email: a failure here must not relabel an issue that
   // published fine, because `Has Issue Been Processed?` treats `failed` as
   // re-processable and a re-stage would send the issue twice.
@@ -947,6 +955,21 @@ describe('stage-issue definition: identifiers, not content', () => {
     // Writing the input's content back over the record is what made an edit
     // after scheduling publish stale content.
     expect(state.Parameters.UpdateExpression).not.toMatch(/:content/);
+  });
+
+  // The handshake reads the status and the claim writes it. Without a condition
+  // tying the write to what the read saw, the two are advisory: two executions
+  // for the same issue - two POSTs to /resend, a Scheduler entry that fired
+  // twice - both see a sendable status, both claim, and both reach `Publish`.
+  // The recipient idempotency marker is only written once SES accepts, so two
+  // concurrent sends select the same subscribers and mail them twice.
+  it('claims the issue atomically against the status the handshake read', () => {
+    const { state } = allStates.find(({ name }) => name === CLAIM_STATE);
+
+    expect(state.Parameters.ConditionExpression).toBe('#status = :expected');
+    expect(state.Parameters.ExpressionAttributeValues[':expected']).toEqual({
+      'S.$': '$.existingNewsletter.Item.status.S'
+    });
   });
 
   it('binds the content variables in the one claim state', () => {

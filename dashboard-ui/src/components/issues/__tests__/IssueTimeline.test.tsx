@@ -174,6 +174,37 @@ describe('IssueTimeline', () => {
       expect(screen.getByText('Nothing further recorded')).toBeInTheDocument();
       expect(screen.queryByText('Still in progress')).not.toBeInTheDocument();
     });
+
+    // `send_completed` is written by the local-send tracker and nothing else, so
+    // an ordinary send has no terminal event of its own. Its `sending_started`
+    // lands once every SES call has returned, which routinely sorts after the
+    // derived `published` — minutes later for a large list, a day later for a
+    // deferred one — and the panel used to claim such a send was still running
+    // forever.
+    it('treats a plain send as finished once its mail has gone', () => {
+      renderTimeline([
+        entry({ type: 'send_handed_off', at: '2026-08-03T14:00:00.000Z' }),
+        entry({ type: 'published', at: '2026-08-03T14:00:01.000Z', derived: true }),
+        entry({ type: 'sending_started', at: '2026-08-03T14:06:00.000Z' })
+      ]);
+
+      expect(screen.getByText('Nothing further recorded')).toBeInTheDocument();
+    });
+
+    // The same event means the opposite thing mid fan-out: one timezone group
+    // has gone and a dozen are still queued for hours from now.
+    it('keeps a fan-out open when only some groups have sent', () => {
+      renderTimeline([
+        entry({
+          type: 'fanout_planned',
+          at: '2026-08-03T14:00:00.000Z',
+          detail: { groups: 14 }
+        }),
+        entry({ type: 'sending_started', at: '2026-08-03T14:01:00.000Z', detail: { group: 'Chicago' } })
+      ]);
+
+      expect(screen.getByText('Still in progress')).toBeInTheDocument();
+    });
   });
 });
 

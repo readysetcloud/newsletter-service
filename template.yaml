@@ -2360,9 +2360,6 @@ Resources:
               Action:
                 - dynamodb:GetItem
                 - dynamodb:Query
-                # Appends the `workflow_started` entry to the issue's timeline
-                # (functions/utils/issue-timeline.mjs).
-                - dynamodb:PutItem
               Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
               Action: dynamodb:Query
@@ -2422,6 +2419,12 @@ Resources:
               Action:
                 - dynamodb:GetItem
                 - dynamodb:Query
+                # Appends the `workflow_started` entry to the issue's timeline
+                # (functions/utils/issue-timeline.mjs). Without it every one of
+                # those writes is an AccessDenied that `recordIssueEvent`
+                # swallows by design, so publishing carries on and the timeline
+                # silently loses the milestone.
+                - dynamodb:PutItem
               Resource: !GetAtt NewsletterTable.Arn
             # getSnippets() reads tenant snippets via the GSI1 index.
             - Effect: Allow

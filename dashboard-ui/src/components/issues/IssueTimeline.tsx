@@ -57,6 +57,30 @@ const PRESENTATION: Record<string, EventPresentation> = {
 /** Events after which nothing more is expected to happen on its own. */
 const TERMINAL_EVENTS = new Set(['send_completed', 'published', 'failed', 'unscheduled']);
 
+/**
+ * Whether the timeline is still expecting something.
+ *
+ * `send_completed` is written by the local-send progress tracker and by nothing
+ * else, so an ordinary send has no terminal event of its own: its last entry is
+ * `sending_started`, recorded once every SES call has returned. That routinely
+ * sorts *after* the derived `published` — minutes after for a large list, a day
+ * after for a deferred one — which left the panel reading "Still in progress"
+ * forever for a send that had entirely finished.
+ *
+ * So terminality depends on who owns completion. With a fan-out in the
+ * timeline, only `send_completed` ends it — the groups run for hours and an
+ * early `sending_started` says nothing about the ones still queued. Without
+ * one, a send event *is* the end of the story: one invocation mailed the list.
+ */
+const isFinished = (entries: TimelineEntry[]): boolean => {
+  const last = entries[entries.length - 1];
+  if (!last) return false;
+  if (TERMINAL_EVENTS.has(String(last.type))) return true;
+
+  const fannedOut = entries.some((entry) => entry.type === 'fanout_planned');
+  return !fannedOut && last.type === 'sending_started';
+};
+
 /** An event the backend knows about and this build does not. */
 const unknownPresentation = (type: string): EventPresentation => ({
   // Underscores out, so a new backend event still reads as English rather than
@@ -173,10 +197,10 @@ export const IssueTimeline: React.FC<IssueTimelineProps> = ({
     });
   }, [entries, formatLongDate]);
 
-  const inFlight = useMemo(() => {
-    const last = rows[rows.length - 1]?.entry;
-    return !!last && !TERMINAL_EVENTS.has(String(last.type));
-  }, [rows]);
+  const inFlight = useMemo(
+    () => rows.length > 0 && !isFinished(rows.map((row) => row.entry)),
+    [rows]
+  );
 
   if (rows.length === 0) {
     return (

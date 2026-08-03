@@ -89,21 +89,41 @@ export const handler = async (state) => {
       // reached first. Failure is non-fatal — a missed claim restores exactly
       // the old racy behaviour rather than stopping a send that is otherwise
       // ready to go.
-      if (activeLocalSend) {
-        await claimSending(state.tenantId, state.data.metadata.number);
-      }
+      const claimed = activeLocalSend
+        ? await claimSending(state.tenantId, state.data.metadata.number)
+        : false;
 
-      await sendEmail({
-        subject: state.subject,
-        html,
-        to: { list: tenant.list },
-        sendAt: state.sendAtDate,
-        referenceNumber: `${tenant.pk}_${state.data.metadata.number}`,
-        tenantId: state.tenantId,
-        abTest: activeAbTest,
-        localSend: activeLocalSend,
-        contentAssembly: assemblyEnabled ? { enabled: true } : undefined
-      });
+      try {
+        await sendEmail({
+          subject: state.subject,
+          html,
+          to: { list: tenant.list },
+          sendAt: state.sendAtDate,
+          referenceNumber: `${tenant.pk}_${state.data.metadata.number}`,
+          tenantId: state.tenantId,
+          abTest: activeAbTest,
+          localSend: activeLocalSend,
+          contentAssembly: assemblyEnabled ? { enabled: true } : undefined
+        });
+      } catch (err) {
+        // The claim has to come back off, or the issue is stranded.
+        //
+        // `sending` exists to tell the rest of the system that a fan-out owns
+        // this issue's terminal status. If the hand-off throws there is no
+        // fan-out, and nothing will ever move it: the state machine's failure
+        // write refuses to stamp `failed` over `sending` (by design — that
+        // condition is what stops it lying about a send in flight), the
+        // handshake does not treat `sending` as re-sendable, and the resend
+        // endpoint only accepts `published`. The issue would sit there with no
+        // route back, having sent nothing.
+        //
+        // Releasing it restores exactly the state the claim found, so the
+        // failure write behaves as it did before the claim existed.
+        if (claimed) {
+          await releaseSending(state.tenantId, state.data.metadata.number);
+        }
+        throw err;
+      }
 
       // The hand-off, recorded as its own fact rather than folded into
       // "published". They are not the same event and the gap between them is
@@ -321,6 +341,8 @@ const padIssueNumber = (issueNumber) => {
  *
  * @param {string} tenantId
  * @param {number|string} issueNumber
+ * @returns {Promise<boolean>} Whether this call is the one that took the claim,
+ *   and therefore the one responsible for releasing it if the hand-off fails
  */
 const claimSending = async (tenantId, issueNumber) => {
   try {
@@ -336,19 +358,67 @@ const claimSending = async (tenantId, issueNumber) => {
         ':now': new Date().toISOString()
       })
     }));
+
+    return true;
   } catch (err) {
     if (err.name === 'ConditionalCheckFailedException') {
       console.log('[PUBLISH] Issue is no longer in progress - leaving its status alone', {
         tenantId,
         issueNumber
       });
-      return;
+      return false;
     }
     console.error('[PUBLISH] Failed to claim sending before the local-send fan-out', {
       tenantId,
       issueNumber,
       error: err.message
     });
+    return false;
+  }
+};
+
+/**
+ * Puts the issue back to `in progress` after a hand-off that never happened.
+ *
+ * Conditional on it still reading `sending`, because the claim is not the only
+ * thing that writes that status: if the fan-out somehow got going before the
+ * hand-off reported failure, it owns the issue and this must not take it back.
+ *
+ * Never throws, for the same reason the claim does not — but the consequence of
+ * failing here is worse, so it says so loudly. An issue left at `sending` with
+ * no fan-out behind it has no route back through the state machine or the API,
+ * and needs a hand.
+ *
+ * @param {string} tenantId
+ * @param {number|string} issueNumber
+ */
+const releaseSending = async (tenantId, issueNumber) => {
+  try {
+    await ddb.send(new UpdateItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({ pk: `${tenantId}#${issueNumber}`, sk: 'newsletter' }),
+      UpdateExpression: 'SET #status = :inProgress, updatedAt = :now',
+      ConditionExpression: '#status = :sending',
+      ExpressionAttributeNames: { '#status': 'status' },
+      ExpressionAttributeValues: marshall({
+        ':inProgress': 'in progress',
+        ':sending': 'sending',
+        ':now': new Date().toISOString()
+      })
+    }));
+  } catch (err) {
+    if (err.name === 'ConditionalCheckFailedException') {
+      console.log('[PUBLISH] Issue is no longer sending - leaving its status alone', {
+        tenantId,
+        issueNumber
+      });
+      return;
+    }
+    console.error(
+      '[PUBLISH] Could not release the sending claim after a failed hand-off - the issue is '
+      + 'stuck at `sending` with no fan-out and needs manual repair',
+      { tenantId, issueNumber, error: err.message }
+    );
   }
 };
 
@@ -387,24 +457,48 @@ const resolvePublishedAt = (sendAtDate) => {
 };
 
 const setupIssueStats = async (tenant, issueNumber, subject, publishedAt) => {
-  await ddb.send(new PutItemCommand({
-    TableName: process.env.TABLE_NAME,
-    Item: marshall({
-      pk: `${tenant.pk}#${issueNumber}`,
-      sk: 'stats',
-      GSI1PK: `${tenant.pk}#issue`,
-      GSI1SK: padIssueNumber(issueNumber),
-      subject,
-      publishedAt,
-      opens: 0,
-      bounces: 0,
-      rejects: 0,
-      complaints: 0,
-      deliveries: 0,
-      sends: 0,
-      subscribers: tenant.subscribers,
-      failedAddresses: [],
-      statsPhase: 'realtime'
-    })
-  }));
+  try {
+    await ddb.send(new PutItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Item: marshall({
+        pk: `${tenant.pk}#${issueNumber}`,
+        sk: 'stats',
+        GSI1PK: `${tenant.pk}#issue`,
+        GSI1SK: padIssueNumber(issueNumber),
+        subject,
+        publishedAt,
+        opens: 0,
+        bounces: 0,
+        rejects: 0,
+        complaints: 0,
+        deliveries: 0,
+        sends: 0,
+        subscribers: tenant.subscribers,
+        failedAddresses: [],
+        statsPhase: 'realtime'
+      }),
+      // Seed the record; never reset one that already exists.
+      //
+      // This is a PutItem, so it replaces the whole item — and every route back
+      // through `Publish` runs it. Unconditional, a resend of an issue that had
+      // already gone out zeroed its sends, deliveries, opens, clicks and
+      // consolidated analytics, and re-staging a `failed` issue that had partly
+      // delivered did the same. The counters are the only record of what
+      // actually reached people; they are not the publish step's to discard.
+      //
+      // A resend that genuinely needs fresh counters does not exist: the send
+      // path's idempotency filter means a resend only ever *adds* recipients to
+      // an issue, so its numbers should accumulate, not restart.
+      ConditionExpression: 'attribute_not_exists(pk)'
+    }));
+  } catch (err) {
+    if (err.name === 'ConditionalCheckFailedException') {
+      console.log('[PUBLISH] Stats already exist for this issue - keeping them', {
+        tenantId: tenant.pk,
+        issueNumber
+      });
+      return;
+    }
+    throw err;
+  }
 };

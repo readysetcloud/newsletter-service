@@ -444,6 +444,50 @@ describe('publish-issue', () => {
       logSpy.mockRestore();
     });
 
+    // Without the rollback the issue is stranded: nothing else can move it off
+    // `sending`. The state machine's failure write refuses to stamp `failed`
+    // over it (deliberately - that condition is what stops it lying about a
+    // send in flight), the handshake does not treat `sending` as re-sendable,
+    // and the resend endpoint only accepts `published`.
+    it('releases the sending claim when the hand-off throws', async () => {
+      mockIssueRecord({
+        localSend: JSON.stringify({ enabled: true, defaultTimeZone: 'America/New_York', mode: 'timezone' })
+      });
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      eventBridgeSend.mockRejectedValueOnce(new Error('PutEvents failed'));
+
+      const result = await handler(publishEvent);
+
+      expect(result.success).toBe(false);
+
+      const statusWrites = ddbSend.mock.calls
+        .map(([cmd]) => cmd)
+        .filter((cmd) => cmd.__type === 'UpdateItem')
+        .map((cmd) => unmarshall(cmd.ExpressionAttributeValues));
+
+      expect(statusWrites).toHaveLength(2);
+      expect(statusWrites[0][':sending']).toBe('sending');
+      // Back to exactly what the claim found, so the failure write behaves as
+      // it did before the claim existed.
+      expect(statusWrites[1][':inProgress']).toBe('in progress');
+      errorSpy.mockRestore();
+    });
+
+    it('does not release a claim it never took', async () => {
+      mockIssueRecord({});
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      eventBridgeSend.mockRejectedValueOnce(new Error('PutEvents failed'));
+
+      await handler(publishEvent);
+
+      const statusWrites = ddbSend.mock.calls
+        .map(([cmd]) => cmd)
+        .filter((cmd) => cmd.__type === 'UpdateItem');
+
+      expect(statusWrites).toHaveLength(0);
+      errorSpy.mockRestore();
+    });
+
     it('drops localSend (with a warning) when an A/B test is active', async () => {
       const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
       mockIssueRecord({
@@ -575,6 +619,36 @@ describe('publish-issue', () => {
       const publishedAt = Date.parse(statsWrite().Item.publishedAt.S);
       expect(Number.isNaN(publishedAt)).toBe(false);
       expect(publishedAt).toBeGreaterThanOrEqual(before);
+    });
+
+    // Every route back through `Publish` runs this write, and it is a PutItem —
+    // so unconditional it replaces the whole item. A resend of an issue that had
+    // already gone out zeroed its sends, deliveries, opens, clicks and
+    // consolidated analytics; re-staging a partly-delivered `failed` issue did
+    // the same. Those counters are the only record of what reached people.
+    it('seeds the stats record without resetting one that exists', async () => {
+      await handler(publishEvent('now'));
+
+      expect(statsWrite().ConditionExpression).toBe('attribute_not_exists(pk)');
+    });
+
+    it('publishes successfully when the stats record is already there', async () => {
+      const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+      const passThrough = ddbSend.getMockImplementation();
+      ddbSend.mockImplementation((command) => {
+        if (command.__type === 'PutItem' && command.Item?.sk?.S === 'stats') {
+          const error = new Error('The conditional request failed');
+          error.name = 'ConditionalCheckFailedException';
+          return Promise.reject(error);
+        }
+        return passThrough(command);
+      });
+
+      const result = await handler(publishEvent('now'));
+
+      expect(result.success).toBe(true);
+      expect(eventBridgeSend).toHaveBeenCalled();
+      logSpy.mockRestore();
     });
   });
 });

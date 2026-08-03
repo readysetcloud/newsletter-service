@@ -100,7 +100,7 @@
     },
     "Mark Issue In Progress": {
       "Type": "Task",
-      "Comment": "The one claim state: it flips the record to 'in progress', stamps the execution, and binds $content/$callerSubject from the record it just wrote (ReturnValues: ALL_NEW). Since PR #358 removed the GitHub ingress there is no producer that supplies a body on the execution input, so the record is the single source of what an execution publishes - which is what makes 'read the record' an invariant the definition test can pin rather than one of two possibilities.",
+      "Comment": "The one claim state: it flips the record to 'in progress', stamps the execution, and binds $content/$callerSubject from the record it just wrote (ReturnValues: ALL_NEW). Since PR #358 removed the GitHub ingress there is no producer that supplies a body on the execution input, so the record is the single source of what an execution publishes - which is what makes 'read the record' an invariant the definition test can pin rather than one of two possibilities. The claim is a compare-and-swap against the status 'Has Issue Been Processed?' just read, which is what makes the handshake atomic rather than advisory: without the condition two executions started for the same issue - two POSTs to /resend, a Scheduler entry that fired twice - can both read a sendable status, both claim, and both reach 'Publish'. The recipient idempotency marker is only written after SES accepts, so two concurrent sends select the same subscribers and mail them twice. The loser of the swap is not a failure; it is the duplicate the handshake exists to reject, so it ends where every other duplicate does.",
       "Resource": "${DynamodbUpdateItem}",
       "Parameters": {
         "TableName": "${TableName}",
@@ -113,12 +113,16 @@
           }
         },
         "UpdateExpression": "SET #status = :status, executionArn = :executionArn, updatedAt = :updatedAt",
+        "ConditionExpression": "#status = :expected",
         "ExpressionAttributeNames": {
           "#status": "status"
         },
         "ExpressionAttributeValues": {
           ":status": {
             "S": "in progress"
+          },
+          ":expected": {
+            "S.$": "$.existingNewsletter.Item.status.S"
           },
           ":executionArn": {
             "S.$": "$$.Execution.Id"
@@ -130,6 +134,14 @@
         "ReturnValues": "ALL_NEW"
       },
       "Catch": [
+        {
+          "ErrorEquals": [
+            "DynamoDB.ConditionalCheckFailedException"
+          ],
+          "Comment": "Somebody else claimed the issue between the handshake's read and this write. That is not an error - it is the same answer 'Has Issue Been Processed?' gives a duplicate, arrived at a moment later, so it ends the same way. Listed before the States.ALL catcher, which would otherwise mark a perfectly healthy issue 'failed' on behalf of the execution that is publishing it.",
+          "Next": "Success - Duplicate Request",
+          "ResultPath": null
+        },
         {
           "ErrorEquals": [
             "States.ALL"

@@ -83,3 +83,32 @@ export const findStalledSend = (
 
   return { deferredUntil };
 };
+
+/** Gaps shorter than this are the ordinary cost of doing the work. */
+const GAP_FLOOR_MS = 5 * 60 * 1000;
+
+/**
+ * How long a timeline waited between two events.
+ *
+ * Worth rendering because on this system the gaps *are* the story. A publish
+ * workflow runs 26 hours before its send instant, and a local send reaches its
+ * last timezone hours after its first — so "handed off, then a day of nothing,
+ * then mail" is the healthy shape, and a reader who cannot see the day has no
+ * way to tell it apart from a send that hung.
+ *
+ * @returns The gap in words, or null when it is too small to be worth saying
+ */
+export const humanizeGap = (ms: number): string | null => {
+  if (ms < GAP_FLOOR_MS) return null;
+
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `${minutes}m later`;
+
+  const hours = Math.floor(minutes / 60);
+  const minutesOver = minutes % 60;
+  if (hours < 24) return minutesOver ? `${hours}h ${minutesOver}m later` : `${hours}h later`;
+
+  const days = Math.floor(hours / 24);
+  const hoursOver = hours % 24;
+  return hoursOver ? `${days}d ${hoursOver}h later` : `${days}d later`;
+};

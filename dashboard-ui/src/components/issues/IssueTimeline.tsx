@@ -15,12 +15,17 @@ import {
   XCircle
 } from 'lucide-react';
 import { cn } from '@/utils/cn';
+import { humanizeGap } from '@/utils/issueTimeline';
 import type { TimelineEntry, TimelineEventType } from '@/types/issues';
 
 export interface IssueTimelineProps {
   entries: TimelineEntry[];
-  /** Renders an instant in the newsletter's timezone. */
-  formatDateTime: (value: string) => string;
+  /** Renders a day heading, e.g. "Monday, August 3, 2026". */
+  formatLongDate: (value: string) => string;
+  /** Renders a time of day in the newsletter's timezone. */
+  formatTime: (value: string) => string;
+  /** The zone those times are in, stated once so they are unambiguous. */
+  timeZoneLabel?: string;
   className?: string;
 }
 
@@ -49,6 +54,9 @@ const PRESENTATION: Record<string, EventPresentation> = {
   failed: { label: 'Publish failed', icon: XCircle, tone: 'bad' }
 };
 
+/** Events after which nothing more is expected to happen on its own. */
+const TERMINAL_EVENTS = new Set(['send_completed', 'published', 'failed', 'unscheduled']);
+
 /** An event the backend knows about and this build does not. */
 const unknownPresentation = (type: string): EventPresentation => ({
   // Underscores out, so a new backend event still reads as English rather than
@@ -61,11 +69,12 @@ const unknownPresentation = (type: string): EventPresentation => ({
 const presentationFor = (type: TimelineEventType): EventPresentation =>
   PRESENTATION[type] ?? unknownPresentation(String(type));
 
-const TONE_STYLES: Record<Tone, string> = {
+const MARKER_STYLES: Record<Tone, string> = {
   neutral: 'bg-surface text-muted-foreground border-border',
-  progress: 'bg-primary-50 text-primary-700 border-primary-200 dark:bg-primary-900/20 dark:text-primary-300 dark:border-primary-900/40',
-  good: 'bg-success-50 text-success-700 border-success-200 dark:bg-success-900/20 dark:text-success-300 dark:border-success-900/40',
-  bad: 'bg-error-50 text-error-700 border-error-200 dark:bg-error-900/20 dark:text-error-300 dark:border-error-900/40'
+  progress:
+    'bg-primary-100 text-primary-700 border-primary-300 dark:bg-primary-900/40 dark:text-primary-200 dark:border-primary-700',
+  good: 'bg-success-100 text-success-700 border-success-300 dark:bg-success-900/40 dark:text-success-200 dark:border-success-700',
+  bad: 'bg-error-100 text-error-700 border-error-300 dark:bg-error-900/40 dark:text-error-200 dark:border-error-700'
 };
 
 /** Detail keys worth spelling out, in the order they read best. */
@@ -99,35 +108,77 @@ const formatDetailValue = (value: unknown): string => {
   return String(value);
 };
 
+interface RenderRow {
+  entry: TimelineEntry;
+  /** Day heading to print above this row, when it opens a new day. */
+  day: string | null;
+  /** Elapsed time since the previous event, when it is worth stating. */
+  gap: string | null;
+}
+
 /**
- * What actually happened to an issue, in order.
+ * What happened to an issue, and when, in order.
  *
- * The dashboard's other panels all answer "what is true now" — the status
- * badge, the stats, the per-group progress. None of them can explain an issue
- * that says `published` while nobody received it, because every one of those
- * numbers is consistent with that state. This is the panel that can: it shows
- * the hand-off to the send path and the deferral that followed it, and then
- * nothing, which is the actual shape of that failure.
+ * The dashboard's other panels answer "what is true now" — the status badge,
+ * the stats, the per-group progress. None of them can explain an issue that
+ * says `published` while most of the list has not been mailed, because every
+ * one of those readings is equally consistent with a healthy send. This panel
+ * can, because it shows sequence and elapsed time: a fan-out that planned
+ * fourteen groups and has fired four looks nothing like one that fired none.
  *
- * Entries are rendered whether or not this build recognises them. An event the
+ * Entries render whether or not this build recognises them. An event the
  * backend has started recording and the frontend has not learned about yet is
  * still evidence, and dropping it would put a hole in exactly the sequence
  * somebody is reading to work out what went wrong.
  */
 export const IssueTimeline: React.FC<IssueTimelineProps> = ({
   entries,
-  formatDateTime,
+  formatLongDate,
+  formatTime,
+  timeZoneLabel,
   className
 }) => {
-  // Defensive: the API sorts, but a timeline rendered out of order is actively
-  // misleading rather than merely untidy, and the cost of being sure is one
-  // comparison per entry.
-  const ordered = useMemo(
-    () => [...entries].sort((a, b) => a.at.localeCompare(b.at)),
-    [entries]
-  );
+  const rows = useMemo<RenderRow[]>(() => {
+    // Defensive: the API sorts, but a timeline rendered out of order is
+    // actively misleading rather than merely untidy, and being sure costs one
+    // comparison per entry.
+    const ordered = [...entries].sort((a, b) => a.at.localeCompare(b.at));
 
-  if (ordered.length === 0) {
+    // Each row is derived from its own entry and the one before it, read by
+    // index. Threading the previous day/instant through a mutable closure would
+    // be shorter and is what this used to do, but it makes the mapper depend on
+    // the order it happens to be called in.
+    return ordered.map((entry, index) => {
+      const previous = index > 0 ? ordered[index - 1] : null;
+
+      // Grouped by the rendered day string rather than by parsing dates: the
+      // formatter already works in the newsletter's timezone, so two instants
+      // on the same local day produce the same string by construction. Doing
+      // the arithmetic here instead would be a second, disagreeing
+      // implementation of the tenant's zone.
+      const day = formatLongDate(entry.at);
+      const previousDay = previous ? formatLongDate(previous.at) : null;
+
+      const at = new Date(entry.at).getTime();
+      const previousAt = previous ? new Date(previous.at).getTime() : NaN;
+
+      return {
+        entry,
+        day: day === previousDay ? null : day,
+        gap:
+          Number.isFinite(at) && Number.isFinite(previousAt)
+            ? humanizeGap(at - previousAt)
+            : null
+      };
+    });
+  }, [entries, formatLongDate]);
+
+  const inFlight = useMemo(() => {
+    const last = rows[rows.length - 1]?.entry;
+    return !!last && !TERMINAL_EVENTS.has(String(last.type));
+  }, [rows]);
+
+  if (rows.length === 0) {
     return (
       <p className={cn('text-sm text-muted-foreground', className)}>
         Nothing has been recorded for this issue yet.
@@ -136,54 +187,116 @@ export const IssueTimeline: React.FC<IssueTimelineProps> = ({
   }
 
   return (
-    <ol className={cn('space-y-0', className)} aria-label="Issue timeline">
-      {ordered.map((entry, index) => {
-        const { label, icon: Icon, tone } = presentationFor(entry.type);
-        const isLast = index === ordered.length - 1;
+    <div className={className}>
+      {timeZoneLabel && (
+        <p className="text-xs text-muted-foreground mb-3">All times {timeZoneLabel}</p>
+      )}
 
-        return (
-          <li key={`${entry.at}-${entry.type}-${index}`} className="flex gap-3">
-            {/* Rail: the marker, and the line joining it to the next event. */}
-            <div className="flex flex-col items-center flex-shrink-0">
-              <span
-                className={cn(
-                  'flex h-8 w-8 items-center justify-center rounded-full border',
-                  TONE_STYLES[tone]
-                )}
-              >
-                <Icon className="h-4 w-4" aria-hidden="true" />
-              </span>
-              {!isLast && <span className="w-px flex-1 bg-border min-h-[1rem]" aria-hidden="true" />}
-            </div>
+      <ol className="relative" aria-label="Issue timeline">
+        {/* The rail. One continuous line behind every marker, rather than a
+            segment per row, so day headings and gap markers sit *on* the
+            timeline instead of interrupting it. */}
+        <span
+          className="absolute left-[15px] top-2 bottom-2 w-px bg-border"
+          aria-hidden="true"
+        />
 
-            <div className={cn('min-w-0 flex-1', isLast ? 'pb-0' : 'pb-5')}>
-              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                <span className="text-sm font-medium text-foreground">{label}</span>
-                {entry.derived && (
-                  // Said out loud because a derived timestamp can be
-                  // approximate — `failed` carries the record's last write,
-                  // not the instant of failure — and somebody reconstructing a
-                  // sequence needs to know which timestamps to trust.
-                  <span
-                    className="text-[11px] uppercase tracking-wide text-muted-foreground border border-border rounded px-1"
-                    title="Reconstructed from the issue record rather than recorded as it happened"
-                  >
-                    from record
+        {rows.map(({ entry, day, gap }, index) => {
+          const { label, icon: Icon, tone } = presentationFor(entry.type);
+
+          return (
+            <li key={`${entry.at}-${entry.type}-${index}`}>
+              {day && (
+                <div className={cn('relative flex items-center gap-3', index > 0 && 'pt-5')}>
+                  {/* Masks the rail so the heading reads as a break in the day,
+                      not a marker of its own. */}
+                  <span className="w-8 flex justify-center bg-card z-10" aria-hidden="true">
+                    <span className="h-2 w-2 rounded-full bg-border" />
                   </span>
-                )}
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    {day}
+                  </h4>
+                </div>
+              )}
+
+              {gap && (
+                <div className="relative flex items-center gap-3 py-1">
+                  <span className="w-8 flex justify-center bg-card z-10" aria-hidden="true">
+                    <span className="h-3 w-px border-l border-dashed border-border" />
+                  </span>
+                  <span className="text-[11px] text-muted-foreground italic">{gap}</span>
+                </div>
+              )}
+
+              <div className={cn('relative flex gap-3', day || gap ? 'pt-2' : 'pt-4')}>
+                <span
+                  className={cn(
+                    'relative z-10 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full border-2',
+                    MARKER_STYLES[tone]
+                  )}
+                >
+                  <Icon className="h-4 w-4" aria-hidden="true" />
+                </span>
+
+                <div className="min-w-0 flex-1 pb-1">
+                  <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                    <time
+                      dateTime={entry.at}
+                      className="text-sm font-semibold tabular-nums text-foreground"
+                    >
+                      {formatTime(entry.at)}
+                    </time>
+                    <span className="text-sm text-foreground">{label}</span>
+                    {entry.derived && (
+                      // Said out loud because a derived timestamp can be
+                      // approximate — `failed` carries the record's last write,
+                      // not the instant of failure — and somebody
+                      // reconstructing a sequence needs to know which
+                      // timestamps to trust.
+                      <span
+                        className="text-[11px] uppercase tracking-wide text-muted-foreground border border-border rounded px-1"
+                        title="Reconstructed from the issue record rather than recorded as it happened"
+                      >
+                        from record
+                      </span>
+                    )}
+                    {entry.actor && entry.actor !== 'system' && (
+                      <span className="text-xs text-muted-foreground">· {entry.actor}</span>
+                    )}
+                  </div>
+
+                  <EntryDetail detail={entry.detail} />
+                </div>
               </div>
+            </li>
+          );
+        })}
 
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {formatDateTime(entry.at)}
-                {entry.actor && entry.actor !== 'system' && <> · {entry.actor}</>}
-              </p>
-
-              <EntryDetail detail={entry.detail} />
-            </div>
-          </li>
-        );
-      })}
-    </ol>
+        {/* Terminator. An issue whose last event is not terminal is still
+            going — the single most useful thing this panel can say about a
+            local send that has hours of timezones left to reach. */}
+        <li className="relative flex gap-3 pt-4">
+          <span
+            className={cn(
+              'relative z-10 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full border-2 border-dashed',
+              inFlight
+                ? 'border-primary-400 text-primary-600 dark:text-primary-300'
+                : 'border-border text-muted-foreground'
+            )}
+          >
+            <span
+              className={cn(
+                'h-2 w-2 rounded-full',
+                inFlight ? 'bg-primary-500 animate-pulse' : 'bg-border'
+              )}
+            />
+          </span>
+          <span className="self-center text-xs text-muted-foreground">
+            {inFlight ? 'Still in progress' : 'Nothing further recorded'}
+          </span>
+        </li>
+      </ol>
+    </div>
   );
 };
 
@@ -207,11 +320,14 @@ const EntryDetail: React.FC<{ detail?: Record<string, unknown> }> = ({ detail })
   if (pairs.length === 0) return null;
 
   return (
-    <dl className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5">
+    <dl className="mt-1.5 flex flex-wrap gap-1.5">
       {pairs.map(({ key, label, value }) => (
-        <div key={key} className="flex gap-1 text-xs min-w-0">
-          <dt className="text-muted-foreground">{label}:</dt>
-          <dd className="text-foreground truncate max-w-[16rem]" title={value}>
+        <div
+          key={key}
+          className="flex min-w-0 items-baseline gap-1 rounded border border-border bg-surface px-1.5 py-0.5 text-[11px]"
+        >
+          <dt className="text-muted-foreground">{label}</dt>
+          <dd className="truncate max-w-[14rem] font-medium text-foreground" title={value}>
             {value}
           </dd>
         </div>

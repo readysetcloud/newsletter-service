@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Pencil, PencilLine, Trash, RefreshCw, AlertCircle, TrendingUp, Users, Shield, FileText, CheckCircle, Flame, Hash, CalendarDays, Clock, Send, History } from 'lucide-react';
+import { ArrowLeft, Pencil, PencilLine, Trash, RefreshCw, AlertCircle, TrendingUp, Users, Shield, FileText, CheckCircle, Flame, Hash, CalendarDays, Clock, Send, GitCommitVertical } from 'lucide-react';
 import { PageHero, PageHeroTitle, PageHeroChips, PageHeroChip, SegmentedControl } from '@readysetcloud/ui';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -542,7 +542,12 @@ export const IssueDetailPage: React.FC = () => {
 
   // Times here carry a zone label: an issue's send time is only meaningful
   // against the newsletter's timezone, which may not be the viewer's.
-  const { formatDateTime: formatDate } = useTenantDateFormat();
+  const {
+    formatDateTime: formatDate,
+    formatLongDate,
+    formatTime,
+    timeZoneLabel
+  } = useTenantDateFormat();
 
   const isDraft = useMemo(() => issue?.status === 'draft', [issue?.status]);
   const isPublished = useMemo(() => issue?.status === 'published', [issue?.status]);
@@ -1393,15 +1398,15 @@ export const IssueDetailPage: React.FC = () => {
           </CollapsibleSection>
         )}
 
-        {/* History. Deliberately outside SECTION_CONFIGS and its
+        {/* Timeline. Deliberately outside SECTION_CONFIGS and its
             `isPublished && analytics` gate: a draft, a failed publish and an
             issue that never sent are exactly the cases with no analytics to
-            show, and exactly the ones whose history somebody needs. */}
+            show, and exactly the ones whose sequence somebody needs. */}
         <Card className="mb-6">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <History className="w-5 h-5" />
-              History
+              <GitCommitVertical className="w-5 h-5" />
+              Timeline
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -1411,7 +1416,12 @@ export const IssueDetailPage: React.FC = () => {
                 formatDateTime={formatDate}
               />
             )}
-            <IssueTimeline entries={issue.timeline ?? []} formatDateTime={formatDate} />
+            <IssueTimeline
+              entries={issue.timeline ?? []}
+              formatLongDate={formatLongDate}
+              formatTime={formatTime}
+              timeZoneLabel={timeZoneLabel()}
+            />
           </CardContent>
         </Card>
 

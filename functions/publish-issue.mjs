@@ -5,6 +5,7 @@ import { DynamoDBClient, PutItemCommand, GetItemCommand, QueryCommand } from '@a
 import { getTenant } from './utils/helpers.mjs';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { publishIssueEvent, EVENT_TYPES } from './utils/event-publisher.mjs';
+import { recordIssueEvent, ISSUE_EVENTS } from './utils/issue-timeline.mjs';
 import { renderWithSnippets } from './utils/render-template.mjs';
 
 const eventBridge = new EventBridgeClient();
@@ -77,6 +78,24 @@ export const handler = async (state) => {
         abTest: activeAbTest,
         localSend: activeLocalSend,
         contentAssembly: assemblyEnabled ? { enabled: true } : undefined
+      });
+
+      // The hand-off, recorded as its own fact rather than folded into
+      // "published". They are not the same event and the gap between them is
+      // where issue 227 was lost: the workflow finished and wrote `published`,
+      // while the mail was still owed to a Scheduler entry that never fired.
+      // A hand-off with no `send_deferred` or `sending_started` after it is
+      // that failure, visible at a glance.
+      await recordIssueEvent({
+        tenantId: state.tenantId,
+        issueNumber: state.data.metadata.number,
+        type: ISSUE_EVENTS.SEND_HANDED_OFF,
+        detail: {
+          sendAt: state.sendAtDate ?? 'now',
+          subscribers: tenant.subscribers,
+          ...(activeAbTest && { abTest: activeAbTest.dimension }),
+          ...(activeLocalSend && { localSend: activeLocalSend.mode ?? 'timezone' })
+        }
       });
 
       await publishIssueEvent(

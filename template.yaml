@@ -2184,6 +2184,11 @@ Resources:
               Action:
                 - dynamodb:UpdateItem
                 - dynamodb:Query
+                # Appends the send-path entries to the issue's timeline —
+                # send_deferred above all, which is the only record that a
+                # deferred delivery is pending
+                # (functions/utils/issue-timeline.mjs).
+                - dynamodb:PutItem
               Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
               Action: dynamodb:Query
@@ -2352,6 +2357,9 @@ Resources:
               Action:
                 - dynamodb:GetItem
                 - dynamodb:Query
+                # Appends the `workflow_started` entry to the issue's timeline
+                # (functions/utils/issue-timeline.mjs).
+                - dynamodb:PutItem
               Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
               Action: dynamodb:Query

@@ -1,5 +1,6 @@
 import { SESv2Client, SendEmailCommand } from "@aws-sdk/client-sesv2";
 import { SchedulerClient, CreateScheduleCommand } from "@aws-sdk/client-scheduler";
+import { recordIssueEvent, ISSUE_EVENTS, issueNumberFromReference } from './utils/issue-timeline.mjs';
 import { EventBridgeClient, PutEventsCommand } from "@aws-sdk/client-eventbridge";
 import { DynamoDBClient, QueryCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
@@ -477,6 +478,23 @@ const fanOutLocalSendGroups = async ({ data, localSend }) => {
   );
 
   console.log(`[LOCAL SEND] Fan-out complete (${localSend.mode}) - ${plans.length} groups (${immediate} immediate, ${scheduled} scheduled), catch-all at ${catchAllAt.toISOString()}`);
+
+  // Group-level detail lives on the progress record, which the detail page
+  // already renders; the timeline only needs the shape of the plan and when it
+  // is expected to be over, so that a fan-out still running hours later is
+  // distinguishable from one that stalled.
+  await recordIssueEvent({
+    tenantId: data.tenantId,
+    issueNumber: issueNumberFromReference(data.referenceNumber),
+    type: ISSUE_EVENTS.FANOUT_PLANNED,
+    detail: {
+      mode: localSend.mode,
+      groups: plans.length,
+      immediate,
+      scheduled,
+      catchAllAt: catchAllAt.toISOString()
+    }
+  });
 
   return {
     sent: false,
@@ -976,12 +994,16 @@ export const handler = async (event) => {
       if (sendAtDate > now) {
         // Schedule for future, but remove sendAt property
         delete data.sendAt;
+        // Named up front so the timeline can carry it. The entry is otherwise
+        // unrecoverable: nothing else writes the name down, so a send waiting
+        // on it could not be found, inspected or cancelled.
+        const scheduleName = `email-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
         await sendWithRetry(async () => {
           return await scheduler.send(new CreateScheduleCommand({
             ActionAfterCompletion: 'DELETE',
             FlexibleTimeWindow: { Mode: 'OFF' },
             GroupName: 'newsletter',
-            Name: `email-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+            Name: scheduleName,
             ScheduleExpression: `at(${sendAtDate.toISOString().slice(0, 19)})`,
             Target: {
               Arn: 'arn:aws:scheduler:::aws-sdk:eventbridge:putEvents',
@@ -998,6 +1020,21 @@ export const handler = async (event) => {
 
           }));
         }, 'Schedule future email send');
+
+        // The single most useful entry in the whole timeline. Everything up to
+        // here says the issue published successfully; from here the send is
+        // owed by one Scheduler entry, hours away, with no dead-letter queue
+        // behind it and no other record that it is pending. When it does not
+        // fire, this is the last thing that happened — and the timeline shows
+        // a deferral with nothing after it instead of an issue that simply
+        // claims to have been sent.
+        await recordIssueEvent({
+          tenantId: data.tenantId,
+          issueNumber: issueNumberFromReference(data.referenceNumber),
+          type: ISSUE_EVENTS.SEND_DEFERRED,
+          detail: { sendAt: sendAtDate.toISOString(), scheduleName }
+        });
+
         return { scheduled: true, sendAt: sendAtDate.toISOString() };
       }
     }
@@ -1191,6 +1228,27 @@ export const handler = async (event) => {
 
     const executionDuration = Date.now() - executionStart;
     console.log(`[EXECUTION COMPLETE] Total sent: ${sentCount}, Duration: ${executionDuration}ms, Sender: ${senderEmail}`);
+
+    // Mail actually left, which is the event every other one in the timeline is
+    // ultimately evidence for or against. Recorded per invocation rather than
+    // per issue: a local send reaches here once per timezone group, and the
+    // group's own name is what makes a partial send readable — a run of these
+    // that stops halfway through the groups is a fan-out that died in the
+    // middle, which looks nothing like a send that never started.
+    await recordIssueEvent({
+      tenantId,
+      issueNumber: issueNumberFromReference(data.referenceNumber),
+      type: ISSUE_EVENTS.SENDING_STARTED,
+      detail: {
+        recipients: sentCount,
+        skipped: skippedCount,
+        sender: senderEmail,
+        ...(progressLabelForGroup(data.localSendGroup) && {
+          group: progressLabelForGroup(data.localSendGroup)
+        }),
+        ...(variantFilter && { variant: variantFilter })
+      }
+    });
 
     return {
       sent: true,

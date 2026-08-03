@@ -3992,6 +3992,51 @@ components:
           $ref: "#/components/schemas/SendProgress"
         workflow:
           $ref: "#/components/schemas/WorkflowState"
+        timeline:
+          type: array
+          description: >
+            Everything that has happened to this issue, oldest first. Where
+            stats, sendProgress and workflow answer "what is true now", this
+            answers "how did it get here" — the question a send that silently
+            did not happen leaves behind.
+          items:
+            $ref: "#/components/schemas/TimelineEntry"
+
+    TimelineEntry:
+      type: object
+      description: One lifecycle event in an issue's history.
+      properties:
+        type:
+          type: string
+          description: >
+            The event. Recorded as they happen: created, updated, scheduled,
+            rescheduled, unscheduled, workflow_started, send_handed_off,
+            send_deferred, fanout_planned, sending_started, send_completed,
+            resend_requested. Derived from the issue record at read time:
+            published, failed. Clients should render an unrecognised type
+            rather than dropping it — a missing entry defeats the purpose.
+          example: send_deferred
+        at:
+          type: string
+          format: date-time
+          description: When the event happened.
+        actor:
+          type: string
+          description: The email address that caused it, or "system".
+          example: system
+        detail:
+          type: object
+          additionalProperties: true
+          description: >
+            Small scalars describing the event — send times, counts, causes,
+            the name of the schedule that owes a deferred delivery.
+        derived:
+          type: boolean
+          description: >
+            Reconstructed from the issue record rather than recorded as it
+            happened, and therefore approximate: a derived `failed` entry
+            carries the record's last write, not the moment of failure.
+            Omitted when false.
 
     SendProgress:
       type: object

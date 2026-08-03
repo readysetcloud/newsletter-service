@@ -19,6 +19,7 @@
  */
 import { handler as parseMarkdown } from './parse-md-to-json.mjs';
 import { handler as parseJsonIssue } from './parse-json-issue.mjs';
+import { recordIssueEvent, ISSUE_EVENTS } from './utils/issue-timeline.mjs';
 
 const CONTENT_TYPE_MARKDOWN = 'markdown';
 
@@ -57,6 +58,23 @@ export const handler = async (state) => {
   // The delegate sees the *normalized* contentType, not the caller's raw value:
   // parse-json-issue separates html from json with an exact `=== 'html'` check,
   // so `HTML` would otherwise fall through to `JSON.parse` on a pre-rendered
+  // The first thing that runs inside the workflow after the claim, which makes
+  // it the place to record that the workflow started. `Mark Issue In Progress`
+  // is the real claim, but it is a DynamoDB Task with no room to write a second
+  // item, and giving the definition a state per timeline entry would cost more
+  // than the seconds of precision it buys. The two are milliseconds apart.
+  //
+  // `sendAt` rides along because the gap between "workflow started" and "issue
+  // sent" is the whole point of the lead time, and a timeline that does not
+  // show what the workflow believed the send instant to be cannot explain an
+  // issue that went out at the wrong hour.
+  await recordIssueEvent({
+    tenantId: state?.tenantId,
+    issueNumber: state?.issueId,
+    type: ISSUE_EVENTS.WORKFLOW_STARTED,
+    detail: { contentType, sendAt: sendAt ?? 'now' }
+  });
+
   // email master. Every other field is forwarded untouched — each parser reads
   // what it needs and ignores the rest.
   return delegate({ ...state, contentType, sendAt });

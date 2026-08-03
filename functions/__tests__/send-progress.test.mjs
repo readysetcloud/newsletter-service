@@ -1,5 +1,5 @@
 import { jest } from '@jest/globals';
-import { DynamoDBClient, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, UpdateItemCommand, PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 
 process.env.TABLE_NAME = 'test-newsletter-table';
@@ -127,6 +127,15 @@ const applyUpdate = (item, command, values, names) => {
 };
 
 function handleCommand(command) {
+  // The module appends a `send_completed` timeline entry once the last group
+  // lands (functions/utils/issue-timeline.mjs), which is a PutItem with an
+  // Item and no Key. Stored like any other item so a test can assert on it.
+  if (command instanceof PutItemCommand) {
+    const item = unmarshall(command.input.Item);
+    items.set(`${item.pk}|${item.sk}`, item);
+    return {};
+  }
+
   if (!(command instanceof UpdateItemCommand)) {
     throw new Error(`Unexpected command: ${command?.constructor?.name}`);
   }
@@ -378,11 +387,46 @@ describe('markGroupSent', () => {
 
     const statusWrites = DynamoDBClient.prototype.send.mock.calls
       .map(([command]) => command)
+      // Timeline appends carry an Item rather than a Key.
+      .filter((command) => command.input.Key)
       .filter((command) => unmarshall(command.input.Key).sk === 'newsletter')
       .filter((command) => unmarshall(command.input.ExpressionAttributeValues)[':status'] === 'published');
 
     expect(statusWrites).toHaveLength(1);
     expect(items.get(issueKey()).status).toBe('published');
+  });
+
+  // Gated on the completion stamp landing, because that is the only write in
+  // the terminal path with a guard a redelivered final group cannot pass twice.
+  // Everything around it is deliberately idempotent, so hanging the timeline
+  // entry anywhere else would report the same send finishing repeatedly.
+  test('records send_completed exactly once, even when the last group is redelivered', async () => {
+    for (const label of ['America/Chicago', 'America/Los_Angeles', '__default__', '__catch_all__']) {
+      await markGroupSent(ISSUE_ID, label, { recipients: 1 });
+    }
+    // The catch-all arrives again, as a redelivered event would.
+    await markGroupSent(ISSUE_ID, '__catch_all__', { recipients: 0 });
+
+    const completions = DynamoDBClient.prototype.send.mock.calls
+      .map(([command]) => command)
+      .filter((command) => command.input.Item)
+      .map((command) => unmarshall(command.input.Item))
+      .filter((item) => item.type === 'send_completed');
+
+    expect(completions).toHaveLength(1);
+    expect(completions[0].pk).toBe(ISSUE_ID);
+  });
+
+  test('does not record send_completed while groups are still pending', async () => {
+    await markGroupSent(ISSUE_ID, 'America/Chicago', { recipients: 38 });
+
+    const completions = DynamoDBClient.prototype.send.mock.calls
+      .map(([command]) => command)
+      .filter((command) => command.input.Item)
+      .map((command) => unmarshall(command.input.Item))
+      .filter((item) => item.type === 'send_completed');
+
+    expect(completions).toHaveLength(0);
   });
 
   test('an unplanned group label is skipped rather than invented', async () => {

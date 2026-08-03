@@ -25,7 +25,10 @@ jest.unstable_mockModule('@aws-sdk/client-eventbridge', () => ({
 jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
   DynamoDBClient: jest.fn(() => ddbInstance),
   QueryCommand: jest.fn((params) => ({ __type: 'Query', ...params })),
-  UpdateItemCommand: jest.fn((params) => ({ __type: 'UpdateItem', ...params }))
+  UpdateItemCommand: jest.fn((params) => ({ __type: 'UpdateItem', ...params })),
+  // The send path appends timeline entries (send_deferred, fanout_planned,
+  // sending_started) as it goes.
+  PutItemCommand: jest.fn((params) => ({ __type: 'PutItem', ...params }))
 }));
 
 jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
@@ -915,6 +918,79 @@ describe('send-email-v2 property-based tests', () => {
         }),
         { numRuns: 100 }
       );
+    });
+  });
+
+  // The deferral is what carries a lead-time send: the workflow publishes ~26
+  // hours early and hands delivery to a one-shot Scheduler entry. Nothing else
+  // records that the entry exists, and nothing notices if it never fires — the
+  // issue reads `published` either way. This entry is the only evidence a send
+  // is still owed, which is what made issue 227 invisible without it.
+  describe('deferred send timeline', () => {
+    const deferredEvent = (sendAt) => ({
+      detail: {
+        subject: 'Picks of the Week #227',
+        html: '<p>Hello __EMAIL__</p>',
+        to: { list: 'my-list' },
+        from: 'sender@example.com',
+        tenantId: 'readysetcloud',
+        referenceNumber: 'readysetcloud_227',
+        sendAt
+      }
+    });
+
+    const verifiedSender = () => ({
+      Items: [{
+        unmarshalled: {
+          senderId: 'sender-123',
+          email: 'sender@example.com',
+          verificationStatus: 'verified',
+          isDefault: true
+        }
+      }]
+    });
+
+    const timelineWrites = () =>
+      ddbInstance.send.mock.calls
+        .map(([command]) => command)
+        .filter((command) => command.__type === 'PutItem')
+        .map((command) => command.Item.marshalled)
+        .filter((item) => typeof item?.sk === 'string' && item.sk.startsWith('event#'));
+
+    test('records the deferral, with the instant and the schedule that owes it', async () => {
+      const sendAt = new Date(Date.now() + 26 * 3600 * 1000).toISOString();
+      ddbInstance.send.mockResolvedValueOnce(verifiedSender());
+
+      const result = await handler(deferredEvent(sendAt));
+
+      expect(result.scheduled).toBe(true);
+
+      const deferred = timelineWrites().filter((item) => item.type === 'send_deferred');
+      expect(deferred).toHaveLength(1);
+      expect(deferred[0].pk).toBe('readysetcloud#227');
+      expect(deferred[0].detail.sendAt).toBe(sendAt);
+      // The schedule name is otherwise written down nowhere, so a pending send
+      // could not be found, inspected or cancelled.
+      expect(deferred[0].detail.scheduleName).toMatch(/^email-/);
+      expect(deferred[0].detail.scheduleName).toBe(
+        schedulerInstance.send.mock.calls[0][0].Name
+      );
+    });
+
+    test('does not record a deferral for a send going out now', async () => {
+      ddbInstance.send.mockResolvedValueOnce(verifiedSender());
+      sesInstance.send.mockResolvedValue({ MessageId: 'msg-1' });
+      listSubscribers.mockResolvedValue({
+        subscribers: [{ email: 'reader@example.com', lastIssueSent: null }],
+        lastEvaluatedKey: undefined
+      });
+
+      await handler(deferredEvent(new Date(Date.now() - 1000).toISOString()));
+
+      const written = timelineWrites();
+      expect(written.filter((item) => item.type === 'send_deferred')).toHaveLength(0);
+      // It went out instead, and said so.
+      expect(written.filter((item) => item.type === 'sending_started')).toHaveLength(1);
     });
   });
 });

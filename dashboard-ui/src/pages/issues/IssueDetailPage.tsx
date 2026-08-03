@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Pencil, PencilLine, Trash, RefreshCw, AlertCircle, TrendingUp, Users, Shield, FileText, CheckCircle, Flame, Hash, CalendarDays, Clock, Send } from 'lucide-react';
+import { ArrowLeft, Pencil, PencilLine, Trash, RefreshCw, AlertCircle, TrendingUp, Users, Shield, FileText, CheckCircle, Flame, Hash, CalendarDays, Clock, Send, History } from 'lucide-react';
 import { PageHero, PageHeroTitle, PageHeroChips, PageHeroChip, SegmentedControl } from '@readysetcloud/ui';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -11,6 +11,11 @@ import { MarkdownPreview } from '../../components/issues/MarkdownPreview';
 import { DeleteIssueDialog } from '../../components/issues/DeleteIssueDialog';
 import { RescheduleIssueDialog } from '../../components/issues/RescheduleIssueDialog';
 import { ResendIssueDialog } from '../../components/issues/ResendIssueDialog';
+import {
+  IssueTimeline,
+  IssueTimelineStalledWarning
+} from '../../components/issues/IssueTimeline';
+import { findStalledSend } from '../../utils/issueTimeline';
 import { SubscriberMetricsPanel } from '../../components/issues/SubscriberMetricsPanel';
 import { AbTestResults } from '../../components/issues/AbTestResults';
 import { SendProgressCard } from '../../components/issues/SendProgressCard';
@@ -585,6 +590,18 @@ export const IssueDetailPage: React.FC = () => {
   const canResend = useMemo(
     () => issue?.status === 'published' && issue?.stats?.sends === 0,
     [issue?.status, issue?.stats?.sends]
+  );
+
+  /**
+   * A send that was handed off and then never happened.
+   *
+   * Read off the timeline rather than the status, because the status cannot
+   * show it: `published` is what this failure looks like. The sequence — a
+   * hand-off, a deferral, and then nothing — is the only evidence there is.
+   */
+  const stalledSend = useMemo(
+    () => findStalledSend(issue?.timeline ?? []),
+    [issue?.timeline]
   );
 
   /**
@@ -1365,6 +1382,28 @@ export const IssueDetailPage: React.FC = () => {
             </div>
           </CollapsibleSection>
         )}
+
+        {/* History. Deliberately outside SECTION_CONFIGS and its
+            `isPublished && analytics` gate: a draft, a failed publish and an
+            issue that never sent are exactly the cases with no analytics to
+            show, and exactly the ones whose history somebody needs. */}
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <History className="w-5 h-5" />
+              History
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {stalledSend && (
+              <IssueTimelineStalledWarning
+                stalled={stalledSend}
+                formatDateTime={formatDate}
+              />
+            )}
+            <IssueTimeline entries={issue.timeline ?? []} formatDateTime={formatDate} />
+          </CardContent>
+        </Card>
 
         {/* Content Preview Section - Moved to bottom */}
         <Card className="mb-6">

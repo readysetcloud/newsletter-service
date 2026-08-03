@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
+use super::issue_timeline;
 use super::send_progress;
 use super::settings::{self, TenantSettings};
 
@@ -210,6 +211,14 @@ pub struct GetIssueResponse {
     /// progress to report — before fan-out, or when the workflow failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     workflow: Option<send_progress::WorkflowState>,
+    /// Everything that has happened to this issue, oldest first.
+    ///
+    /// `stats`, `sendProgress` and `workflow` each answer "what is true now";
+    /// this answers "how did it get here", which is the question a send that
+    /// silently did not happen leaves behind. Never omitted once an issue has
+    /// any history at all, including history reconstructed from the record.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    timeline: Vec<issue_timeline::TimelineEntry>,
 }
 
 // Per-variant engagement counters for an A/B test.
@@ -390,6 +399,9 @@ pub struct IssueRecord {
     /// ARN of the publish workflow execution, recorded when the issue is
     /// scheduled so its state can be reported back without guessing.
     pub execution_arn: Option<String>,
+    /// Why the publish workflow gave up, as the state machine's failure path
+    /// recorded it. Surfaced through the timeline's derived `failed` entry.
+    pub failure_reason: Option<String>,
 }
 
 #[derive(Debug)]
@@ -558,6 +570,8 @@ async fn handle_get_issue(
     let send_progress = send_progress::get_send_progress(&tenant_id, issue.issue_number).await;
     let workflow = get_workflow_state_for(&issue, send_progress.is_some()).await;
 
+    let timeline = timeline_for(&tenant_id, &issue).await;
+
     let response_data = build_issue_response(
         issue,
         stats,
@@ -565,6 +579,7 @@ async fn handle_get_issue(
         variant_stats,
         send_progress,
         workflow,
+        timeline,
     );
 
     response::format_response(200, response_data)
@@ -703,6 +718,19 @@ async fn handle_resend_issue(
     // lands too early costs nothing; one that lands too late strands the send.
     clear_send_progress(&tenant_id, issue.issue_number).await?;
 
+    // Recorded before the workflow starts, so that a resend which itself fails
+    // to send still leaves evidence that somebody asked for one. The events the
+    // send path writes come later and independently; this is the request, not
+    // its outcome.
+    issue_timeline::record_event(
+        &tenant_id,
+        issue.issue_number,
+        issue_timeline::events::RESEND_REQUESTED,
+        &user_context.email,
+        None,
+    )
+    .await;
+
     // Nothing here filters the audience. It does not need to: every send runs
     // through the idempotency filter in send-email-v2.mjs, which skips any
     // subscriber whose `lastIssueSent` already equals this issue's reference
@@ -816,7 +844,16 @@ async fn handle_declare_ab_winner(
 
     // An A/B test and a local send are mutually exclusive, so an issue reaching
     // here never has send progress to report.
-    let response_data = build_issue_response(updated, stats, insights, variant_stats, None, None);
+    let timeline = timeline_for(&tenant_id, &updated).await;
+    let response_data = build_issue_response(
+        updated,
+        stats,
+        insights,
+        variant_stats,
+        None,
+        None,
+        timeline,
+    );
     response::format_response(200, response_data)
 }
 
@@ -2042,6 +2079,21 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
 
     publish_event(&tenant_id, "ISSUE_DRAFT_SAVED", &issue).await?;
 
+    issue_timeline::record_event(
+        &tenant_id,
+        issue_number,
+        if overwrite_draft {
+            issue_timeline::events::UPDATED
+        } else {
+            issue_timeline::events::CREATED
+        },
+        &user_context.email,
+        Some(serde_json::json!({
+            "contentType": normalize_content_type(body.content_type.as_deref()),
+        })),
+    )
+    .await;
+
     // Overwriting an existing draft invalidates any TTL deletion schedule it
     // had: left in place it would fire against the new record (which is still
     // a draft) and delete it. schedule_draft_deletion recreates one below when
@@ -2065,8 +2117,17 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
         // A future send leaves the record at `scheduled` (the workflow starts at
         // the send time and claims it then), so say so rather than reporting the
         // `draft` the record was created as a moment ago.
-        if normalized_scheduled_at.is_some() {
+        if let Some(scheduled_at) = normalized_scheduled_at.as_deref() {
             issue.status = "scheduled".to_string();
+
+            issue_timeline::record_event(
+                &tenant_id,
+                issue_number,
+                issue_timeline::events::SCHEDULED,
+                &user_context.email,
+                Some(serde_json::json!({ "sendAt": scheduled_at })),
+            )
+            .await;
         }
     } else if let Some(ttl_seconds) = body.ttl_seconds {
         schedule_draft_deletion(&tenant_id, issue_number, ttl_seconds).await?;
@@ -2239,6 +2300,21 @@ async fn handle_update_issue(
         .await;
     }
 
+    // `updated` covers a content edit as well as an unschedule; the two are the
+    // same request shape and only the status distinguishes them.
+    issue_timeline::record_event(
+        &tenant_id,
+        existing.issue_number,
+        if is_unscheduling {
+            issue_timeline::events::UNSCHEDULED
+        } else {
+            issue_timeline::events::UPDATED
+        },
+        &user_context.email,
+        None,
+    )
+    .await;
+
     publish_event(&tenant_id, "ISSUE_UPDATED", &updated).await?;
 
     response::format_response(200, updated)
@@ -2319,6 +2395,21 @@ async fn handle_reschedule_issue(
     // caller asked; the other leaves a record promising a time the send won't
     // honour.
     update_issue_scheduled_at(&tenant_id, existing.issue_number, &scheduled_at).await?;
+
+    // Both instants, because the useful question about a moved send is what it
+    // moved *from* — a timeline showing only the new time cannot explain an
+    // issue that went out at an hour nobody expected.
+    issue_timeline::record_event(
+        &tenant_id,
+        existing.issue_number,
+        issue_timeline::events::RESCHEDULED,
+        &user_context.email,
+        Some(serde_json::json!({
+            "from": existing.scheduled_at,
+            "sendAt": scheduled_at,
+        })),
+    )
+    .await;
 
     let response = RescheduleIssueResponse {
         id: existing.issue_number.to_string(),
@@ -3242,6 +3333,14 @@ fn parse_issue_record(item: &HashMap<String, AttributeValue>) -> Result<IssueRec
         .and_then(|v| v.as_s().ok())
         .map(|s| s.to_string());
 
+    // Written by the state machine's failure path (`Update Issue Record -
+    // Failure`) and, until the timeline, read by nothing — the cause of a
+    // failed publish was stored on the record and never shown anywhere.
+    let failure_reason = item
+        .get("failureReason")
+        .and_then(|v| v.as_s().ok())
+        .map(|s| s.to_string());
+
     Ok(IssueRecord {
         pk,
         sk,
@@ -3262,6 +3361,7 @@ fn parse_issue_record(item: &HashMap<String, AttributeValue>) -> Result<IssueRec
         local_send,
         content_assembly,
         execution_arn,
+        failure_reason,
     })
 }
 
@@ -5152,6 +5252,8 @@ async fn update_issue_record(
     let progress = send_progress::get_send_progress(tenant_id, updated_issue.issue_number).await;
     let workflow = get_workflow_state_for(&updated_issue, progress.is_some()).await;
 
+    let timeline = timeline_for(tenant_id, &updated_issue).await;
+
     Ok(build_issue_response(
         updated_issue,
         stats,
@@ -5159,6 +5261,7 @@ async fn update_issue_record(
         variant_stats,
         progress,
         workflow,
+        timeline,
     ))
 }
 
@@ -5342,6 +5445,28 @@ async fn publish_issue_published_event(
     }
 }
 
+/// An issue's timeline: everything recorded, plus the milestones the record
+/// already states.
+///
+/// The derive half is what makes this useful on the issues that already exist
+/// rather than only on the next one published — every issue has a `createdAt`,
+/// and a published one has a `publishedAt`. Built on every response that
+/// carries an issue, not just the detail fetch, so a client that adopts a
+/// mutation's response does not silently drop the history it was showing.
+async fn timeline_for(tenant_id: &str, issue: &IssueRecord) -> Vec<issue_timeline::TimelineEntry> {
+    issue_timeline::merge_entries(
+        issue_timeline::get_recorded_entries(tenant_id, issue.issue_number).await,
+        issue_timeline::derive_entries(
+            Some(issue.created_at.as_str()),
+            issue.scheduled_at.as_deref(),
+            issue.published_at.as_deref(),
+            issue.failure_reason.as_deref(),
+            Some(issue.updated_at.as_str()),
+            &issue.status,
+        ),
+    )
+}
+
 fn build_issue_response(
     issue: IssueRecord,
     stats: Option<IssueStats>,
@@ -5349,6 +5474,7 @@ fn build_issue_response(
     variant_stats: Vec<VariantStats>,
     send_progress: Option<send_progress::SendProgressResponse>,
     workflow: Option<send_progress::WorkflowState>,
+    timeline: Vec<issue_timeline::TimelineEntry>,
 ) -> GetIssueResponse {
     GetIssueResponse {
         id: issue.issue_number.to_string(),
@@ -5376,6 +5502,7 @@ fn build_issue_response(
         content_assembly: issue.content_assembly,
         send_progress,
         workflow,
+        timeline,
     }
 }
 
@@ -6737,6 +6864,7 @@ Thanks!"#;
             local_send: None,
             content_assembly: None,
             execution_arn: None,
+            failure_reason: None,
         };
 
         let stats = Some(IssueStats {
@@ -6754,7 +6882,7 @@ Thanks!"#;
             analytics: None,
         });
 
-        let response = build_issue_response(issue, stats, None, Vec::new(), None, None);
+        let response = build_issue_response(issue, stats, None, Vec::new(), None, None, Vec::new());
 
         assert_eq!(response.id, "42");
         assert_eq!(response.issue_number, 42);
@@ -6786,9 +6914,10 @@ Thanks!"#;
             local_send: None,
             content_assembly: None,
             execution_arn: None,
+            failure_reason: None,
         };
 
-        let response = build_issue_response(issue, None, None, Vec::new(), None, None);
+        let response = build_issue_response(issue, None, None, Vec::new(), None, None, Vec::new());
 
         assert_eq!(response.id, "1");
         assert_eq!(response.issue_number, 1);
@@ -7109,6 +7238,7 @@ Thanks!"#;
             local_send: None,
             content_assembly: None,
             execution_arn: execution_arn.map(str::to_string),
+            failure_reason: None,
         }
     }
 
@@ -7590,6 +7720,7 @@ Thanks!"#;
             local_send: None,
             content_assembly: None,
             execution_arn: None,
+            failure_reason: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -7618,6 +7749,7 @@ Thanks!"#;
             local_send: None,
             content_assembly: None,
             execution_arn: None,
+            failure_reason: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -7647,6 +7779,7 @@ Thanks!"#;
             local_send: None,
             content_assembly: None,
             execution_arn: None,
+            failure_reason: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -7676,6 +7809,7 @@ Thanks!"#;
             local_send: None,
             content_assembly: None,
             execution_arn: None,
+            failure_reason: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -7704,6 +7838,7 @@ Thanks!"#;
             local_send: None,
             content_assembly: None,
             execution_arn: None,
+            failure_reason: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -7733,6 +7868,7 @@ Thanks!"#;
             local_send: None,
             content_assembly: None,
             execution_arn: None,
+            failure_reason: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -7762,6 +7898,7 @@ Thanks!"#;
             local_send: None,
             content_assembly: None,
             execution_arn: None,
+            failure_reason: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -8329,6 +8466,7 @@ Thanks!"#;
             local_send: None,
             send_progress: None,
             workflow: None,
+            timeline: Vec::new(),
         };
 
         let result = publish_event(tenant_id, event_type, &data).await;
@@ -8359,6 +8497,7 @@ Thanks!"#;
             local_send: None,
             content_assembly: None,
             execution_arn: None,
+            failure_reason: None,
         };
 
         let result = publish_event(tenant_id, event_type, &data).await;

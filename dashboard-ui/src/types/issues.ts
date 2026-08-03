@@ -59,6 +59,51 @@ export interface Issue extends IssueListItem {
   contentAssembly?: ContentAssembly;
   sendProgress?: SendProgress;
   workflow?: WorkflowState;
+  /** Everything that has happened to this issue, oldest first. */
+  timeline?: TimelineEntry[];
+}
+
+/**
+ * The lifecycle events an issue can record.
+ *
+ * Kept in step with `ISSUE_EVENTS` in `functions/utils/issue-timeline.mjs` and
+ * `events` in `functions/src/api/controllers/issue_timeline.rs`. Typed as a
+ * union with a string fallback so an event added by the backend renders as an
+ * unknown-but-present entry rather than disappearing from the timeline — a
+ * missing entry on a page whose whole purpose is "what happened" is the one
+ * failure mode worth designing against.
+ */
+export type TimelineEventType =
+  | 'created'
+  | 'updated'
+  | 'scheduled'
+  | 'rescheduled'
+  | 'unscheduled'
+  | 'workflow_started'
+  | 'send_handed_off'
+  | 'send_deferred'
+  | 'fanout_planned'
+  | 'sending_started'
+  | 'send_completed'
+  | 'resend_requested'
+  | 'published'
+  | 'failed'
+  | (string & {});
+
+export interface TimelineEntry {
+  type: TimelineEventType;
+  /** ISO-8601 instant the event happened. */
+  at: string;
+  /** An email address, or `system`. */
+  actor: string;
+  /** Small scalars describing the event — send times, counts, causes. */
+  detail?: Record<string, unknown>;
+  /**
+   * Reconstructed from the issue record rather than recorded as it happened.
+   * A derived entry's timestamp can be approximate: `failed` carries the
+   * record's last write, not the moment of failure.
+   */
+  derived?: boolean;
 }
 
 /** Delivery state of a single local-send group. */

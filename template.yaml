@@ -1237,6 +1237,13 @@ Resources:
                 - ses:GetEmailIdentity
                 - ses:PutEmailIdentityDkimSigningAttributes
                 - ses:SendCustomVerificationEmail
+                # POST /senders/{id}/test, which is the pre-flight somebody runs
+                # to confirm a sender works before trusting it with an issue.
+                # `send_test_email_via_ses` (senders.rs) has always called this
+                # and the policy has never granted it, so the check that exists
+                # to build confidence in a sender has only ever returned
+                # AccessDenied.
+                - ses:SendEmail
                 - ses:CreateTenantResourceAssociation
                 - ses:DeleteTenantResourceAssociation
                 - ses:GetIdentityVerificationAttributes
@@ -1450,9 +1457,18 @@ Resources:
           Statement:
             - Effect: Allow
               Action:
-                - sesv2:CreateTenant
-                - sesv2:CreateContactList
-                - sesv2:TagResource
+                # `ses:`, not `sesv2:`. There is no `sesv2` IAM service prefix -
+                # the SES v2 API authorizes under `ses:` like v1 does, which is
+                # why `ses:CreateTenantResourceAssociation` (also v2-only) is
+                # spelled that way further up this file. Written as `sesv2:`
+                # these three granted nothing at all, and because IAM does not
+                # reject an unknown prefix the policy deployed clean: tenant
+                # finalization has been failing for every new tenant with an
+                # AccessDenied that nothing here could explain.
+                - ses:CreateTenant
+                - ses:CreateContactList
+                # Both creates pass `Tags`, which SES authorizes separately.
+                - ses:TagResource
               Resource: "*"
             - Effect: Allow
               Action:

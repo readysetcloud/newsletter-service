@@ -174,6 +174,22 @@ class IssuesService {
   }
 
   /**
+   * Sends a published issue again.
+   *
+   * Only subscribers who never received it are mailed: every send runs through
+   * an idempotency filter keyed on the issue, so this is a no-op for anyone who
+   * already got it. That is what makes it safe to offer as a repair for an
+   * issue that reached `published` without its send ever firing.
+   *
+   * @param issueId - Unique identifier of the issue to send again
+   * @returns Promise resolving once the send has been queued
+   * @throws {Error} 400 Bad Request if the issue is not published
+   */
+  async resendIssue(issueId: string): Promise<ApiResponse<{ status: string }>> {
+    return apiClient.post(`/issues/${issueId}/resend`, {});
+  }
+
+  /**
    * Manually declares the winner of an issue's A/B test, overriding automatic
    * evaluation. Records the winner and marks the test as sent.
    * @param issueId - Unique identifier of the issue

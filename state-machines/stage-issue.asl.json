@@ -72,6 +72,28 @@
             }
           ],
           "Next": "Mark Issue In Progress"
+        },
+        {
+          "And": [
+            {
+              "Variable": "$.existingNewsletter.Item",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.existingNewsletter.Item.status.S",
+              "StringEquals": "published"
+            },
+            {
+              "Variable": "$$.Execution.Input.resend",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$$.Execution.Input.resend",
+              "BooleanEquals": true
+            }
+          ],
+          "Comment": "The one way a 'published' issue sends again, and it only opens for POST /issues/{id}/resend - handle_resend_issue is the sole caller that sets the flag. Everything else that can reach this state (a duplicate Scheduler fire, a re-stage of an issue that already went out) leaves it false and still lands on the Default, so the duplicate-send guard is unchanged for them. The audience is not re-derived here: send-email-v2's idempotency filter skips any subscriber whose lastIssueSent already matches this issue, so a resend reaches only the ones who never got it - everyone when the deferred send never fired, nobody when it did. The IsPresent test is not redundant with BooleanEquals: an ISSUE-SEND Scheduler entry freezes its target input at creation time, so an issue scheduled before this field existed arrives without it, and a bare BooleanEquals on an absent path raises States.Runtime - which is neither retriable nor catchable, and would kill the execution of an ordinary scheduled send.",
+          "Next": "Mark Issue In Progress"
         }
       ],
       "Default": "Success - Duplicate Request"

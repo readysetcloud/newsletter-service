@@ -146,9 +146,22 @@ export const handler = async (state) => {
     console.error('Failed to apply content assembly markers, sending canonical order', { error: err.message });
   }
 
+  const now = new Date();
+
   // Downstream jobs hang off the send instant: list cleanup three days later,
   // the stats report five.
-  const baseDate = sendInstant ?? new Date();
+  //
+  // Clamped to now when the send instant is already past, which mirrors
+  // parse-json-issue.mjs and is not hypothetical: `sendInstant` falls back to
+  // the frontmatter `date` when the execution carries no `sendAt`, so an
+  // immediate publish - or a resend - of an issue dated more than three days
+  // ago yields `at()` expressions in the past. Scheduler rejects those with a
+  // ValidationException, which is deliberately absent from the Retry on both
+  // entries, so it takes the Parallel's Catch and stamps the issue `failed`
+  // *after* the mail has already gone out. Both entries are relative offsets
+  // from "when this issue went out", and for a send happening now, now is that
+  // instant.
+  const baseDate = sendInstant && sendInstant > now ? sendInstant : now;
 
   const listCleanupDate = new Date(baseDate);
   listCleanupDate.setDate(listCleanupDate.getDate() + 3);
@@ -156,7 +169,6 @@ export const handler = async (state) => {
   const reportStatsDate = new Date(baseDate);
   reportStatsDate.setDate(reportStatsDate.getDate() + 5);
 
-  const now = new Date();
   const sendAtDate = !sendInstant || sendInstant < now ? 'now' : sendInstant.toISOString();
 
   return {

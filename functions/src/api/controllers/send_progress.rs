@@ -21,7 +21,9 @@ use serde::Serialize;
 use std::collections::HashMap;
 
 /// Sort key of the progress item written by the send path.
-const SEND_PROGRESS_SK: &str = "sendProgress";
+/// Shared with `issues::clear_send_progress`, which deletes this item when an
+/// issue is re-sent, so the two cannot drift apart.
+pub(crate) const SEND_PROGRESS_SK: &str = "sendProgress";
 
 /// How far past its scheduled time a group may sit before it is called overdue.
 /// A group send is minutes of work, so half an hour of silence means something

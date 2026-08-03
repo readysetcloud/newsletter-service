@@ -27,6 +27,13 @@ export interface IssueStats {
   opens: number;
   clicks: number;
   deliveries: number;
+  /**
+   * Messages SES accepted for this issue — not the same as `deliveries`, which
+   * counts only the ones it went on to deliver. Zero on a `published` issue
+   * means nothing was ever handed to SES at all, which is what the detail page
+   * offers a resend on.
+   */
+  sends: number;
   bounces: number;
   complaints: number;
   subscribers: number;

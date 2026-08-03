@@ -1060,16 +1060,85 @@ describe('stage-issue definition: identifiers, not content', () => {
   // about yet. Every field named here is one the API has always emitted; a new
   // one is only safe to read this way once every outstanding Scheduler entry
   // carries it, which is never true in the deploy that introduces it.
+  //
+  // The one exemption is a Choice rule that tests `IsPresent` on the same path
+  // first. `IsPresent` is the only comparator ASL defines on a path that does
+  // not resolve, so it converts the States.Runtime this rule exists to prevent
+  // into a plain `false` — which is the correct answer for an entry created
+  // before the field existed. The exemption is deliberately narrow: it is per
+  // rule, not per state, so a sibling rule cannot borrow another's guard, and
+  // it does not extend to `.$` parameter fields, which have no such comparator
+  // and stay banned outright.
   it('reads no execution-input field that a pending Scheduler entry may lack', () => {
     const ALWAYS_PRESENT = ['fileName', 'issueId', 'tenant', 'templateId', 'contentType'];
+
+    const lateFieldIn = (value) => {
+      const match = /^\$\$\.Execution\.Input\.([A-Za-z0-9_]+)/.exec(value);
+      return match && !ALWAYS_PRESENT.includes(match[1]) ? value : null;
+    };
+
+    // Every path this rule proves present before comparing it.
+    const guardedPathsIn = (rule) => {
+      const guarded = new Set();
+      const visit = (node) => {
+        if (Array.isArray(node)) {
+          node.forEach(visit);
+        } else if (node && typeof node === 'object') {
+          if (node.IsPresent === true && typeof node.Variable === 'string') {
+            guarded.add(node.Variable);
+          }
+          Object.values(node).forEach(visit);
+        }
+      };
+      visit(rule);
+      return guarded;
+    };
+
     const reads = [];
 
-    walkStrings(definition, '$', (value) => {
-      const match = /^\$\$\.Execution\.Input\.([A-Za-z0-9_]+)/.exec(value);
-      if (match && !ALWAYS_PRESENT.includes(match[1])) reads.push(value);
-    });
+    for (const { name, state } of allStates) {
+      const body = ownBody(state);
+
+      if (state.Type === 'Choice') {
+        for (const [index, rule] of (state.Choices ?? []).entries()) {
+          const guarded = guardedPathsIn(rule);
+          walkStrings(rule, `$.${name}.Choices[${index}]`, (value) => {
+            if (lateFieldIn(value) && !guarded.has(value)) reads.push(value);
+          });
+        }
+        // Anything outside the rules gets no exemption.
+        walkStrings({ ...body, Choices: undefined }, `$.${name}`, (value) => {
+          if (lateFieldIn(value)) reads.push(value);
+        });
+        continue;
+      }
+
+      walkStrings(body, `$.${name}`, (value) => {
+        if (lateFieldIn(value)) reads.push(value);
+      });
+    }
 
     expect(reads).toEqual([]);
+  });
+
+  // The resend branch is the only reason a `published` issue can send again, so
+  // both halves of its guard are pinned: without `IsPresent` an ISSUE-SEND entry
+  // predating the field kills an ordinary scheduled send, and without
+  // `BooleanEquals` the mere presence of the field would resend every issue that
+  // had already gone out.
+  it('admits a published issue only behind a guarded resend flag', () => {
+    const { state } = allStates.find(({ name }) => name === 'Has Issue Been Processed?');
+    const publishedEdge = state.Choices.find((choice) =>
+      JSON.stringify(choice.And ?? choice).includes('"StringEquals":"published"')
+    );
+
+    expect(publishedEdge?.Next).toBe(CLAIM_STATE);
+    expect(publishedEdge.And).toEqual(
+      expect.arrayContaining([
+        { Variable: '$$.Execution.Input.resend', IsPresent: true },
+        { Variable: '$$.Execution.Input.resend', BooleanEquals: true }
+      ])
+    );
   });
 });
 

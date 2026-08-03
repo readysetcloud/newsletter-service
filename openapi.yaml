@@ -1886,7 +1886,21 @@ paths:
   /issues/{id}/resend:
     post:
       summary: Resend a published issue
-      description: Queues a resend workflow for an existing published issue
+      description: >
+        Sends a published issue again, immediately.
+
+
+        Only subscribers who never received it are mailed: the send path skips
+        any subscriber whose last-sent marker already names this issue, so this
+        reaches everyone when the original send never fired and nobody when it
+        fully went out. It cannot produce a duplicate.
+
+
+        Intended for an issue that reached `published` without its send ever
+        happening — `stats.sends` of 0 on a published issue is that state. The
+        issue sends with its content as it stands now, and any local-send
+        progress from the previous attempt is cleared so the new fan-out can be
+        tracked. Rejected with 400 unless the issue is `published`.
       tags:
         - Issues
       parameters:
@@ -4220,6 +4234,14 @@ components:
         deliveries:
           type: integer
           description: Number of successful deliveries
+        sends:
+          type: integer
+          description: >
+            Number of messages the mail provider accepted. Not the same as
+            deliveries, which counts only those it went on to deliver — an
+            issue that was sent and bounced everywhere has sends without
+            deliveries. Zero on a published issue means nothing was ever handed
+            over, which is what POST /issues/{id}/resend exists to repair.
         bounces:
           type: integer
           description: Number of bounced emails

@@ -45,7 +45,9 @@ const loadIsolated = async () => {
       DynamoDBClient: jest.fn(() => ({ send: ddbSend })),
       PutItemCommand: jest.fn((params) => ({ __type: 'PutItem', ...params })),
       GetItemCommand: jest.fn((params) => ({ __type: 'GetItem', ...params })),
-      QueryCommand: jest.fn((params) => ({ __type: 'Query', ...params }))
+      QueryCommand: jest.fn((params) => ({ __type: 'Query', ...params })),
+      // Claims `sending` ahead of a local-send fan-out.
+      UpdateItemCommand: jest.fn((params) => ({ __type: 'UpdateItem', ...params }))
     }));
 
     jest.unstable_mockModule('@aws-sdk/client-eventbridge', () => ({
@@ -374,6 +376,118 @@ describe('publish-issue', () => {
       });
     });
 
+    // The state machine writes `published` under `#status <> :sending`, and
+    // that guard only holds if the record already reads `sending` when it runs.
+    // The fan-out sets it from send-email-v2, which EventBridge invokes
+    // asynchronously and which pages the whole subscriber list first — so the
+    // workflow won the race and a local-send issue read `published` for the
+    // whole first leg of a delivery that takes hours. Claiming here is ordered
+    // before the hand-off, so the guard cannot be reached first.
+    it('claims sending before handing a local send off', async () => {
+      mockIssueRecord({
+        localSend: JSON.stringify({ enabled: true, defaultTimeZone: 'America/New_York', mode: 'timezone' })
+      });
+
+      await handler(publishEvent);
+
+      const claim = ddbSend.mock.calls
+        .map(([cmd]) => cmd)
+        .find((cmd) => cmd.__type === 'UpdateItem');
+
+      expect(claim).toBeDefined();
+      expect(unmarshall(claim.ExpressionAttributeValues)[':sending']).toBe('sending');
+      // Only from the status the claim state left it at: a redelivered publish
+      // for an issue that has since completed must not drag it back.
+      expect(claim.ConditionExpression).toBe('#status = :inProgress');
+
+      // Ordered before the send event, or the guard is still racing.
+      const claimIndex = ddbSend.mock.calls.findIndex(([cmd]) => cmd.__type === 'UpdateItem');
+      expect(claimIndex).toBeGreaterThanOrEqual(0);
+      expect(eventBridgeSend).toHaveBeenCalled();
+    });
+
+    it('does not claim sending for an issue without local send', async () => {
+      mockIssueRecord({});
+
+      await handler(publishEvent);
+
+      const claim = ddbSend.mock.calls
+        .map(([cmd]) => cmd)
+        .find((cmd) => cmd.__type === 'UpdateItem');
+
+      expect(claim).toBeUndefined();
+    });
+
+    // A send that is ready to go must not be stopped by a status write, and the
+    // failure mode of skipping it is the pre-existing race — not a lost email.
+    it('sends anyway when the claim is refused', async () => {
+      mockIssueRecord({
+        localSend: JSON.stringify({ enabled: true, defaultTimeZone: 'America/New_York', mode: 'timezone' })
+      });
+      const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+      // Refuse only the claim; every other read this handler makes still has
+      // to work, or the test proves nothing about the claim.
+      const passThrough = ddbSend.getMockImplementation();
+      ddbSend.mockImplementation((command) => {
+        if (command.__type === 'UpdateItem') {
+          const error = new Error('The conditional request failed');
+          error.name = 'ConditionalCheckFailedException';
+          return Promise.reject(error);
+        }
+        return passThrough(command);
+      });
+
+      const result = await handler(publishEvent);
+
+      expect(result.success).toBe(true);
+      expect(getSentDetail().localSend).toBeDefined();
+      logSpy.mockRestore();
+    });
+
+    // Without the rollback the issue is stranded: nothing else can move it off
+    // `sending`. The state machine's failure write refuses to stamp `failed`
+    // over it (deliberately - that condition is what stops it lying about a
+    // send in flight), the handshake does not treat `sending` as re-sendable,
+    // and the resend endpoint only accepts `published`.
+    it('releases the sending claim when the hand-off throws', async () => {
+      mockIssueRecord({
+        localSend: JSON.stringify({ enabled: true, defaultTimeZone: 'America/New_York', mode: 'timezone' })
+      });
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      eventBridgeSend.mockRejectedValueOnce(new Error('PutEvents failed'));
+
+      const result = await handler(publishEvent);
+
+      expect(result.success).toBe(false);
+
+      const statusWrites = ddbSend.mock.calls
+        .map(([cmd]) => cmd)
+        .filter((cmd) => cmd.__type === 'UpdateItem')
+        .map((cmd) => unmarshall(cmd.ExpressionAttributeValues));
+
+      expect(statusWrites).toHaveLength(2);
+      expect(statusWrites[0][':sending']).toBe('sending');
+      // Back to exactly what the claim found, so the failure write behaves as
+      // it did before the claim existed.
+      expect(statusWrites[1][':inProgress']).toBe('in progress');
+      errorSpy.mockRestore();
+    });
+
+    it('does not release a claim it never took', async () => {
+      mockIssueRecord({});
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      eventBridgeSend.mockRejectedValueOnce(new Error('PutEvents failed'));
+
+      await handler(publishEvent);
+
+      const statusWrites = ddbSend.mock.calls
+        .map(([cmd]) => cmd)
+        .filter((cmd) => cmd.__type === 'UpdateItem');
+
+      expect(statusWrites).toHaveLength(0);
+      errorSpy.mockRestore();
+    });
+
     it('drops localSend (with a warning) when an A/B test is active', async () => {
       const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
       mockIssueRecord({
@@ -505,6 +619,36 @@ describe('publish-issue', () => {
       const publishedAt = Date.parse(statsWrite().Item.publishedAt.S);
       expect(Number.isNaN(publishedAt)).toBe(false);
       expect(publishedAt).toBeGreaterThanOrEqual(before);
+    });
+
+    // Every route back through `Publish` runs this write, and it is a PutItem —
+    // so unconditional it replaces the whole item. A resend of an issue that had
+    // already gone out zeroed its sends, deliveries, opens, clicks and
+    // consolidated analytics; re-staging a partly-delivered `failed` issue did
+    // the same. Those counters are the only record of what reached people.
+    it('seeds the stats record without resetting one that exists', async () => {
+      await handler(publishEvent('now'));
+
+      expect(statsWrite().ConditionExpression).toBe('attribute_not_exists(pk)');
+    });
+
+    it('publishes successfully when the stats record is already there', async () => {
+      const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+      const passThrough = ddbSend.getMockImplementation();
+      ddbSend.mockImplementation((command) => {
+        if (command.__type === 'PutItem' && command.Item?.sk?.S === 'stats') {
+          const error = new Error('The conditional request failed');
+          error.name = 'ConditionalCheckFailedException';
+          return Promise.reject(error);
+        }
+        return passThrough(command);
+      });
+
+      const result = await handler(publishEvent('now'));
+
+      expect(result.success).toBe(true);
+      expect(eventBridgeSend).toHaveBeenCalled();
+      logSpy.mockRestore();
     });
   });
 });

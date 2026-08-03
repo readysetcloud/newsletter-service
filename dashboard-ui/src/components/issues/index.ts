@@ -22,6 +22,12 @@ export type { DeleteIssueDialogProps } from './DeleteIssueDialog';
 export { RescheduleIssueDialog } from './RescheduleIssueDialog';
 export type { RescheduleIssueDialogProps } from './RescheduleIssueDialog';
 
+export { ResendIssueDialog } from './ResendIssueDialog';
+export type { ResendIssueDialogProps } from './ResendIssueDialog';
+
+export { IssueTimeline, IssueTimelineStalledWarning } from './IssueTimeline';
+export type { IssueTimelineProps } from './IssueTimeline';
+
 export { IssuesEmptyState } from './IssuesEmptyState';
 export type { IssuesEmptyStateProps } from './IssuesEmptyState';
 

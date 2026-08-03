@@ -32,7 +32,9 @@ const loadWithRealParsers = async () => {
     jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
       DynamoDBClient: jest.fn(() => ({ send: ddbSend })),
       GetItemCommand: jest.fn((params) => ({ __type: 'GetItem', ...params })),
-      QueryCommand: jest.fn((params) => ({ __type: 'Query', ...params }))
+      QueryCommand: jest.fn((params) => ({ __type: 'Query', ...params })),
+      // The dispatcher records the `workflow_started` timeline entry.
+      PutItemCommand: jest.fn((params) => ({ __type: 'PutItem', ...params }))
     }));
 
     jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({ marshall, unmarshall }));

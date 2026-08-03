@@ -72,13 +72,35 @@
             }
           ],
           "Next": "Mark Issue In Progress"
+        },
+        {
+          "And": [
+            {
+              "Variable": "$.existingNewsletter.Item",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.existingNewsletter.Item.status.S",
+              "StringEquals": "published"
+            },
+            {
+              "Variable": "$$.Execution.Input.resend",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$$.Execution.Input.resend",
+              "BooleanEquals": true
+            }
+          ],
+          "Comment": "The one way a 'published' issue sends again, and it only opens for POST /issues/{id}/resend - handle_resend_issue is the sole caller that sets the flag. Everything else that can reach this state (a duplicate Scheduler fire, a re-stage of an issue that already went out) leaves it false and still lands on the Default, so the duplicate-send guard is unchanged for them. The audience is not re-derived here: send-email-v2's idempotency filter skips any subscriber whose lastIssueSent already matches this issue, so a resend reaches only the ones who never got it - everyone when the deferred send never fired, nobody when it did. The IsPresent test is not redundant with BooleanEquals: an ISSUE-SEND Scheduler entry freezes its target input at creation time, so an issue scheduled before this field existed arrives without it, and a bare BooleanEquals on an absent path raises States.Runtime - which is neither retriable nor catchable, and would kill the execution of an ordinary scheduled send.",
+          "Next": "Mark Issue In Progress"
         }
       ],
       "Default": "Success - Duplicate Request"
     },
     "Mark Issue In Progress": {
       "Type": "Task",
-      "Comment": "The one claim state: it flips the record to 'in progress', stamps the execution, and binds $content/$callerSubject from the record it just wrote (ReturnValues: ALL_NEW). Since PR #358 removed the GitHub ingress there is no producer that supplies a body on the execution input, so the record is the single source of what an execution publishes - which is what makes 'read the record' an invariant the definition test can pin rather than one of two possibilities.",
+      "Comment": "The one claim state: it flips the record to 'in progress', stamps the execution, and binds $content/$callerSubject from the record it just wrote (ReturnValues: ALL_NEW). Since PR #358 removed the GitHub ingress there is no producer that supplies a body on the execution input, so the record is the single source of what an execution publishes - which is what makes 'read the record' an invariant the definition test can pin rather than one of two possibilities. The claim is a compare-and-swap against the status 'Has Issue Been Processed?' just read, which is what makes the handshake atomic rather than advisory: without the condition two executions started for the same issue - two POSTs to /resend, a Scheduler entry that fired twice - can both read a sendable status, both claim, and both reach 'Publish'. The recipient idempotency marker is only written after SES accepts, so two concurrent sends select the same subscribers and mail them twice. The loser of the swap is not a failure; it is the duplicate the handshake exists to reject, so it ends where every other duplicate does.",
       "Resource": "${DynamodbUpdateItem}",
       "Parameters": {
         "TableName": "${TableName}",
@@ -91,12 +113,16 @@
           }
         },
         "UpdateExpression": "SET #status = :status, executionArn = :executionArn, updatedAt = :updatedAt",
+        "ConditionExpression": "#status = :expected",
         "ExpressionAttributeNames": {
           "#status": "status"
         },
         "ExpressionAttributeValues": {
           ":status": {
             "S": "in progress"
+          },
+          ":expected": {
+            "S.$": "$.existingNewsletter.Item.status.S"
           },
           ":executionArn": {
             "S.$": "$$.Execution.Id"
@@ -108,6 +134,14 @@
         "ReturnValues": "ALL_NEW"
       },
       "Catch": [
+        {
+          "ErrorEquals": [
+            "DynamoDB.ConditionalCheckFailedException"
+          ],
+          "Comment": "Somebody else claimed the issue between the handshake's read and this write. That is not an error - it is the same answer 'Has Issue Been Processed?' gives a duplicate, arrived at a moment later, so it ends the same way. Listed before the States.ALL catcher, which would otherwise mark a perfectly healthy issue 'failed' on behalf of the execution that is publishing it.",
+          "Next": "Success - Duplicate Request",
+          "ResultPath": null
+        },
         {
           "ErrorEquals": [
             "States.ALL"

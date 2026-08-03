@@ -21,7 +21,9 @@ use serde::Serialize;
 use std::collections::HashMap;
 
 /// Sort key of the progress item written by the send path.
-const SEND_PROGRESS_SK: &str = "sendProgress";
+/// Shared with `issues::clear_send_progress`, which deletes this item when an
+/// issue is re-sent, so the two cannot drift apart.
+pub(crate) const SEND_PROGRESS_SK: &str = "sendProgress";
 
 /// How far past its scheduled time a group may sit before it is called overdue.
 /// A group send is minutes of work, so half an hour of silence means something
@@ -285,7 +287,31 @@ fn build_message(
 ///
 /// Errors are swallowed: progress reporting must never fail an issue fetch.
 pub async fn get_send_progress(tenant_id: &str, issue_number: i32) -> Option<SendProgressResponse> {
-    let table_name = std::env::var("TABLE_NAME").ok()?;
+    // Collapses "there is none" and "could not tell" into the same `None`,
+    // which is right here: a panel would rather render nothing than fail the
+    // page around it. Callers deciding whether an action is *safe* need the
+    // distinction and should use `try_get_send_progress`.
+    try_get_send_progress(tenant_id, issue_number).await.ok()?
+}
+
+/// Reads the progress record, distinguishing "there is none" from "could not
+/// tell".
+///
+/// `Ok(None)` means the read succeeded and no fan-out has ever run for this
+/// issue. `Err` means the answer is unknown — the read failed, or a record
+/// exists that cannot be interpreted, which still proves a fan-out happened
+/// without saying whether it finished.
+///
+/// The distinction is load-bearing for `handle_resend_issue`, which deletes
+/// this record: treating an unreadable answer as "no fan-out" would let a
+/// resend destroy the plan a running fan-out reports against and strand the
+/// issue at `sending` with no groups left to complete it. A guard on a
+/// destructive action has to fail closed.
+pub async fn try_get_send_progress(
+    tenant_id: &str,
+    issue_number: i32,
+) -> Result<Option<SendProgressResponse>, String> {
+    let table_name = std::env::var("TABLE_NAME").map_err(|_| "TABLE_NAME not set".to_string())?;
     let ddb_client = aws_clients::get_dynamodb_client().await;
 
     let result = ddb_client
@@ -301,9 +327,17 @@ pub async fn get_send_progress(tenant_id: &str, issue_number: i32) -> Option<Sen
         .inspect_err(|error| {
             tracing::warn!("Failed to read send progress: {error}");
         })
-        .ok()?;
+        .map_err(|error| format!("Failed to read send progress: {error}"))?;
 
-    build_progress_report(result.item()?, chrono::Utc::now())
+    let Some(item) = result.item() else {
+        return Ok(None);
+    };
+
+    build_progress_report(item, chrono::Utc::now())
+        .map(Some)
+        .ok_or_else(|| {
+            format!("A send progress record exists for issue {issue_number} but cannot be read")
+        })
 }
 
 /// An issue whose send time has not arrived yet.

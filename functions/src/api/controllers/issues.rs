@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
+use super::issue_timeline;
 use super::send_progress;
 use super::settings::{self, TenantSettings};
 
@@ -210,6 +211,14 @@ pub struct GetIssueResponse {
     /// progress to report — before fan-out, or when the workflow failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     workflow: Option<send_progress::WorkflowState>,
+    /// Everything that has happened to this issue, oldest first.
+    ///
+    /// `stats`, `sendProgress` and `workflow` each answer "what is true now";
+    /// this answers "how did it get here", which is the question a send that
+    /// silently did not happen leaves behind. Never omitted once an issue has
+    /// any history at all, including history reconstructed from the record.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    timeline: Vec<issue_timeline::TimelineEntry>,
 }
 
 // Per-variant engagement counters for an A/B test.
@@ -231,6 +240,13 @@ pub struct IssueStats {
     opens: i64,
     clicks: i64,
     deliveries: i64,
+    /// Messages SES accepted for this issue. Distinct from `deliveries`, which
+    /// only counts the ones it went on to deliver: an issue that was handed to
+    /// SES and bounced everywhere has sends without deliveries. Zero on a
+    /// `published` issue therefore means nothing was ever handed over at all —
+    /// the signature of a publish whose deferred send never fired — which is
+    /// what the dashboard offers a resend on.
+    sends: i64,
     bounces: i64,
     complaints: i64,
     subscribers: i64,
@@ -383,6 +399,9 @@ pub struct IssueRecord {
     /// ARN of the publish workflow execution, recorded when the issue is
     /// scheduled so its state can be reported back without guessing.
     pub execution_arn: Option<String>,
+    /// Why the publish workflow gave up, as the state machine's failure path
+    /// recorded it. Surfaced through the timeline's derived `failed` entry.
+    pub failure_reason: Option<String>,
 }
 
 #[derive(Debug)]
@@ -551,6 +570,8 @@ async fn handle_get_issue(
     let send_progress = send_progress::get_send_progress(&tenant_id, issue.issue_number).await;
     let workflow = get_workflow_state_for(&issue, send_progress.is_some()).await;
 
+    let timeline = timeline_for(&tenant_id, &issue).await;
+
     let response_data = build_issue_response(
         issue,
         stats,
@@ -558,6 +579,7 @@ async fn handle_get_issue(
         variant_stats,
         send_progress,
         workflow,
+        timeline,
     );
 
     response::format_response(200, response_data)
@@ -674,18 +696,83 @@ async fn handle_resend_issue(
         ));
     }
 
-    // Deliberately does NOT clear the previous send's progress record, even
-    // though the plan write refuses to overwrite a completed plan and a real
-    // resend would need it cleared.
+    // `published` alone is not proof the send is over. A local-send issue can
+    // read `published` while its fan-out is still working through timezones —
+    // that is the whole reason this endpoint is offered — and resending one
+    // mid-flight is actively destructive: `clear_send_progress` below would
+    // delete the plan the running fan-out reports against, so its groups would
+    // report into nothing, the completion condition would never be met, and the
+    // issue would sit at `sending` forever with no way to finish.
     //
-    // Resending does not currently send anything. The execution starts while
-    // the issue is still `published`, and `Has Issue Been Processed?` has no
-    // `published` branch - it routes to `Success - Duplicate Request`. That is
-    // true on main too, so it is not a regression, but it means clearing the
-    // record here would destroy the delivery history of the last real send in
-    // exchange for nothing. Whoever fixes resend properly needs to give the
-    // handshake a resend branch AND clear the progress record; doing only the
-    // second half is strictly worse than doing neither.
+    // The progress record answers this where the status cannot: it exists from
+    // fan-out until the last group lands, and gains `completedAt` only when
+    // delivery is genuinely finished.
+    //
+    // Read strictly: an unreadable answer refuses the resend rather than
+    // assuming there is nothing to protect. The lenient read used everywhere
+    // else reports a failed lookup as "no progress record", which here would
+    // mean a transient DynamoDB error is all it takes to delete a live plan.
+    match send_progress::try_get_send_progress(&tenant_id, issue.issue_number).await {
+        Ok(Some(progress)) if progress.completed_at.is_none() => {
+            return Err(AppError::Conflict(format!(
+                "Issue {} is still being delivered ({} of {} groups sent). Wait for the send to \
+                 finish before sending it again.",
+                issue.issue_number, progress.groups_delivered, progress.groups_total
+            )));
+        }
+        Ok(_) => {}
+        Err(error) => {
+            tracing::error!("Refusing to resend issue {}: {error}", issue.issue_number);
+            return Err(AppError::Conflict(format!(
+                "Could not confirm that issue {} has finished sending, so it was not sent again. \
+                 Try once the delivery status can be read.",
+                issue.issue_number
+            )));
+        }
+    }
+
+    // Both halves of the fix the old comment here asked for, in the order it
+    // asked for them: the handshake now has a `published` + `resend` branch,
+    // and the completed progress record is cleared so a local-send fan-out can
+    // plan again. `startProgress` refuses to overwrite a plan that carries
+    // `completedAt` (functions/utils/send-progress.mjs), so leaving the record
+    // in place would leave the re-sent issue stuck reporting the *previous*
+    // send's groups forever. Doing only this half was worse than doing
+    // neither, which is why it waited for the handshake.
+    //
+    // Clearing it does discard the last send's per-group delivery history.
+    // That is the intended trade for an issue being sent again — the record
+    // describes one fan-out, and after this there is a new one — and it is why
+    // this is scoped to the explicit resend action rather than done on every
+    // execution.
+    //
+    // Before the execution starts, not after, and the order is not cosmetic:
+    // the new fan-out writes its plan from inside the workflow, so a delete
+    // issued afterwards races it and can remove the plan it just wrote —
+    // leaving the issue `sending` with no groups to complete it. A delete that
+    // lands too early costs nothing; one that lands too late strands the send.
+    clear_send_progress(&tenant_id, issue.issue_number).await?;
+
+    // Recorded before the workflow starts, so that a resend which itself fails
+    // to send still leaves evidence that somebody asked for one. The events the
+    // send path writes come later and independently; this is the request, not
+    // its outcome.
+    issue_timeline::record_event(
+        &tenant_id,
+        issue.issue_number,
+        issue_timeline::events::RESEND_REQUESTED,
+        &user_context.email,
+        None,
+    )
+    .await;
+
+    // Nothing here filters the audience. It does not need to: every send runs
+    // through the idempotency filter in send-email-v2.mjs, which skips any
+    // subscriber whose `lastIssueSent` already equals this issue's reference
+    // number. A resend therefore reaches exactly the subscribers who never got
+    // it — everyone, for an issue whose send never fired, and nobody, for one
+    // that fully went out. That property is what makes this safe to expose in
+    // the dashboard.
     start_issue_schedule(IssueScheduleInput {
         tenant_id: &tenant_id,
         tenant_email: user_context.email.as_str(),
@@ -693,6 +780,7 @@ async fn handle_resend_issue(
         scheduled_at: None,
         template_id: issue.template_id.as_deref(),
         content_type: &normalize_content_type(issue.content_type.as_deref()),
+        resend: true,
     })
     .await?;
 
@@ -791,7 +879,16 @@ async fn handle_declare_ab_winner(
 
     // An A/B test and a local send are mutually exclusive, so an issue reaching
     // here never has send progress to report.
-    let response_data = build_issue_response(updated, stats, insights, variant_stats, None, None);
+    let timeline = timeline_for(&tenant_id, &updated).await;
+    let response_data = build_issue_response(
+        updated,
+        stats,
+        insights,
+        variant_stats,
+        None,
+        None,
+        timeline,
+    );
     response::format_response(200, response_data)
 }
 
@@ -2017,6 +2114,21 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
 
     publish_event(&tenant_id, "ISSUE_DRAFT_SAVED", &issue).await?;
 
+    issue_timeline::record_event(
+        &tenant_id,
+        issue_number,
+        if overwrite_draft {
+            issue_timeline::events::UPDATED
+        } else {
+            issue_timeline::events::CREATED
+        },
+        &user_context.email,
+        Some(serde_json::json!({
+            "contentType": normalize_content_type(body.content_type.as_deref()),
+        })),
+    )
+    .await;
+
     // Overwriting an existing draft invalidates any TTL deletion schedule it
     // had: left in place it would fire against the new record (which is still
     // a draft) and delete it. schedule_draft_deletion recreates one below when
@@ -2033,14 +2145,24 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
             scheduled_at: normalized_scheduled_at.as_deref(),
             template_id: body.template_id.as_deref(),
             content_type: &normalize_content_type(body.content_type.as_deref()),
+            resend: false,
         })
         .await?;
 
         // A future send leaves the record at `scheduled` (the workflow starts at
         // the send time and claims it then), so say so rather than reporting the
         // `draft` the record was created as a moment ago.
-        if normalized_scheduled_at.is_some() {
+        if let Some(scheduled_at) = normalized_scheduled_at.as_deref() {
             issue.status = "scheduled".to_string();
+
+            issue_timeline::record_event(
+                &tenant_id,
+                issue_number,
+                issue_timeline::events::SCHEDULED,
+                &user_context.email,
+                Some(serde_json::json!({ "sendAt": scheduled_at })),
+            )
+            .await;
         }
     } else if let Some(ttl_seconds) = body.ttl_seconds {
         schedule_draft_deletion(&tenant_id, issue_number, ttl_seconds).await?;
@@ -2213,6 +2335,21 @@ async fn handle_update_issue(
         .await;
     }
 
+    // `updated` covers a content edit as well as an unschedule; the two are the
+    // same request shape and only the status distinguishes them.
+    issue_timeline::record_event(
+        &tenant_id,
+        existing.issue_number,
+        if is_unscheduling {
+            issue_timeline::events::UNSCHEDULED
+        } else {
+            issue_timeline::events::UPDATED
+        },
+        &user_context.email,
+        None,
+    )
+    .await;
+
     publish_event(&tenant_id, "ISSUE_UPDATED", &updated).await?;
 
     response::format_response(200, updated)
@@ -2282,6 +2419,7 @@ async fn handle_reschedule_issue(
             scheduled_at: Some(&scheduled_at),
             template_id: existing.template_id.as_deref(),
             content_type: &normalize_content_type(existing.content_type.as_deref()),
+            resend: false,
         },
         &scheduled_at,
     )
@@ -2292,6 +2430,21 @@ async fn handle_reschedule_issue(
     // caller asked; the other leaves a record promising a time the send won't
     // honour.
     update_issue_scheduled_at(&tenant_id, existing.issue_number, &scheduled_at).await?;
+
+    // Both instants, because the useful question about a moved send is what it
+    // moved *from* — a timeline showing only the new time cannot explain an
+    // issue that went out at an hour nobody expected.
+    issue_timeline::record_event(
+        &tenant_id,
+        existing.issue_number,
+        issue_timeline::events::RESCHEDULED,
+        &user_context.email,
+        Some(serde_json::json!({
+            "from": existing.scheduled_at,
+            "sendAt": scheduled_at,
+        })),
+    )
+    .await;
 
     let response = RescheduleIssueResponse {
         id: existing.issue_number.to_string(),
@@ -3215,6 +3368,14 @@ fn parse_issue_record(item: &HashMap<String, AttributeValue>) -> Result<IssueRec
         .and_then(|v| v.as_s().ok())
         .map(|s| s.to_string());
 
+    // Written by the state machine's failure path (`Update Issue Record -
+    // Failure`) and, until the timeline, read by nothing — the cause of a
+    // failed publish was stored on the record and never shown anywhere.
+    let failure_reason = item
+        .get("failureReason")
+        .and_then(|v| v.as_s().ok())
+        .map(|s| s.to_string());
+
     Ok(IssueRecord {
         pk,
         sk,
@@ -3235,6 +3396,7 @@ fn parse_issue_record(item: &HashMap<String, AttributeValue>) -> Result<IssueRec
         local_send,
         content_assembly,
         execution_arn,
+        failure_reason,
     })
 }
 
@@ -3280,6 +3442,12 @@ fn parse_issue_stats(item: &HashMap<String, AttributeValue>) -> Result<IssueStat
 
     let deliveries = item
         .get("deliveries")
+        .and_then(|v| v.as_n().ok())
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(0);
+
+    let sends = item
+        .get("sends")
         .and_then(|v| v.as_n().ok())
         .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or(0);
@@ -3340,6 +3508,7 @@ fn parse_issue_stats(item: &HashMap<String, AttributeValue>) -> Result<IssueStat
         opens,
         clicks,
         deliveries,
+        sends,
         bounces,
         complaints,
         subscribers,
@@ -3914,6 +4083,16 @@ struct IssueScheduleInput<'a> {
     scheduled_at: Option<&'a str>,
     template_id: Option<&'a str>,
     content_type: &'a str,
+    /// Whether this is a deliberate re-send of an already-`published` issue.
+    ///
+    /// It exists because the state machine's `Has Issue Been Processed?`
+    /// handshake treats `published` as "already done" and no-ops the send —
+    /// which is correct for every other way an execution can start, and is
+    /// exactly what made resend a silent no-op before. The flag is the one
+    /// thing that distinguishes an operator asking for a second send from a
+    /// duplicate execution arriving for an issue that already went out, so the
+    /// handshake gets to keep refusing the second while allowing the first.
+    resend: bool,
 }
 
 /// Environment variable holding the publish lead time, in minutes.
@@ -3961,7 +4140,14 @@ fn build_execution_input(input: &IssueScheduleInput<'_>) -> serde_json::Value {
         // The issue's send instant, or null for an immediate publish — where
         // "now" is the honest answer and the parsers' own fallback is correct.
         // Present-but-null for the same reason templateId is.
-        "sendAt": input.scheduled_at
+        "sendAt": input.scheduled_at,
+        // Lets the handshake admit a `published` issue for one more send.
+        // Always present (false, not absent) for the same reason as the two
+        // above — the definition reads it with an unconditional path. The
+        // Choice still guards on `IsPresent` so that an ISSUE-SEND entry
+        // created before this field existed, whose target input is frozen at
+        // creation time, evaluates false instead of raising States.Runtime.
+        "resend": input.resend
     })
 }
 
@@ -4333,6 +4519,41 @@ async fn mark_issue_scheduled(tenant_id: &str, issue_number: i32) -> Result<(), 
         .expression_attribute_values(
             ":updatedAt",
             AttributeValue::S(chrono::Utc::now().to_rfc3339()),
+        )
+        .send()
+        .await?;
+
+    Ok(())
+}
+
+/// Drops an issue's local-send progress record so a resend can plan a new one.
+///
+/// The record is one-per-issue (`sk: sendProgress`, see `SEND_PROGRESS_SK` in
+/// `functions/utils/send-progress.mjs`) and describes a single fan-out. Once
+/// that fan-out finishes it carries `completedAt`, and `startProgress` refuses
+/// to overwrite a record that has it — a guard that stops a redelivered group
+/// event from resurrecting a finished plan. A resend has to get past it, or the
+/// new fan-out's plan write is refused and the issue reports the previous
+/// send's groups indefinitely.
+///
+/// Deleting a record that isn't there is not an error: an issue that never had
+/// local send enabled has no progress record at all, which is the common case
+/// for the failure this exists to recover from.
+async fn clear_send_progress(tenant_id: &str, issue_number: i32) -> Result<(), AppError> {
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+    let table_name = std::env::var("TABLE_NAME")
+        .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
+
+    ddb_client
+        .delete_item()
+        .table_name(&table_name)
+        .key(
+            "pk",
+            AttributeValue::S(format!("{tenant_id}#{issue_number}")),
+        )
+        .key(
+            "sk",
+            AttributeValue::S(send_progress::SEND_PROGRESS_SK.to_string()),
         )
         .send()
         .await?;
@@ -5066,6 +5287,8 @@ async fn update_issue_record(
     let progress = send_progress::get_send_progress(tenant_id, updated_issue.issue_number).await;
     let workflow = get_workflow_state_for(&updated_issue, progress.is_some()).await;
 
+    let timeline = timeline_for(tenant_id, &updated_issue).await;
+
     Ok(build_issue_response(
         updated_issue,
         stats,
@@ -5073,6 +5296,7 @@ async fn update_issue_record(
         variant_stats,
         progress,
         workflow,
+        timeline,
     ))
 }
 
@@ -5256,6 +5480,28 @@ async fn publish_issue_published_event(
     }
 }
 
+/// An issue's timeline: everything recorded, plus the milestones the record
+/// already states.
+///
+/// The derive half is what makes this useful on the issues that already exist
+/// rather than only on the next one published — every issue has a `createdAt`,
+/// and a published one has a `publishedAt`. Built on every response that
+/// carries an issue, not just the detail fetch, so a client that adopts a
+/// mutation's response does not silently drop the history it was showing.
+async fn timeline_for(tenant_id: &str, issue: &IssueRecord) -> Vec<issue_timeline::TimelineEntry> {
+    issue_timeline::merge_entries(
+        issue_timeline::get_recorded_entries(tenant_id, issue.issue_number).await,
+        issue_timeline::derive_entries(
+            Some(issue.created_at.as_str()),
+            issue.scheduled_at.as_deref(),
+            issue.published_at.as_deref(),
+            issue.failure_reason.as_deref(),
+            Some(issue.updated_at.as_str()),
+            &issue.status,
+        ),
+    )
+}
+
 fn build_issue_response(
     issue: IssueRecord,
     stats: Option<IssueStats>,
@@ -5263,6 +5509,7 @@ fn build_issue_response(
     variant_stats: Vec<VariantStats>,
     send_progress: Option<send_progress::SendProgressResponse>,
     workflow: Option<send_progress::WorkflowState>,
+    timeline: Vec<issue_timeline::TimelineEntry>,
 ) -> GetIssueResponse {
     GetIssueResponse {
         id: issue.issue_number.to_string(),
@@ -5290,6 +5537,7 @@ fn build_issue_response(
         content_assembly: issue.content_assembly,
         send_progress,
         workflow,
+        timeline,
     }
 }
 
@@ -6651,12 +6899,14 @@ Thanks!"#;
             local_send: None,
             content_assembly: None,
             execution_arn: None,
+            failure_reason: None,
         };
 
         let stats = Some(IssueStats {
             opens: 150,
             clicks: 45,
             deliveries: 500,
+            sends: 500,
             bounces: 5,
             complaints: 2,
             subscribers: 0,
@@ -6667,7 +6917,7 @@ Thanks!"#;
             analytics: None,
         });
 
-        let response = build_issue_response(issue, stats, None, Vec::new(), None, None);
+        let response = build_issue_response(issue, stats, None, Vec::new(), None, None, Vec::new());
 
         assert_eq!(response.id, "42");
         assert_eq!(response.issue_number, 42);
@@ -6699,9 +6949,10 @@ Thanks!"#;
             local_send: None,
             content_assembly: None,
             execution_arn: None,
+            failure_reason: None,
         };
 
-        let response = build_issue_response(issue, None, None, Vec::new(), None, None);
+        let response = build_issue_response(issue, None, None, Vec::new(), None, None, Vec::new());
 
         assert_eq!(response.id, "1");
         assert_eq!(response.issue_number, 1);
@@ -7022,6 +7273,7 @@ Thanks!"#;
             local_send: None,
             content_assembly: None,
             execution_arn: execution_arn.map(str::to_string),
+            failure_reason: None,
         }
     }
 
@@ -7080,6 +7332,7 @@ Thanks!"#;
             scheduled_at: Some("2026-07-27T14:00:00+00:00"),
             template_id: Some("tmpl-1"),
             content_type: "markdown",
+            resend: false,
         });
 
         assert_eq!(
@@ -7090,7 +7343,8 @@ Thanks!"#;
                 "tenant": { "id": "tenant-123", "email": "owner@example.com" },
                 "templateId": "tmpl-1",
                 "contentType": "markdown",
-                "sendAt": "2026-07-27T14:00:00+00:00"
+                "sendAt": "2026-07-27T14:00:00+00:00",
+                "resend": false
             })
         );
         // Named individually because each one is a specific bug if it comes
@@ -7116,6 +7370,7 @@ Thanks!"#;
             scheduled_at: Some("2026-07-27T14:00:00+00:00"),
             template_id: None,
             content_type: "markdown",
+            resend: false,
         });
         assert_eq!(scheduled["sendAt"], "2026-07-27T14:00:00+00:00");
 
@@ -7126,6 +7381,7 @@ Thanks!"#;
             scheduled_at: None,
             template_id: None,
             content_type: "markdown",
+            resend: false,
         });
         // Present-but-null, like templateId: the definition reads it with an
         // unconditional `.$` path, where an absent field is an unretryable
@@ -7144,11 +7400,49 @@ Thanks!"#;
             scheduled_at: None,
             template_id: None,
             content_type: "json",
+            resend: false,
         });
 
         // Present-but-null, because the definition reads it with an
         // unconditional `.$` path: an absent field is a runtime error there.
         assert_eq!(input["templateId"], serde_json::Value::Null);
+    }
+
+    /// The flag that lets a `published` issue send again, and the reason the
+    /// handshake can keep refusing every other route to one. It has to be
+    /// present on every input, not just a resend's: the definition's Choice
+    /// tests `IsPresent` before `BooleanEquals`, and an input that omitted it
+    /// on the ordinary path would quietly stop matching if that guard were
+    /// ever tightened.
+    #[test]
+    fn test_build_execution_input_carries_the_resend_flag() {
+        let ordinary = build_execution_input(&IssueScheduleInput {
+            tenant_id: "tenant-123",
+            tenant_email: "owner@example.com",
+            issue_number: 227,
+            scheduled_at: Some("2026-08-03T14:00:00+00:00"),
+            template_id: None,
+            content_type: "markdown",
+            resend: false,
+        });
+        assert_eq!(ordinary["resend"], serde_json::Value::Bool(false));
+
+        let resent = build_execution_input(&IssueScheduleInput {
+            tenant_id: "tenant-123",
+            tenant_email: "owner@example.com",
+            issue_number: 227,
+            scheduled_at: None,
+            template_id: None,
+            content_type: "markdown",
+            resend: true,
+        });
+        assert_eq!(resent["resend"], serde_json::Value::Bool(true));
+
+        // A resend is an immediate publish: it carries no send instant, so the
+        // parse step answers "now" and the issue goes out as soon as the
+        // workflow reaches Publish. Scheduling it would re-introduce the wait
+        // that lost the send in the first place.
+        assert_eq!(resent["sendAt"], serde_json::Value::Null);
     }
 
     #[test]
@@ -7461,6 +7755,7 @@ Thanks!"#;
             local_send: None,
             content_assembly: None,
             execution_arn: None,
+            failure_reason: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -7489,6 +7784,7 @@ Thanks!"#;
             local_send: None,
             content_assembly: None,
             execution_arn: None,
+            failure_reason: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -7518,6 +7814,7 @@ Thanks!"#;
             local_send: None,
             content_assembly: None,
             execution_arn: None,
+            failure_reason: None,
         };
 
         let result = check_update_allowed(&issue);
@@ -7547,6 +7844,7 @@ Thanks!"#;
             local_send: None,
             content_assembly: None,
             execution_arn: None,
+            failure_reason: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -7575,6 +7873,7 @@ Thanks!"#;
             local_send: None,
             content_assembly: None,
             execution_arn: None,
+            failure_reason: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -7604,6 +7903,7 @@ Thanks!"#;
             local_send: None,
             content_assembly: None,
             execution_arn: None,
+            failure_reason: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -7633,6 +7933,7 @@ Thanks!"#;
             local_send: None,
             content_assembly: None,
             execution_arn: None,
+            failure_reason: None,
         };
 
         let result = check_delete_allowed(&issue);
@@ -8200,6 +8501,7 @@ Thanks!"#;
             local_send: None,
             send_progress: None,
             workflow: None,
+            timeline: Vec::new(),
         };
 
         let result = publish_event(tenant_id, event_type, &data).await;
@@ -8230,6 +8532,7 @@ Thanks!"#;
             local_send: None,
             content_assembly: None,
             execution_arn: None,
+            failure_reason: None,
         };
 
         let result = publish_event(tenant_id, event_type, &data).await;
@@ -8261,6 +8564,7 @@ Thanks!"#;
             opens: 450,
             clicks: 125,
             deliveries: 1000,
+            sends: 1000,
             bounces: 20,
             complaints: 5,
             subscribers: 900,
@@ -8289,6 +8593,7 @@ Thanks!"#;
             opens: 0,
             clicks: 0,
             deliveries: 0,
+            sends: 0,
             bounces: 0,
             complaints: 0,
             subscribers: 0,
@@ -8317,6 +8622,7 @@ Thanks!"#;
             opens: 333,
             clicks: 111,
             deliveries: 1000,
+            sends: 1000,
             bounces: 7,
             complaints: 2,
             subscribers: 1000,
@@ -8345,6 +8651,7 @@ Thanks!"#;
             opens: 950,
             clicks: 800,
             deliveries: 1000,
+            sends: 1000,
             bounces: 10,
             complaints: 1,
             subscribers: 1000,
@@ -8625,6 +8932,7 @@ Thanks!"#;
                 opens: 0,
                 clicks: 0,
                 deliveries: 0,
+                sends: 0,
                 bounces: 0,
                 complaints: 0,
                 subscribers: 0,

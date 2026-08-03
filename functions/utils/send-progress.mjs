@@ -27,6 +27,7 @@
 
 import { DynamoDBClient, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
+import { recordIssueEvent, ISSUE_EVENTS } from './issue-timeline.mjs';
 
 let ddb;
 function getClient() {
@@ -311,6 +312,7 @@ export const markGroupSent = async (issueId, label, { recipients, skipped = 0 })
     return;
   }
 
+  let stamped = true;
   try {
     await updateWithRetry({
       TableName: process.env.TABLE_NAME,
@@ -320,10 +322,30 @@ export const markGroupSent = async (issueId, label, { recipients, skipped = 0 })
       ExpressionAttributeValues: marshall({ ':now': new Date().toISOString() })
     });
   } catch (error) {
+    stamped = false;
     if (error.name !== 'ConditionalCheckFailedException') {
       console.error('[PROGRESS] Failed to stamp completion', { issueId, error: error.message });
     }
   }
+
+  // Gated on the stamp landing, which is what makes this exactly-once: the
+  // stamp's `attribute_not_exists` guard is the only thing in this function
+  // that a redelivered final group cannot pass twice. Everything above it is
+  // deliberately idempotent and would happily run again, and a timeline
+  // claiming the same send finished three times is worse than one that misses
+  // a duplicate.
+  if (!stamped) {
+    return;
+  }
+
+  // `issueId` is `<tenantId>#<issueNumber>` — the timeline writer takes the two
+  // separately because every other caller has them that way.
+  const separator = issueId.lastIndexOf('#');
+  await recordIssueEvent({
+    tenantId: issueId.slice(0, separator),
+    issueNumber: issueId.slice(separator + 1),
+    type: ISSUE_EVENTS.SEND_COMPLETED
+  });
 };
 
 /**

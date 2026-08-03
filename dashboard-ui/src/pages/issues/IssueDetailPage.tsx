@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Pencil, PencilLine, Trash, RefreshCw, AlertCircle, TrendingUp, Users, Shield, FileText, CheckCircle, Flame, Hash, CalendarDays, Clock, Send } from 'lucide-react';
+import { ArrowLeft, Pencil, PencilLine, Trash, RefreshCw, AlertCircle, TrendingUp, Users, Shield, FileText, CheckCircle, Flame, Hash, CalendarDays, Clock, Send, GitCommitVertical } from 'lucide-react';
 import { PageHero, PageHeroTitle, PageHeroChips, PageHeroChip, SegmentedControl } from '@readysetcloud/ui';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -10,6 +10,12 @@ import { IssueStatusBadge } from '../../components/issues/IssueStatusBadge';
 import { MarkdownPreview } from '../../components/issues/MarkdownPreview';
 import { DeleteIssueDialog } from '../../components/issues/DeleteIssueDialog';
 import { RescheduleIssueDialog } from '../../components/issues/RescheduleIssueDialog';
+import { ResendIssueDialog } from '../../components/issues/ResendIssueDialog';
+import {
+  IssueTimeline,
+  IssueTimelineStalledWarning
+} from '../../components/issues/IssueTimeline';
+import { findStalledSend } from '../../utils/issueTimeline';
 import { SubscriberMetricsPanel } from '../../components/issues/SubscriberMetricsPanel';
 import { AbTestResults } from '../../components/issues/AbTestResults';
 import { SendProgressCard } from '../../components/issues/SendProgressCard';
@@ -125,6 +131,7 @@ export const IssueDetailPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [rescheduleDialogOpen, setRescheduleDialogOpen] = useState(false);
+  const [resendDialogOpen, setResendDialogOpen] = useState(false);
   const [selectedLinkId, setSelectedLinkId] = useState<string | null>(null);
   const [isAnalyticsRebuilding, setIsAnalyticsRebuilding] = useState(false);
   const [isMarkingPublished, setIsMarkingPublished] = useState(false);
@@ -535,7 +542,12 @@ export const IssueDetailPage: React.FC = () => {
 
   // Times here carry a zone label: an issue's send time is only meaningful
   // against the newsletter's timezone, which may not be the viewer's.
-  const { formatDateTime: formatDate } = useTenantDateFormat();
+  const {
+    formatDateTime: formatDate,
+    formatLongDate,
+    formatTime,
+    timeZoneLabel
+  } = useTenantDateFormat();
 
   const isDraft = useMemo(() => issue?.status === 'draft', [issue?.status]);
   const isPublished = useMemo(() => issue?.status === 'published', [issue?.status]);
@@ -564,6 +576,73 @@ export const IssueDetailPage: React.FC = () => {
     () => issue?.status === 'scheduled' && !!issue?.scheduledAt,
     [issue?.status, issue?.scheduledAt]
   );
+
+  /**
+   * A published issue that was never actually mailed.
+   *
+   * `sends` counts what the mail provider accepted, so zero on a `published`
+   * issue means the publish finished but the send behind it never happened —
+   * nothing recovers from that on its own, because the workflow ended
+   * reporting success. Gated on `sends` rather than `deliveries` because an
+   * issue can legitimately be sent and delivered to nobody (every address
+   * bouncing), and offering a resend for that would mail the same broken list
+   * again.
+   *
+   * Stats are absent until the issue has a stats record, which a published
+   * issue always does — `undefined` therefore means "not loaded yet", not
+   * "zero", so the button stays hidden rather than flashing in during load.
+   *
+   * An unfinished fan-out disqualifies the issue no matter what the other two
+   * say. `published` with no sends is also what a local send looks like in the
+   * moments before its first group fires, and resending then would delete the
+   * plan the running fan-out reports against and strand it at `sending`. The
+   * API refuses this case outright; the button hides it so nobody is offered a
+   * repair for an issue that is working correctly.
+   */
+  const canResend = useMemo(
+    () =>
+      issue?.status === 'published' &&
+      issue?.stats?.sends === 0 &&
+      !(issue?.sendProgress && !issue.sendProgress.completedAt),
+    [issue?.status, issue?.stats?.sends, issue?.sendProgress]
+  );
+
+  /**
+   * A send that was handed off and then never happened.
+   *
+   * Read off the timeline rather than the status, because the status cannot
+   * show it: `published` is what this failure looks like. The sequence — a
+   * hand-off, a deferral, and then nothing — is the only evidence there is.
+   */
+  const stalledSend = useMemo(
+    () => findStalledSend(issue?.timeline ?? []),
+    [issue?.timeline]
+  );
+
+  /**
+   * Sends a published issue again.
+   *
+   * Only the toast reports the outcome: the API queues the send and returns,
+   * so there is nothing to reflect into the page beyond the status, which the
+   * reload picks up once the workflow claims the issue.
+   */
+  const handleResend = useCallback(async () => {
+    if (!id) return;
+
+    const response = await issuesService.resendIssue(id);
+
+    if (!response.success) {
+      throw new Error(response.error || 'Could not send this issue again.');
+    }
+
+    setResendDialogOpen(false);
+    addToast({
+      type: 'success',
+      title: 'Send queued',
+      message: 'This issue is going out to everyone who never received it.',
+    });
+    loadIssue();
+  }, [id, addToast, loadIssue]);
 
   /**
    * Moves the send time of a scheduled issue.
@@ -881,6 +960,18 @@ export const IssueDetailPage: React.FC = () => {
                   >
                     <Clock className="h-4 w-4 mr-2" />
                     <span className="hidden sm:inline">Change send time</span>
+                  </Button>
+                )}
+                {canResend && (
+                  <Button
+                    onClick={() => setResendDialogOpen(true)}
+                    variant="outline"
+                    size="sm"
+                    aria-label="Send this issue again"
+                    className="hover:bg-primary-50 hover:border-primary-300 dark:hover:bg-primary-900/20 transition-colors min-h-[44px] min-w-[44px]"
+                  >
+                    <Send className="h-4 w-4 mr-2" />
+                    <span className="hidden sm:inline">Send it again</span>
                   </Button>
                 )}
                 {isDraft && (
@@ -1307,6 +1398,33 @@ export const IssueDetailPage: React.FC = () => {
           </CollapsibleSection>
         )}
 
+        {/* Timeline. Deliberately outside SECTION_CONFIGS and its
+            `isPublished && analytics` gate: a draft, a failed publish and an
+            issue that never sent are exactly the cases with no analytics to
+            show, and exactly the ones whose sequence somebody needs. */}
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <GitCommitVertical className="w-5 h-5" />
+              Timeline
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {stalledSend && (
+              <IssueTimelineStalledWarning
+                stalled={stalledSend}
+                formatDateTime={formatDate}
+              />
+            )}
+            <IssueTimeline
+              entries={issue.timeline ?? []}
+              formatLongDate={formatLongDate}
+              formatTime={formatTime}
+              timeZoneLabel={timeZoneLabel()}
+            />
+          </CardContent>
+        </Card>
+
         {/* Content Preview Section - Moved to bottom */}
         <Card className="mb-6">
           <CardHeader>
@@ -1382,6 +1500,17 @@ export const IssueDetailPage: React.FC = () => {
           onClose={() => setRescheduleDialogOpen(false)}
           issue={issue}
           onSubmit={handleReschedule}
+        />
+      )}
+
+      {/* Resend Dialog */}
+      {canResend && issue && (
+        <ResendIssueDialog
+          isOpen={resendDialogOpen}
+          onClose={() => setResendDialogOpen(false)}
+          issue={issue}
+          subscribers={issue.stats?.subscribers}
+          onSubmit={handleResend}
         />
       )}
 

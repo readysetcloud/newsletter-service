@@ -1237,6 +1237,13 @@ Resources:
                 - ses:GetEmailIdentity
                 - ses:PutEmailIdentityDkimSigningAttributes
                 - ses:SendCustomVerificationEmail
+                # POST /senders/{id}/test, which is the pre-flight somebody runs
+                # to confirm a sender works before trusting it with an issue.
+                # `send_test_email_via_ses` (senders.rs) has always called this
+                # and the policy has never granted it, so the check that exists
+                # to build confidence in a sender has only ever returned
+                # AccessDenied.
+                - ses:SendEmail
                 - ses:CreateTenantResourceAssociation
                 - ses:DeleteTenantResourceAssociation
                 - ses:GetIdentityVerificationAttributes
@@ -1450,9 +1457,18 @@ Resources:
           Statement:
             - Effect: Allow
               Action:
-                - sesv2:CreateTenant
-                - sesv2:CreateContactList
-                - sesv2:TagResource
+                # `ses:`, not `sesv2:`. There is no `sesv2` IAM service prefix -
+                # the SES v2 API authorizes under `ses:` like v1 does, which is
+                # why `ses:CreateTenantResourceAssociation` (also v2-only) is
+                # spelled that way further up this file. Written as `sesv2:`
+                # these three granted nothing at all, and because IAM does not
+                # reject an unknown prefix the policy deployed clean: tenant
+                # finalization has been failing for every new tenant with an
+                # AccessDenied that nothing here could explain.
+                - ses:CreateTenant
+                - ses:CreateContactList
+                # Both creates pass `Tags`, which SES authorizes separately.
+                - ses:TagResource
               Resource: "*"
             - Effect: Allow
               Action:
@@ -2140,6 +2156,9 @@ Resources:
                 - dynamodb:GetItem
                 - dynamodb:PutItem
                 - dynamodb:Query
+                # Claims `sending` ahead of a local-send fan-out, so the state
+                # machine's terminal write stands down instead of racing it.
+                - dynamodb:UpdateItem
               Resource: !GetAtt NewsletterTable.Arn
             # getSnippets() reads tenant snippets via the GSI1 index when a
             # custom template is selected.
@@ -2184,6 +2203,11 @@ Resources:
               Action:
                 - dynamodb:UpdateItem
                 - dynamodb:Query
+                # Appends the send-path entries to the issue's timeline —
+                # send_deferred above all, which is the only record that a
+                # deferred delivery is pending
+                # (functions/utils/issue-timeline.mjs).
+                - dynamodb:PutItem
               Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
               Action: dynamodb:Query
@@ -2411,6 +2435,12 @@ Resources:
               Action:
                 - dynamodb:GetItem
                 - dynamodb:Query
+                # Appends the `workflow_started` entry to the issue's timeline
+                # (functions/utils/issue-timeline.mjs). Without it every one of
+                # those writes is an AccessDenied that `recordIssueEvent`
+                # swallows by design, so publishing carries on and the timeline
+                # silently loses the milestone.
+                - dynamodb:PutItem
               Resource: !GetAtt NewsletterTable.Arn
             # getSnippets() reads tenant snippets via the GSI1 index.
             - Effect: Allow

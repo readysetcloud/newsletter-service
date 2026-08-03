@@ -33,6 +33,9 @@ vi.mock('@/contexts/SettingsContext', () => ({
   useTenantDateFormat: () => ({
     formatDateTime: (value: string) => value,
     formatDate: (value: string) => value,
+    formatLongDate: (value: string) => value.slice(0, 10),
+    formatTime: (value: string) => value.slice(11, 16),
+    timeZoneLabel: () => 'UTC',
     timeZone: 'UTC',
   }),
 }));

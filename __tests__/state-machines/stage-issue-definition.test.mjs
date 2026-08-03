@@ -159,7 +159,15 @@ const EXPECTED_CATCH_ROUTES = {
   // Degraded personalization is acceptable; a missed issue is not. Pinned here
   // and again in the "cannot block or fail a send" test below.
   'Extract Links': ['States.ALL -> Parse Issue (error discarded)'],
-  'Mark Issue In Progress': ['States.ALL -> Update Issue Record - Failure ($.error)'],
+  // The claim is a compare-and-swap, so a refused condition means another
+  // execution got there first - the same answer the handshake gives a
+  // duplicate, a moment later. It has to precede the ALL catcher, which would
+  // otherwise stamp `failed` on a healthy issue on behalf of the execution
+  // that is busy publishing it.
+  'Mark Issue In Progress': [
+    'DynamoDB.ConditionalCheckFailedException -> Success - Duplicate Request (error discarded)',
+    'States.ALL -> Update Issue Record - Failure ($.error)'
+  ],
   // Post-publish courtesy email: a failure here must not relabel an issue that
   // published fine, because `Has Issue Been Processed?` treats `failed` as
   // re-processable and a re-stage would send the issue twice.
@@ -949,6 +957,21 @@ describe('stage-issue definition: identifiers, not content', () => {
     expect(state.Parameters.UpdateExpression).not.toMatch(/:content/);
   });
 
+  // The handshake reads the status and the claim writes it. Without a condition
+  // tying the write to what the read saw, the two are advisory: two executions
+  // for the same issue - two POSTs to /resend, a Scheduler entry that fired
+  // twice - both see a sendable status, both claim, and both reach `Publish`.
+  // The recipient idempotency marker is only written once SES accepts, so two
+  // concurrent sends select the same subscribers and mail them twice.
+  it('claims the issue atomically against the status the handshake read', () => {
+    const { state } = allStates.find(({ name }) => name === CLAIM_STATE);
+
+    expect(state.Parameters.ConditionExpression).toBe('#status = :expected');
+    expect(state.Parameters.ExpressionAttributeValues[':expected']).toEqual({
+      'S.$': '$.existingNewsletter.Item.status.S'
+    });
+  });
+
   it('binds the content variables in the one claim state', () => {
     for (const variable of ['content', 'callerSubject']) {
       const binders = allStates
@@ -1060,16 +1083,85 @@ describe('stage-issue definition: identifiers, not content', () => {
   // about yet. Every field named here is one the API has always emitted; a new
   // one is only safe to read this way once every outstanding Scheduler entry
   // carries it, which is never true in the deploy that introduces it.
+  //
+  // The one exemption is a Choice rule that tests `IsPresent` on the same path
+  // first. `IsPresent` is the only comparator ASL defines on a path that does
+  // not resolve, so it converts the States.Runtime this rule exists to prevent
+  // into a plain `false` — which is the correct answer for an entry created
+  // before the field existed. The exemption is deliberately narrow: it is per
+  // rule, not per state, so a sibling rule cannot borrow another's guard, and
+  // it does not extend to `.$` parameter fields, which have no such comparator
+  // and stay banned outright.
   it('reads no execution-input field that a pending Scheduler entry may lack', () => {
     const ALWAYS_PRESENT = ['fileName', 'issueId', 'tenant', 'templateId', 'contentType'];
+
+    const lateFieldIn = (value) => {
+      const match = /^\$\$\.Execution\.Input\.([A-Za-z0-9_]+)/.exec(value);
+      return match && !ALWAYS_PRESENT.includes(match[1]) ? value : null;
+    };
+
+    // Every path this rule proves present before comparing it.
+    const guardedPathsIn = (rule) => {
+      const guarded = new Set();
+      const visit = (node) => {
+        if (Array.isArray(node)) {
+          node.forEach(visit);
+        } else if (node && typeof node === 'object') {
+          if (node.IsPresent === true && typeof node.Variable === 'string') {
+            guarded.add(node.Variable);
+          }
+          Object.values(node).forEach(visit);
+        }
+      };
+      visit(rule);
+      return guarded;
+    };
+
     const reads = [];
 
-    walkStrings(definition, '$', (value) => {
-      const match = /^\$\$\.Execution\.Input\.([A-Za-z0-9_]+)/.exec(value);
-      if (match && !ALWAYS_PRESENT.includes(match[1])) reads.push(value);
-    });
+    for (const { name, state } of allStates) {
+      const body = ownBody(state);
+
+      if (state.Type === 'Choice') {
+        for (const [index, rule] of (state.Choices ?? []).entries()) {
+          const guarded = guardedPathsIn(rule);
+          walkStrings(rule, `$.${name}.Choices[${index}]`, (value) => {
+            if (lateFieldIn(value) && !guarded.has(value)) reads.push(value);
+          });
+        }
+        // Anything outside the rules gets no exemption.
+        walkStrings({ ...body, Choices: undefined }, `$.${name}`, (value) => {
+          if (lateFieldIn(value)) reads.push(value);
+        });
+        continue;
+      }
+
+      walkStrings(body, `$.${name}`, (value) => {
+        if (lateFieldIn(value)) reads.push(value);
+      });
+    }
 
     expect(reads).toEqual([]);
+  });
+
+  // The resend branch is the only reason a `published` issue can send again, so
+  // both halves of its guard are pinned: without `IsPresent` an ISSUE-SEND entry
+  // predating the field kills an ordinary scheduled send, and without
+  // `BooleanEquals` the mere presence of the field would resend every issue that
+  // had already gone out.
+  it('admits a published issue only behind a guarded resend flag', () => {
+    const { state } = allStates.find(({ name }) => name === 'Has Issue Been Processed?');
+    const publishedEdge = state.Choices.find((choice) =>
+      JSON.stringify(choice.And ?? choice).includes('"StringEquals":"published"')
+    );
+
+    expect(publishedEdge?.Next).toBe(CLAIM_STATE);
+    expect(publishedEdge.And).toEqual(
+      expect.arrayContaining([
+        { Variable: '$$.Execution.Input.resend', IsPresent: true },
+        { Variable: '$$.Execution.Input.resend', BooleanEquals: true }
+      ])
+    );
   });
 });
 

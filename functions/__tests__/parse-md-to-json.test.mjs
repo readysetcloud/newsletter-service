@@ -354,6 +354,26 @@ describe('parse-md-to-json tenant settings', () => {
     expect(result.data.metadata.date).toBe('June 29, 2026');
   });
 
+  // Both Scheduler entries are `at()` expressions, and Scheduler refuses one in
+  // the past with a ValidationException that neither entry's Retry lists — so
+  // it takes the Parallel's Catch and stamps the issue `failed` *after* the
+  // mail has gone out. The trigger is any send whose instant is already behind
+  // it: an immediate publish of a stale draft, and every resend of an issue
+  // more than three days old. parse-json-issue.mjs has always clamped; this is
+  // the markdown path agreeing with it.
+  it('dates the cleanup and report jobs from now when the send instant has passed', async () => {
+    await loadIsolated([], { timezone: 'America/Chicago', defaultSendTime: '09:00' });
+
+    // Frontmatter a month behind the fixed clock (2026-06-01T00:00:00Z), and no
+    // forwarded sendAt — the resend shape.
+    const stale = md('Some body copy.').replace('date: 2026-06-25', 'date: 2026-05-01');
+    const result = await handler(issue({ content: stale }));
+
+    expect(result.sendAtDate).toBe('now');
+    expect(result.listCleanupDate).toBe('2026-06-04T00:00:00');
+    expect(result.reportStatsDate).toBe('2026-06-06T00:00:00');
+  });
+
   // An immediate publish carries `sendAt: null` on the execution input, which
   // must leave the frontmatter path exactly as it was.
   it('falls back to the frontmatter date when no send instant is forwarded', async () => {

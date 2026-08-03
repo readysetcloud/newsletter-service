@@ -24,7 +24,10 @@ jest.unstable_mockModule('@aws-sdk/client-eventbridge', () => ({
 jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
   DynamoDBClient: jest.fn(() => ddbInstance),
   QueryCommand: jest.fn((params) => ({ __type: 'Query', ...params })),
-  UpdateItemCommand: jest.fn((params) => ({ __type: 'UpdateItem', ...params }))
+  UpdateItemCommand: jest.fn((params) => ({ __type: 'UpdateItem', ...params })),
+  // The send path appends timeline entries (send_deferred, fanout_planned,
+  // sending_started) as it goes.
+  PutItemCommand: jest.fn((params) => ({ __type: 'PutItem', ...params }))
 }));
 
 jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({

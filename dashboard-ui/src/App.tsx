@@ -515,6 +515,12 @@ function App() {
                       }
                     />
 
+                    {/* The dashboard lives at `/`, but sign-up, onboarding and
+                        the error boundary all send people to `/dashboard`.
+                        Naming the alias keeps those honest instead of leaving
+                        them to fall through the catch-all below. */}
+                    <Route path="/dashboard" element={<Navigate to="/" replace />} />
+
                     {/* Catch all - redirect to home */}
                     <Route path="*" element={<Navigate to="/" replace />} />
                   </Routes>

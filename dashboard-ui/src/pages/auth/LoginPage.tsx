@@ -1,11 +1,16 @@
 
-import { Link, Navigate } from 'react-router-dom';
+import { Link, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { LoginForm } from '@/components/auth/LoginForm';
 import { BRAND } from '@/constants/brand';
 
+interface LoginRedirectState {
+  from?: { pathname?: string };
+}
+
 export function LoginPage() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, sessionExpired } = useAuth();
+  const location = useLocation();
 
   // Show loading spinner while checking authentication
   if (isLoading) {
@@ -22,9 +27,13 @@ export function LoginPage() {
     );
   }
 
-  // Redirect to dashboard if already authenticated
+  // Send an authenticated visitor back where they were headed. ProtectedRoute
+  // records that in `state.from`; `/` is the dashboard. (This used to point at
+  // `/dashboard`, which is not a route — it only worked by falling through the
+  // catch-all, and it threw away the route the user actually asked for.)
   if (isAuthenticated) {
-    return <Navigate to="/dashboard" replace />;
+    const from = (location.state as LoginRedirectState | null)?.from?.pathname;
+    return <Navigate to={from && from !== '/login' ? from : '/'} replace />;
   }
 
   return (
@@ -41,6 +50,17 @@ export function LoginPage() {
           </p>
         </div>
       </div>
+
+      {sessionExpired && (
+        <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
+          <div
+            role="status"
+            className="bg-warning-50 border border-warning-200 rounded-md p-3 text-sm text-warning-600"
+          >
+            Your session expired. Please sign in again.
+          </div>
+        </div>
+      )}
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
         <LoginForm onSuccess={() => {

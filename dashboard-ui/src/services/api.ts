@@ -1,4 +1,4 @@
-import { getFreshIdToken } from '@readysetcloud/ui/auth';
+import { getFreshIdToken, signOut } from '@readysetcloud/ui/auth';
 import type { ApiResponse, RequestConfig, ApiClientConfig } from '@/types';
 import { parseApiError, shouldRetryError, getRetryDelay } from '@/utils/errorHandling';
 
@@ -24,6 +24,34 @@ class ApiClient {
     } catch (error) {
       console.error('Error getting auth token:', error);
       return null;
+    }
+  }
+
+  /**
+   * A 401 says the credential this request carried is dead. Clear the session
+   * so the app is honestly signed out and the router can render the login form.
+   *
+   * Navigating here with `window.location.href` was the redirect loop: the hard
+   * reload left the dead session in storage, so the login page still read as
+   * authenticated, redirected into a protected route, got another 401, and
+   * reloaded again — losing any error state on the way, which is why it never
+   * said anything.
+   */
+  private async endDeadSession(): Promise<void> {
+    try {
+      // One more refresh in case the token simply aged out mid-flight. If that
+      // works the session is fine and the caller can retry.
+      if (await this.getAuthToken()) {
+        return;
+      }
+    } catch {
+      // An unusable refresh is a dead session — fall through and clear it.
+    }
+
+    try {
+      await signOut();
+    } catch (error) {
+      console.error('Error clearing expired session:', error);
     }
   }
 
@@ -83,8 +111,9 @@ class ApiClient {
 
         // Handle specific HTTP status codes
         if (response.status === 401) {
-          // Redirect to login page
-          window.location.href = '/login';
+          // Clearing the session drops the app to signed-out, and the route
+          // guards take it from there.
+          await this.endDeadSession();
           throw new Error('Authentication required. Please sign in again.');
         } else if (response.status === 403) {
           throw new Error('Access denied. You do not have permission to perform this action.');

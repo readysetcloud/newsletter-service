@@ -2604,10 +2604,18 @@ Resources:
             - Effect: Allow
               Action: states:StartExecution
               Resource: !Ref MonthlyReportStateMachine
+            # The tenant record does not hold the owner's address - the self-serve
+            # path writes `email` as the tenant's SES setup map and the brand path
+            # omits it. The address is on the Cognito user, found by the record's
+            # `createdBy` sub.
+            - Effect: Allow
+              Action: cognito-idp:ListUsers
+              Resource: !GetAtt NewsletterUserPool.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           STATE_MACHINE_ARN: !Ref MonthlyReportStateMachine
+          USER_POOL_ID: !Ref NewsletterUserPool
       Events:
         MonthlySchedule:
           Type: Schedule

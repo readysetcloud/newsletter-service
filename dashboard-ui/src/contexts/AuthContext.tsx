@@ -1,19 +1,18 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 import {
-  AUTH_KEY,
   claims,
   confirmSignUp as rscConfirmSignUp,
   getFreshIdToken,
   isSignedIn,
   onAuthChange,
-  readSession,
   resendConfirmationCode,
   signIn as rscSignIn,
   signOut as rscSignOut,
   signUp as rscSignUp,
 } from '@readysetcloud/ui/auth';
 import type { IdClaims } from '@readysetcloud/ui/auth';
+import { forceRefreshIdToken } from '@/services/session';
 
 interface User {
   userId: string;
@@ -189,13 +188,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const refreshUser = async () => {
     try {
       // Force a token refresh so new claims (e.g. custom:tenant_id set during
-      // onboarding) show up: mark the session expired, then ask for a fresh
-      // token. Candidate for a first-class forceRefresh in @readysetcloud/ui.
-      const session = readSession();
-      if (session?.refreshToken) {
-        localStorage.setItem(AUTH_KEY, JSON.stringify({ ...session, expiresAt: 0 }));
-        await getFreshIdToken();
-      }
+      // onboarding) show up — getFreshIdToken() on its own would return the
+      // stored token with the stale claims still in it.
+      await forceRefreshIdToken();
       setUser(userFromClaims(claims()));
       setIsAuthenticated(isSignedIn());
     } catch (error) {

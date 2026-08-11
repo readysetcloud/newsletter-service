@@ -1,6 +1,7 @@
 import { getFreshIdToken, signOut } from '@readysetcloud/ui/auth';
 import type { ApiResponse, RequestConfig, ApiClientConfig } from '@/types';
 import { parseApiError, shouldRetryError, getRetryDelay } from '@/utils/errorHandling';
+import { forceRefreshIdToken } from './session';
 
 // API Client configuration
 const DEFAULT_CONFIG: ApiClientConfig = {
@@ -28,8 +29,8 @@ class ApiClient {
   }
 
   /**
-   * A 401 says the credential this request carried is dead. Clear the session
-   * so the app is honestly signed out and the router can render the login form.
+   * Clear the session so the app is honestly signed out and the router can
+   * render the login form.
    *
    * Navigating here with `window.location.href` was the redirect loop: the hard
    * reload left the dead session in storage, so the login page still read as
@@ -38,16 +39,6 @@ class ApiClient {
    * said anything.
    */
   private async endDeadSession(): Promise<void> {
-    try {
-      // One more refresh in case the token simply aged out mid-flight. If that
-      // works the session is fine and the caller can retry.
-      if (await this.getAuthToken()) {
-        return;
-      }
-    } catch {
-      // An unusable refresh is a dead session — fall through and clear it.
-    }
-
     try {
       await signOut();
     } catch (error) {
@@ -58,7 +49,8 @@ class ApiClient {
   private async request<T>(
     endpoint: string,
     config: RequestConfig = {},
-    retryCount = 0
+    retryCount = 0,
+    authRetried = false
   ): Promise<ApiResponse<T>> {
     const {
       method = 'GET',
@@ -111,8 +103,18 @@ class ApiClient {
 
         // Handle specific HTTP status codes
         if (response.status === 401) {
-          // Clearing the session drops the app to signed-out, and the route
-          // guards take it from there.
+          // The server rejected the credential this request carried. It may
+          // only have aged out in flight, so force a genuinely new token and
+          // give the request one more go — `getAuthToken()` alone would hand
+          // back the same rejected token, since it renews on local expiry
+          // rather than on what the server said.
+          //
+          // A token that can't be renewed, or a renewed one the server rejects
+          // too, means the session is dead. Clearing it drops the app to
+          // signed-out and the route guards take it from there.
+          if (!authRetried && (await forceRefreshIdToken())) {
+            return this.request<T>(endpoint, config, retryCount, true);
+          }
           await this.endDeadSession();
           throw new Error('Authentication required. Please sign in again.');
         } else if (response.status === 403) {
@@ -143,7 +145,7 @@ class ApiClient {
       if (retryCount < this.config.retries && this.shouldRetry(error)) {
         const delay = getRetryDelay(retryCount + 1, this.config.retryDelay);
         await this.delay(delay);
-        return this.request<T>(endpoint, config, retryCount + 1);
+        return this.request<T>(endpoint, config, retryCount + 1, authRetried);
       }
 
       const errorInfo = parseApiError(error);

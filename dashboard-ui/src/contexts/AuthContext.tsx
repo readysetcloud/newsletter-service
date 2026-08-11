@@ -1,19 +1,18 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 import {
-  AUTH_KEY,
   claims,
   confirmSignUp as rscConfirmSignUp,
   getFreshIdToken,
   isSignedIn,
   onAuthChange,
-  readSession,
   resendConfirmationCode,
   signIn as rscSignIn,
   signOut as rscSignOut,
   signUp as rscSignUp,
 } from '@readysetcloud/ui/auth';
 import type { IdClaims } from '@readysetcloud/ui/auth';
+import { forceRefreshIdToken } from '@/services/session';
 
 interface User {
   userId: string;
@@ -34,6 +33,13 @@ interface AuthContextType {
   isAuthenticated: boolean;
   isLoading: boolean;
   error: string | null;
+  /**
+   * True when the session ended on its own — an id token that could not be
+   * renewed, or a 401 from the API — rather than because the user signed out.
+   * The login page reads this so an expired session explains itself instead of
+   * silently re-rendering the form.
+   */
+  sessionExpired: boolean;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string, firstName: string, lastName: string) => Promise<{ isSignUpComplete: boolean; nextStep?: unknown }>;
   confirmSignUp: (email: string, confirmationCode: string) => Promise<void>;
@@ -74,25 +80,77 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [isAuthenticated, setIsAuthenticated] = useState(() => isSignedIn());
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  // `isSignedIn()` only reports that tokens are *stored*, not that they still
+  // work, so a stored session starts out unverified. Holding the routes until
+  // the first refresh settles keeps a dead session from flashing the dashboard
+  // on its way back to the login page.
+  const [isRestoring, setIsRestoring] = useState(() => isSignedIn());
+
+  // Tells "the session went away" apart from "the user pressed Sign Out" —
+  // only the former owes the login page an explanation.
+  const wasSignedIn = useRef(isAuthenticated);
+  const signingOut = useRef(false);
 
   useEffect(() => {
     // Sign-in/out in this tab or another one (storage events) re-syncs state.
     return onAuthChange(() => {
+      const signedIn = isSignedIn();
+      if (signedIn) {
+        setSessionExpired(false);
+      } else if (wasSignedIn.current && !signingOut.current) {
+        setSessionExpired(true);
+      }
+      wasSignedIn.current = signedIn;
+      signingOut.current = false;
       setUser(userFromClaims(claims()));
-      setIsAuthenticated(isSignedIn());
+      setIsAuthenticated(signedIn);
     });
+  }, []);
+
+  useEffect(() => {
+    if (!isSignedIn()) return;
+
+    // Revalidate the stored session once per load. An id token that has merely
+    // aged out is renewed here from the refresh token; one that cannot be
+    // renewed is cleared by @readysetcloud/ui, which fires the listener above
+    // and drops us to signed-out. Without this pass every route believes a dead
+    // session, every request 401s, and /login bounces straight back into a
+    // protected route — the silent redirect loop.
+    let cancelled = false;
+    void (async () => {
+      try {
+        await getFreshIdToken();
+      } catch (err) {
+        // A refresh that fails on the network leaves the session in place and
+        // is retried by the next request; only a rejected refresh clears it.
+        console.error('Error restoring session:', err);
+      } finally {
+        if (!cancelled) setIsRestoring(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const signIn = async (email: string, password: string) => {
     try {
       setIsLoading(true);
       setError(null);
+      setSessionExpired(false);
 
       const result = await rscSignIn(email, password);
       if (result.kind === 'newPasswordRequired') {
         setError('New password required. Please contact administrator.');
+        return;
       }
-      // Success updates state via onAuthChange.
+      // Success updates state via onAuthChange. A session the browser refused
+      // to keep — blocked site data, Safari's private mode — throws
+      // `SessionNotPersisted` out of rscSignIn as of @readysetcloud/ui 0.7.1
+      // rather than reporting a success with nothing behind it, so the catch
+      // below has the message to show.
     } catch (error: unknown) {
       console.error('Sign in error:', error);
       setError(getErrorMessage(error) || 'An error occurred during sign in');
@@ -106,12 +164,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const signOut = async () => {
     try {
       setIsLoading(true);
+      signingOut.current = true;
       await rscSignOut();
       setError(null);
+      setSessionExpired(false);
     } catch (error: unknown) {
       console.error('Sign out error:', error);
       setError('Error signing out');
     } finally {
+      signingOut.current = false;
       setIsLoading(false);
     }
   };
@@ -127,13 +188,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const refreshUser = async () => {
     try {
       // Force a token refresh so new claims (e.g. custom:tenant_id set during
-      // onboarding) show up: mark the session expired, then ask for a fresh
-      // token. Candidate for a first-class forceRefresh in @readysetcloud/ui.
-      const session = readSession();
-      if (session?.refreshToken) {
-        localStorage.setItem(AUTH_KEY, JSON.stringify({ ...session, expiresAt: 0 }));
-        await getFreshIdToken();
-      }
+      // onboarding) show up — getFreshIdToken() on its own would return the
+      // stored token with the stale claims still in it.
+      await forceRefreshIdToken();
       setUser(userFromClaims(claims()));
       setIsAuthenticated(isSignedIn());
     } catch (error) {
@@ -196,8 +253,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const value: AuthContextType = {
     user,
     isAuthenticated,
-    isLoading,
+    // Restoring a stored session is a loading state as far as the routes are
+    // concerned: they must not decide where to send anyone until it settles.
+    isLoading: isLoading || isRestoring,
     error,
+    sessionExpired,
     signIn,
     signUp,
     confirmSignUp,

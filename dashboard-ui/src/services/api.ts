@@ -1,6 +1,7 @@
-import { getFreshIdToken } from '@readysetcloud/ui/auth';
+import { getFreshIdToken, signOut } from '@readysetcloud/ui/auth';
 import type { ApiResponse, RequestConfig, ApiClientConfig } from '@/types';
 import { parseApiError, shouldRetryError, getRetryDelay } from '@/utils/errorHandling';
+import { forceRefreshIdToken } from './session';
 
 // API Client configuration
 const DEFAULT_CONFIG: ApiClientConfig = {
@@ -27,10 +28,29 @@ class ApiClient {
     }
   }
 
+  /**
+   * Clear the session so the app is honestly signed out and the router can
+   * render the login form.
+   *
+   * Navigating here with `window.location.href` was the redirect loop: the hard
+   * reload left the dead session in storage, so the login page still read as
+   * authenticated, redirected into a protected route, got another 401, and
+   * reloaded again — losing any error state on the way, which is why it never
+   * said anything.
+   */
+  private async endDeadSession(): Promise<void> {
+    try {
+      await signOut();
+    } catch (error) {
+      console.error('Error clearing expired session:', error);
+    }
+  }
+
   private async request<T>(
     endpoint: string,
     config: RequestConfig = {},
-    retryCount = 0
+    retryCount = 0,
+    authRetried = false
   ): Promise<ApiResponse<T>> {
     const {
       method = 'GET',
@@ -83,8 +103,19 @@ class ApiClient {
 
         // Handle specific HTTP status codes
         if (response.status === 401) {
-          // Redirect to login page
-          window.location.href = '/login';
+          // The server rejected the credential this request carried. It may
+          // only have aged out in flight, so force a genuinely new token and
+          // give the request one more go — `getAuthToken()` alone would hand
+          // back the same rejected token, since it renews on local expiry
+          // rather than on what the server said.
+          //
+          // A token that can't be renewed, or a renewed one the server rejects
+          // too, means the session is dead. Clearing it drops the app to
+          // signed-out and the route guards take it from there.
+          if (!authRetried && (await forceRefreshIdToken())) {
+            return this.request<T>(endpoint, config, retryCount, true);
+          }
+          await this.endDeadSession();
           throw new Error('Authentication required. Please sign in again.');
         } else if (response.status === 403) {
           throw new Error('Access denied. You do not have permission to perform this action.');
@@ -114,7 +145,7 @@ class ApiClient {
       if (retryCount < this.config.retries && this.shouldRetry(error)) {
         const delay = getRetryDelay(retryCount + 1, this.config.retryDelay);
         await this.delay(delay);
-        return this.request<T>(endpoint, config, retryCount + 1);
+        return this.request<T>(endpoint, config, retryCount + 1, authRetried);
       }
 
       const errorInfo = parseApiError(error);

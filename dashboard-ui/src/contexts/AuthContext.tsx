@@ -147,19 +147,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
         setError('New password required. Please contact administrator.');
         return;
       }
-
-      // Success normally lands via onAuthChange. If the session did not
-      // survive being written, say so rather than re-rendering an untouched
-      // form: blocked site data and Safari's private mode both turn the token
-      // store into a no-op, and a login that appears to do nothing is the only
-      // symptom the user gets.
-      if (!isSignedIn()) {
-        setError(
-          "We couldn't keep you signed in on this device. Check that cookies and site data are allowed for this site, then try again."
-        );
-        return;
-      }
-      // Success updates state via onAuthChange.
+      // Success updates state via onAuthChange. A session the browser refused
+      // to keep — blocked site data, Safari's private mode — throws
+      // `SessionNotPersisted` out of rscSignIn as of @readysetcloud/ui 0.7.1
+      // rather than reporting a success with nothing behind it, so the catch
+      // below has the message to show.
     } catch (error: unknown) {
       console.error('Sign in error:', error);
       setError(getErrorMessage(error) || 'An error occurred during sign in');

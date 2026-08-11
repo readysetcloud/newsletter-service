@@ -129,16 +129,21 @@ describe('AuthProvider session restore', () => {
 
 describe('AuthProvider sign in', () => {
   it('reports a sign-in whose session did not persist', async () => {
-    // Blocked site data / Safari private mode: the write is swallowed, so the
-    // session is gone the moment it is read back.
-    mocks.signIn.mockResolvedValue({ kind: 'success' });
-    mocks.isSignedIn.mockReturnValue(false);
+    // Blocked site data / Safari private mode: the write is swallowed, so
+    // @readysetcloud/ui rejects with SessionNotPersisted instead of handing
+    // back a success with no session behind it.
+    mocks.signIn.mockRejectedValue(
+      Object.assign(new Error("This browser isn't keeping you signed in."), {
+        name: 'AuthError',
+        code: 'SessionNotPersisted'
+      })
+    );
 
     renderAuth();
     await act(async () => { screen.getByText('sign in').click(); });
 
     await waitFor(() =>
-      expect(screen.getByTestId('error')).toHaveTextContent(/couldn't keep you signed in/i)
+      expect(screen.getByTestId('error')).toHaveTextContent(/isn't keeping you signed in/i)
     );
     expect(screen.getByTestId('authenticated')).toHaveTextContent('false');
   });

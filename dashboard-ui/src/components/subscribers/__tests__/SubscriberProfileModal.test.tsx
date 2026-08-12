@@ -184,4 +184,66 @@ describe('SubscriberProfileModal', () => {
     // The email is still shown (as the secondary description line).
     expect(screen.getByText('reader@example.com')).toBeInTheDocument();
   });
+
+  it('says nothing about bot signals for an unflagged subscriber', () => {
+    render(
+      <SubscriberProfileModal subscriber={base} latestIssueNumber={20} onClose={() => {}} />
+    );
+    expect(screen.queryByText(/automated signup/i)).not.toBeInTheDocument();
+  });
+
+  it('explains each flag that fired, strongest first', () => {
+    render(
+      <SubscriberProfileModal
+        subscriber={{
+          ...base,
+          suspectedBot: true,
+          botFlags: {
+            honeypotTriggered: true,
+            disposableDomain: false,
+            suspiciousUserAgent: true,
+            fastSubmission: false,
+            suspiciousEmailPattern: false,
+          },
+        }}
+        latestIssueNumber={20}
+        onClose={() => {}}
+      />
+    );
+
+    expect(screen.getByText('Likely automated signup')).toBeInTheDocument();
+
+    const reasons = screen.getAllByRole('listitem').map((li) => li.textContent ?? '');
+    const honeypotIndex = reasons.findIndex((t) => t.includes('Honeypot triggered'));
+    const uaIndex = reasons.findIndex((t) => t.includes('Suspicious user agent'));
+    expect(honeypotIndex).toBeGreaterThanOrEqual(0);
+    expect(uaIndex).toBeGreaterThan(honeypotIndex);
+
+    // Flags that did not fire are not listed.
+    expect(screen.queryByText('Disposable email domain')).not.toBeInTheDocument();
+    expect(screen.queryByText('Fast form submission')).not.toBeInTheDocument();
+  });
+
+  it('hedges the wording when only circumstantial signals fired', () => {
+    render(
+      <SubscriberProfileModal
+        subscriber={{
+          ...base,
+          suspectedBot: true,
+          botFlags: {
+            honeypotTriggered: false,
+            disposableDomain: false,
+            suspiciousUserAgent: true,
+            fastSubmission: true,
+            suspiciousEmailPattern: false,
+          },
+        }}
+        latestIssueNumber={20}
+        onClose={() => {}}
+      />
+    );
+
+    expect(screen.getByText('Possibly automated signup')).toBeInTheDocument();
+    expect(screen.getByText(/circumstantial on its own/)).toBeInTheDocument();
+  });
 });

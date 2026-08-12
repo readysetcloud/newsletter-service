@@ -423,4 +423,145 @@ describe('SubscribersPage', () => {
       expect(dash).toHaveAttribute('title', expect.stringContaining('3 consecutive issues'));
     });
   });
+
+  // --- Suspected-bot surfacing ---
+  describe('suspected bot flags', () => {
+    type BotSub = {
+      email: string;
+      addedAt?: string;
+      suspectedBot?: boolean;
+      botFlags?: {
+        honeypotTriggered: boolean;
+        disposableDomain: boolean;
+        suspiciousUserAgent: boolean;
+        fastSubmission: boolean;
+        suspiciousEmailPattern: boolean;
+      };
+    };
+
+    const flags = (overrides: Partial<BotSub['botFlags'] & object> = {}) => ({
+      honeypotTriggered: false,
+      disposableDomain: false,
+      suspiciousUserAgent: false,
+      fastSubmission: false,
+      suspiciousEmailPattern: false,
+      ...overrides,
+    });
+
+    const renderWithBotSubscribers = async (subscribers: BotSub[]) => {
+      vi.mocked(subscriberService.getCount).mockResolvedValue({
+        success: true,
+        data: { totalSubscribers: subscribers.length },
+      });
+      vi.mocked(subscriberService.getTrends).mockResolvedValue({
+        success: true,
+        data: mockTrendsData,
+      });
+      vi.mocked(segmentService.listSegments).mockResolvedValue({
+        success: true,
+        data: { segments: [] },
+      });
+      vi.mocked(subscriberService.getList).mockResolvedValue({
+        success: true,
+        data: {
+          total: subscribers.length,
+          subscribers: subscribers.map((sub) => ({
+            addedAt: '2025-01-01T00:00:00Z',
+            lastEngagedIssue: 5,
+            ...sub,
+          })),
+        },
+      });
+
+      renderPage();
+      await waitFor(() => {
+        expect(screen.getByText(subscribers[0].email)).toBeInTheDocument();
+      });
+    };
+
+    it('renders the Suspected chip as a button that opens the profile', async () => {
+      await renderWithBotSubscribers([
+        {
+          email: 'bot@example.com',
+          suspectedBot: true,
+          botFlags: flags({ honeypotTriggered: true }),
+        },
+      ]);
+
+      // A native title tooltip never fires on touch, so the chip has to be a
+      // real control rather than a decorated span.
+      const chip = screen.getByRole('button', {
+        name: /Why bot@example.com is flagged as a suspected bot/,
+      });
+      expect(chip).toHaveAttribute('title', expect.stringContaining('Honeypot triggered'));
+
+      fireEvent.click(chip);
+
+      await waitFor(() => {
+        expect(screen.getByText('Likely automated signup')).toBeInTheDocument();
+      });
+    });
+
+    it('does not render a chip for an unflagged subscriber', async () => {
+      await renderWithBotSubscribers([{ email: 'reader@example.com', suspectedBot: false }]);
+
+      expect(
+        screen.queryByRole('button', { name: /flagged as a suspected bot/ })
+      ).not.toBeInTheDocument();
+    });
+
+    it('counts flagged subscribers and filters the list down to them', async () => {
+      await renderWithBotSubscribers([
+        { email: 'bot@example.com', suspectedBot: true, botFlags: flags({ fastSubmission: true }) },
+        { email: 'spam@example.com', suspectedBot: true, botFlags: flags({ disposableDomain: true }) },
+        { email: 'reader@example.com', suspectedBot: false },
+      ]);
+
+      const toggle = screen.getByRole('button', { name: /Suspected \(2\)/ });
+      expect(toggle).toHaveAttribute('aria-pressed', 'false');
+      expect(screen.getByText('reader@example.com')).toBeInTheDocument();
+
+      fireEvent.click(toggle);
+
+      await waitFor(() => {
+        expect(screen.queryByText('reader@example.com')).not.toBeInTheDocument();
+      });
+      expect(screen.getByText('bot@example.com')).toBeInTheDocument();
+      expect(screen.getByText('spam@example.com')).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: /Suspected \(2\)/ })
+      ).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    it('hides the count entirely when nothing is flagged', async () => {
+      await renderWithBotSubscribers([{ email: 'reader@example.com', suspectedBot: false }]);
+
+      expect(screen.queryByRole('button', { name: /Suspected \(/ })).not.toBeInTheDocument();
+    });
+
+    it('reports the flagged share of recent signups once there are enough to be meaningful', async () => {
+      // 12 signups, 3 flagged — above the 10-signup floor for a rate.
+      const subs: BotSub[] = Array.from({ length: 12 }, (_, i) => ({
+        email: `sub${i}@example.com`,
+        addedAt: `2025-01-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+        suspectedBot: i < 3,
+        botFlags: i < 3 ? flags({ fastSubmission: true }) : undefined,
+      }));
+      await renderWithBotSubscribers(subs);
+
+      expect(screen.getByText(/3 of the last 12 signups/)).toBeInTheDocument();
+      expect(screen.getByText(/\(25%\)/)).toBeInTheDocument();
+    });
+
+    it('omits the rate when the sample is too small to mean anything', async () => {
+      await renderWithBotSubscribers([
+        { email: 'bot@example.com', suspectedBot: true, botFlags: flags({ fastSubmission: true }) },
+        { email: 'reader@example.com', suspectedBot: false },
+      ]);
+
+      expect(screen.queryByText(/of the last/)).not.toBeInTheDocument();
+      // The absolute count still shows.
+      expect(screen.getByRole('button', { name: /Suspected \(1\)/ })).toBeInTheDocument();
+    });
+  });
 });

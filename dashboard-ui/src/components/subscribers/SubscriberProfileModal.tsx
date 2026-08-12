@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Sparkles, MailOpen, MousePointerClick } from 'lucide-react';
+import { Sparkles, MailOpen, MousePointerClick, Bot } from 'lucide-react';
 import { Modal, ModalHeader, ModalTitle, ModalDescription, ModalContent } from '@/components/ui/Modal';
 import {
   getSortedInterestProfile,
@@ -7,6 +7,7 @@ import {
   AUTO_SEGMENT_THRESHOLD,
 } from '@/utils/interestProfile';
 import { getEngagementStatus } from '@/utils/engagement';
+import { describeBotFlags, hasStrongBotSignal } from './botFlags';
 import { subscriberService } from '@/services/subscriberService';
 import type { SubscriberListItem, SubscriberDetail, ActivityEntry } from '@/types';
 import { useTenantDateFormat } from '@/contexts/SettingsContext';
@@ -122,6 +123,8 @@ export const SubscriberProfileModal: React.FC<SubscriberProfileModalProps> = ({
   const profile = getSortedInterestProfile(subscriber.interestScores);
   const autoSegmentTopics = profile.filter((entry) => entry.score >= AUTO_SEGMENT_THRESHOLD);
   const recentActivity = detail?.recentActivity ?? [];
+  const botReasons = describeBotFlags(subscriber.botFlags);
+  const strongBotSignal = hasStrongBotSignal(subscriber.botFlags);
 
   return (
     <Modal isOpen={!!subscriber} onClose={onClose} size="md">
@@ -132,6 +135,32 @@ export const SubscriberProfileModal: React.FC<SubscriberProfileModalProps> = ({
         <ModalDescription>{subscriber.email}</ModalDescription>
       </ModalHeader>
       <ModalContent className="space-y-6">
+        {/* Why this subscriber is flagged — only present when something fired.
+            This is what the "Suspected" chip on the list opens to. */}
+        {botReasons.length > 0 && (
+          <section className="rounded-lg border border-orange-200 bg-orange-50 p-3 dark:border-orange-900 dark:bg-orange-900/10">
+            <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-orange-800 dark:text-orange-300 mb-2">
+              <Bot className="w-3.5 h-3.5" aria-hidden="true" />
+              {strongBotSignal ? 'Likely automated signup' : 'Possibly automated signup'}
+            </h3>
+            <ul className="space-y-2">
+              {botReasons.map((reason) => (
+                <li key={reason.key}>
+                  <p className="text-sm font-medium text-foreground">{reason.label}</p>
+                  <p className="text-xs text-muted-foreground leading-snug">{reason.description}</p>
+                </li>
+              ))}
+            </ul>
+            <p className="text-xs text-muted-foreground mt-3 leading-snug">
+              {strongBotSignal
+                ? 'These signals fired when the address signed up. Nothing here is blocked automatically except honeypot hits — the rest are recorded for review.'
+                : 'Every signal here is circumstantial on its own. Treat this as worth a look rather than a verdict.'}
+              {' '}Engagement is not a counter-argument: mail-security scanners fetch tracked
+              links automatically, which counts as engagement on this list.
+            </p>
+          </section>
+        )}
+
         {/* Engagement */}
         <section>
           <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">

@@ -1,5 +1,6 @@
 import { DynamoDBClient, PutItemCommand, QueryCommand, DeleteItemCommand, UpdateItemCommand, GetItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
+import { isSubscriberRecord } from './subscriber-record.mjs';
 
 const ddb = new DynamoDBClient();
 
@@ -53,12 +54,11 @@ export const listSubscribers = async (tenantId, options = {}) => {
     const response = await ddb.send(new QueryCommand(queryParams));
 
     // Unmarshall items and extract subscriber data. The segments feature stores
-    // its records (SEGMENT#, SEGMENT_NAME#, SEGMENT_JOB#, and member rows)
-    // under the same tenant partition with the sort key overloading `email`;
-    // those must never be treated as sendable subscribers.
+    // its records under the same tenant partition with the sort key overloading
+    // `email`; those must never be treated as sendable subscribers.
     const subscribers = (response.Items || [])
       .map(item => unmarshall(item))
-      .filter(subscriber => subscriber.email && !subscriber.email.startsWith('SEGMENT'))
+      .filter(isSubscriberRecord)
       .map(subscriber => ({
         email: subscriber.email,
         firstName: subscriber.firstName || null,

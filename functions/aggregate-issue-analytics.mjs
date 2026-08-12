@@ -2,6 +2,7 @@ import { DynamoDBClient, QueryCommand, UpdateItemCommand, GetItemCommand } from 
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { unmarshall, marshall } from '@aws-sdk/util-dynamodb';
 import { decrypt, getTenant } from './utils/helpers.mjs';
+import { classifyScannerClicks } from './utils/scanner-clicks.mjs';
 
 const ddb = new DynamoDBClient();
 const eventBridge = new EventBridgeClient();
@@ -64,6 +65,10 @@ export const handler = async (event) => {
       timingMetrics: calculateTimingMetrics(events.opens, events.clicks),
       engagementType: await calculateEngagementType(events.clicks, ddb, tenantId),
       trafficSource: calculateTrafficSource(events.clicks),
+      // Reported alongside the raw counters, never subtracted from them. The
+      // anomaly check below reads `clicks` and treats scanner traffic as the
+      // floor that separates a dead click path from a quiet week.
+      clickQuality: classifyScannerClicks(events.clicks).summary,
       bounceReasons: calculateBounceReasons(events.bounces),
       complaintDetails: formatComplaintDetails(events.complaints),
       ...(abTestSummary && { abTest: abTestSummary })

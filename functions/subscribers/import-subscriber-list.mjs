@@ -1,6 +1,7 @@
 import { DynamoDBClient, UpdateItemCommand, BatchWriteItemCommand, QueryCommand } from "@aws-sdk/client-dynamodb";
 import { marshall } from "@aws-sdk/util-dynamodb";
 import { getTenant, formatResponse, throttle, sendWithRetry } from "../utils/helpers.mjs";
+import { sanitizeName } from "../utils/subscriber-name.mjs";
 
 const ddb = new DynamoDBClient();
 
@@ -69,12 +70,15 @@ export const handler = async (event) => {
 const addSubscriber = async (tenantId, contact) => {
   const addedAt = new Date().toISOString();
 
+  const firstName = sanitizeName(contact.firstName);
+  const lastName = sanitizeName(contact.lastName);
+
   const subscriberItem = {
     tenantId,
     email: contact.address.toLowerCase(), // Normalize email to lowercase
     addedAt,
-    ...(contact.firstName && { firstName: contact.firstName }),
-    ...(contact.lastName && { lastName: contact.lastName })
+    ...(firstName && { firstName }),
+    ...(lastName && { lastName })
   };
 
   const requestItems = {

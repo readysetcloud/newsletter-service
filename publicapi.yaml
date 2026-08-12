@@ -468,8 +468,19 @@ components:
           minLength: 4
         firstName:
           type: string
+          description: >-
+            Optional. Normalized before storage: surrounding and repeated
+            whitespace is collapsed, invisible and control characters are
+            removed, and anything still longer than 50 characters is truncated.
+            Deliberately carries no maxLength — this route runs the "Validate
+            All" request validator, so a schema constraint would make API
+            Gateway reject the signup with a 400 before the handler could
+            truncate it, including names that would have come in under the cap
+            once whitespace was collapsed. The cap is enforced in
+            add-subscriber.mjs, where overflowing it costs the reader nothing.
         lastName:
           type: string
+          description: Optional. Normalized on the same terms as firstName.
         website:
           type: string
           description: Honeypot field — should be empty for legitimate signups

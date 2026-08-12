@@ -226,7 +226,10 @@ const captureClickEvent = async (msg, eventTimestamp, statsCache) => {
 
   const countryData = ip ? await lookupCountry(ip) : null;
 
-  const device = detectDevice(null);
+  // The redirect function logs a truncated user agent. Before it did, every
+  // web click resolved to 'unknown' and the device breakdown covered opens
+  // only — older events therefore stay 'unknown' rather than being backfilled.
+  const device = detectDevice(msg.ua);
   const country = countryData?.countryCode || 'unknown';
 
   const clickEvent = {

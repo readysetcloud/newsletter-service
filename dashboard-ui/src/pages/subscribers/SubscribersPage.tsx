@@ -14,6 +14,7 @@ import { SubscriberGrowthChart } from '@/components/SubscriberGrowthChart';
 import { AudienceHealthWidget } from '@/components/AudienceHealthWidget';
 import { InterestChips } from '@/components/subscribers/InterestChips';
 import { SubscriberProfileModal } from '@/components/subscribers/SubscriberProfileModal';
+import { summarizeBotFlags } from '@/components/subscribers/botFlags';
 import { subscriberService } from '@/services/subscriberService';
 import { segmentService } from '@/services/segmentService';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
@@ -143,6 +144,7 @@ export const SubscribersPage: React.FC = () => {
   const [subscriberListError, setSubscriberListError] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [selectedSubscriber, setSelectedSubscriber] = useState<SubscriberListItem | null>(null);
+  const [suspectedOnly, setSuspectedOnly] = useState(false);
 
   // Create segment modal state
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -232,13 +234,40 @@ export const SubscribersPage: React.FC = () => {
     ? Number(trendsData.points[0].issueNumber)
     : 0;
 
+  const suspectedCount = useMemo(
+    () => subscriberList.filter((sub) => sub.suspectedBot).length,
+    [subscriberList]
+  );
+
+  /**
+   * Share of the 30 most recent signups that are flagged. Growth questions are
+   * about the recent intake, and a lifetime percentage is dominated by history
+   * — a clean list of 5,000 would hide a week where every new signup tripped a
+   * flag. Undefined below a floor of 10, where the ratio is too noisy to mean
+   * anything.
+   */
+  const recentSuspectedRate = useMemo(() => {
+    const RECENT_WINDOW = 30;
+    const MIN_FOR_A_RATE = 10;
+    const recent = [...subscriberList]
+      .filter((sub) => sub.addedAt)
+      .sort((a, b) => new Date(b.addedAt!).getTime() - new Date(a.addedAt!).getTime())
+      .slice(0, RECENT_WINDOW);
+    if (recent.length < MIN_FOR_A_RATE) return null;
+    const flagged = recent.filter((sub) => sub.suspectedBot).length;
+    return { flagged, of: recent.length, percent: Math.round((flagged / recent.length) * 100) };
+  }, [subscriberList]);
+
   const sortedSubscribers = useMemo(() => {
-    return [...subscriberList].sort((a, b) => {
+    const visible = suspectedOnly
+      ? subscriberList.filter((sub) => sub.suspectedBot)
+      : subscriberList;
+    return [...visible].sort((a, b) => {
       const aTime = a.addedAt ? new Date(a.addedAt).getTime() : 0;
       const bTime = b.addedAt ? new Date(b.addedAt).getTime() : 0;
       return sortDirection === 'asc' ? aTime - bTime : bTime - aTime;
     });
-  }, [subscriberList, sortDirection]);
+  }, [subscriberList, sortDirection, suspectedOnly]);
 
   const toggleSortDirection = useCallback(() => {
     setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
@@ -277,26 +306,23 @@ export const SubscribersPage: React.FC = () => {
     [latestIssueNumber]
   );
 
+  // The chip opens the profile modal rather than an inline popover: the table
+  // body scrolls with `overflow: auto`, so anything anchored inside a row gets
+  // clipped, and a native `title` tooltip never appears on touch at all. The
+  // modal is also where there is room to say what each signal actually means.
   const renderBotBadge = useCallback((sub: SubscriberListItem): React.ReactNode => {
     if (!sub.suspectedBot) return null;
-    const reasons: string[] = [];
-    if (sub.botFlags?.honeypotTriggered) reasons.push('Honeypot triggered');
-    if (sub.botFlags?.disposableDomain) reasons.push('Disposable email domain');
-    if (sub.botFlags?.suspiciousUserAgent) reasons.push('Suspicious user agent');
-    if (sub.botFlags?.fastSubmission) reasons.push('Fast form submission');
-    if (sub.botFlags?.suspiciousEmailPattern) reasons.push('Suspicious email pattern (dot-trick)');
-    const tooltip = reasons.length > 0
-      ? `Flagged for: ${reasons.join(', ')}`
-      : 'One or more bot detection flags were triggered';
     return (
-      <span
-        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800 dark:bg-orange-900/20 dark:text-orange-400 cursor-help"
-        role="status"
-        title={tooltip}
+      <button
+        type="button"
+        onClick={() => setSelectedSubscriber(sub)}
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800 dark:bg-orange-900/20 dark:text-orange-400 hover:bg-orange-200 dark:hover:bg-orange-900/40 focus:outline-none focus:ring-2 focus:ring-ring transition-colors"
+        title={summarizeBotFlags(sub.botFlags)}
+        aria-label={`Why ${sub.email} is flagged as a suspected bot`}
       >
         <Bot className="w-3 h-3" aria-hidden="true" />
         Suspected
-      </span>
+      </button>
     );
   }, []);
 
@@ -647,22 +673,56 @@ export const SubscribersPage: React.FC = () => {
           <h3 className="text-lg font-semibold text-foreground mb-4">Subscribers</h3>
           <SectionError message={subscriberListError} onRetry={loadSubscriberList} />
         </Card>
-      ) : sortedSubscribers.length === 0 ? (
+      ) : subscriberList.length === 0 ? (
         <Card padding="md">
           <h3 className="text-lg font-semibold text-foreground mb-4">Subscribers</h3>
           <p className="text-sm text-muted-foreground">No subscribers yet.</p>
         </Card>
       ) : (
         <Card padding="md">
-          <h3 className="text-lg font-semibold text-foreground mb-4">Subscribers</h3>
-          <VirtualTable<SubscriberListItem>
-            items={sortedSubscribers}
-            getKey={(sub) => sub.email}
-            ariaLabel="Subscribers list"
-            rowHeight={isMobile ? 60 : 44}
-            maxHeight={440}
-            columns={isMobile ? mobileSubscriberColumns : subscriberColumns}
-          />
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+            <h3 className="text-lg font-semibold text-foreground">Subscribers</h3>
+            {suspectedCount > 0 && (
+              <div className="flex flex-wrap items-center gap-3">
+                {/* The lifetime count answers "how much junk is on the list";
+                    the recent rate answers "is this week different", which is
+                    the one a growth spike actually turns on. */}
+                {recentSuspectedRate && (
+                  <span className="text-xs text-muted-foreground">
+                    {recentSuspectedRate.flagged} of the last {recentSuspectedRate.of} signups
+                    {' '}({recentSuspectedRate.percent}%)
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setSuspectedOnly((prev) => !prev)}
+                  aria-pressed={suspectedOnly}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors focus:outline-none focus:ring-2 focus:ring-ring ${
+                    suspectedOnly
+                      ? 'bg-orange-100 text-orange-800 border-orange-300 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-800'
+                      : 'bg-transparent text-muted-foreground border-border hover:bg-muted'
+                  }`}
+                >
+                  <Bot className="w-3.5 h-3.5" aria-hidden="true" />
+                  Suspected ({suspectedCount.toLocaleString()})
+                </button>
+              </div>
+            )}
+          </div>
+          {sortedSubscribers.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No subscribers match this filter.
+            </p>
+          ) : (
+            <VirtualTable<SubscriberListItem>
+              items={sortedSubscribers}
+              getKey={(sub) => sub.email}
+              ariaLabel="Subscribers list"
+              rowHeight={isMobile ? 60 : 44}
+              maxHeight={440}
+              columns={isMobile ? mobileSubscriberColumns : subscriberColumns}
+            />
+          )}
         </Card>
       )}
 

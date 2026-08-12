@@ -2835,6 +2835,12 @@ Resources:
           // Reliable in CloudFront Functions:
           var ip  = (event.viewer && event.viewer.ip) || null;
 
+          // Truncated because the log line is the whole tracking payload and a
+          // long UA would crowd out the fields that matter; 256 is well past
+          // where the device and client are identifiable.
+          var uaHdr = headers['user-agent'] && headers['user-agent'].value;
+          var ua = uaHdr ? String(uaHdr).slice(0, 256) : null;
+
           function redirect(to){
             return {
               statusCode: 302,
@@ -2868,14 +2874,18 @@ Resources:
           }
 
           // Loop guard: don't redirect back to the tracker host
-          var hostHdr = headers.host && headers.host[0] && headers.host[0].value || '';
+          // CloudFront Functions expose headers as { host: { value } }, with no
+          // array index — the [0] this used to carry is the Lambda@Edge shape,
+          // and it made hostHdr always empty, so the loop guard below never
+          // fired.
+          var hostHdr = (headers.host && headers.host.value) || '';
           var destHost = ''; try { destHost = dest.split('/')[2].toLowerCase(); } catch(e) { return fallback('bad_url'); }
           if (hostHdr && destHost === hostHdr.toLowerCase()) return fallback('loop_to_tracker');
 
           if (dest.length > 2048) return fallback('url_too_long');
 
           // SUCCESS: log minimal fields only, then redirect
-          try { console.log(JSON.stringify({ cid: cid || null, u: dest, src, ip, s })); } catch(_) {}
+          try { console.log(JSON.stringify({ cid: cid || null, u: dest, src, ip, s, ua })); } catch(_) {}
           return redirect(dest);
         }
       FunctionConfig:
@@ -2910,6 +2920,12 @@ Resources:
           const srcOverride = get('src');
           const s = get('s') || null;
           const ip = (event.viewer && event.viewer.ip) || null;
+
+          // Truncated for the same reason as the generic redirect: the log line
+          // is the tracking payload, and 256 characters is well past where the
+          // device and client are identifiable.
+          const uaHdr = headers['user-agent'] && headers['user-agent'].value;
+          const ua = uaHdr ? String(uaHdr).slice(0, 256) : null;
 
           function redirect(to){
             return {
@@ -2947,14 +2963,16 @@ Resources:
 
           if (!dest || !/^https?:\/\//i.test(dest)) return fallback('bad_dest');
 
-          const hostHdr = (headers.host && headers.host[0] && headers.host[0].value) || '';
+          // Same correction as the generic redirect: CloudFront Functions have
+          // no array index on headers, so this guard never fired.
+          const hostHdr = (headers.host && headers.host.value) || '';
           let destHost = '';
           try { destHost = dest.split('/')[2].toLowerCase(); } catch(e) { return fallback('bad_url'); }
           if (hostHdr && destHost === hostHdr.toLowerCase()) return fallback('loop_to_tracker');
 
           if (dest.length > 2048) return fallback('url_too_long');
 
-          try { console.log(JSON.stringify({ code, u: dest, src, ip, s })); } catch(_) {}
+          try { console.log(JSON.stringify({ code, u: dest, src, ip, s, ua })); } catch(_) {}
           return redirect(dest);
         }
       FunctionConfig:

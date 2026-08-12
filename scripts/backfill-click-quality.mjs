@@ -50,38 +50,48 @@ const ddb = new DynamoDBClient();
 // ── Issue discovery ────────────────────────────────────────────────────
 
 /**
- * Issue numbers to process. With --issue this is just that one; otherwise the
- * partition keys are discovered from the stats records the tenant already has.
+ * Issue numbers to process. With --issue this is just that one; otherwise every
+ * issue the tenant has a stats record for.
  *
- * There is no index over issues, so discovery walks stats rows via a scan-free
- * query per candidate. Instead of guessing a range, the caller passes --issue
- * for a spot check and omits it for a full sweep, which walks upward from 1
- * until it hits a run of missing issues.
+ * Stats records carry GSI1PK = `{tenantId}#issue`, so the set is a single index
+ * query. Probing issue numbers upward from 1 instead would quietly skip work
+ * whenever a tenant's numbering starts high or leaves a gap — issue numbers are
+ * caller-supplied, so neither is unusual.
+ *
+ * The issue number comes off the record's own `pk` rather than GSI1SK, since
+ * the sort key is zero-padded in places and `pk` is what the update below has
+ * to match anyway.
  */
 async function discoverIssueNumbers() {
   if (args.issue) return [args.issue];
 
   const found = [];
-  let consecutiveMisses = 0;
-  const STOP_AFTER_CONSECUTIVE_MISSES = 25;
+  let exclusiveStartKey;
 
-  for (let n = 1; consecutiveMisses < STOP_AFTER_CONSECUTIVE_MISSES; n++) {
+  do {
     const result = await ddb.send(new QueryCommand({
       TableName: args.table,
-      KeyConditionExpression: 'pk = :pk AND sk = :sk',
-      ExpressionAttributeValues: marshall({ ':pk': `${args.tenant}#${n}`, ':sk': 'stats' }),
-      ProjectionExpression: 'pk'
+      IndexName: 'GSI1',
+      KeyConditionExpression: 'GSI1PK = :gsi1pk',
+      FilterExpression: 'sk = :stats',
+      ExpressionAttributeValues: marshall({
+        ':gsi1pk': `${args.tenant}#issue`,
+        ':stats': 'stats'
+      }),
+      ProjectionExpression: 'pk',
+      ExclusiveStartKey: exclusiveStartKey
     }));
 
-    if (result.Items?.length) {
-      found.push(String(n));
-      consecutiveMisses = 0;
-    } else {
-      consecutiveMisses++;
+    for (const raw of result.Items || []) {
+      const { pk } = unmarshall(raw);
+      const issueNumber = typeof pk === 'string' ? pk.split('#')[1] : null;
+      if (issueNumber) found.push(issueNumber);
     }
-  }
 
-  return found;
+    exclusiveStartKey = result.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+
+  return found.sort((a, b) => Number(a) - Number(b));
 }
 
 // ── Event loading ──────────────────────────────────────────────────────

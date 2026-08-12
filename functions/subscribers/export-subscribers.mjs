@@ -2,6 +2,7 @@ import { DynamoDBClient, QueryCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getTenant, sendWithRetry } from "../utils/helpers.mjs";
+import { isSubscriberRecord } from "../utils/subscriber-record.mjs";
 
 const ddb = new DynamoDBClient();
 const s3 = new S3Client();
@@ -36,6 +37,11 @@ export const handler = async (event) => {
       if (response.Items?.length) {
         for (const item of response.Items) {
           const record = unmarshall(item);
+          // The tenant partition also holds the segments feature's bookkeeping
+          // rows. Without this they land in `addresses` looking like real
+          // recipients.
+          if (!isSubscriberRecord(record)) continue;
+
           emailAddresses.push(record.email);
           subscribers.push({
             email: record.email,

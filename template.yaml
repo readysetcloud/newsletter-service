@@ -2874,7 +2874,11 @@ Resources:
           }
 
           // Loop guard: don't redirect back to the tracker host
-          var hostHdr = headers.host && headers.host[0] && headers.host[0].value || '';
+          // CloudFront Functions expose headers as { host: { value } }, with no
+          // array index — the [0] this used to carry is the Lambda@Edge shape,
+          // and it made hostHdr always empty, so the loop guard below never
+          // fired.
+          var hostHdr = (headers.host && headers.host.value) || '';
           var destHost = ''; try { destHost = dest.split('/')[2].toLowerCase(); } catch(e) { return fallback('bad_url'); }
           if (hostHdr && destHost === hostHdr.toLowerCase()) return fallback('loop_to_tracker');
 
@@ -2959,7 +2963,9 @@ Resources:
 
           if (!dest || !/^https?:\/\//i.test(dest)) return fallback('bad_dest');
 
-          const hostHdr = (headers.host && headers.host[0] && headers.host[0].value) || '';
+          // Same correction as the generic redirect: CloudFront Functions have
+          // no array index on headers, so this guard never fired.
+          const hostHdr = (headers.host && headers.host.value) || '';
           let destHost = '';
           try { destHost = dest.split('/')[2].toLowerCase(); } catch(e) { return fallback('bad_url'); }
           if (hostHdr && destHost === hostHdr.toLowerCase()) return fallback('loop_to_tracker');

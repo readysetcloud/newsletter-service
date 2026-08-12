@@ -124,4 +124,45 @@ describe('export-subscribers', () => {
       engagementCount: null,
     });
   });
+
+  it('excludes the segments feature bookkeeping rows sharing the partition', async () => {
+    ddbSend.mockResolvedValueOnce({
+      Items: [
+        { tenantId: { S: 'tenant1' }, email: { S: 'real@example.com' } },
+        // Every shape the segments feature writes under this tenant partition,
+        // all overloading the `email` sort key.
+        { tenantId: { S: 'tenant1' }, email: { S: 'SEGMENT#abc123' } },
+        { tenantId: { S: 'tenant1' }, email: { S: 'SEGMENT#abc123#MEMBER#member@example.com' } },
+        { tenantId: { S: 'tenant1' }, email: { S: 'SEGMENT_NAME#vip subscribers' } },
+        { tenantId: { S: 'tenant1' }, email: { S: 'SEGMENT_JOB#job-1' } },
+      ],
+    });
+    s3Send.mockResolvedValueOnce({});
+
+    await handler({ tenant: 'tenant1' });
+
+    const report = JSON.parse(s3Send.mock.calls[0][0].Body);
+
+    // Bookkeeping keys in `addresses` would read as deliverable recipients.
+    expect(report.addresses).toEqual(['real@example.com']);
+    expect(report.total).toBe(1);
+    expect(report.subscribers).toHaveLength(1);
+  });
+
+  it('skips records with no email rather than exporting a hole', async () => {
+    ddbSend.mockResolvedValueOnce({
+      Items: [
+        { tenantId: { S: 'tenant1' }, email: { S: 'real@example.com' } },
+        { tenantId: { S: 'tenant1' } },
+      ],
+    });
+    s3Send.mockResolvedValueOnce({});
+
+    await handler({ tenant: 'tenant1' });
+
+    const report = JSON.parse(s3Send.mock.calls[0][0].Body);
+
+    expect(report.addresses).toEqual(['real@example.com']);
+    expect(report.total).toBe(1);
+  });
 });

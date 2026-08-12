@@ -18,6 +18,7 @@ import {
   emitBotProtectionLog,
   disposableDomainSet
 } from '../utils/bot-protection.mjs';
+import { sanitizeName } from '../utils/subscriber-name.mjs';
 import { checkRateLimit } from '../utils/rate-limiter.mjs';
 import { createLogger } from '../utils/structured-logger.mjs';
 import { getMostRecentPublishedIssue, incrementIssueCounter } from '../utils/issue-attribution.mjs';
@@ -54,6 +55,11 @@ export const handler = async (event) => {
 
     // Step 2: Normalize email
     const normalizedEmail = normalizeEmail(contact.email);
+
+    // Names are free-form and unauthenticated — normalize once here so the
+    // stored record and the SUBSCRIBER_ADDED event carry the same value.
+    contact.firstName = sanitizeName(contact.firstName);
+    contact.lastName = sanitizeName(contact.lastName);
 
     // Step 3: Extract request metadata
     const { sourceIp, userAgent, unknownIp } = extractRequestMetadata(event);

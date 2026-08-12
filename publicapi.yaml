@@ -468,8 +468,16 @@ components:
           minLength: 4
         firstName:
           type: string
+          maxLength: 50
+          description: >-
+            Optional. Normalized before storage: surrounding and repeated
+            whitespace is collapsed, invisible and control characters are
+            removed, and anything longer than 50 characters is truncated rather
+            than rejected so an unusual name never costs a signup.
         lastName:
           type: string
+          maxLength: 50
+          description: Optional. Normalized on the same terms as firstName.
         website:
           type: string
           description: Honeypot field — should be empty for legitimate signups

@@ -2,6 +2,7 @@ import { DynamoDBClient, UpdateItemCommand, PutItemCommand } from '@aws-sdk/clie
 import { marshall } from '@aws-sdk/util-dynamodb';
 import { ulid } from 'ulid';
 import zlib from 'zlib';
+import { detectDevice } from './utils/detect-device.mjs';
 
 const ddb = new DynamoDBClient();
 const TABLE = process.env.TABLE_NAME;
@@ -72,6 +73,8 @@ async function recordClickEvent({ code, occurredAt, src, raw }) {
       src,
       destinationUrl: raw.u || null,
       subscriberHash: raw.s || null,
+      // 'unknown' for clicks logged before the redirect captured a user agent.
+      device: detectDevice(raw.ua),
       ttl: Math.floor(Date.now() / 1000) + CLICK_TTL_SECONDS,
     }, { removeUndefinedValues: true }),
   }));

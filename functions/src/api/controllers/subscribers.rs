@@ -574,13 +574,38 @@ fn build_issue_gsi1pk(tenant_id: &str) -> String {
     format!("{}#issue", tenant_id)
 }
 
-/// Extract the `pk` from the first item in a page that has a `publishedAt` attribute.
-/// Returns `Some(pk)` if a published issue is found, `None` otherwise.
+/// Whether an issue has actually reached inboxes, which is what "most recently
+/// published" has to mean for attribution.
+///
+/// `publishedAt` is stamped when the publish workflow starts, and the workflow
+/// starts `IssueSendLeadTimeMinutes` (26 hours by default) *before* the send so
+/// the local-send fan-out can schedule eastward timezones for their own
+/// morning. It stamps the future send instant, so for that whole window the
+/// newest issue is one nobody has received — attributing a removal to it
+/// credited an issue that had not gone out and took the removal from the issue
+/// the reader actually had in front of them.
+///
+/// An unparseable stamp is old data rather than a scheduled send; the lead-time
+/// window is the only thing being excluded, so it stays attributable.
+fn has_been_sent(published_at: Option<&str>, now: chrono::DateTime<chrono::Utc>) -> bool {
+    match published_at {
+        None => false,
+        Some(value) => match chrono::DateTime::parse_from_rfc3339(value) {
+            Ok(sent_at) => sent_at.with_timezone(&chrono::Utc) <= now,
+            Err(_) => true,
+        },
+    }
+}
+
+/// Extract the `pk` from the first item in a page belonging to an issue that has
+/// actually been sent. Returns `Some(pk)` if one is found, `None` otherwise.
 fn find_published_issue_pk(
     items: &[std::collections::HashMap<String, AttributeValue>],
+    now: chrono::DateTime<chrono::Utc>,
 ) -> Option<String> {
     for item in items {
-        if item.contains_key("publishedAt") {
+        let published_at = item.get("publishedAt").and_then(|v| v.as_s().ok());
+        if has_been_sent(published_at.map(|s| s.as_str()), now) {
             if let Some(pk_attr) = item.get("pk") {
                 if let Ok(pk) = pk_attr.as_s() {
                     return Some(pk.to_string());
@@ -591,9 +616,9 @@ fn find_published_issue_pk(
     None
 }
 
-/// Query GSI1 for the most recently published issue for a tenant.
-/// Paginates in pages of 10 until a published issue (with `publishedAt`) is found
-/// or items are exhausted. Returns Some(issue_pk) or None if no published issues exist.
+/// Query GSI1 for the most recently sent issue for a tenant.
+/// Paginates in pages of 10 until an issue that has actually gone out is found
+/// or items are exhausted. Returns Some(issue_pk) or None if there is none.
 async fn get_most_recent_published_issue(
     ddb_client: &aws_sdk_dynamodb::Client,
     table_name: &str,
@@ -602,6 +627,7 @@ async fn get_most_recent_published_issue(
     let gsi1pk = build_issue_gsi1pk(tenant_id);
     let page_size = 10;
     let mut exclusive_start_key = None;
+    let now = chrono::Utc::now();
 
     loop {
         let mut query = ddb_client
@@ -619,7 +645,7 @@ async fn get_most_recent_published_issue(
 
         let result = query.send().await?;
 
-        if let Some(pk) = find_published_issue_pk(result.items()) {
+        if let Some(pk) = find_published_issue_pk(result.items(), now) {
             return Ok(Some(pk));
         }
 
@@ -2061,6 +2087,14 @@ mod tests {
 
     // ── Attribution helper tests ──────────────────────────────────────
 
+    /// A fixed "now" well after every timestamp the fixtures use, so these tests
+    /// exercise the lookup rather than the clock.
+    fn now() -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339("2030-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
     fn make_issue_item(pk: &str, published_at: Option<&str>) -> HashMap<String, AttributeValue> {
         let mut item = HashMap::new();
         item.insert("pk".to_string(), AttributeValue::S(pk.to_string()));
@@ -2080,7 +2114,7 @@ mod tests {
     fn test_find_published_issue_pk_single_published() {
         let items = vec![make_issue_item("tenant-1#42", Some("2024-06-01T00:00:00Z"))];
         assert_eq!(
-            find_published_issue_pk(&items),
+            find_published_issue_pk(&items, now()),
             Some("tenant-1#42".to_string())
         );
     }
@@ -2088,7 +2122,7 @@ mod tests {
     #[test]
     fn test_find_published_issue_pk_no_items() {
         let items: Vec<HashMap<String, AttributeValue>> = vec![];
-        assert_eq!(find_published_issue_pk(&items), None);
+        assert_eq!(find_published_issue_pk(&items, now()), None);
     }
 
     #[test]
@@ -2097,7 +2131,7 @@ mod tests {
             make_issue_item("tenant-1#3", None),
             make_issue_item("tenant-1#2", None),
         ];
-        assert_eq!(find_published_issue_pk(&items), None);
+        assert_eq!(find_published_issue_pk(&items, now()), None);
     }
 
     #[test]
@@ -2111,7 +2145,7 @@ mod tests {
         ];
         // Should return the first published item encountered (issue #3)
         assert_eq!(
-            find_published_issue_pk(&items),
+            find_published_issue_pk(&items, now()),
             Some("tenant-1#3".to_string())
         );
     }
@@ -2125,7 +2159,7 @@ mod tests {
             AttributeValue::S("2024-06-01T00:00:00Z".to_string()),
         );
         let items = vec![item];
-        assert_eq!(find_published_issue_pk(&items), None);
+        assert_eq!(find_published_issue_pk(&items, now()), None);
     }
 
     #[test]
@@ -2137,8 +2171,47 @@ mod tests {
             make_issue_item("tenant-1#8", Some("2024-05-01T00:00:00Z")),
         ];
         assert_eq!(
-            find_published_issue_pk(&items),
+            find_published_issue_pk(&items, now()),
             Some("tenant-1#10".to_string())
+        );
+    }
+
+    // The publish workflow stamps `publishedAt` with the *send* instant and runs
+    // up to 26 hours ahead of it, so the newest issue in the GSI is routinely one
+    // that has not gone out. A removal in that window belongs to the issue the
+    // reader actually has, not to the one still waiting on its Scheduler entry.
+    #[test]
+    fn test_find_published_issue_pk_skips_an_issue_that_has_not_sent_yet() {
+        let items = vec![
+            make_issue_item("tenant-1#11", Some("2030-01-02T00:00:00Z")),
+            make_issue_item("tenant-1#10", Some("2029-12-25T00:00:00Z")),
+        ];
+
+        assert_eq!(
+            find_published_issue_pk(&items, now()),
+            Some("tenant-1#10".to_string())
+        );
+    }
+
+    #[test]
+    fn test_find_published_issue_pk_accepts_an_issue_sending_right_now() {
+        let items = vec![make_issue_item("tenant-1#11", Some("2030-01-01T00:00:00Z"))];
+
+        assert_eq!(
+            find_published_issue_pk(&items, now()),
+            Some("tenant-1#11".to_string())
+        );
+    }
+
+    // Old records predate the current stamp format; they are history, not a
+    // scheduled send, so they stay attributable.
+    #[test]
+    fn test_find_published_issue_pk_keeps_an_unparseable_timestamp() {
+        let items = vec![make_issue_item("tenant-1#9", Some("last tuesday"))];
+
+        assert_eq!(
+            find_published_issue_pk(&items, now()),
+            Some("tenant-1#9".to_string())
         );
     }
 

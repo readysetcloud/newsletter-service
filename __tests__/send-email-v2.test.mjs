@@ -240,6 +240,48 @@ describe('send-email-v2', () => {
     });
   });
 
+  // Every use of this marker is inside a query string — the unsubscribe and
+  // preference-centre links. `encrypt` emits standard base64, and a `+` in a
+  // query value decodes to a space, which shifts the base64 and makes the GCM
+  // auth tag reject the token: the click lands on "invalid or expired link",
+  // the subscriber stays subscribed, and the issue's `unsubscribes` never moves.
+  describe('unsubscribe link personalization', () => {
+    test('percent-encodes the encrypted address in the link', async () => {
+      const { encrypt } = await import('../functions/utils/helpers.mjs');
+      encrypt.mockReturnValueOnce('iv+part/x==:data+part:tag+part');
+
+      ddbInstance.send.mockResolvedValueOnce({
+        Items: [{
+          unmarshalled: {
+            senderId: 'sender-123',
+            email: 'sender@example.com',
+            verificationStatus: 'verified',
+            isDefault: false
+          }
+        }]
+      });
+      sesInstance.send.mockResolvedValue({ MessageId: 'msg-123' });
+
+      await handler({
+        detail: {
+          subject: 'Test Subject',
+          html: '<a href="https://api.example.com/t/unsubscribe?email=__EMAIL_HASH__">Unsubscribe</a>',
+          to: { email: 'recipient@example.com' },
+          from: 'sender@example.com',
+          tenantId: 'tenant-123',
+          replacements: { emailAddressHash: '__EMAIL_HASH__' }
+        }
+      });
+
+      const sent = sesInstance.send.mock.calls[0][0];
+      const html = sent.Content.Simple.Body.Html.Data;
+      const token = html.match(/unsubscribe\?email=([^"]+)/)[1];
+
+      expect(token).not.toContain('+');
+      expect(decodeURIComponent(token)).toBe('iv+part/x==:data+part:tag+part');
+    });
+  });
+
   describe('metrics tracking', () => {
     test('updates sender metrics after successful send', async () => {
       const event = {

@@ -412,5 +412,34 @@ describe('send-welcome-email handler', () => {
       expect(detail.subject).toContain('Test Newsletter');
       expect(detail.html).toBeDefined();
     });
+
+    // The token is standard base64 and rides in a query string, where a `+`
+    // decodes to a space and corrupts it before the unsubscribe handler can
+    // decrypt it.
+    test('percent-encodes the token in the unsubscribe link', async () => {
+      mockEncrypt.mockReturnValueOnce('iv+part/x==:data+part:tag+part');
+      mockDdbSend.mockImplementation((command) => {
+        if (command.__type === 'GetItem') {
+          return Promise.resolve({ Item: { pk: 'test-tenant', sk: 'tenant', brandName: 'Test Newsletter' } });
+        }
+        if (command.__type === 'Query') {
+          return Promise.resolve({
+            Items: [{ email: 'sender@example.com', senderId: 'sender-123', verificationStatus: 'verified', isDefault: true }],
+          });
+        }
+        return Promise.resolve({});
+      });
+      mockEventBridgeSend.mockResolvedValue({});
+
+      await handler({
+        detail: { tenantId: 'test-tenant', data: { email: 'subscriber@example.com' } },
+      });
+
+      const { unsubscribeUrl } = mockTemplate.mock.calls.at(-1)[0];
+      const token = unsubscribeUrl.split('?email=')[1];
+
+      expect(token).not.toContain('+');
+      expect(decodeURIComponent(token)).toBe('iv+part/x==:data+part:tag+part');
+    });
   });
 });

@@ -141,6 +141,53 @@ describe('issue-attribution', () => {
       expect(cmd.input.ScanIndexForward).toBe(false);
       expect(cmd.input.Limit).toBe(10);
     });
+
+    // The publish workflow stamps `publishedAt` with the send instant and starts
+    // IssueSendLeadTimeMinutes (26h by default) before it, so the newest issue in
+    // the GSI is routinely one nobody has received. Attributing to it credited an
+    // issue that had not gone out, and took the activity from the issue the
+    // reader actually had in front of them.
+    test('should skip an issue whose send is still in the future', async () => {
+      const inTwentySixHours = new Date(Date.now() + 26 * 60 * 60 * 1000).toISOString();
+      const lastWeek = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      mockSend.mockResolvedValueOnce({
+        Items: [
+          marshall({ pk: 'tenant1#6', GSI1PK: 'tenant1#issue', GSI1SK: '00006', issueNumber: 6, publishedAt: inTwentySixHours }),
+          marshall({ pk: 'tenant1#5', GSI1PK: 'tenant1#issue', GSI1SK: '00005', issueNumber: 5, publishedAt: lastWeek })
+        ]
+      });
+
+      const result = await getMostRecentPublishedIssue('tenant1');
+
+      expect(result).toEqual({ pk: 'tenant1#5', issueNumber: 5 });
+    });
+
+    test('should return null when every issue is still waiting to send', async () => {
+      const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      mockSend.mockResolvedValueOnce({
+        Items: [
+          marshall({ pk: 'tenant1#6', GSI1PK: 'tenant1#issue', GSI1SK: '00006', issueNumber: 6, publishedAt: tomorrow })
+        ]
+      });
+
+      const result = await getMostRecentPublishedIssue('tenant1');
+
+      expect(result).toBeNull();
+    });
+
+    // Old records predate the current stamp; they are history, not a pending
+    // send, so they stay attributable.
+    test('should still attribute to an issue with an unparseable publishedAt', async () => {
+      mockSend.mockResolvedValueOnce({
+        Items: [
+          marshall({ pk: 'tenant1#4', GSI1PK: 'tenant1#issue', GSI1SK: '00004', issueNumber: 4, publishedAt: 'last tuesday' })
+        ]
+      });
+
+      const result = await getMostRecentPublishedIssue('tenant1');
+
+      expect(result).toEqual({ pk: 'tenant1#4', issueNumber: 4 });
+    });
   });
 
   describe('incrementIssueCounter', () => {

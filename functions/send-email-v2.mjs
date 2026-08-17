@@ -659,7 +659,11 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
       }
 
       if (emailConfig.replacements?.emailAddressHash) {
-        const emailHash = encrypt(email);
+        // Percent-encoded because every use of this marker is inside a query
+        // string (the unsubscribe and preference-centre links), and `encrypt`
+        // emits standard base64 — whose `+` a query parser decodes as a space,
+        // corrupting the token before the handler ever sees it.
+        const emailHash = encodeURIComponent(encrypt(email));
         personalizedHtml = personalizedHtml.replace(
           new RegExp(emailConfig.replacements.emailAddressHash, 'g'),
           emailHash

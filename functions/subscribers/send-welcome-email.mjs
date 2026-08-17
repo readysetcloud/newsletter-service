@@ -53,7 +53,10 @@ export const handler = async (event) => {
       return;
     }
 
-    const emailHash = encrypt(email);
+    // Percent-encoded: `encrypt` emits standard base64, and a `+` in a query
+    // value decodes to a space, which corrupts the token past repair by the
+    // time the unsubscribe handler decodes it.
+    const emailHash = encodeURIComponent(encrypt(email));
     const unsubscribeUrl = `${process.env.ORIGIN}/${tenantId}/unsubscribe?email=${emailHash}`;
 
     const templateData = {

@@ -56,14 +56,25 @@ export const getConfirmationPage = (tenantId, emailAddress) => {
 };
 
 /**
- * Result page (success or failure-with-manual-form). Uses the tenant's custom
- * success page when one is configured.
+ * Result page, for a removal that succeeded or one that did not.
+ *
+ * A tenant's custom `success` page is used only when the unsubscribe actually
+ * succeeded. It used to be returned for both outcomes, so any tenant with a
+ * custom page told people with an expired token or a failed delete that they
+ * had been unsubscribed when they had not — and skipped the stock failure
+ * page, whose manual form is the only way back for someone holding a dead
+ * link. A tenant may also configure a `failure` page; without one, the stock
+ * failure page (with the form) is used.
  */
 export const getUnsubscribePage = async (tenantId, wasSuccessful, emailAddress) => {
   const template = await getUnsubscribeTemplate(tenantId);
 
-  if (template.success) {
+  if (wasSuccessful && template.success) {
     return template.success;
+  }
+
+  if (!wasSuccessful && template.failure) {
+    return template.failure;
   }
 
   return unsubscribeHtml({

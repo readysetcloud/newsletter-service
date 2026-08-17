@@ -17,12 +17,11 @@ describe('suppression', () => {
     test('writes the revocation under the tenant partition, lowercased', async () => {
       mockSend.mockResolvedValueOnce({});
 
-      const ok = await recordSuppression('tenant1', 'Person@Example.COM', 'one-click', {
+      await recordSuppression('tenant1', 'Person@Example.COM', 'one-click', {
         ipAddress: '10.0.0.1',
         userAgent: 'Mozilla/5.0'
       });
 
-      expect(ok).toBe(true);
       const cmd = mockSend.mock.calls[0][0];
       expect(cmd).toBeInstanceOf(PutItemCommand);
       const item = unmarshall(cmd.input.Item);
@@ -34,12 +33,13 @@ describe('suppression', () => {
       expect(typeof item.unsubscribedAt).toBe('string');
     });
 
-    // The removal itself must not fail because its paper trail could not be
-    // written — the caller proceeds to delete regardless.
-    test('never throws', async () => {
+    // Consent fails closed: reporting a durable unsubscribe that was never
+    // recorded would leave the person exposed to the next list import, so the
+    // caller has to hear about this and abort the removal.
+    test('throws so the caller can abort the removal', async () => {
       mockSend.mockRejectedValueOnce(new Error('DynamoDB down'));
 
-      await expect(recordSuppression('tenant1', 'a@b.com', 'complaint')).resolves.toBe(false);
+      await expect(recordSuppression('tenant1', 'a@b.com', 'complaint')).rejects.toThrow('DynamoDB down');
     });
   });
 
@@ -68,11 +68,14 @@ describe('suppression', () => {
       expect(await getSuppression('tenant1', 'a@b.com')).toBeNull();
     });
 
-    // Fails open: "could not check" must not turn into "could not import".
-    test('returns null on error rather than throwing', async () => {
+    // "No suppression on record" and "could not check" are different facts.
+    // Collapsing them into null let an unreachable consent store read as
+    // consent, so a transient failure during an import would have
+    // re-subscribed opted-out people.
+    test('throws rather than reporting no suppression when it cannot read', async () => {
       mockSend.mockRejectedValueOnce(new Error('DynamoDB down'));
 
-      await expect(getSuppression('tenant1', 'a@b.com')).resolves.toBeNull();
+      await expect(getSuppression('tenant1', 'a@b.com')).rejects.toThrow('DynamoDB down');
     });
   });
 

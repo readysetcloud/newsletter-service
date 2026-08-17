@@ -41,8 +41,13 @@ jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
 
 // Mock helpers
 jest.unstable_mockModule('../functions/utils/helpers.mjs', () => ({
-  encrypt: jest.fn((email) => `encrypted_${email}`),
   sendWithRetry: jest.fn(async (fn) => await fn())
+}));
+
+// Tokens are minted here now, bound to the tenant so they cannot be replayed
+// against another tenant's unsubscribe endpoint.
+jest.unstable_mockModule('../functions/utils/subscriber-token.mjs', () => ({
+  mintSubscriberToken: jest.fn((tenantId, email) => `token_${tenantId}_${email}`)
 }));
 
 // Mock subscriber utility

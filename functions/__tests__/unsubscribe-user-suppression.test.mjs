@@ -72,7 +72,11 @@ describe('unsubscribeUser suppression trail', () => {
     expect(suppressionWrite.Item.sk).toBe('suppression#gone@b.com');
   });
 
-  test('a failed suppression write does not block the removal', async () => {
+  // Fails closed. Removing the subscriber anyway would report a durable
+  // unsubscribe with no record of it, and the next list import would put that
+  // person straight back on — the exact failure the record exists to prevent.
+  // Leaving them subscribed and reporting failure means the provider retries.
+  test('a failed suppression write aborts the removal', async () => {
     ddbSend.mockImplementation((cmd) => {
       if (cmd.__type === 'PutItem') {
         return Promise.reject(new Error('DynamoDB down'));
@@ -82,7 +86,7 @@ describe('unsubscribeUser suppression trail', () => {
 
     const result = await unsubscribeUser('tenant1', 'a@b.com', 'complaint');
 
-    expect(result).toEqual({ success: true, actuallyRemoved: true });
-    expect(ddbSend.mock.calls.map(([cmd]) => cmd.__type)).toContain('DeleteItem');
+    expect(result).toEqual({ success: false, actuallyRemoved: false });
+    expect(ddbSend.mock.calls.map(([cmd]) => cmd.__type)).not.toContain('DeleteItem');
   });
 });

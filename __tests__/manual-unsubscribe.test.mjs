@@ -3,7 +3,7 @@ import { jest, describe, test, expect, beforeEach } from '@jest/globals';
 let handler;
 let unsubscribeUser;
 let getTenant;
-let decrypt;
+let readSubscriberToken;
 let getMostRecentPublishedIssue;
 let incrementIssueCounter;
 let getUnsubscribePage;
@@ -12,7 +12,7 @@ async function loadIsolated() {
   await jest.isolateModulesAsync(async () => {
     unsubscribeUser = jest.fn();
     getTenant = jest.fn();
-    decrypt = jest.fn();
+    readSubscriberToken = jest.fn();
     getMostRecentPublishedIssue = jest.fn();
     incrementIssueCounter = jest.fn();
     getUnsubscribePage = jest.fn(async (tenantId, wasSuccessful) => `<html>result:${wasSuccessful}</html>`);
@@ -23,7 +23,11 @@ async function loadIsolated() {
 
     jest.unstable_mockModule('../functions/utils/helpers.mjs', () => ({
       getTenant,
-      decrypt,
+    }));
+
+    // Tokens are now tenant-bound; this throws for a token minted elsewhere.
+    jest.unstable_mockModule('../functions/utils/subscriber-token.mjs', () => ({
+      readSubscriberToken,
     }));
 
     jest.unstable_mockModule('../functions/utils/issue-attribution.mjs', () => ({
@@ -406,12 +410,12 @@ describe('manual-unsubscribe handler', () => {
     });
 
     test('one-click POST removes without confirmation and answers JSON', async () => {
-      decrypt.mockReturnValue('subscriber@example.com');
+      readSubscriberToken.mockReturnValue({ email: 'subscriber@example.com', legacy: false });
       unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: true });
 
       const result = await handler(tokenEvent('List-Unsubscribe=One-Click'));
 
-      expect(decrypt).toHaveBeenCalledWith('encrypted-token');
+      expect(readSubscriberToken).toHaveBeenCalledWith('encrypted-token', 'test-tenant');
       expect(unsubscribeUser).toHaveBeenCalledWith(
         'test-tenant', 'subscriber@example.com', 'one-click', expect.any(Object)
       );
@@ -421,7 +425,7 @@ describe('manual-unsubscribe handler', () => {
     });
 
     test('a base64-encoded one-click body is decoded before parsing', async () => {
-      decrypt.mockReturnValue('subscriber@example.com');
+      readSubscriberToken.mockReturnValue({ email: 'subscriber@example.com', legacy: false });
       unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: true });
 
       const event = tokenEvent(Buffer.from('List-Unsubscribe=One-Click').toString('base64'));
@@ -436,7 +440,7 @@ describe('manual-unsubscribe handler', () => {
     });
 
     test('confirmation form removes and answers with the HTML result page', async () => {
-      decrypt.mockReturnValue('subscriber@example.com');
+      readSubscriberToken.mockReturnValue({ email: 'subscriber@example.com', legacy: false });
       unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: true });
 
       const result = await handler(tokenEvent('confirmed=true'));
@@ -452,7 +456,7 @@ describe('manual-unsubscribe handler', () => {
     // RFC 8058 wants an honest status the provider can act on; a human gets
     // the failure page, which carries the manual form as an escape hatch.
     test('an undecryptable token fails one-click with 400 and humans with the failure page', async () => {
-      decrypt.mockImplementation(() => { throw new Error('bad token'); });
+      readSubscriberToken.mockImplementation(() => { throw new Error('bad token'); });
 
       const oneClick = await handler(tokenEvent('List-Unsubscribe=One-Click'));
       expect(oneClick.statusCode).toBe(400);
@@ -466,7 +470,7 @@ describe('manual-unsubscribe handler', () => {
     });
 
     test('an already-removed subscriber still gets a success answer and no double count', async () => {
-      decrypt.mockReturnValue('subscriber@example.com');
+      readSubscriberToken.mockReturnValue({ email: 'subscriber@example.com', legacy: false });
       unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: false });
 
       const result = await handler(tokenEvent('List-Unsubscribe=One-Click'));
@@ -475,8 +479,78 @@ describe('manual-unsubscribe handler', () => {
       expect(incrementIssueCounter).not.toHaveBeenCalled();
     });
 
+    // RFC 8058 says the one-click POST SHOULD be multipart/form-data, so a
+    // urlencoded-only parser would miss the form conforming providers prefer.
+    test('reads the one-click intent from a multipart body', async () => {
+      readSubscriberToken.mockReturnValue({ email: 'subscriber@example.com', legacy: false });
+      unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: true });
+
+      const body = [
+        '--boundary42',
+        'Content-Disposition: form-data; name="List-Unsubscribe"',
+        '',
+        'One-Click',
+        '--boundary42--',
+        ''
+      ].join('\r\n');
+
+      const result = await handler(tokenEvent(body, {
+        'content-type': 'multipart/form-data; boundary=boundary42'
+      }));
+
+      expect(unsubscribeUser).toHaveBeenCalledWith(
+        'test-tenant', 'subscriber@example.com', 'one-click', expect.any(Object)
+      );
+      expect(result.statusCode).toBe(200);
+      expect(result.headers['Content-Type']).toBe('application/json');
+    });
+
+    // Only the two documented intents remove anyone: an arbitrary or empty
+    // token-bearing POST used to fall through as a real unsubscribe.
+    test.each([
+      ['an empty body', ''],
+      ['an unrelated field', 'garbage=true'],
+      ['a confirmation that is not true', 'confirmed=maybe']
+    ])('refuses a token POST carrying %s', async (_label, body) => {
+      readSubscriberToken.mockReturnValue({ email: 'subscriber@example.com', legacy: false });
+
+      const result = await handler(tokenEvent(body));
+
+      expect(result.statusCode).toBe(400);
+      expect(unsubscribeUser).not.toHaveBeenCalled();
+    });
+
+    // A legacy token cannot be tenant-checked, so it is accepted but recorded.
+    test('accepts a legacy token and notes it', async () => {
+      const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+      readSubscriberToken.mockReturnValue({ email: 'old@example.com', legacy: true });
+      unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: true });
+
+      const result = await handler(tokenEvent('List-Unsubscribe=One-Click'));
+
+      expect(result.statusCode).toBe(200);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('legacy'),
+        expect.objectContaining({ tenantId: 'test-tenant' })
+      );
+      logSpy.mockRestore();
+    });
+
+    // readSubscriberToken throws for a token minted under another tenant, and
+    // that must not remove anyone here.
+    test('refuses a token minted for a different tenant', async () => {
+      readSubscriberToken.mockImplementation(() => {
+        throw new Error('Subscriber token was minted for a different tenant');
+      });
+
+      const result = await handler(tokenEvent('List-Unsubscribe=One-Click'));
+
+      expect(result.statusCode).toBe(400);
+      expect(unsubscribeUser).not.toHaveBeenCalled();
+    });
+
     test('one-click reports a real failure as 500 so the provider can retry', async () => {
-      decrypt.mockReturnValue('subscriber@example.com');
+      readSubscriberToken.mockReturnValue({ email: 'subscriber@example.com', legacy: false });
       unsubscribeUser.mockResolvedValue({ success: false, actuallyRemoved: false });
 
       const result = await handler(tokenEvent('List-Unsubscribe=One-Click'));

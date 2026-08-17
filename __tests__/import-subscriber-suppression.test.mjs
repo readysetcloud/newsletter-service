@@ -85,14 +85,29 @@ describe('import-subscriber-list suppression', () => {
     expect(result.suppressed).toBe(0);
   });
 
-  // getSuppression fails open (null on error), so an unreadable suppression
-  // table degrades to the old behavior instead of blocking the import.
-  test('a suppression check error does not block the import', async () => {
-    getSuppression.mockResolvedValue(null);
+  // An unreachable consent store must never read as consent. The address fails
+  // rather than being imported, and surfaces in the result so the operator can
+  // retry it rather than silently mailing someone who opted out.
+  test('fails the address when the consent store cannot be read', async () => {
+    getSuppression.mockImplementation(async (tenantId, email) => {
+      if (email === 'unknown@example.com') {
+        throw new Error('DynamoDB down');
+      }
+      return null;
+    });
 
-    const result = await handler(importEvent(['a@example.com']));
+    const result = await handler(importEvent(['good@example.com', 'unknown@example.com']));
 
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
+    expect(result.failed).toBe(1);
     expect(result.imported).toBe(1);
+    expect(result.errors[0]).toMatch(/Could not read consent state for unknown@example\.com/);
+
+    // Only the address whose consent state was known got written.
+    const written = ddbSend.mock.calls
+      .map(([cmd]) => cmd)
+      .filter((cmd) => cmd.__type === 'BatchWriteItem')
+      .map((cmd) => cmd.RequestItems['subscribers-table'][0].PutRequest.Item.email);
+    expect(written).toEqual(['good@example.com']);
   });
 });

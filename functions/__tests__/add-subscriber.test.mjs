@@ -61,8 +61,9 @@ async function loadIsolated() {
       UpdateItemCommand: jest.fn((params) => ({ __type: 'UpdateItem', ...params })),
       PutItemCommand: jest.fn((params) => ({ __type: 'PutItem', ...params })),
       GetItemCommand: jest.fn((params) => ({ __type: 'GetItem', ...params })),
-      // clearSuppression (utils/suppression.mjs) lifts an earlier unsubscribe
-      // on a fresh signup — new consent.
+      // Imported by utils/suppression.mjs for clearSuppression, which is
+      // deliberately unwired from this path — signup is unauthenticated and
+      // cannot be treated as proof of address ownership.
       DeleteItemCommand: jest.fn((params) => ({ __type: 'DeleteItem', ...params })),
     }));
 
@@ -184,6 +185,19 @@ describe('add-subscriber handler — bot protection integration', () => {
     });
   });
 
+
+  /**
+   * Signup now reads the suppression record before writing the subscriber, so
+   * a bare `mockRejectedValue` would fail that read instead of the write it is
+   * aiming at. This resolves the consent lookup (no suppression on record) and
+   * applies `rest` to every call after it.
+   */
+  const withCleanSuppressionCheck = (rest) => {
+    ddbInstance.send.mockImplementation((cmd) =>
+      cmd.__type === 'GetItem' ? Promise.resolve({}) : rest(cmd)
+    );
+  };
+
   // 1. HTTP 400 for invalid email format
   test('returns HTTP 400 for invalid email format', async () => {
     mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
@@ -272,7 +286,7 @@ describe('add-subscriber handler — bot protection integration', () => {
     expect(res.statusCode).toBe(201);
     // Subscriber PutItem should have been called (record created)
     expect(ddbInstance.send).toHaveBeenCalled();
-    const putCall = ddbInstance.send.mock.calls[0][0];
+    const putCall = ddbInstance.send.mock.calls[1][0];
     expect(putCall.__type).toBe('PutItem');
     expect(putCall.Item.disposableDomain).toBe(true);
     // Should emit signup.flagged log since disposableDomain flag is true
@@ -287,15 +301,16 @@ describe('add-subscriber handler — bot protection integration', () => {
   test('returns HTTP 201 for duplicate email with no additional writes', async () => {
     mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
     // First DDB send (PutItem for subscriber) throws ConditionalCheckFailedException
-    ddbInstance.send.mockRejectedValue(
+    withCleanSuppressionCheck(() => Promise.reject(
       Object.assign(new Error('exists'), { name: 'ConditionalCheckFailedException' })
-    );
+    ));
 
     const res = await handler(makeEvent({ email: 'dup@example.com' }));
 
     expect(res.statusCode).toBe(201);
-    // Only one DDB call — the failed PutItem; no UpdateItem or event record
-    expect(ddbInstance.send).toHaveBeenCalledTimes(1);
+    // Two DDB calls — the consent lookup and the failed PutItem; no UpdateItem
+    // or event record.
+    expect(ddbInstance.send).toHaveBeenCalledTimes(2);
     expect(mockPublishSubscriberEvent).not.toHaveBeenCalled();
   });
 
@@ -321,7 +336,7 @@ describe('add-subscriber handler — bot protection integration', () => {
 
     expect(res.statusCode).toBe(201);
     // First DDB call is PutItem for subscriber
-    const putCall = ddbInstance.send.mock.calls[0][0];
+    const putCall = ddbInstance.send.mock.calls[1][0];
     expect(putCall.__type).toBe('PutItem');
     expect(putCall.Item.sourceIp).toBe('10.0.0.1');
     expect(putCall.Item.userAgent).toBe('TestAgent');
@@ -344,9 +359,9 @@ describe('add-subscriber handler — bot protection integration', () => {
   test('emits duplicate_abuse log when requestCount > 3 for duplicate email', async () => {
     mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
     mockCheckRateLimit.mockResolvedValue({ count: 4, limited: false, retryAfterSeconds: null });
-    ddbInstance.send.mockRejectedValue(
+    withCleanSuppressionCheck(() => Promise.reject(
       Object.assign(new Error('exists'), { name: 'ConditionalCheckFailedException' })
-    );
+    ));
 
     const res = await handler(makeEvent({ email: 'dup@example.com' }));
 
@@ -364,9 +379,9 @@ describe('add-subscriber handler — bot protection integration', () => {
   test('does NOT emit duplicate_abuse log when requestCount <= 3 for duplicate email', async () => {
     mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
     mockCheckRateLimit.mockResolvedValue({ count: 3, limited: false, retryAfterSeconds: null });
-    ddbInstance.send.mockRejectedValue(
+    withCleanSuppressionCheck(() => Promise.reject(
       Object.assign(new Error('exists'), { name: 'ConditionalCheckFailedException' })
-    );
+    ));
 
     const res = await handler(makeEvent({ email: 'dup@example.com' }));
 
@@ -466,9 +481,9 @@ describe('add-subscriber handler — bot protection integration', () => {
     test('emits signup.duplicate_abuse log with correct fields', async () => {
       mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
       mockCheckRateLimit.mockResolvedValue({ count: 5, limited: false, retryAfterSeconds: null });
-      ddbInstance.send.mockRejectedValue(
+      withCleanSuppressionCheck(() => Promise.reject(
         Object.assign(new Error('exists'), { name: 'ConditionalCheckFailedException' })
-      );
+      ));
 
       await handler(makeEvent({ email: 'dup@example.com' }));
 
@@ -502,6 +517,52 @@ describe('add-subscriber handler — bot protection integration', () => {
           requestCountInWindow: 11
         })
       );
+    });
+  });
+
+  // Signup is unauthenticated and takes a caller-supplied address, so it is not
+  // proof that its owner sent it. Treating it as fresh consent would have let
+  // anyone re-create a subscriber and erase that person's durable opt-out.
+  describe('previously unsubscribed addresses', () => {
+    test('refuses a suppressed address and writes nothing', async () => {
+      mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
+      ddbInstance.send.mockImplementation((cmd) =>
+        cmd.__type === 'GetItem'
+          ? Promise.resolve({ Item: { unsubscribedAt: '2026-08-01T00:00:00.000Z', method: 'one-click' } })
+          : Promise.resolve({})
+      );
+
+      const res = await handler(makeEvent({ email: 'optedout@example.com' }));
+
+      // Silent 201, same as the bot filters: the endpoint must not reveal that
+      // an address is known, let alone that it opted out.
+      expect(res.statusCode).toBe(201);
+      // The consent lookup, and nothing else.
+      expect(ddbInstance.send).toHaveBeenCalledTimes(1);
+      expect(mockPublishSubscriberEvent).not.toHaveBeenCalled();
+      expect(mockEmitBotProtectionLog).toHaveBeenCalledWith(
+        mockLogger,
+        'signup.suppressed',
+        expect.objectContaining({ rejectionReason: 'previously_unsubscribed' })
+      );
+    });
+
+    // An unreachable consent store must never read as consent — but a
+    // legitimate signup lost to a blip deserves to be told, so the form can
+    // surface an error rather than the person silently never hearing from us.
+    test('reports a consent-store read failure instead of adding', async () => {
+      mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
+      ddbInstance.send.mockImplementation((cmd) =>
+        cmd.__type === 'GetItem'
+          ? Promise.reject(new Error('DynamoDB down'))
+          : Promise.resolve({})
+      );
+
+      const res = await handler(makeEvent({ email: 'new@example.com' }));
+
+      expect(res.statusCode).toBe(500);
+      expect(ddbInstance.send).toHaveBeenCalledTimes(1);
+      expect(mockPublishSubscriberEvent).not.toHaveBeenCalled();
     });
   });
 });

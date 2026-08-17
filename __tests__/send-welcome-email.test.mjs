@@ -5,7 +5,9 @@ import * as fc from 'fast-check';
 
 const mockDdbSend = jest.fn();
 const mockEventBridgeSend = jest.fn();
-const mockEncrypt = jest.fn((email) => `encrypted_${email}`);
+// Now tenant-bound: the token carries the tenant so it cannot be replayed
+// against another tenant's unsubscribe endpoint.
+const mockEncrypt = jest.fn((tenantId, email) => `encrypted_${tenantId}_${email}`);
 const mockTemplate = jest.fn((data) => `<html>Welcome ${data.subscriberFirstName || ''} to ${data.brandName}</html>`);
 
 jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
@@ -24,8 +26,8 @@ jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
   unmarshall: jest.fn((obj) => obj),
 }));
 
-jest.unstable_mockModule('../functions/utils/helpers.mjs', () => ({
-  encrypt: mockEncrypt,
+jest.unstable_mockModule('../functions/utils/subscriber-token.mjs', () => ({
+  mintSubscriberToken: mockEncrypt,
 }));
 
 jest.unstable_mockModule('handlebars', () => ({

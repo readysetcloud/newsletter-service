@@ -24,10 +24,12 @@ const ddb = new DynamoDBClient();
  * Who writes and who honors it:
  *  - Every subscriber-initiated unsubscribe (footer link, one-click header,
  *    manual form, spam complaint) records one, via `unsubscribeUser`.
- *  - Bulk import refuses to re-add a suppressed address.
- *  - The single-address signup endpoint treats a fresh signup as new consent:
- *    it clears the record and proceeds. That is the deliberate difference —
- *    the person can always come back; a CSV cannot bring them back.
+ *  - Both add paths — bulk import and the public signup endpoint — refuse a
+ *    suppressed address. Signup is unauthenticated and accepts a
+ *    caller-supplied address, so a submission there is not proof that the
+ *    owner sent it; treating it as fresh consent would have let anyone erase
+ *    someone else's opt-out. Reactivation is therefore blocked pending a
+ *    confirmed opt-in flow (see `clearSuppression`).
  *  - Operator actions (dashboard delete, bounce cleanup) do NOT suppress:
  *    neither is a consent revocation, and the operator may re-add on purpose.
  */
@@ -36,12 +38,15 @@ const suppressionSk = (email) => `suppression#${email.toLowerCase()}`;
 
 /**
  * Record a consent revocation. Written before the subscriber row is deleted so
- * a crash between the two still leaves the revocation on record, and written
- * even when the address is not currently on the list — an unsubscribe click on
- * an old email is still a statement about future sends.
+ * that a failure here stops the removal entirely rather than leaving the
+ * person unsubscribed with no durable record — which is the state a later CSV
+ * import would quietly undo. Written even when the address is not currently on
+ * the list: an unsubscribe click on an old email is still a statement about
+ * future sends.
  *
- * Never throws: the removal itself must not fail because its paper trail
- * could not be written.
+ * Throws on failure. Consent state fails closed: the caller must not report a
+ * durable unsubscribe it could not record, so the one-click endpoint answers
+ * 5xx and the mail provider retries.
  */
 export const recordSuppression = async (tenantId, emailAddress, method, metadata = {}) => {
   try {
@@ -57,22 +62,25 @@ export const recordSuppression = async (tenantId, emailAddress, method, metadata
         ...(metadata.userAgent && { userAgent: metadata.userAgent })
       })
     }));
-    return true;
   } catch (err) {
     console.error('Failed to write suppression record', {
       tenantId,
       method,
       error: err.message
     });
-    return false;
+    throw err;
   }
 };
 
 /**
- * Whether an address has an outstanding consent revocation.
- * Fails open (returns null) on error: the callers that consult this are add
- * paths, and "could not check" must not turn into "could not import anything".
- * Returns the record when suppressed, null otherwise.
+ * The outstanding consent revocation for an address, or null if there is none.
+ *
+ * Throws when the store cannot be read. "We checked and there is no
+ * suppression" and "we could not check" are different facts, and collapsing
+ * them into null made an unavailable consent store read as implicit consent —
+ * a transient DynamoDB failure during an import would have re-subscribed
+ * opted-out people. Callers must treat a throw as "cannot add this address"
+ * and surface it, not swallow it.
  */
 export const getSuppression = async (tenantId, emailAddress) => {
   try {
@@ -87,13 +95,21 @@ export const getSuppression = async (tenantId, emailAddress) => {
     return result.Item ? unmarshall(result.Item) : null;
   } catch (err) {
     console.error('Failed to read suppression record', { tenantId, error: err.message });
-    return null;
+    throw err;
   }
 };
 
 /**
- * Lift a suppression — only ever called when the person themselves re-subscribes
- * through the signup endpoint, which is fresh consent. Idempotent; never throws.
+ * Lift a suppression.
+ *
+ * Deliberately not wired to the public signup endpoint. That endpoint is
+ * unauthenticated and takes a caller-supplied address, so a submission there
+ * proves nothing about who sent it — anyone who knows an address could have
+ * used it to erase that person's opt-out. Reactivation needs proof of
+ * ownership (a confirmation link sent to the address itself), which is not
+ * built yet; until it is, nothing in the request path calls this.
+ *
+ * Idempotent; never throws.
  */
 export const clearSuppression = async (tenantId, emailAddress) => {
   try {

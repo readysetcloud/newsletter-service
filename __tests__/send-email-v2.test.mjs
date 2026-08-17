@@ -38,8 +38,13 @@ jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
 
 // Mock helpers
 jest.unstable_mockModule('../functions/utils/helpers.mjs', () => ({
-  encrypt: jest.fn((email) => `encrypted_${email}`),
   sendWithRetry: jest.fn(async (fn, operationName) => await fn())
+}));
+
+// Tokens are minted here now, bound to the tenant so they cannot be replayed
+// against another tenant's unsubscribe endpoint.
+jest.unstable_mockModule('../functions/utils/subscriber-token.mjs', () => ({
+  mintSubscriberToken: jest.fn((tenantId, email) => `token_${tenantId}_${email}`)
 }));
 
 // Mock subscriber utility
@@ -268,8 +273,8 @@ describe('send-email-v2', () => {
     });
 
     test('issue sends carry the one-click headers with a per-recipient token', async () => {
-      const { encrypt } = await import('../functions/utils/helpers.mjs');
-      encrypt.mockReturnValueOnce('iv+x:data+y:tag+z');
+      const { mintSubscriberToken } = await import('../functions/utils/subscriber-token.mjs');
+      mintSubscriberToken.mockReturnValueOnce('iv+x:data+y:tag+z');
       senderLookup();
 
       await handler({
@@ -356,8 +361,8 @@ describe('send-email-v2', () => {
   // the subscriber stays subscribed, and the issue's `unsubscribes` never moves.
   describe('unsubscribe link personalization', () => {
     test('percent-encodes the encrypted address in the link', async () => {
-      const { encrypt } = await import('../functions/utils/helpers.mjs');
-      encrypt.mockReturnValueOnce('iv+part/x==:data+part:tag+part');
+      const { mintSubscriberToken } = await import('../functions/utils/subscriber-token.mjs');
+      mintSubscriberToken.mockReturnValueOnce('iv+part/x==:data+part:tag+part');
 
       ddbInstance.send.mockResolvedValueOnce({
         Items: [{

@@ -1087,9 +1087,6 @@ Resources:
                 - dynamodb:UpdateItem
                 - dynamodb:PutItem
                 - dynamodb:Query
-                # DeleteItem clears the suppression record on a fresh signup —
-                # the person re-subscribing is new consent (utils/suppression.mjs).
-                - dynamodb:DeleteItem
               Resource:
                 - !GetAtt NewsletterTable.Arn
                 - !Sub "${NewsletterTable.Arn}/index/GSI1"

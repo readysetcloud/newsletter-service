@@ -22,7 +22,7 @@ import { sanitizeName } from '../utils/subscriber-name.mjs';
 import { checkRateLimit } from '../utils/rate-limiter.mjs';
 import { createLogger } from '../utils/structured-logger.mjs';
 import { getMostRecentPublishedIssue, incrementIssueCounter } from '../utils/issue-attribution.mjs';
-import { clearSuppression } from '../utils/suppression.mjs';
+import { getSuppression } from '../utils/suppression.mjs';
 
 const ddb = new DynamoDBClient();
 
@@ -155,6 +155,48 @@ export const handler = async (event) => {
       return formatResponse(201, 'Contact added');
     }
 
+    // Step 8.5: Refuse an address that has already opted out.
+    //
+    // This endpoint is unauthenticated and takes a caller-supplied address, so
+    // a submission here is not evidence that its owner sent it — anyone who
+    // knows an address could use this to erase that person's opt-out and put
+    // them back on the list. Reactivation needs proof of ownership (a
+    // confirmation link sent to the address itself), which does not exist yet,
+    // so until it does a suppressed address stays suppressed.
+    //
+    // A suppressed address gets the same silent 201 the bot filters return, so
+    // this endpoint still says nothing about whether an address is known.
+    //
+    // A read failure is different: nobody is added either way — an unreachable
+    // consent store must never read as consent — but a legitimate signup lost
+    // to a transient blip deserves to be told, so the form can surface an
+    // error and the person can try again rather than silently never hearing
+    // from us. The failure is independent of whether a record exists, so
+    // reporting it leaks nothing.
+    let suppression;
+    try {
+      suppression = await getSuppression(tenantId, normalizedEmail);
+    } catch (suppressionErr) {
+      console.error('Refusing signup: consent state could not be read', {
+        tenantId,
+        error: suppressionErr.message
+      });
+      return formatResponse(500, 'Something went wrong');
+    }
+
+    if (suppression) {
+      emitBotProtectionLog(logger, 'signup.suppressed', {
+        tenantId,
+        normalizedEmail,
+        sourceIp,
+        userAgent,
+        detectionFlags,
+        rejectionReason: 'previously_unsubscribed',
+        requestCountInWindow: rateLimitResult.count
+      });
+      return formatResponse(201, 'Contact added');
+    }
+
     // Step 9: Attempt to create subscriber (duplicate check via ConditionExpression)
     const isNew = await addSubscriber(tenantId, contact, normalizedEmail, {
       sourceIp,
@@ -181,14 +223,6 @@ export const handler = async (event) => {
 
       const addedAt = new Date().toISOString();
       const timestamp = Date.now();
-
-      // A signup through this endpoint is the person themselves acting, which
-      // is fresh consent — it lifts any earlier unsubscribe. This is the one
-      // deliberate difference from the import path, which refuses suppressed
-      // addresses: the person can always come back; a CSV cannot bring them
-      // back. Cleared only on a genuinely new subscription so a duplicate
-      // signup does not touch the record.
-      await clearSuppression(tenantId, normalizedEmail);
 
       await updateSubscriberCount(tenantId);
       await createSubscriberEventRecord(tenantId, normalizedEmail, addedAt, timestamp);

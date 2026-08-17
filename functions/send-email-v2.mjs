@@ -4,7 +4,8 @@ import { recordIssueEvent, ISSUE_EVENTS, issueNumberFromReference } from './util
 import { EventBridgeClient, PutEventsCommand } from "@aws-sdk/client-eventbridge";
 import { DynamoDBClient, QueryCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
-import { encrypt, sendWithRetry } from './utils/helpers.mjs';
+import { sendWithRetry } from './utils/helpers.mjs';
+import { mintSubscriberToken } from './utils/subscriber-token.mjs';
 import { listSubscribers, getSubscriberByEmail, updateSubscriberSendMetadata } from './utils/subscriber.mjs';
 import { splitRecipients, selectHoldoutSample } from './utils/ab-variants.mjs';
 import {
@@ -652,6 +653,7 @@ const resolveListUnsubscribe = (data) => {
  * @param {Object} emailConfig - Email configuration object
  * @param {string} emailConfig.subject - Email subject line
  * @param {string} emailConfig.html - Email HTML body
+ * @param {string} emailConfig.tenantId - Tenant the recipients belong to; binds each minted token to it
  * @param {Object} emailConfig.replacements - Replacement tokens for personalization
  * @param {string} emailConfig.referenceNumber - Optional reference number for tracking
  * @param {string} [emailConfig.variant] - Optional A/B variant id ("a"/"b") tagged on the send
@@ -700,7 +702,11 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
       // a query parser decodes as a space, corrupting the token before the
       // handler ever sees it.
       const needsToken = Boolean(emailConfig.replacements?.emailAddressHash || emailConfig.listUnsubscribe);
-      const encodedToken = needsToken ? encodeURIComponent(encrypt(email)) : null;
+      // Tenant-bound (utils/subscriber-token.mjs): a bare encrypted address
+      // could be replayed against any other tenant's unsubscribe endpoint.
+      const encodedToken = needsToken
+        ? encodeURIComponent(mintSubscriberToken(emailConfig.tenantId, email))
+        : null;
 
       if (emailConfig.replacements?.emailAddressHash) {
         personalizedHtml = personalizedHtml.replace(
@@ -1227,6 +1233,7 @@ export const handler = async (event) => {
           const result = await sendEmailsPhase(bucketRecipients, {
             subject: subjectByVariant[variantId] ?? subject,
             html,
+            tenantId,
             replacements,
             referenceNumber: data.referenceNumber,
             variant: variantId,
@@ -1244,6 +1251,7 @@ export const handler = async (event) => {
       return await sendEmailsPhase(emailAddresses, {
         subject,
         html,
+        tenantId,
         replacements,
         referenceNumber: data.referenceNumber,
         ...assembly && { assembly },

@@ -1,6 +1,7 @@
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { unsubscribeUser } from "../utils/subscriber.mjs";
-import { decrypt, getTenant } from "../utils/helpers.mjs";
+import { getTenant } from "../utils/helpers.mjs";
+import { readSubscriberToken } from "../utils/subscriber-token.mjs";
 import { getMostRecentPublishedIssue, incrementIssueCounter } from "../utils/issue-attribution.mjs";
 import { htmlResponse, getUnsubscribePage } from "./unsubscribe-pages.mjs";
 
@@ -45,19 +46,35 @@ export const handler = async (event) => {
 };
 
 const handleTokenUnsubscribe = async (event, tenantId, token) => {
-  const body = decodeBody(event);
-  const params = parseFormBody(body);
+  const params = parseFormBody(event);
   const isOneClick = params.get('List-Unsubscribe') === 'One-Click';
-  // Whoever isn't a mail provider is a person with a browser: answer them in
-  // HTML. That covers the confirmation form (`confirmed=true`) and anything
-  // else that lands here holding a token.
+  const isConfirmation = params.get('confirmed') === 'true';
+  // A browser gets HTML, a mail provider gets JSON.
   const wantsHtml = !isOneClick;
+
+  // Only the two documented intents remove anyone. Treating every
+  // token-bearing POST as an unsubscribe made the boundary wider than the
+  // flow: an empty or arbitrary body would have fallen through as a real
+  // removal.
+  if (!isOneClick && !isConfirmation) {
+    // No legitimate caller reaches here: our own confirmation page always sends
+    // `confirmed=true`, and a provider always sends the RFC's key/value.
+    console.warn('Rejecting token POST with no recognized unsubscribe intent', { tenantId });
+    return jsonResponse(400, 'Missing unsubscribe confirmation');
+  }
 
   let emailAddress;
   try {
-    emailAddress = decrypt(token);
+    // Verifies the token was minted for this tenant. Without that check a
+    // token for tenant A could be replayed at tenant B's endpoint and both
+    // unsubscribe and suppress the address there.
+    const { email, legacy } = readSubscriberToken(token, tenantId);
+    emailAddress = email;
+    if (legacy) {
+      console.log('Unsubscribe used a legacy (pre-tenant-binding) token', { tenantId, isOneClick });
+    }
   } catch (decryptErr) {
-    console.error('Unsubscribe token decryption failed:', {
+    console.error('Unsubscribe token rejected:', {
       tenantId,
       isOneClick,
       error: decryptErr.message
@@ -150,7 +167,36 @@ const decodeBody = (event) => {
     : event.body;
 };
 
-const parseFormBody = (body) => {
+/**
+ * Read the POST body as form fields.
+ *
+ * RFC 8058 says the one-click POST SHOULD be `multipart/form-data` and MAY be
+ * `application/x-www-form-urlencoded`, so multipart is the form to expect from
+ * a conforming provider — a urlencoded-only parser would miss the common case
+ * and silently reject real unsubscribes. Browsers posting the confirmation
+ * form send urlencoded. Both are handled; the body is small and fixed-shape
+ * (one key/value), so multipart is picked apart directly rather than pulling
+ * in a parser.
+ */
+const parseFormBody = (event) => {
+  const body = decodeBody(event);
+  if (!body) {
+    return new URLSearchParams();
+  }
+
+  const contentType = event.headers?.['content-type'] || event.headers?.['Content-Type'] || '';
+
+  if (contentType.toLowerCase().includes('multipart/form-data')) {
+    const params = new URLSearchParams();
+    // Each part is `...name="field"\r\n\r\n<value>` up to the next boundary.
+    const partPattern = /name="([^"]+)"[^]*?\r?\n\r?\n([^]*?)(?=\r?\n--)/g;
+    let match;
+    while ((match = partPattern.exec(body)) !== null) {
+      params.append(match[1], match[2].trim());
+    }
+    return params;
+  }
+
   try {
     return new URLSearchParams(body);
   } catch {

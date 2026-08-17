@@ -105,12 +105,27 @@ export const unsubscribeUser = async (tenantId, emailAddress, method = 'encrypte
 
     // Every method that reaches this function is the subscriber (or their mail
     // provider, for complaints) revoking consent, so record the suppression
-    // first: written before the delete, a crash between the two still leaves
-    // the revocation on record, and the record is what stops a later list
-    // import from silently re-adding them. Recorded even when the address is
-    // not currently on the list — an unsubscribe click on an old email is
-    // still a statement about future sends.
-    await recordSuppression(tenantId, email, method, metadata);
+    // first — and abort if it fails.
+    //
+    // Consent state fails closed. Deleting the subscriber after a failed
+    // suppression write would report a successful unsubscribe while leaving no
+    // durable record of it, and the next list import would put that person
+    // straight back on — precisely the failure this record exists to prevent.
+    // Aborting first instead leaves the subscriber in place and reports
+    // failure, so the mail provider retries the one-click POST and the browser
+    // flows show the manual form. Recorded even when the address is not
+    // currently on the list: an unsubscribe click on an old email is still a
+    // statement about future sends.
+    try {
+      await recordSuppression(tenantId, email, method, metadata);
+    } catch (suppressionErr) {
+      console.error('Aborting unsubscribe: consent record could not be written', {
+        tenantId,
+        method,
+        error: suppressionErr.message
+      });
+      return { success: false, actuallyRemoved: false };
+    }
 
     // Delete subscriber from Subscribers table only if it exists
     // Using ReturnValues to check if an item was actually deleted

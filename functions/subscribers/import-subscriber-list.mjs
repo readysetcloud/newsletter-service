@@ -90,9 +90,19 @@ const addSubscriber = async (tenantId, contact) => {
   // An import is the operator acting, not the subscriber, so it cannot restore
   // consent: a list snapshot that predates someone's unsubscribe would silently
   // put them back on the list — the classic way opted-out people get mailed
-  // again. Only the person re-subscribing through the signup form lifts a
-  // suppression.
-  const suppression = await getSuppression(tenantId, normalizedEmail);
+  // again.
+  //
+  // A failed lookup fails the address rather than importing it. "No suppression
+  // on record" and "could not reach the consent store" are different facts, and
+  // only the first is permission to add someone; the address surfaces in the
+  // import result's errors so the operator can retry it.
+  let suppression;
+  try {
+    suppression = await getSuppression(tenantId, normalizedEmail);
+  } catch (err) {
+    throw new Error(`Could not read consent state for ${normalizedEmail}, not imported: ${err.message}`);
+  }
+
   if (suppression) {
     console.log(`Skipping ${normalizedEmail}; unsubscribed on ${suppression.unsubscribedAt} via ${suppression.method}`);
     return { suppressed: true, email: normalizedEmail };

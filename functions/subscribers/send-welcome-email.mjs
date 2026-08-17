@@ -3,7 +3,7 @@ import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import Handlebars from 'handlebars';
 import welcomeTemplate from '../../templates/welcome.hbs';
-import { encrypt } from '../utils/helpers.mjs';
+import { mintSubscriberToken } from '../utils/subscriber-token.mjs';
 
 // Key patterns for DynamoDB (previously from ../senders/types.mjs)
 const KEY_PATTERNS = {
@@ -56,7 +56,7 @@ export const handler = async (event) => {
     // Percent-encoded: `encrypt` emits standard base64, and a `+` in a query
     // value decodes to a space, which corrupts the token past repair by the
     // time the unsubscribe handler decodes it.
-    const emailHash = encodeURIComponent(encrypt(email));
+    const emailHash = encodeURIComponent(mintSubscriberToken(tenantId, email));
     // API_BASE_URL, not ORIGIN: the unsubscribe route lives on the public API.
     // ORIGIN is the marketing site, which has no such path — every welcome
     // email's unsubscribe link 404'd (when welcome emails sent at all).

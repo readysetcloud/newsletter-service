@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex">
+    <title>Confirm Unsubscribe</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #f0f4f8 0%, #d9e2ec 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .card {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 540px;
+            width: 100%;
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #4a90e2 0%, #357abd 100%);
+            padding: 40px 30px;
+            text-align: center;
+            color: white;
+        }
+        .icon-circle {
+            width: 80px;
+            height: 80px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            backdrop-filter: blur(10px);
+        }
+        .icon { font-size: 48px; }
+        .header h1 { font-size: 28px; font-weight: 600; margin-bottom: 8px; }
+        .header p { font-size: 16px; opacity: 0.95; }
+        .content { padding: 40px 30px; }
+        .message {
+            text-align: center;
+            color: #4a5568;
+            font-size: 15px;
+            margin-bottom: 30px;
+            line-height: 1.7;
+        }
+        .message strong { color: #2d3748; }
+        .btn {
+            width: 100%;
+            padding: 14px 24px;
+            font-size: 15px;
+            font-weight: 600;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-family: inherit;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #4a90e2 0%, #357abd 100%);
+            color: white;
+        }
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(74, 144, 226, 0.3);
+        }
+        .footer {
+            text-align: center;
+            padding: 20px 30px;
+            background: #f7fafc;
+            color: #718096;
+            font-size: 13px;
+        }
+        @media (max-width: 600px) {
+            body { padding: 10px; }
+            .header { padding: 30px 20px; }
+            .header h1 { font-size: 24px; }
+            .content { padding: 30px 20px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="header">
+            <div class="icon-circle">
+                <span class="icon">👋</span>
+            </div>
+            <h1>Unsubscribe?</h1>
+            <p>One click and you're off the list</p>
+        </div>
+        <div class="content">
+            <p class="message">
+                This will unsubscribe <strong>{{emailAddress}}</strong> from this
+                newsletter. You won't receive any future issues.
+            </p>
+            {{! No action attribute on purpose: the form posts back to this
+                page's own URL, which carries the unsubscribe token in its query
+                string — the token never has to be re-embedded in markup. }}
+            <form method="POST">
+                <input type="hidden" name="confirmed" value="true">
+                <button type="submit" class="btn btn-primary">Yes, unsubscribe me</button>
+            </form>
+        </div>
+        <div class="footer">
+            Changed your mind? Just close this page — nothing happens until you confirm.
+        </div>
+    </div>
+</body>
+</html>

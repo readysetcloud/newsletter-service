@@ -1,0 +1,98 @@
+import { jest, describe, test, expect, beforeEach } from '@jest/globals';
+
+let handler;
+let getSuppression;
+let ddbSend;
+let getTenant;
+
+async function loadIsolated() {
+  await jest.isolateModulesAsync(async () => {
+    ddbSend = jest.fn().mockResolvedValue({ Count: 0 });
+    getTenant = jest.fn().mockResolvedValue({ pk: 'tenant1' });
+    getSuppression = jest.fn().mockResolvedValue(null);
+
+    jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
+      DynamoDBClient: jest.fn(() => ({ send: ddbSend })),
+      UpdateItemCommand: jest.fn((params) => ({ __type: 'UpdateItem', ...params })),
+      BatchWriteItemCommand: jest.fn((params) => ({ __type: 'BatchWriteItem', ...params })),
+      QueryCommand: jest.fn((params) => ({ __type: 'Query', ...params })),
+    }));
+
+    jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
+      marshall: jest.fn((obj) => obj),
+      unmarshall: jest.fn((obj) => obj),
+    }));
+
+    jest.unstable_mockModule('../functions/utils/helpers.mjs', () => ({
+      getTenant,
+      formatResponse: (statusCode, body) => ({ statusCode, body: JSON.stringify(body) }),
+      throttle: async (tasks) => { for (const task of tasks) await task(); },
+      sendWithRetry: async (fn) => await fn(),
+    }));
+
+    jest.unstable_mockModule('../functions/utils/suppression.mjs', () => ({
+      getSuppression,
+    }));
+
+    ({ handler } = await import('../functions/subscribers/import-subscriber-list.mjs'));
+  });
+}
+
+// An import is the operator acting, not the subscriber, so it cannot restore
+// consent: a list snapshot that predates someone's unsubscribe must not put
+// them back on the list.
+describe('import-subscriber-list suppression', () => {
+  beforeEach(async () => {
+    jest.resetModules();
+    process.env.TABLE_NAME = 'newsletter-table';
+    process.env.SUBSCRIBERS_TABLE_NAME = 'subscribers-table';
+    await loadIsolated();
+  });
+
+  const importEvent = (addresses) => ({
+    tenantId: 'tenant1',
+    list: { items: addresses.map((address) => ({ address })) }
+  });
+
+  test('skips unsubscribed addresses and names them in the result', async () => {
+    getSuppression.mockImplementation(async (tenantId, email) =>
+      email === 'optedout@example.com'
+        ? { unsubscribedAt: '2026-08-01T00:00:00.000Z', method: 'one-click' }
+        : null
+    );
+
+    const result = await handler(importEvent(['keep@example.com', 'OptedOut@example.com']));
+
+    expect(result.success).toBe(true);
+    expect(result.imported).toBe(1);
+    expect(result.suppressed).toBe(1);
+    expect(result.suppressedAddresses).toEqual(['optedout@example.com']);
+
+    // Only the non-suppressed address was written.
+    const writes = ddbSend.mock.calls
+      .map(([cmd]) => cmd)
+      .filter((cmd) => cmd.__type === 'BatchWriteItem');
+    expect(writes).toHaveLength(1);
+    const written = writes[0].RequestItems['subscribers-table'][0].PutRequest.Item;
+    expect(written.email).toBe('keep@example.com');
+  });
+
+  test('imports everything when nothing is suppressed', async () => {
+    const result = await handler(importEvent(['a@example.com', 'b@example.com']));
+
+    expect(result.success).toBe(true);
+    expect(result.imported).toBe(2);
+    expect(result.suppressed).toBe(0);
+  });
+
+  // getSuppression fails open (null on error), so an unreadable suppression
+  // table degrades to the old behavior instead of blocking the import.
+  test('a suppression check error does not block the import', async () => {
+    getSuppression.mockResolvedValue(null);
+
+    const result = await handler(importEvent(['a@example.com']));
+
+    expect(result.success).toBe(true);
+    expect(result.imported).toBe(1);
+  });
+});

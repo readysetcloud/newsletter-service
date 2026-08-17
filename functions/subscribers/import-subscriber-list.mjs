@@ -2,6 +2,7 @@ import { DynamoDBClient, UpdateItemCommand, BatchWriteItemCommand, QueryCommand 
 import { marshall } from "@aws-sdk/util-dynamodb";
 import { getTenant, formatResponse, throttle, sendWithRetry } from "../utils/helpers.mjs";
 import { sanitizeName } from "../utils/subscriber-name.mjs";
+import { getSuppression } from "../utils/suppression.mjs";
 
 const ddb = new DynamoDBClient();
 
@@ -18,9 +19,13 @@ export const handler = async (event) => {
 
     // Track failures during import while keeping bounded concurrency
     const results = [];
+    const suppressed = [];
     const trackedTasks = tasks.map(task => async () => {
       try {
-        await task();
+        const outcome = await task();
+        if (outcome?.suppressed) {
+          suppressed.push(outcome.email);
+        }
         results.push({ status: 'fulfilled' });
       } catch (error) {
         results.push({ status: 'rejected', reason: error });
@@ -28,6 +33,12 @@ export const handler = async (event) => {
     });
     await throttle(trackedTasks, 5);
     const failures = results.filter(r => r.status === 'rejected');
+
+    if (suppressed.length > 0) {
+      // Named, not just counted: the operator needs to know exactly which
+      // addresses were withheld so "why isn't X on my list" has an answer.
+      console.log(`Skipped ${suppressed.length} unsubscribed addresses:`, suppressed);
+    }
 
     if (failures.length > 0) {
       console.error(`Import completed with ${failures.length} failures out of ${tasks.length} total`);
@@ -41,20 +52,24 @@ export const handler = async (event) => {
       // Return partial success with failure details
       return {
         success: false,
-        imported: tasks.length - failures.length,
+        imported: tasks.length - failures.length - suppressed.length,
         failed: failures.length,
+        suppressed: suppressed.length,
+        suppressedAddresses: suppressed,
         total: tasks.length,
         errors: failures.map(f => f.reason?.message || String(f.reason))
       };
     }
 
     await updateSubscriberCount(tenantId);
-    console.log(`Successfully added ${list.items.length} contacts`);
+    console.log(`Successfully added ${list.items.length - suppressed.length} contacts`);
 
     return {
       success: true,
-      imported: list.items.length,
+      imported: list.items.length - suppressed.length,
       failed: 0,
+      suppressed: suppressed.length,
+      suppressedAddresses: suppressed,
       total: list.items.length
     };
   } catch (err) {
@@ -70,12 +85,25 @@ export const handler = async (event) => {
 const addSubscriber = async (tenantId, contact) => {
   const addedAt = new Date().toISOString();
 
+  const normalizedEmail = contact.address.toLowerCase();
+
+  // An import is the operator acting, not the subscriber, so it cannot restore
+  // consent: a list snapshot that predates someone's unsubscribe would silently
+  // put them back on the list — the classic way opted-out people get mailed
+  // again. Only the person re-subscribing through the signup form lifts a
+  // suppression.
+  const suppression = await getSuppression(tenantId, normalizedEmail);
+  if (suppression) {
+    console.log(`Skipping ${normalizedEmail}; unsubscribed on ${suppression.unsubscribedAt} via ${suppression.method}`);
+    return { suppressed: true, email: normalizedEmail };
+  }
+
   const firstName = sanitizeName(contact.firstName);
   const lastName = sanitizeName(contact.lastName);
 
   const subscriberItem = {
     tenantId,
-    email: contact.address.toLowerCase(), // Normalize email to lowercase
+    email: normalizedEmail,
     addedAt,
     ...(firstName && { firstName }),
     ...(lastName && { lastName })

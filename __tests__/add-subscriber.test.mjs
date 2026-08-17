@@ -21,11 +21,16 @@ async function loadIsolated() {
       DynamoDBClient: jest.fn(() => ddbInstance),
       UpdateItemCommand: jest.fn((params) => ({ __type: 'UpdateItem', ...params })),
       PutItemCommand: jest.fn((params) => ({ __type: 'PutItem', ...params })),
+      GetItemCommand: jest.fn((params) => ({ __type: 'GetItem', ...params })),
+      // clearSuppression (utils/suppression.mjs) lifts an earlier unsubscribe
+      // on a fresh signup — new consent.
+      DeleteItemCommand: jest.fn((params) => ({ __type: 'DeleteItem', ...params })),
     }));
 
     // util-dynamodb
     jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
       marshall: jest.fn((k) => k),
+      unmarshall: jest.fn((k) => k),
     }));
 
     // issue attribution (no published issue → no per-issue counter writes)
@@ -180,8 +185,10 @@ describe('add-subscriber handler (isolated)', () => {
     const res = await handler(event);
     expect(res && res.statusCode).toBe(201);
 
-    // DDB calls: PutItem (subscriber) + UpdateItem (increment) + PutItem (event record)
-    expect(ddbInstance.send).toHaveBeenCalledTimes(3);
+    // DDB calls: PutItem (subscriber) + DeleteItem (suppression clear — fresh
+    // consent lifts any earlier unsubscribe) + UpdateItem (increment) +
+    // PutItem (event record)
+    expect(ddbInstance.send).toHaveBeenCalledTimes(4);
 
     // First call: PutItem for subscriber in Subscribers table
     const subscriberPutArg = ddbInstance.send.mock.calls[0][0];
@@ -197,14 +204,20 @@ describe('add-subscriber handler (isolated)', () => {
     expect(subscriberItem.lastName).toBe('Doe');
     expect(typeof subscriberItem.addedAt).toBe('string');
 
-    // Second call: UpdateItem for subscriber count
-    const updateArg = ddbInstance.send.mock.calls[1][0];
+    // Second call: DeleteItem clearing any suppression record for the address
+    const suppressionDeleteArg = ddbInstance.send.mock.calls[1][0];
+    expect(suppressionDeleteArg.__type).toBe('DeleteItem');
+    expect(suppressionDeleteArg.TableName).toBe('test-table');
+    expect(suppressionDeleteArg.Key).toEqual({ pk: 't1', sk: 'suppression#test@example.com' });
+
+    // Third call: UpdateItem for subscriber count
+    const updateArg = ddbInstance.send.mock.calls[2][0];
     expect(updateArg.__type).toBe('UpdateItem');
     expect(updateArg.TableName).toBe('test-table');
     expect(updateArg.UpdateExpression).toBe('SET #subscribers = #subscribers + :val');
 
-    // Third call: PutItem for subscriber event record
-    const eventPutArg = ddbInstance.send.mock.calls[2][0];
+    // Fourth call: PutItem for subscriber event record
+    const eventPutArg = ddbInstance.send.mock.calls[3][0];
     expect(eventPutArg.__type).toBe('PutItem');
     expect(eventPutArg.TableName).toBe('test-table');
 

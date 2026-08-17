@@ -60,10 +60,15 @@ async function loadIsolated() {
       DynamoDBClient: jest.fn(() => ddbInstance),
       UpdateItemCommand: jest.fn((params) => ({ __type: 'UpdateItem', ...params })),
       PutItemCommand: jest.fn((params) => ({ __type: 'PutItem', ...params })),
+      GetItemCommand: jest.fn((params) => ({ __type: 'GetItem', ...params })),
+      // clearSuppression (utils/suppression.mjs) lifts an earlier unsubscribe
+      // on a fresh signup — new consent.
+      DeleteItemCommand: jest.fn((params) => ({ __type: 'DeleteItem', ...params })),
     }));
 
     jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
       marshall: jest.fn((k) => k),
+      unmarshall: jest.fn((k) => k),
     }));
 
     // issue attribution (no published issue → no per-issue counter writes)

@@ -1,6 +1,7 @@
 import { DynamoDBClient, PutItemCommand, QueryCommand, DeleteItemCommand, UpdateItemCommand, GetItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { isSubscriberRecord } from './subscriber-record.mjs';
+import { recordSuppression } from './suppression.mjs';
 
 const ddb = new DynamoDBClient();
 
@@ -101,6 +102,15 @@ export const listSubscribers = async (tenantId, options = {}) => {
 export const unsubscribeUser = async (tenantId, emailAddress, method = 'encrypted-link', metadata = {}) => {
   try {
     const email = emailAddress.toLowerCase();
+
+    // Every method that reaches this function is the subscriber (or their mail
+    // provider, for complaints) revoking consent, so record the suppression
+    // first: written before the delete, a crash between the two still leaves
+    // the revocation on record, and the record is what stops a later list
+    // import from silently re-adding them. Recorded even when the address is
+    // not currently on the list — an unsubscribe click on an old email is
+    // still a statement about future sends.
+    await recordSuppression(tenantId, email, method, metadata);
 
     // Delete subscriber from Subscribers table only if it exists
     // Using ReturnValues to check if an item was actually deleted

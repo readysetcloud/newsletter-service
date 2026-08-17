@@ -1,91 +1,130 @@
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { unsubscribeUser } from "../utils/subscriber.mjs";
-import { getTenant } from "../utils/helpers.mjs";
+import { decrypt, getTenant } from "../utils/helpers.mjs";
 import { getMostRecentPublishedIssue, incrementIssueCounter } from "../utils/issue-attribution.mjs";
+import { htmlResponse, getUnsubscribePage } from "./unsubscribe-pages.mjs";
 
 const eventBridge = new EventBridgeClient();
 
+/**
+ * POST /{tenant}/unsubscribe — the one place a subscriber is actually removed.
+ *
+ * Three callers land here, distinguished by what they carry:
+ *
+ *  1. RFC 8058 one-click: the mail provider POSTs `List-Unsubscribe=One-Click`
+ *     to the URL from the List-Unsubscribe header, encrypted token in the
+ *     query string. No human confirmation is allowed by the RFC — and none is
+ *     needed, because link scanners GET and never POST.
+ *  2. The confirmation form the GET handler renders for the footer link: same
+ *     token in the query string, `confirmed=true` in the body, and the person
+ *     expects an HTML page back, not JSON.
+ *  3. The legacy manual form (typed email address, JSON body). Kept as-is: it
+ *     is the escape hatch when a link is dead, and old error pages in the wild
+ *     still post it.
+ *
+ * The token paths count toward `unsubscribes` — they are the subscriber acting
+ * on their own mail. The typed-address form stays under `manualRemovals`, as
+ * before, since anyone can type any address into it.
+ */
 export const handler = async (event) => {
+  const tenantId = event.pathParameters?.tenant;
+
+  if (!tenantId) {
+    return jsonResponse(400, 'Missing tenant parameter');
+  }
+
+  // A token in the query string marks the request as coming from an email we
+  // sent — the one-click header or the footer link's confirmation form. Its
+  // absence marks the legacy typed-address form.
+  const token = event.queryStringParameters?.email;
+  if (token) {
+    return await handleTokenUnsubscribe(event, tenantId, token);
+  }
+
+  return await handleManualFormUnsubscribe(event, tenantId);
+};
+
+const handleTokenUnsubscribe = async (event, tenantId, token) => {
+  const body = decodeBody(event);
+  const params = parseFormBody(body);
+  const isOneClick = params.get('List-Unsubscribe') === 'One-Click';
+  // Whoever isn't a mail provider is a person with a browser: answer them in
+  // HTML. That covers the confirmation form (`confirmed=true`) and anything
+  // else that lands here holding a token.
+  const wantsHtml = !isOneClick;
+
+  let emailAddress;
+  try {
+    emailAddress = decrypt(token);
+  } catch (decryptErr) {
+    console.error('Unsubscribe token decryption failed:', {
+      tenantId,
+      isOneClick,
+      error: decryptErr.message
+    });
+    await notifyAdminSafely(tenantId, null, isOneClick ? 'one-click' : 'encrypted-link', { error: decryptErr.message });
+
+    return wantsHtml
+      ? htmlResponse(await getUnsubscribePage(tenantId, false, ''))
+      : jsonResponse(400, 'Invalid or expired unsubscribe link');
+  }
+
+  const metadata = extractRequestMetadata(event);
+  const method = isOneClick ? 'one-click' : 'encrypted-link';
+  const result = await unsubscribeUser(tenantId, emailAddress, method, metadata);
+
+  if (result.actuallyRemoved) {
+    await attributeUnsubscribe(tenantId, 'unsubscribes');
+  } else if (!result.success) {
+    await notifyAdminSafely(tenantId, emailAddress, method, metadata);
+  }
+
+  // `success: false` still renders the failure page (which carries the manual
+  // form) for humans; one-click gets the honest status code so the provider
+  // can retry.
+  if (wantsHtml) {
+    return htmlResponse(await getUnsubscribePage(tenantId, result.success, emailAddress));
+  }
+
+  return result.success
+    ? jsonResponse(200, 'Successfully unsubscribed')
+    : jsonResponse(500, 'Unsubscribe failed');
+};
+
+const handleManualFormUnsubscribe = async (event, tenantId) => {
   let tenant;
-  let tenantId;
   let emailAddress;
 
   try {
-    tenantId = event.pathParameters?.tenant;
-
-    if (!tenantId) {
-      return {
-        statusCode: 400,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: 'Missing tenant parameter' })
-      };
-    }
-
     try {
       tenant = await getTenant(tenantId);
     } catch (err) {
       console.error('Tenant not found:', { tenantId, error: err.message });
-      return {
-        statusCode: 404,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: 'Tenant not found' })
-      };
+      return jsonResponse(404, 'Tenant not found');
     }
 
-    const body = JSON.parse(event.body || '{}');
+    const body = JSON.parse(decodeBody(event) || '{}');
     emailAddress = body.email;
 
     if (!emailAddress) {
-      return {
-        statusCode: 400,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: 'Missing email parameter' })
-      };
+      return jsonResponse(400, 'Missing email parameter');
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(emailAddress)) {
-      return {
-        statusCode: 400,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: 'Invalid email format' })
-      };
+      return jsonResponse(400, 'Invalid email format');
     }
 
-    const ipAddress = event.requestContext?.identity?.sourceIp ||
-                      event.headers?.['X-Forwarded-For']?.split(',')[0]?.trim() ||
-                      'unknown';
-
-    const userAgent = event.headers?.['User-Agent'] || event.headers?.['user-agent'] || 'unknown';
-
-    const metadata = {
-      ipAddress,
-      userAgent
-    };
-
+    const metadata = extractRequestMetadata(event);
     const result = await unsubscribeUser(tenantId, emailAddress, 'manual-form', metadata);
 
     if (result.actuallyRemoved) {
-      try {
-        const recentIssue = await getMostRecentPublishedIssue(tenantId);
-        if (recentIssue) {
-          await incrementIssueCounter(recentIssue.pk, 'manualRemovals');
-        } else {
-          console.warn('No published issue found for manual removal attribution:', { tenantId });
-        }
-      } catch (attrErr) {
-        console.warn('Failed to increment manual removal counter:', { tenantId, error: attrErr.message });
-      }
+      await attributeUnsubscribe(tenantId, 'manualRemovals');
     } else if (!result.success) {
       await notifyAdminOfFailure(tenant, emailAddress, 'manual-form', metadata);
     }
 
-    return {
-      statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: 'Successfully unsubscribed' })
-    };
-
+    return jsonResponse(200, 'Successfully unsubscribed');
   } catch (err) {
     console.error('Manual unsubscribe error:', err);
 
@@ -97,11 +136,60 @@ export const handler = async (event) => {
       }
     }
 
-    return {
-      statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: 'Successfully unsubscribed' })
-    };
+    // Privacy-preserving: the form must not reveal whether an address exists.
+    return jsonResponse(200, 'Successfully unsubscribed');
+  }
+};
+
+const decodeBody = (event) => {
+  if (!event.body) {
+    return '';
+  }
+  return event.isBase64Encoded
+    ? Buffer.from(event.body, 'base64').toString('utf8')
+    : event.body;
+};
+
+const parseFormBody = (body) => {
+  try {
+    return new URLSearchParams(body);
+  } catch {
+    return new URLSearchParams();
+  }
+};
+
+const extractRequestMetadata = (event) => ({
+  ipAddress: event.requestContext?.identity?.sourceIp ||
+    event.headers?.['X-Forwarded-For']?.split(',')[0]?.trim() ||
+    'unknown',
+  userAgent: event.headers?.['User-Agent'] || event.headers?.['user-agent'] || 'unknown'
+});
+
+const attributeUnsubscribe = async (tenantId, counterName) => {
+  try {
+    const recentIssue = await getMostRecentPublishedIssue(tenantId);
+    if (recentIssue) {
+      await incrementIssueCounter(recentIssue.pk, counterName);
+    } else {
+      console.warn('No published issue found for unsubscribe attribution:', { tenantId });
+    }
+  } catch (attrErr) {
+    console.warn('Failed to increment unsubscribe counter:', { tenantId, error: attrErr.message });
+  }
+};
+
+const jsonResponse = (statusCode, message) => ({
+  statusCode,
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ message })
+});
+
+const notifyAdminSafely = async (tenantId, emailAddress, method, metadata) => {
+  try {
+    const tenant = await getTenant(tenantId);
+    await notifyAdminOfFailure(tenant, emailAddress, method, metadata);
+  } catch (err) {
+    console.error('Failed to notify admin of unsubscribe failure:', err);
   }
 };
 
@@ -119,7 +207,7 @@ const notifyAdminOfFailure = async (tenant, emailAddress, method, metadata = {})
 
       <h3>Details:</h3>
       <ul>
-        <li><strong>Email:</strong> ${emailAddress}</li>
+        <li><strong>Email:</strong> ${emailAddress || 'could not be determined'}</li>
         <li><strong>Method:</strong> ${method}</li>
         <li><strong>Time:</strong> ${new Date().toISOString()}</li>
         ${metadata.error ? `<li><strong>Error:</strong> ${metadata.error}</li>` : ''}

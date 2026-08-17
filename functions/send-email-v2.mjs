@@ -612,6 +612,41 @@ const prepareAssemblyPhase = async (html, subscribers, referenceNumber) => {
 };
 
 /**
+ * Decide whether this send carries the RFC 8058 one-click unsubscribe headers,
+ * and against which endpoint.
+ *
+ * Marketing mail to subscribers gets them: issue sends (anything with a
+ * referenceNumber) and events that opt in explicitly (`listUnsubscribe: true`,
+ * set by the welcome email). Nothing else does — admin alerts and previews ride
+ * this same event type to the operator's own inbox, and an unsubscribe header
+ * there would let the operator one-click themselves off their own list.
+ *
+ * Gmail and Yahoo have required these headers on bulk promotional mail since
+ * 2024; without them the only way out a recipient sees at the top of the
+ * message is "report spam", which is the complaint rate that decides
+ * deliverability.
+ *
+ * @param {Object} data - The Send Email v2 event detail
+ * @returns {{baseUrl: string, tenantId: string} | null}
+ */
+const resolveListUnsubscribe = (data) => {
+  const isMarketingSend = Boolean(data.referenceNumber) || data.listUnsubscribe === true;
+  if (!isMarketingSend || !data.tenantId) {
+    return null;
+  }
+
+  if (!process.env.API_BASE_URL) {
+    console.warn('[HEADERS] API_BASE_URL not set - sending without List-Unsubscribe headers');
+    return null;
+  }
+
+  return {
+    baseUrl: process.env.API_BASE_URL.replace(/\/+$/, ''),
+    tenantId: data.tenantId
+  };
+};
+
+/**
  * Send emails to recipients with personalization and TPS throttling
  * @param {string[]} emailAddresses - Array of recipient email addresses
  * @param {Object} emailConfig - Email configuration object
@@ -621,6 +656,7 @@ const prepareAssemblyPhase = async (html, subscribers, referenceNumber) => {
  * @param {string} emailConfig.referenceNumber - Optional reference number for tracking
  * @param {string} [emailConfig.variant] - Optional A/B variant id ("a"/"b") tagged on the send
  * @param {Object} [emailConfig.assembly] - Optional prepared interest assembly ({ prepared, interestByEmail }) from prepareAssemblyPhase
+ * @param {{baseUrl: string, tenantId: string}} [emailConfig.listUnsubscribe] - When set, each message carries RFC 8058 one-click unsubscribe headers built from this endpoint
  * @param {string} senderEmail - Sender email address
  * @returns {Promise<{sentCount: number, sentRecipients: string[]}>} Send stats and sent recipients
  */
@@ -658,15 +694,18 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
         );
       }
 
+      // One encrypted token per recipient serves both the in-body links and
+      // the List-Unsubscribe header. Percent-encoded because every use is
+      // inside a query string, and `encrypt` emits standard base64 — whose `+`
+      // a query parser decodes as a space, corrupting the token before the
+      // handler ever sees it.
+      const needsToken = Boolean(emailConfig.replacements?.emailAddressHash || emailConfig.listUnsubscribe);
+      const encodedToken = needsToken ? encodeURIComponent(encrypt(email)) : null;
+
       if (emailConfig.replacements?.emailAddressHash) {
-        // Percent-encoded because every use of this marker is inside a query
-        // string (the unsubscribe and preference-centre links), and `encrypt`
-        // emits standard base64 — whose `+` a query parser decodes as a space,
-        // corrupting the token before the handler ever sees it.
-        const emailHash = encodeURIComponent(encrypt(email));
         personalizedHtml = personalizedHtml.replace(
           new RegExp(emailConfig.replacements.emailAddressHash, 'g'),
-          emailHash
+          encodedToken
         );
       }
 
@@ -678,13 +717,28 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
         emailTags.push({ Name: 'variant', Value: emailConfig.variant });
       }
 
+      // RFC 8058 one-click unsubscribe. The POST endpoint acts without
+      // confirmation — that is safe where the footer link is not, because mail
+      // clients POST only on an explicit unsubscribe action, while link
+      // scanners GET every URL in the message.
+      const messageHeaders = emailConfig.listUnsubscribe
+        ? [
+          {
+            Name: 'List-Unsubscribe',
+            Value: `<${emailConfig.listUnsubscribe.baseUrl}/${emailConfig.listUnsubscribe.tenantId}/unsubscribe?email=${encodedToken}>`
+          },
+          { Name: 'List-Unsubscribe-Post', Value: 'List-Unsubscribe=One-Click' }
+        ]
+        : undefined;
+
       await ses.send(new SendEmailCommand({
         FromEmailAddress: senderEmail,
         Destination: { ToAddresses: [email] },
         Content: {
           Simple: {
             Subject: { Data: emailConfig.subject },
-            Body: { Html: { Data: personalizedHtml } }
+            Body: { Html: { Data: personalizedHtml } },
+            ...messageHeaders && { Headers: messageHeaders }
           }
         },
         ...emailTags.length > 0 && { EmailTags: emailTags },
@@ -1139,6 +1193,7 @@ export const handler = async (event) => {
     const variants = abTest?.variants ?? (Array.isArray(data.variants) ? data.variants : null);
     const allEmails = subscribers.map(subscriber => subscriber.email);
     const eligibleSet = new Set(emailAddresses);
+    const listUnsubscribe = resolveListUnsubscribe(data);
     const { sentCount, sentRecipients } = await executePhase('Email Sending', async () => {
       if (variants?.length && to.list) {
         const subjectByVariant = Object.fromEntries(
@@ -1175,7 +1230,8 @@ export const handler = async (event) => {
             replacements,
             referenceNumber: data.referenceNumber,
             variant: variantId,
-            ...assembly && { assembly }
+            ...assembly && { assembly },
+            ...listUnsubscribe && { listUnsubscribe }
           }, senderEmail);
 
           total += result.sentCount;
@@ -1190,7 +1246,8 @@ export const handler = async (event) => {
         html,
         replacements,
         referenceNumber: data.referenceNumber,
-        ...assembly && { assembly }
+        ...assembly && { assembly },
+        ...listUnsubscribe && { listUnsubscribe }
       }, senderEmail);
     });
 

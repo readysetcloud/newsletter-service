@@ -240,6 +240,115 @@ describe('send-email-v2', () => {
     });
   });
 
+  // RFC 8058 one-click unsubscribe headers: required by Gmail and Yahoo on
+  // bulk promotional mail, and the way out a recipient sees before "report
+  // spam". Issue sends (referenceNumber) and explicit opt-ins get them;
+  // admin alerts and previews must not.
+  describe('List-Unsubscribe headers', () => {
+    const senderLookup = () => {
+      ddbInstance.send.mockResolvedValueOnce({
+        Items: [{
+          unmarshalled: {
+            senderId: 'sender-123',
+            email: 'sender@example.com',
+            verificationStatus: 'verified',
+            isDefault: false
+          }
+        }]
+      });
+    };
+
+    beforeEach(() => {
+      process.env.API_BASE_URL = 'https://api.example.com';
+      sesInstance.send.mockResolvedValue({ MessageId: 'msg-123' });
+    });
+
+    afterEach(() => {
+      delete process.env.API_BASE_URL;
+    });
+
+    test('issue sends carry the one-click headers with a per-recipient token', async () => {
+      const { encrypt } = await import('../functions/utils/helpers.mjs');
+      encrypt.mockReturnValueOnce('iv+x:data+y:tag+z');
+      senderLookup();
+
+      await handler({
+        detail: {
+          subject: 'Issue',
+          html: '<p>content</p>',
+          to: { email: 'recipient@example.com' },
+          from: 'sender@example.com',
+          tenantId: 'tenant-123',
+          referenceNumber: 'tenant-123_42'
+        }
+      });
+
+      const headers = sesInstance.send.mock.calls[0][0].Content.Simple.Headers;
+      expect(headers).toEqual([
+        {
+          Name: 'List-Unsubscribe',
+          Value: `<https://api.example.com/tenant-123/unsubscribe?email=${encodeURIComponent('iv+x:data+y:tag+z')}>`
+        },
+        { Name: 'List-Unsubscribe-Post', Value: 'List-Unsubscribe=One-Click' }
+      ]);
+    });
+
+    test('explicit opt-in (welcome email) carries the headers without a referenceNumber', async () => {
+      senderLookup();
+
+      await handler({
+        detail: {
+          subject: 'Welcome!',
+          html: '<p>welcome</p>',
+          to: { email: 'recipient@example.com' },
+          from: 'sender@example.com',
+          tenantId: 'tenant-123',
+          listUnsubscribe: true
+        }
+      });
+
+      const headers = sesInstance.send.mock.calls[0][0].Content.Simple.Headers;
+      expect(headers?.[0]?.Name).toBe('List-Unsubscribe');
+    });
+
+    // An admin alert with these headers would let the operator one-click
+    // themselves off their own list from their own notification.
+    test('plain sends (admin alerts) carry no unsubscribe headers', async () => {
+      senderLookup();
+
+      await handler({
+        detail: {
+          subject: '[Alert] Something failed',
+          html: '<p>alert</p>',
+          to: { email: 'operator@example.com' },
+          from: 'sender@example.com',
+          tenantId: 'tenant-123'
+        }
+      });
+
+      expect(sesInstance.send.mock.calls[0][0].Content.Simple.Headers).toBeUndefined();
+    });
+
+    test('a missing API_BASE_URL sends without headers instead of failing', async () => {
+      delete process.env.API_BASE_URL;
+      senderLookup();
+
+      await handler({
+        detail: {
+          subject: 'Issue',
+          html: '<p>content</p>',
+          to: { email: 'recipient@example.com' },
+          from: 'sender@example.com',
+          tenantId: 'tenant-123',
+          referenceNumber: 'tenant-123_42'
+        }
+      });
+
+      expect(sesInstance.send).toHaveBeenCalledTimes(1);
+      expect(sesInstance.send.mock.calls[0][0].Content.Simple.Headers).toBeUndefined();
+    });
+  });
+
   // Every use of this marker is inside a query string — the unsubscribe and
   // preference-centre links. `encrypt` emits standard base64, and a `+` in a
   // query value decodes to a space, which shifts the base64 and makes the GCM

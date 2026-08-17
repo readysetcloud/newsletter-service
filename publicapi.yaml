@@ -279,14 +279,19 @@ paths:
     parameters:
       - $ref: "#/components/parameters/Tenant"
     get:
-      summary: Unsubscribe from newsletter
+      summary: Render the unsubscribe confirmation page
+      description: >
+        Renders a confirmation page whose button posts back to this path. The
+        GET itself never removes anyone: mail security gateways fetch every
+        link in a message before the recipient sees it, so a destructive GET
+        unsubscribes people who never clicked. The removal happens on POST.
       parameters:
         - name: email
           in: query
           required: true
           schema:
             type: string
-          description: Hashed email address for unsubscribe
+          description: Encrypted email token from the unsubscribe link
       tags:
         - Subscription
       responses:
@@ -309,7 +314,24 @@ paths:
         httpMethod: POST
         type: aws_proxy
     post:
-      summary: Unsubscribe manually
+      summary: Unsubscribe
+      description: >
+        The one place a subscriber is actually removed. Serves three callers:
+        the RFC 8058 one-click POST from mail providers (form-encoded body
+        `List-Unsubscribe=One-Click`, encrypted token in the `email` query
+        parameter), the confirmation form rendered by the GET on this path
+        (same token, form body `confirmed=true`, HTML response), and the
+        legacy manual form (JSON body with a typed email address). A request
+        carrying the `email` query token is treated as the token flow; only
+        the JSON body variant is modelled below — form-encoded bodies pass
+        the validator untouched because no model matches their content type.
+      parameters:
+        - name: email
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Encrypted email token (one-click and confirmation-form flows)
       tags:
         - Subscription
       requestBody:

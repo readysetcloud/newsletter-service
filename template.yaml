@@ -1087,6 +1087,9 @@ Resources:
                 - dynamodb:UpdateItem
                 - dynamodb:PutItem
                 - dynamodb:Query
+                # DeleteItem clears the suppression record on a fresh signup —
+                # the person re-subscribing is new consent (utils/suppression.mjs).
+                - dynamodb:DeleteItem
               Resource:
                 - !GetAtt NewsletterTable.Arn
                 - !Sub "${NewsletterTable.Arn}/index/GSI1"
@@ -1148,7 +1151,16 @@ Resources:
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
-          ENCRYPTION_KEY: !Ref EncryptionKey
+          # Must be EMAIL_ENCRYPTION_KEY — helpers.mjs getKey() reads that name.
+          # This was ENCRYPTION_KEY, so encrypt() threw on an undefined key and
+          # the handler's catch swallowed it: no welcome email ever sent.
+          EMAIL_ENCRYPTION_KEY: !Ref EncryptionKey
+          # Where the unsubscribe endpoint actually lives. The link used to be
+          # built from ORIGIN (the marketing site), which has no such route.
+          API_BASE_URL: !If
+            - DeployNewsletterApiCustomDomain
+            - !Sub https://api.newsletter.${DomainName}
+            - !Sub "https://${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com/public"
       Events:
         SubscriberAddedEvent:
           Type: EventBridgeRule
@@ -1786,10 +1798,11 @@ Resources:
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
-            - Effect: Allow
-              Action:
-                - dynamodb:DeleteItem
-              Resource: !GetAtt SubscribersTable.Arn
+      # No SubscribersTable access on purpose: the GET renders the confirmation
+      # page and nothing else. Corporate link scanners (SafeLinks, Proofpoint)
+      # fetch every URL in a message, so a GET that deleted the subscriber was
+      # unsubscribing people who never opened the email. The removal lives
+      # behind POST (ManualUnsubscribeFunction), which scanners do not send.
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
@@ -1841,6 +1854,10 @@ Resources:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
+          # The POST route is now where token-carrying unsubscribes land — the
+          # RFC 8058 one-click POST and the footer link's confirmation form —
+          # so this handler decrypts the same tokens the GET handler does.
+          EMAIL_ENCRYPTION_KEY: !Ref EncryptionKey
       Events:
         FromApi:
           Type: Api
@@ -2228,6 +2245,12 @@ Resources:
           NEWSLETTER_BUCKET: !Ref NewsletterBucket
           CACHE_MAX_AGE_DAYS: "8"
           SUBSCRIBER_TABLE_NAME: !Ref SubscribersTable
+          # Base of the one-click unsubscribe URL in the List-Unsubscribe
+          # header (RFC 8058). Same value as NewsletterApiBaseUrlParam.
+          API_BASE_URL: !If
+            - DeployNewsletterApiCustomDomain
+            - !Sub https://api.newsletter.${DomainName}
+            - !Sub "https://${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com/public"
       Events:
         EmailEvent:
           Type: EventBridgeRule

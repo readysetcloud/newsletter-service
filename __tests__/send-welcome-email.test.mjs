@@ -53,6 +53,7 @@ describe('send-welcome-email handler', () => {
     jest.clearAllMocks();
     process.env.TABLE_NAME = 'test-table';
     process.env.ORIGIN = 'https://example.com';
+    process.env.API_BASE_URL = 'https://api.example.com';
 
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -440,6 +441,33 @@ describe('send-welcome-email handler', () => {
 
       expect(token).not.toContain('+');
       expect(decodeURIComponent(token)).toBe('iv+part/x==:data+part:tag+part');
+      // The route lives on the public API, not the marketing site (ORIGIN) —
+      // built from ORIGIN, every welcome email's unsubscribe link 404'd.
+      expect(unsubscribeUrl).toMatch(/^https:\/\/api\.example\.com\/test-tenant\/unsubscribe\?email=/);
+    });
+
+    // Welcome emails are marketing mail to a subscriber, so the send event
+    // opts into the RFC 8058 one-click headers the way an issue send does.
+    test('opts the send into List-Unsubscribe headers', async () => {
+      mockDdbSend.mockImplementation((command) => {
+        if (command.__type === 'GetItem') {
+          return Promise.resolve({ Item: { pk: 'test-tenant', sk: 'tenant', brandName: 'Test Newsletter' } });
+        }
+        if (command.__type === 'Query') {
+          return Promise.resolve({
+            Items: [{ email: 'sender@example.com', senderId: 'sender-123', verificationStatus: 'verified', isDefault: true }],
+          });
+        }
+        return Promise.resolve({});
+      });
+      mockEventBridgeSend.mockResolvedValue({});
+
+      await handler({
+        detail: { tenantId: 'test-tenant', data: { email: 'subscriber@example.com' } },
+      });
+
+      const detail = JSON.parse(mockEventBridgeSend.mock.calls[0][0].Entries[0].Detail);
+      expect(detail.listUnsubscribe).toBe(true);
     });
   });
 });

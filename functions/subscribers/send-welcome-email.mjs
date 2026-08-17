@@ -57,7 +57,10 @@ export const handler = async (event) => {
     // value decodes to a space, which corrupts the token past repair by the
     // time the unsubscribe handler decodes it.
     const emailHash = encodeURIComponent(encrypt(email));
-    const unsubscribeUrl = `${process.env.ORIGIN}/${tenantId}/unsubscribe?email=${emailHash}`;
+    // API_BASE_URL, not ORIGIN: the unsubscribe route lives on the public API.
+    // ORIGIN is the marketing site, which has no such path — every welcome
+    // email's unsubscribe link 404'd (when welcome emails sent at all).
+    const unsubscribeUrl = `${process.env.API_BASE_URL}/${tenantId}/unsubscribe?email=${emailHash}`;
 
     const templateData = {
       brandName: tenant.name || tenant.brandName || 'Our Newsletter',
@@ -82,7 +85,12 @@ export const handler = async (event) => {
           html,
           to: {
             email
-          }
+          },
+          // Welcome emails are marketing mail to a subscriber, so they carry
+          // the one-click unsubscribe headers like an issue does. Admin alerts
+          // ride the same event type and must not — hence an explicit flag
+          // rather than "every send with a tenantId".
+          listUnsubscribe: true
         })
       }]
     }));

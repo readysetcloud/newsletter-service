@@ -22,6 +22,7 @@ import { sanitizeName } from '../utils/subscriber-name.mjs';
 import { checkRateLimit } from '../utils/rate-limiter.mjs';
 import { createLogger } from '../utils/structured-logger.mjs';
 import { getMostRecentPublishedIssue, incrementIssueCounter } from '../utils/issue-attribution.mjs';
+import { clearSuppression } from '../utils/suppression.mjs';
 
 const ddb = new DynamoDBClient();
 
@@ -180,6 +181,14 @@ export const handler = async (event) => {
 
       const addedAt = new Date().toISOString();
       const timestamp = Date.now();
+
+      // A signup through this endpoint is the person themselves acting, which
+      // is fresh consent — it lifts any earlier unsubscribe. This is the one
+      // deliberate difference from the import path, which refuses suppressed
+      // addresses: the person can always come back; a CSV cannot bring them
+      // back. Cleared only on a genuinely new subscription so a duplicate
+      // signup does not touch the record.
+      await clearSuppression(tenantId, normalizedEmail);
 
       await updateSubscriberCount(tenantId);
       await createSubscriberEventRecord(tenantId, normalizedEmail, addedAt, timestamp);

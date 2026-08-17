@@ -335,7 +335,13 @@ paths:
       tags:
         - Subscription
       requestBody:
-        required: true
+        # Not `required`, and both content types are declared, so that the
+        # gateway's body validator can never reject a one-click POST before it
+        # reaches the handler. RFC 8058 providers send
+        # `List-Unsubscribe=One-Click` as a form body; a JSON-only required
+        # model would 400 them, and an unhonoured unsubscribe is the one
+        # failure this endpoint must not have. The handler validates instead.
+        required: false
         content:
           application/json:
             schema:
@@ -344,8 +350,18 @@ paths:
                 email:
                   type: string
                   format: email
-                  description: Email address to unsubscribe
+                  description: Email address to unsubscribe (manual form)
               required: [email]
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                List-Unsubscribe:
+                  type: string
+                  description: "`One-Click`, sent by mail providers per RFC 8058"
+                confirmed:
+                  type: string
+                  description: Sent by the confirmation page rendered on GET
       responses:
         200:
           description: The user was successfully unsubscribed

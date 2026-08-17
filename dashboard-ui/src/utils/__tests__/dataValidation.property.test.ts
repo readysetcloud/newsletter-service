@@ -42,6 +42,40 @@ describe('Property 17: Data Validation Before Rendering', () => {
       expect(validateIssueMetrics(validMetrics)).toBe(true);
     });
 
+    // An issue whose stats record was never given a list-size snapshot omits
+    // `subscribers` entirely. Rejecting the payload over that would blank the
+    // whole dashboard rather than one tile.
+    it('should accept IssueMetrics with no recorded subscriber count', () => {
+      const metricsWithoutSnapshot = {
+        openRate: 45.5,
+        clickRate: 12.3,
+        bounceRate: 2.1,
+        delivered: 1000,
+        opens: 455,
+        clicks: 123,
+        bounces: 21,
+        complaints: 2,
+      };
+
+      expect(validateIssueMetrics(metricsWithoutSnapshot)).toBe(true);
+    });
+
+    it('should still reject a non-numeric subscriber count', () => {
+      const invalidMetrics = {
+        openRate: 45.5,
+        clickRate: 12.3,
+        bounceRate: 2.1,
+        delivered: 1000,
+        opens: 455,
+        clicks: 123,
+        bounces: 21,
+        complaints: 2,
+        subscribers: '980',
+      };
+
+      expect(validateIssueMetrics(invalidMetrics)).toBe(false);
+    });
+
     it('should accept valid TrendAggregates', () => {
       const validAggregates = {
         avgOpenRate: 45.5,

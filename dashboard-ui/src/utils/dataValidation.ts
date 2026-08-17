@@ -48,7 +48,9 @@ export function validateIssueMetrics(data: unknown): data is IssueMetrics {
     isNonNegativeNumber(metrics.clicks) &&
     isNonNegativeNumber(metrics.bounces) &&
     isNonNegativeNumber(metrics.complaints) &&
-    isNonNegativeNumber(metrics.subscribers)
+    // Optional on purpose: an issue with no list-size snapshot omits it, and
+    // rejecting the whole trends payload over that would blank the dashboard.
+    (metrics.subscribers === undefined || isNonNegativeNumber(metrics.subscribers))
   );
 }
 

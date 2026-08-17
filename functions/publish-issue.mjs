@@ -473,7 +473,10 @@ const setupIssueStats = async (tenant, issueNumber, subject, publishedAt) => {
         complaints: 0,
         deliveries: 0,
         sends: 0,
-        subscribers: tenant.subscribers,
+        // Omitted rather than written as a placeholder when the tenant record
+        // has no count: the API distinguishes "no snapshot" from "zero", and
+        // marshalling an undefined here would throw and fail the publish.
+        ...(typeof tenant.subscribers === 'number' && { subscribers: tenant.subscribers }),
         failedAddresses: [],
         statsPhase: 'realtime'
       }),
@@ -497,8 +500,60 @@ const setupIssueStats = async (tenant, issueNumber, subject, publishedAt) => {
         tenantId: tenant.pk,
         issueNumber
       });
+      await backfillSubscriberSnapshot(tenant, issueNumber);
       return;
     }
     throw err;
+  }
+};
+
+/**
+ * Write the list-size snapshot onto a stats record the seed did not create.
+ *
+ * The seed is the only writer of `subscribers`, and it only runs when it also
+ * creates the record. But it is not the only writer that can *create* it:
+ * `handle-email-status` opens one with `ADD <stat> :val` on the first SES
+ * event, `aggregate-issue-analytics` opens one with its `statsPhase` claim, and
+ * the attribution counters (`subscribes`, `unsubscribes`, `manualRemovals`) are
+ * bare `ADD`s. DynamoDB upserts all of those, so whichever lands first leaves a
+ * stats record with every counter and no `subscribers` — permanently, because
+ * the seed then declines to touch it. The dashboard reads that hole as a list
+ * that fell to zero.
+ *
+ * Guarded on the attribute rather than the item so it can only ever fill a
+ * hole: an issue that already has its snapshot (every resend, every re-stage)
+ * fails the condition and keeps the number it was published with.
+ */
+const backfillSubscriberSnapshot = async (tenant, issueNumber) => {
+  if (typeof tenant.subscribers !== 'number') {
+    return;
+  }
+
+  try {
+    await ddb.send(new UpdateItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({ pk: `${tenant.pk}#${issueNumber}`, sk: 'stats' }),
+      UpdateExpression: 'SET subscribers = :subscribers',
+      ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(subscribers)',
+      ExpressionAttributeValues: marshall({ ':subscribers': tenant.subscribers })
+    }));
+
+    console.log('[PUBLISH] Backfilled the subscriber snapshot on an existing stats record', {
+      tenantId: tenant.pk,
+      issueNumber,
+      subscribers: tenant.subscribers
+    });
+  } catch (err) {
+    if (err.name === 'ConditionalCheckFailedException') {
+      return;
+    }
+    // Never fail a publish over the snapshot. The issue still sends; the
+    // dashboard shows the issue without a list size, which is what it now
+    // renders for any issue that has none.
+    console.error('[PUBLISH] Could not backfill the subscriber snapshot', {
+      tenantId: tenant.pk,
+      issueNumber,
+      error: err.message
+    });
   }
 };

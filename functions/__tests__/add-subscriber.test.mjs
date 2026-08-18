@@ -65,6 +65,10 @@ async function loadIsolated() {
       // deliberately unwired from this path — signup is unauthenticated and
       // cannot be treated as proof of address ownership.
       DeleteItemCommand: jest.fn((params) => ({ __type: 'DeleteItem', ...params })),
+      QueryCommand: jest.fn((params) => ({ __type: 'Query', ...params })),
+      // The subscriber write commits with a ConditionCheck on the suppression
+      // key, so the consent record guards the write instead of preceding it.
+      TransactWriteItemsCommand: jest.fn((params) => ({ __type: 'TransactWrite', ...params })),
     }));
 
     jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
@@ -284,10 +288,12 @@ describe('add-subscriber handler — bot protection integration', () => {
     const res = await handler(makeEvent({ email: 'user@tempmail.com' }));
 
     expect(res.statusCode).toBe(201);
-    // Subscriber PutItem should have been called (record created)
+    // The subscriber write is the Put half of the transaction whose other half
+    // is the suppression ConditionCheck.
     expect(ddbInstance.send).toHaveBeenCalled();
-    const putCall = ddbInstance.send.mock.calls[1][0];
-    expect(putCall.__type).toBe('PutItem');
+    const transactCall = ddbInstance.send.mock.calls[1][0];
+    expect(transactCall.__type).toBe('TransactWrite');
+    const putCall = transactCall.TransactItems[1].Put;
     expect(putCall.Item.disposableDomain).toBe(true);
     // Should emit signup.flagged log since disposableDomain flag is true
     expect(mockEmitBotProtectionLog).toHaveBeenCalledWith(
@@ -335,9 +341,13 @@ describe('add-subscriber handler — bot protection integration', () => {
     const res = await handler(makeEvent({ email: 'real@example.com', elapsedMs: 500 }));
 
     expect(res.statusCode).toBe(201);
-    // First DDB call is PutItem for subscriber
-    const putCall = ddbInstance.send.mock.calls[1][0];
-    expect(putCall.__type).toBe('PutItem');
+    // The consent lookup runs first; the transactional subscriber write is next.
+    const transactCall = ddbInstance.send.mock.calls[1][0];
+    expect(transactCall.__type).toBe('TransactWrite');
+    // Guard first, write second — the record has to gate the write, not follow it.
+    expect(transactCall.TransactItems[0].ConditionCheck.ConditionExpression)
+      .toBe('attribute_not_exists(pk)');
+    const putCall = transactCall.TransactItems[1].Put;
     expect(putCall.Item.sourceIp).toBe('10.0.0.1');
     expect(putCall.Item.userAgent).toBe('TestAgent');
     expect(putCall.Item.honeypotTriggered).toBe(false);

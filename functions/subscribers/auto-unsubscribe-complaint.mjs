@@ -23,20 +23,44 @@ export const handler = async (event) => {
 
     return true;
   } catch (err) {
+    // Rethrow. This is an async invocation, so returning normally counts as a
+    // successful one and Lambda never retries — a transient outage would
+    // silently leave someone who clicked "Report spam" subscribed. Throwing is
+    // what hands the event to the platform's retry and DLQ.
     console.error(err);
-    return false;
+    throw err;
   }
 };
 
-const processComplaintUnsubscribe = async (emailAddress, detail) => {
-  const referenceNumber = detail.mail?.tags?.referenceNumber;
-  if (!referenceNumber?.length) {
-    console.log(`No reference number found for complaint from ${emailAddress}`);
-    return;
+/**
+ * Which tenant a complained-about message belongs to.
+ *
+ * The `tenantId` tag is preferred because it is on every marketing send,
+ * including welcome mail, which carries no issue reference — a "report spam" on
+ * one used to resolve to nothing and be dropped, leaving the complainant
+ * subscribed. `referenceNumber` remains the fallback for messages sent before
+ * the tag existed.
+ */
+const resolveTenantId = (detail, emailAddress) => {
+  const taggedTenant = detail.mail?.tags?.tenantId?.[0];
+  if (taggedTenant) {
+    return taggedTenant;
   }
 
-  const issueId = referenceNumber[0].replace(/_/g, '#');
-  const tenantId = issueId.split('#')[0];
+  const referenceNumber = detail.mail?.tags?.referenceNumber;
+  if (!referenceNumber?.length) {
+    console.log(`No tenant tag or reference number found for complaint from ${emailAddress}`);
+    return null;
+  }
+
+  return referenceNumber[0].replace(/_/g, '#').split('#')[0];
+};
+
+const processComplaintUnsubscribe = async (emailAddress, detail) => {
+  const tenantId = resolveTenantId(detail, emailAddress);
+  if (!tenantId) {
+    return;
+  }
 
   const tenant = await getTenant(tenantId);
   if (!tenant) {
@@ -65,7 +89,10 @@ const processComplaintUnsubscribe = async (emailAddress, detail) => {
     console.log(`Auto-unsubscribed ${emailAddress} from ${tenantId} due to complaint`);
   } else if (!result.success) {
     console.error(`Failed to auto-unsubscribe ${emailAddress} from ${tenantId}`);
+    // Best-effort notification first, then throw: a complaint that could not be
+    // honoured has to be retried, and only an error does that here.
     await notifyAdminOfFailure(tenantId, emailAddress, 'complaint', metadata, tenant);
+    throw new Error(`Failed to auto-unsubscribe ${emailAddress} from ${tenantId}`);
   }
 };
 

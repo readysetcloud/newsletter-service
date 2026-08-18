@@ -1,7 +1,7 @@
 import { jest, describe, test, expect, beforeEach } from '@jest/globals';
 
 let handler;
-let decrypt;
+let readSubscriberToken;
 let getTenant;
 let getConfirmationPage;
 let getUnsubscribePage;
@@ -9,15 +9,18 @@ let eventBridgeSend;
 
 async function loadIsolated() {
   await jest.isolateModulesAsync(async () => {
-    decrypt = jest.fn();
+    readSubscriberToken = jest.fn();
     getTenant = jest.fn();
     getConfirmationPage = jest.fn((tenantId, email) => `<html>confirm ${email}</html>`);
     getUnsubscribePage = jest.fn(async (tenantId, wasSuccessful) => `<html>result:${wasSuccessful}</html>`);
     eventBridgeSend = jest.fn().mockResolvedValue({});
 
     jest.unstable_mockModule('../functions/utils/helpers.mjs', () => ({
-      decrypt,
       getTenant,
+    }));
+
+    jest.unstable_mockModule('../functions/utils/subscriber-token.mjs', () => ({
+      readSubscriberToken,
     }));
 
     jest.unstable_mockModule('../functions/subscribers/unsubscribe-pages.mjs', () => ({
@@ -52,7 +55,7 @@ describe('unsubscribe GET handler', () => {
   });
 
   test('renders the confirmation page and removes nobody', async () => {
-    decrypt.mockReturnValue('subscriber@example.com');
+    readSubscriberToken.mockReturnValue({ email: 'subscriber@example.com', legacy: false });
 
     const result = await handler({
       pathParameters: { tenant: 'test-tenant' },
@@ -68,7 +71,7 @@ describe('unsubscribe GET handler', () => {
   });
 
   test('an undecryptable token gets the failure page with the manual form', async () => {
-    decrypt.mockImplementation(() => { throw new Error('bad token'); });
+    readSubscriberToken.mockImplementation(() => { throw new Error('bad token'); });
 
     const result = await handler({
       pathParameters: { tenant: 'test-tenant' },

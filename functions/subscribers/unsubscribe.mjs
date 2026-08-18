@@ -1,5 +1,6 @@
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
-import { decrypt, getTenant } from "../utils/helpers.mjs";
+import { getTenant } from "../utils/helpers.mjs";
+import { readSubscriberToken } from "../utils/subscriber-token.mjs";
 import { htmlResponse, getConfirmationPage, getUnsubscribePage } from "./unsubscribe-pages.mjs";
 
 const eventBridge = new EventBridgeClient();
@@ -36,7 +37,15 @@ export const handler = async (event) => {
     }
 
     try {
-      emailAddress = decrypt(email);
+      // Must be the same decode the POST handler uses. Tokens carry a JSON
+      // payload now, so `decrypt` alone would hand the serialized object
+      // straight to the confirmation page where the address belongs — and
+      // would skip the cross-tenant check the payload exists for.
+      const { email: decoded, legacy } = readSubscriberToken(email, tenantId);
+      emailAddress = decoded;
+      if (legacy) {
+        console.log('Unsubscribe page rendered from a legacy (pre-tenant-binding) token', { tenantId });
+      }
     } catch (decryptErr) {
       console.error('Email decryption failed:', {
         error: decryptErr.message,

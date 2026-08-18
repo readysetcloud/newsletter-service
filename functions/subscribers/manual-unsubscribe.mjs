@@ -139,8 +139,16 @@ const handleManualFormUnsubscribe = async (event, tenantId) => {
       await attributeUnsubscribe(tenantId, 'manualRemovals');
     } else if (!result.success) {
       await notifyAdminOfFailure(tenant, emailAddress, 'manual-form', metadata);
+      // Not a false success. Privacy only requires that the answer be the same
+      // whether or not the address exists — it does not require telling someone
+      // they are unsubscribed when the write failed. The page reads `ok` and
+      // would otherwise clear the form and congratulate them, taking away the
+      // one signal that they should try again.
+      return jsonResponse(500, 'Unable to process unsubscribe, please retry');
     }
 
+    // 200 covers both a real removal and the idempotent "already gone, consent
+    // recorded" case — neither reveals whether the address was on the list.
     return jsonResponse(200, 'Successfully unsubscribed');
   } catch (err) {
     console.error('Manual unsubscribe error:', err);
@@ -153,8 +161,9 @@ const handleManualFormUnsubscribe = async (event, tenantId) => {
       }
     }
 
-    // Privacy-preserving: the form must not reveal whether an address exists.
-    return jsonResponse(200, 'Successfully unsubscribed');
+    // An unexpected failure is reported as one, for the same reason as above.
+    // The message is generic, so it still says nothing about the address.
+    return jsonResponse(500, 'Unable to process unsubscribe, please retry');
   }
 };
 

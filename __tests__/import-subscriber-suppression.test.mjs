@@ -14,7 +14,10 @@ async function loadIsolated() {
     jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
       DynamoDBClient: jest.fn(() => ({ send: ddbSend })),
       UpdateItemCommand: jest.fn((params) => ({ __type: 'UpdateItem', ...params })),
-      BatchWriteItemCommand: jest.fn((params) => ({ __type: 'BatchWriteItem', ...params })),
+      // A transaction, not a batch write: it commits the consent ConditionCheck
+      // with the subscriber Put, and unlike BatchWriteItem it supports the
+      // condition that stops a re-import overwriting a live subscriber row.
+      TransactWriteItemsCommand: jest.fn((params) => ({ __type: 'TransactWrite', ...params })),
       QueryCommand: jest.fn((params) => ({ __type: 'Query', ...params })),
     }));
 
@@ -32,6 +35,13 @@ async function loadIsolated() {
 
     jest.unstable_mockModule('../functions/utils/suppression.mjs', () => ({
       getSuppression,
+      suppressionConditionCheck: jest.fn((tenantId, email) => ({
+        ConditionCheck: {
+          TableName: 'newsletter-table',
+          Key: { pk: tenantId, sk: `suppression#${email}` },
+          ConditionExpression: 'attribute_not_exists(pk)'
+        }
+      })),
     }));
 
     ({ handler } = await import('../functions/subscribers/import-subscriber-list.mjs'));
@@ -71,10 +81,9 @@ describe('import-subscriber-list suppression', () => {
     // Only the non-suppressed address was written.
     const writes = ddbSend.mock.calls
       .map(([cmd]) => cmd)
-      .filter((cmd) => cmd.__type === 'BatchWriteItem');
+      .filter((cmd) => cmd.__type === 'TransactWrite');
     expect(writes).toHaveLength(1);
-    const written = writes[0].RequestItems['subscribers-table'][0].PutRequest.Item;
-    expect(written.email).toBe('keep@example.com');
+    expect(writes[0].TransactItems[1].Put.Item.email).toBe('keep@example.com');
   });
 
   test('imports everything when nothing is suppressed', async () => {
@@ -106,8 +115,8 @@ describe('import-subscriber-list suppression', () => {
     // Only the address whose consent state was known got written.
     const written = ddbSend.mock.calls
       .map(([cmd]) => cmd)
-      .filter((cmd) => cmd.__type === 'BatchWriteItem')
-      .map((cmd) => cmd.RequestItems['subscribers-table'][0].PutRequest.Item.email);
+      .filter((cmd) => cmd.__type === 'TransactWrite')
+      .map((cmd) => cmd.TransactItems[1].Put.Item.email);
     expect(written).toEqual(['good@example.com']);
   });
 });

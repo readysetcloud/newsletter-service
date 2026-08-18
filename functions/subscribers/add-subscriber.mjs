@@ -1,4 +1,4 @@
-import { DynamoDBClient, UpdateItemCommand, PutItemCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, UpdateItemCommand, PutItemCommand, TransactWriteItemsCommand } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
 import { formatResponse, getTenant } from '../utils/helpers.mjs';
 import { publishSubscriberEvent, publishEvent, EVENT_TYPES } from '../utils/event-publisher.mjs';
@@ -22,7 +22,7 @@ import { sanitizeName } from '../utils/subscriber-name.mjs';
 import { checkRateLimit } from '../utils/rate-limiter.mjs';
 import { createLogger } from '../utils/structured-logger.mjs';
 import { getMostRecentPublishedIssue, incrementIssueCounter } from '../utils/issue-attribution.mjs';
-import { getSuppression } from '../utils/suppression.mjs';
+import { getSuppression, suppressionConditionCheck } from '../utils/suppression.mjs';
 
 const ddb = new DynamoDBClient();
 
@@ -300,18 +300,36 @@ const addSubscriber = async (tenantId, contact, normalizedEmail, detectionData) 
   };
 
   try {
-    await ddb.send(new PutItemCommand({
-      TableName: process.env.SUBSCRIBERS_TABLE_NAME,
-      Item: marshall(subscriberItem),
-      ConditionExpression: 'attribute_not_exists(tenantId)'
+    // The consent check is committed with the write, not merely performed
+    // before it. A preflight read leaves a window where an unsubscribe lands
+    // between the check and the Put, ending with an active subscriber and a
+    // suppression on record at once. Inside the transaction the record is a
+    // real guard: if a suppression exists at commit time, nothing is written.
+    await ddb.send(new TransactWriteItemsCommand({
+      TransactItems: [
+        suppressionConditionCheck(tenantId, normalizedEmail),
+        {
+          Put: {
+            TableName: process.env.SUBSCRIBERS_TABLE_NAME,
+            Item: marshall(subscriberItem),
+            ConditionExpression: 'attribute_not_exists(tenantId)'
+          }
+        }
+      ]
     }));
     return true;
   } catch (err) {
-    if (err.name === 'ConditionalCheckFailedException') {
+    // A cancelled transaction covers both guards. The duplicate case is the
+    // ordinary one and stays a silent no-op; a suppression appearing in the
+    // window is the race this transaction exists to lose, and is also a no-op
+    // — the earlier read already answered the common case, so reaching here
+    // means the opt-out arrived mid-request and must win.
+    if (err.name === 'TransactionCanceledException' || err.name === 'ConditionalCheckFailedException') {
+      const reasons = (err.CancellationReasons || []).map((reason) => reason.Code).join(',');
+      console.info(`Subscriber not added for ${tenantId}`, { reasons: reasons || err.name });
       return false;
-    } else {
-      throw err;
     }
+    throw err;
   }
 };
 

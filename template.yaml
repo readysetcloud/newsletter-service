@@ -1087,6 +1087,10 @@ Resources:
                 - dynamodb:UpdateItem
                 - dynamodb:PutItem
                 - dynamodb:Query
+                # The subscriber write is a TransactWriteItems whose
+                # ConditionCheck asserts no suppression exists on this table,
+                # so the transaction touches both tables at once.
+                - dynamodb:ConditionCheckItem
               Resource:
                 - !GetAtt NewsletterTable.Arn
                 - !Sub "${NewsletterTable.Arn}/index/GSI1"
@@ -1508,10 +1512,13 @@ Resources:
               Action:
                 - dynamodb:UpdateItem
                 - dynamodb:GetItem
+                # ConditionCheck half of the transactional add — see
+                # AddSubscriberFunction.
+                - dynamodb:ConditionCheckItem
               Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
               Action:
-                - dynamodb:BatchWriteItem
+                - dynamodb:PutItem
                 - dynamodb:Query
               Resource: !GetAtt SubscribersTable.Arn
       Environment:
@@ -2222,6 +2229,9 @@ Resources:
                 # deferred delivery is pending
                 # (functions/utils/issue-timeline.mjs).
                 - dynamodb:PutItem
+                # Reads the tenant's suppression records, which are the final
+                # authority on who may be mailed (utils/suppression.mjs).
+                - dynamodb:GetItem
               Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
               Action: dynamodb:Query

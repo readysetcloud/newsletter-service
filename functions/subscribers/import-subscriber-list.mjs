@@ -1,8 +1,8 @@
-import { DynamoDBClient, UpdateItemCommand, BatchWriteItemCommand, QueryCommand } from "@aws-sdk/client-dynamodb";
+import { DynamoDBClient, UpdateItemCommand, TransactWriteItemsCommand, QueryCommand } from "@aws-sdk/client-dynamodb";
 import { marshall } from "@aws-sdk/util-dynamodb";
 import { getTenant, formatResponse, throttle, sendWithRetry } from "../utils/helpers.mjs";
 import { sanitizeName } from "../utils/subscriber-name.mjs";
-import { getSuppression } from "../utils/suppression.mjs";
+import { getSuppression, suppressionConditionCheck } from "../utils/suppression.mjs";
 
 const ddb = new DynamoDBClient();
 
@@ -119,52 +119,39 @@ const addSubscriber = async (tenantId, contact) => {
     ...(lastName && { lastName })
   };
 
-  const requestItems = {
-    [process.env.SUBSCRIBERS_TABLE_NAME]: [
-      {
-        PutRequest: {
-          Item: marshall(subscriberItem)
-        }
-      }
-    ]
-  };
-
   try {
-    const response = await sendWithRetry(() => ddb.send(new BatchWriteItemCommand({
-      RequestItems: requestItems
-    })), 'BatchWriteItem');
-
-    // Check for unprocessed items and retry them
-    if (response.UnprocessedItems && Object.keys(response.UnprocessedItems).length > 0) {
-      console.warn(`Unprocessed items detected for ${contact.address}, retrying...`);
-
-      // Retry unprocessed items with exponential backoff
-      let unprocessedItems = response.UnprocessedItems;
-      let retryAttempts = 0;
-      const maxRetries = 3;
-
-      while (unprocessedItems && Object.keys(unprocessedItems).length > 0 && retryAttempts < maxRetries) {
-        retryAttempts++;
-        const backoffMs = Math.min(1000 * Math.pow(2, retryAttempts), 5000);
-        await new Promise(resolve => setTimeout(resolve, backoffMs));
-
-        const retryResponse = await ddb.send(new BatchWriteItemCommand({
-          RequestItems: unprocessedItems
-        }));
-
-        unprocessedItems = retryResponse.UnprocessedItems;
-      }
-
-      // If still unprocessed after retries, throw error
-      if (unprocessedItems && Object.keys(unprocessedItems).length > 0) {
-        throw new Error(`Failed to write subscriber ${contact.address} after ${maxRetries} retries due to throttling`);
-      }
-    }
+    // A transaction, not a batch write, for two reasons. It commits the consent
+    // check with the write, so an unsubscribe landing mid-import cannot end
+    // with an active subscriber and a suppression on record at once. And it
+    // supports conditions at all: the previous `BatchWriteItem` did not, so the
+    // guard against overwriting an existing subscriber never applied — a
+    // re-import replaced live rows and wiped their engagement and interest
+    // data, and the `ConditionalCheckFailedException` catch below it could
+    // never fire.
+    await sendWithRetry(() => ddb.send(new TransactWriteItemsCommand({
+      TransactItems: [
+        suppressionConditionCheck(tenantId, normalizedEmail),
+        {
+          Put: {
+            TableName: process.env.SUBSCRIBERS_TABLE_NAME,
+            Item: marshall(subscriberItem),
+            ConditionExpression: 'attribute_not_exists(tenantId)'
+          }
+        }
+      ]
+    })), 'TransactWriteItems');
   } catch (err) {
-    // Only suppress known duplicate/no-op cases
-    if (err.name === 'ConditionalCheckFailedException') {
-      console.info(`Subscriber ${contact.address} already exists, skipping`);
-      return;
+    if (err.name === 'TransactionCanceledException') {
+      const codes = (err.CancellationReasons || []).map((reason) => reason.Code);
+      // Guard order matches TransactItems: [suppression check, subscriber put].
+      if (codes[0] === 'ConditionalCheckFailed') {
+        console.log(`Skipping ${normalizedEmail}; a suppression landed during the import`);
+        return { suppressed: true, email: normalizedEmail };
+      }
+      if (codes[1] === 'ConditionalCheckFailed') {
+        console.info(`Subscriber ${normalizedEmail} already exists, leaving their record untouched`);
+        return;
+      }
     }
 
     // All other errors (IAM, validation, throttling) should fail the import

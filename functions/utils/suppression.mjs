@@ -1,4 +1,4 @@
-import { DynamoDBClient, PutItemCommand, GetItemCommand, DeleteItemCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, PutItemCommand, GetItemCommand, DeleteItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 
 const ddb = new DynamoDBClient();
@@ -35,6 +35,66 @@ const ddb = new DynamoDBClient();
  */
 
 const suppressionSk = (email) => `suppression#${email.toLowerCase()}`;
+
+/**
+ * The key of an address's suppression record.
+ */
+export const suppressionKey = (tenantId, email) => ({
+  pk: tenantId,
+  sk: suppressionSk(email)
+});
+
+/**
+ * A `TransactWriteItems` ConditionCheck asserting no suppression exists for an
+ * address, to be committed alongside the subscriber write.
+ *
+ * Reading the record and then writing the subscriber is a check-then-act race:
+ * an unsubscribe landing between the two leaves an active subscriber *and* a
+ * suppression, which is the one state that must not exist. Committing the check
+ * with the write makes the record an actual guard — the transaction fails if a
+ * suppression appears at any point before it commits.
+ */
+export const suppressionConditionCheck = (tenantId, email) => ({
+  ConditionCheck: {
+    TableName: process.env.TABLE_NAME,
+    Key: marshall(suppressionKey(tenantId, email)),
+    ConditionExpression: 'attribute_not_exists(pk)'
+  }
+});
+
+/**
+ * Read every suppression on record for a tenant, as a Set of addresses.
+ *
+ * One query per send rather than a lookup per recipient. Throws for the same
+ * reason the single-address read does: an unreadable consent store must never
+ * be treated as "nobody has opted out".
+ */
+export const listSuppressedEmails = async (tenantId) => {
+  const suppressed = new Set();
+  let exclusiveStartKey;
+
+  do {
+    const result = await ddb.send(new QueryCommand({
+      TableName: process.env.TABLE_NAME,
+      KeyConditionExpression: '#pk = :pk AND begins_with(#sk, :prefix)',
+      ExpressionAttributeNames: { '#pk': 'pk', '#sk': 'sk' },
+      ExpressionAttributeValues: marshall({ ':pk': tenantId, ':prefix': 'suppression#' }),
+      ProjectionExpression: 'email',
+      ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey })
+    }));
+
+    for (const item of result.Items || []) {
+      const { email } = unmarshall(item);
+      if (email) {
+        suppressed.add(email.toLowerCase());
+      }
+    }
+
+    exclusiveStartKey = result.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+
+  return suppressed;
+};
 
 /**
  * Record a consent revocation. Written before the subscriber row is deleted so
@@ -89,7 +149,11 @@ export const getSuppression = async (tenantId, emailAddress) => {
       Key: marshall({
         pk: tenantId,
         sk: suppressionSk(emailAddress)
-      })
+      }),
+      // A just-written suppression must not read as absent. This narrows the
+      // window but does not close it — see `suppressionConditionCheck`, which
+      // is what actually makes the record a write-time guard.
+      ConsistentRead: true
     }));
 
     return result.Item ? unmarshall(result.Item) : null;

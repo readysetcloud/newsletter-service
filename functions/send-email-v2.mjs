@@ -6,6 +6,7 @@ import { DynamoDBClient, QueryCommand, UpdateItemCommand } from "@aws-sdk/client
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { sendWithRetry } from './utils/helpers.mjs';
 import { mintSubscriberToken } from './utils/subscriber-token.mjs';
+import { listSuppressedEmails, getSuppression } from './utils/suppression.mjs';
 import { listSubscribers, getSubscriberByEmail, updateSubscriberSendMetadata } from './utils/subscriber.mjs';
 import { splitRecipients, selectHoldoutSample } from './utils/ab-variants.mjs';
 import {
@@ -630,9 +631,53 @@ const prepareAssemblyPhase = async (html, subscribers, referenceNumber) => {
  * @param {Object} data - The Send Email v2 event detail
  * @returns {{baseUrl: string, tenantId: string} | null}
  */
+/**
+ * Whether this send is marketing mail to subscribers, as opposed to an admin
+ * alert or preview going to the operator's own inbox on the same event type.
+ * Decides both the one-click headers and whether suppression is enforced —
+ * they have to agree, or a message could carry an unsubscribe link while
+ * ignoring the record that link writes.
+ */
+const isMarketingSend = (data) =>
+  (Boolean(data.referenceNumber) || data.listUnsubscribe === true) && Boolean(data.tenantId);
+
+/**
+ * Drop recipients with a suppression on record.
+ *
+ * Throws rather than sending on a read failure: an unreadable consent store is
+ * not evidence that nobody opted out, and mailing someone who did is the one
+ * outcome worth failing a send over.
+ */
+const filterSuppressedPhase = async (tenantId, subscribers) => {
+  // A single-recipient send (welcome mail, a test) asks about one address
+  // rather than pulling the tenant's whole suppression partition to check it.
+  if (subscribers.length === 1) {
+    const only = subscribers[0];
+    const suppression = await getSuppression(tenantId, only.email);
+    if (suppression) {
+      console.warn('[SUPPRESSION] Withheld a recipient with a recorded opt-out still on the subscriber list');
+      return [];
+    }
+    return subscribers;
+  }
+
+  const suppressed = await listSuppressedEmails(tenantId);
+  if (suppressed.size === 0) {
+    return subscribers;
+  }
+
+  const allowed = subscribers.filter((subscriber) => !suppressed.has(subscriber.email?.toLowerCase()));
+  const removed = subscribers.length - allowed.length;
+
+  if (removed > 0) {
+    console.warn(`[SUPPRESSION] Withheld ${removed} recipient(s) with a recorded opt-out still on the subscriber list`);
+  }
+
+  return allowed;
+};
+
 const resolveListUnsubscribe = (data) => {
-  const isMarketingSend = Boolean(data.referenceNumber) || data.listUnsubscribe === true;
-  if (!isMarketingSend || !data.tenantId) {
+  if (!isMarketingSend(data)) {
     return null;
   }
 
@@ -718,6 +763,14 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
       const emailTags = [];
       if (emailConfig.referenceNumber) {
         emailTags.push({ Name: 'referenceNumber', Value: emailConfig.referenceNumber });
+      }
+      // Complaint handling needs a tenant even when there is no issue to point
+      // at. Welcome mail carries no referenceNumber, so a "report spam" on one
+      // had nothing to resolve a tenant from and was dropped. SES message tag
+      // values allow only letters, digits, dashes and underscores, so a tenant
+      // id outside that set is left off rather than failing the send.
+      if (emailConfig.tenantId && /^[A-Za-z0-9_-]+$/.test(emailConfig.tenantId)) {
+        emailTags.push({ Name: 'tenantId', Value: emailConfig.tenantId });
       }
       if (emailConfig.variant) {
         emailTags.push({ Name: 'variant', Value: emailConfig.variant });
@@ -1152,6 +1205,30 @@ export const handler = async (event) => {
         const groupKey = data.localSendGroup.timeZone;
         subscribers = filterSubscribersForGroup(subscribers, groupKey);
         console.log(`[LOCAL SEND] Group ${groupKey}: ${subscribers.length} subscribers after filtering`);
+      }
+    }
+
+    // Suppression is the final authority on who may be mailed, not just a gate
+    // on the add paths. The Subscribers table can disagree with it after a
+    // partial failure — a recorded revocation whose subscriber delete then
+    // failed leaves an active row for someone who opted out — and this is the
+    // last point where that can be caught before mail goes out. One query per
+    // send, not a lookup per recipient.
+    if (isMarketingSend(data)) {
+      subscribers = await executePhase('Suppression Filter', async () => {
+        return await filterSuppressedPhase(tenantId, subscribers);
+      });
+
+      if (subscribers.length === 0) {
+        console.log('[EXECUTION COMPLETE] Every recipient has opted out');
+        await reportGroupProgress(data, { recipients: 0, skipped: 0 });
+        return {
+          sent: true,
+          recipients: 0,
+          skipped: 0,
+          senderEmail,
+          senderId: senderRecord?.senderId
+        };
       }
     }
 

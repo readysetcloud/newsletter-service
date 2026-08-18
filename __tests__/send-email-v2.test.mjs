@@ -47,6 +47,13 @@ jest.unstable_mockModule('../functions/utils/subscriber-token.mjs', () => ({
   mintSubscriberToken: jest.fn((tenantId, email) => `token_${tenantId}_${email}`)
 }));
 
+// Suppression is the final authority on who may be mailed; default to nobody
+// having opted out so existing send assertions stay about the send path.
+jest.unstable_mockModule('../functions/utils/suppression.mjs', () => ({
+  listSuppressedEmails: jest.fn(async () => new Set()),
+  getSuppression: jest.fn(async () => null)
+}));
+
 // Mock subscriber utility
 jest.unstable_mockModule('../functions/utils/subscriber.mjs', () => ({
   listSubscribers: jest.fn(() => Promise.resolve({
@@ -242,6 +249,148 @@ describe('send-email-v2', () => {
       };
 
       await expect(handler(event)).rejects.toThrow('Missing required field: tenantId');
+    });
+  });
+
+  // Suppression is the final authority on who may be mailed, not just a gate on
+  // the add paths. The Subscribers table can disagree with it after a partial
+  // failure — a recorded revocation whose subscriber delete then failed leaves
+  // an active row for someone who opted out — and this is the last point where
+  // that can be caught.
+  describe('send-time suppression filter', () => {
+    const senderLookup = () => {
+      ddbInstance.send.mockResolvedValueOnce({
+        Items: [{
+          unmarshalled: {
+            senderId: 'sender-123',
+            email: 'sender@example.com',
+            verificationStatus: 'verified',
+            isDefault: false
+          }
+        }]
+      });
+    };
+
+    const issueSend = () => ({
+      detail: {
+        subject: 'Issue',
+        html: '<p>content</p>',
+        to: { list: 'my-list' },
+        from: 'sender@example.com',
+        tenantId: 'tenant-123',
+        referenceNumber: 'tenant-123_42'
+      }
+    });
+
+    beforeEach(() => {
+      process.env.API_BASE_URL = 'https://api.example.com';
+      sesInstance.send.mockResolvedValue({ MessageId: 'msg-123' });
+    });
+
+    afterEach(async () => {
+      delete process.env.API_BASE_URL;
+      // `clearAllMocks` does not drain a `...Once` queue, so an unconsumed one
+      // would surface in a later test as a phantom suppression.
+      const { listSuppressedEmails, getSuppression } = await import('../functions/utils/suppression.mjs');
+      listSuppressedEmails.mockReset().mockResolvedValue(new Set());
+      getSuppression.mockReset().mockResolvedValue(null);
+    });
+
+    test('withholds a subscriber who has a recorded opt-out', async () => {
+      const { listSuppressedEmails } = await import('../functions/utils/suppression.mjs');
+      listSuppressedEmails.mockResolvedValueOnce(new Set(['optedout@example.com']));
+      listSubscribers.mockResolvedValue({
+        subscribers: [
+          { email: 'fine@example.com', lastIssueSent: null },
+          { email: 'optedout@example.com', lastIssueSent: null }
+        ],
+        lastEvaluatedKey: undefined
+      });
+      senderLookup();
+
+      const result = await handler(issueSend());
+
+      expect(result.recipients).toBe(1);
+      const sentTo = sesInstance.send.mock.calls.map((call) => call[0].Destination.ToAddresses[0]);
+      expect(sentTo).toEqual(['fine@example.com']);
+    });
+
+    test('sends nothing when every recipient has opted out', async () => {
+      const { listSuppressedEmails } = await import('../functions/utils/suppression.mjs');
+      listSuppressedEmails.mockResolvedValueOnce(new Set(['one@example.com', 'two@example.com']));
+      listSubscribers.mockResolvedValue({
+        subscribers: [
+          { email: 'one@example.com', lastIssueSent: null },
+          { email: 'two@example.com', lastIssueSent: null }
+        ],
+        lastEvaluatedKey: undefined
+      });
+      senderLookup();
+
+      const result = await handler(issueSend());
+
+      expect(result.recipients).toBe(0);
+      expect(sesInstance.send).not.toHaveBeenCalled();
+    });
+
+    // An unreadable consent store is not evidence that nobody opted out.
+    test('fails the send rather than mailing when suppression cannot be read', async () => {
+      const { listSuppressedEmails } = await import('../functions/utils/suppression.mjs');
+      listSuppressedEmails.mockRejectedValueOnce(new Error('DynamoDB down'));
+      listSubscribers.mockResolvedValue({
+        subscribers: [
+          { email: 'a@example.com', lastIssueSent: null },
+          { email: 'b@example.com', lastIssueSent: null }
+        ],
+        lastEvaluatedKey: undefined
+      });
+      senderLookup();
+
+      await expect(handler(issueSend())).rejects.toThrow('DynamoDB down');
+      expect(sesInstance.send).not.toHaveBeenCalled();
+    });
+
+    // Admin alerts ride the same event type to the operator's own inbox and are
+    // not subscriber mail — filtering them would drop operational messages.
+    test('leaves non-marketing sends unfiltered', async () => {
+      const { listSuppressedEmails, getSuppression } = await import('../functions/utils/suppression.mjs');
+      senderLookup();
+
+      await handler({
+        detail: {
+          subject: '[Alert] Something failed',
+          html: '<p>alert</p>',
+          to: { email: 'operator@example.com' },
+          from: 'sender@example.com',
+          tenantId: 'tenant-123'
+        }
+      });
+
+      expect(listSuppressedEmails).not.toHaveBeenCalled();
+      expect(getSuppression).not.toHaveBeenCalled();
+      expect(sesInstance.send).toHaveBeenCalledTimes(1);
+    });
+
+    test('checks a single marketing recipient without loading the whole set', async () => {
+      const { listSuppressedEmails, getSuppression } = await import('../functions/utils/suppression.mjs');
+      getSuppression.mockResolvedValueOnce({ unsubscribedAt: '2026-08-01T00:00:00.000Z' });
+      senderLookup();
+
+      const result = await handler({
+        detail: {
+          subject: 'Welcome!',
+          html: '<p>welcome</p>',
+          to: { email: 'optedout@example.com' },
+          from: 'sender@example.com',
+          tenantId: 'tenant-123',
+          listUnsubscribe: true
+        }
+      });
+
+      expect(getSuppression).toHaveBeenCalledWith('tenant-123', 'optedout@example.com');
+      expect(listSuppressedEmails).not.toHaveBeenCalled();
+      expect(result.recipients).toBe(0);
+      expect(sesInstance.send).not.toHaveBeenCalled();
     });
   });
 

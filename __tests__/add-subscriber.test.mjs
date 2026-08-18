@@ -26,6 +26,10 @@ async function loadIsolated() {
       // deliberately unwired from this path — signup is unauthenticated and
       // cannot be treated as proof of address ownership.
       DeleteItemCommand: jest.fn((params) => ({ __type: 'DeleteItem', ...params })),
+      QueryCommand: jest.fn((params) => ({ __type: 'Query', ...params })),
+      // The subscriber write commits with a ConditionCheck on the suppression
+      // key, so the consent record guards the write instead of preceding it.
+      TransactWriteItemsCommand: jest.fn((params) => ({ __type: 'TransactWrite', ...params })),
     }));
 
     // util-dynamodb
@@ -195,9 +199,13 @@ describe('add-subscriber handler (isolated)', () => {
     expect(suppressionGetArg.__type).toBe('GetItem');
     expect(suppressionGetArg.Key).toEqual({ pk: 't1', sk: 'suppression#test@example.com' });
 
-    // Second call: PutItem for subscriber in Subscribers table
-    const subscriberPutArg = ddbInstance.send.mock.calls[1][0];
-    expect(subscriberPutArg.__type).toBe('PutItem');
+    // Second call: the transactional subscriber write — the suppression
+    // ConditionCheck commits with the Put so the record guards it.
+    const transactArg = ddbInstance.send.mock.calls[1][0];
+    expect(transactArg.__type).toBe('TransactWrite');
+    expect(transactArg.TransactItems[0].ConditionCheck.ConditionExpression)
+      .toBe('attribute_not_exists(pk)');
+    const subscriberPutArg = transactArg.TransactItems[1].Put;
     expect(subscriberPutArg.TableName).toBe('test-subscribers-table');
     expect(subscriberPutArg.ConditionExpression).toBe('attribute_not_exists(tenantId)');
 

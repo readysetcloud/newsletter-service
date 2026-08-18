@@ -50,6 +50,13 @@ jest.unstable_mockModule('../functions/utils/subscriber-token.mjs', () => ({
   mintSubscriberToken: jest.fn((tenantId, email) => `token_${tenantId}_${email}`)
 }));
 
+// Suppression is the final authority on who may be mailed; default to nobody
+// having opted out so existing send assertions stay about the send path.
+jest.unstable_mockModule('../functions/utils/suppression.mjs', () => ({
+  listSuppressedEmails: jest.fn(async () => new Set()),
+  getSuppression: jest.fn(async () => null)
+}));
+
 // Mock subscriber utility
 jest.unstable_mockModule('../functions/utils/subscriber.mjs', () => ({
   listSubscribers: jest.fn(() => Promise.resolve({

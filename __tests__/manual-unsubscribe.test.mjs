@@ -175,7 +175,11 @@ describe('manual-unsubscribe handler', () => {
     expect(incrementIssueCounter).not.toHaveBeenCalled();
   });
 
-  test('unsubscribeUser failure returns success for privacy', async () => {
+  // Privacy requires the answer be the same whether or not the address exists —
+  // not that an infrastructure failure be dressed up as success. The page reads
+  // `ok`, so a false 200 clears the form and congratulates someone who is still
+  // subscribed, taking away their only cue to retry.
+  test('unsubscribeUser failure reports a retryable error, not success', async () => {
     unsubscribeUser.mockResolvedValue({ success: false, actuallyRemoved: false });
 
     const event = {
@@ -193,10 +197,12 @@ describe('manual-unsubscribe handler', () => {
 
     const result = await handler(event);
 
-    expect(result.statusCode).toBe(200);
+    expect(result.statusCode).toBe(500);
     expect(result.headers['Content-Type']).toBe('application/json');
     const body = JSON.parse(result.body);
-    expect(body.message).toBe('Successfully unsubscribed');
+    // Generic on purpose: it says the request did not complete, and nothing
+    // about whether the address is on the list.
+    expect(body.message).toBe('Unable to process unsubscribe, please retry');
     expect(unsubscribeUser).toHaveBeenCalledWith(
       'test-tenant',
       'test@example.com',
@@ -255,7 +261,7 @@ describe('manual-unsubscribe handler', () => {
     );
   });
 
-  test('exception during processing returns success for privacy', async () => {
+  test('an unexpected error is reported as retryable, not as success', async () => {
     unsubscribeUser.mockRejectedValue(new Error('Unexpected error'));
 
     const event = {
@@ -273,10 +279,10 @@ describe('manual-unsubscribe handler', () => {
 
     const result = await handler(event);
 
-    expect(result.statusCode).toBe(200);
+    expect(result.statusCode).toBe(500);
     expect(result.headers['Content-Type']).toBe('application/json');
     const body = JSON.parse(result.body);
-    expect(body.message).toBe('Successfully unsubscribed');
+    expect(body.message).toBe('Unable to process unsubscribe, please retry');
   });
 
   test('extracts IP from X-Forwarded-For header when available', async () => {

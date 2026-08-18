@@ -131,6 +131,15 @@ export const listSuppressedEmails = async (tenantId) => {
  * self-service way out. The confirmed re-opt-in flow needs to know which
  * suppressions were never verified in the first place, and that fact only
  * exists if it is written down when the record is made.
+ *
+ * `verified` is monotonic: it moves false → true and never back. Unlike the
+ * other fields here, the question it answers is not "what happened first?" but
+ * "has proof of ownership *ever* arrived?" — and proof arriving second is
+ * still proof. Write-once would have discarded it: someone typing their
+ * address into the fallback form and then using the real one-click link would
+ * stay marked unverified forever. `lastVerified` cannot stand in for that
+ * either, since manual → complaint → manual leaves both fields false with no
+ * trace that a verified revocation ever happened.
  */
 const VERIFIED_METHODS = new Set(['one-click', 'encrypted-link', 'complaint']);
 
@@ -160,7 +169,11 @@ export const recordSuppression = async (tenantId, emailAddress, method, metadata
   let updateExpression =
     'SET #unsubscribedAt = if_not_exists(#unsubscribedAt, :now), '
     + '#method = if_not_exists(#method, :method), '
-    + 'verified = if_not_exists(verified, :verified), '
+    // Verified proof latches on; an unverified signal only fills the gap when
+    // nothing has been recorded yet, so it can never clear an earlier `true`.
+    + (VERIFIED_METHODS.has(method)
+      ? 'verified = :verified, '
+      : 'verified = if_not_exists(verified, :verified), ')
     + 'email = :email, lastUnsubscribedAt = :now, lastMethod = :method, lastVerified = :verified';
 
   if (metadata.ipAddress) {

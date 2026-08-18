@@ -190,12 +190,13 @@ describe('add-subscriber handler (isolated)', () => {
     const res = await handler(event);
     expect(res && res.statusCode).toBe(201);
 
-    // DDB calls: GetItem (suppression check — an opted-out address is refused)
-    // + TransactWriteItems (subscriber Put and the tenant count, committed
-    // together) + PutItem (event record). The count used to be a separate
-    // UpdateItem after the write, which could fail with the subscriber already
-    // committed and no way for a retry to repair it.
-    expect(ddbInstance.send).toHaveBeenCalledTimes(3);
+    // Two DDB calls: GetItem (suppression check — an opted-out address is
+    // refused) + TransactWriteItems carrying everything durable about the
+    // signup: the subscriber Put, the tenant count, and the timeline record.
+    // Both the count and the record used to be separate writes after the
+    // transaction, and either failing left a committed subscriber that a retry
+    // would treat as a duplicate, skipping the rest of the creation work.
+    expect(ddbInstance.send).toHaveBeenCalledTimes(2);
 
     // First call: GetItem checking whether this address has opted out
     const suppressionGetArg = ddbInstance.send.mock.calls[0][0];
@@ -227,9 +228,8 @@ describe('add-subscriber handler (isolated)', () => {
     expect(countUpdate.UpdateExpression)
       .toBe('SET #subscribers = if_not_exists(#subscribers, :zero) + :one');
 
-    // Third call: PutItem for subscriber event record
-    const eventPutArg = ddbInstance.send.mock.calls[2][0];
-    expect(eventPutArg.__type).toBe('PutItem');
+    // Fourth transaction item: the subscriber event record.
+    const eventPutArg = transactArg.TransactItems[3].Put;
     expect(eventPutArg.TableName).toBe('test-table');
 
     // Verify the event record structure

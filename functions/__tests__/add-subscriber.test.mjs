@@ -624,7 +624,7 @@ describe('add-subscriber handler — bot protection integration', () => {
         .map(([cmd]) => cmd)
         .find((cmd) => cmd.__type === 'TransactWrite');
 
-      expect(transact.TransactItems).toHaveLength(3);
+      expect(transact.TransactItems).toHaveLength(4);
       expect(transact.TransactItems[2].Update.Key).toEqual({ pk: 't1', sk: 'tenant' });
       expect(transact.TransactItems[2].Update.UpdateExpression)
         .toBe('SET #subscribers = if_not_exists(#subscribers, :zero) + :one');
@@ -634,6 +634,53 @@ describe('add-subscriber handler — bot protection integration', () => {
         .map(([cmd]) => cmd)
         .filter((cmd) => cmd.__type === 'UpdateItem');
       expect(standaloneCountUpdates).toHaveLength(0);
+    });
+
+    // The timeline record commits with the row, not after it. Written
+    // afterwards it was unreplayable: a failure returned 500 with the
+    // subscriber already committed, and the retry hit the duplicate guard and
+    // skipped every remaining creation step — including the `Subscriber Added`
+    // event the welcome email depends on.
+    test('commits the timeline record with the subscriber write', async () => {
+      mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
+      withCleanSuppressionCheck(() => Promise.resolve({}));
+
+      await handler(makeEvent({ email: 'new@example.com' }));
+
+      const transact = ddbInstance.send.mock.calls
+        .map(([cmd]) => cmd)
+        .find((cmd) => cmd.__type === 'TransactWrite');
+
+      const timelinePut = transact.TransactItems[3].Put;
+      expect(timelinePut.TableName).toBe('test-table');
+      expect(timelinePut.Item.sk).toMatch(/^subscriber#\d+#new@example\.com$/);
+      expect(timelinePut.Item.email).toBe('new@example.com');
+      // Same instant on both rows — stamped once, before the transaction.
+      expect(timelinePut.Item.addedAt).toBe(transact.TransactItems[1].Put.Item.addedAt);
+
+      // No PutItem outside the transaction: there is no post-commit write left
+      // that a retry would skip.
+      const standalonePuts = ddbInstance.send.mock.calls
+        .map(([cmd]) => cmd)
+        .filter((cmd) => cmd.__type === 'PutItem');
+      expect(standalonePuts).toHaveLength(0);
+    });
+
+    // A failure at the timeline record now rolls the subscriber back too, so
+    // the retry sees a clean slate rather than a committed subscriber it will
+    // treat as an ordinary duplicate.
+    test('a timeline-record failure leaves no committed subscriber for a retry to mistake for a duplicate', async () => {
+      mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
+      withCleanSuppressionCheck(() => Promise.reject(Object.assign(new Error('cancelled'), {
+        name: 'TransactionCanceledException',
+        // Fourth position is the timeline record.
+        CancellationReasons: [{ Code: 'None' }, { Code: 'None' }, { Code: 'None' }, { Code: 'ValidationError' }]
+      })));
+
+      const res = await handler(makeEvent({ email: 'new@example.com' }));
+
+      expect(res.statusCode).toBe(500);
+      expect(mockPublishSubscriberEvent).not.toHaveBeenCalled();
     });
 
     // The counter can no longer fail on its own, so there is no state where a

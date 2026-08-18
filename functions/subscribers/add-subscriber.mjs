@@ -1,4 +1,4 @@
-import { DynamoDBClient, PutItemCommand, TransactWriteItemsCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, TransactWriteItemsCommand } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
 import { formatResponse, getTenant } from '../utils/helpers.mjs';
 import { publishSubscriberEvent, publishEvent, EVENT_TYPES } from '../utils/event-publisher.mjs';
@@ -197,6 +197,11 @@ export const handler = async (event) => {
       return formatResponse(201, 'Contact added');
     }
 
+    // Stamped before the write, because the subscriber row and its timeline
+    // record share these values and both commit in the same transaction.
+    const addedAt = new Date().toISOString();
+    const timestamp = Date.now();
+
     // Step 9: Attempt to create subscriber (duplicate check via ConditionExpression)
     const isNew = await addSubscriber(tenantId, contact, normalizedEmail, {
       sourceIp,
@@ -204,7 +209,7 @@ export const handler = async (event) => {
       detectionFlags,
       requestCountInWindow: rateLimitResult.count,
       elapsedMs: sanitizedElapsedMs
-    });
+    }, { addedAt, timestamp });
 
     if (isNew) {
       // Emit signup.flagged log if any detection flag is true
@@ -221,12 +226,9 @@ export const handler = async (event) => {
         });
       }
 
-      const addedAt = new Date().toISOString();
-      const timestamp = Date.now();
-
-      // The tenant count is already committed — it is the third item of the
-      // transaction that created the subscriber.
-      await createSubscriberEventRecord(tenantId, normalizedEmail, addedAt, timestamp);
+      // The tenant count and the timeline record are already committed — they
+      // are the third and fourth items of the transaction that created the
+      // subscriber.
 
       // Attribute the new subscriber to the most recently sent issue
       try {
@@ -276,9 +278,7 @@ export const handler = async (event) => {
   }
 };
 
-const addSubscriber = async (tenantId, contact, normalizedEmail, detectionData) => {
-  const addedAt = new Date().toISOString();
-
+const addSubscriber = async (tenantId, contact, normalizedEmail, detectionData, { addedAt, timestamp }) => {
   const subscriberItem = {
     tenantId,
     email: normalizedEmail,
@@ -334,7 +334,19 @@ const addSubscriber = async (tenantId, contact, normalizedEmail, detectionData) 
             ExpressionAttributeNames: { '#subscribers': 'subscribers' },
             ExpressionAttributeValues: marshall({ ':one': 1, ':zero': 0 })
           }
-        }
+        },
+        // The activity-timeline record commits here too, for the same reason
+        // the counter does. Written after the transaction it was unreplayable:
+        // a failure returned 500 with the subscriber already committed, and the
+        // retry hit the duplicate guard and took the "already subscribed"
+        // branch — skipping this record *and* the `Subscriber Added` event, so
+        // the welcome email was lost with EventBridge working perfectly.
+        //
+        // The event publication itself stays outside; it is a different system
+        // and cannot be transacted with DynamoDB. But everything durable that
+        // represents this signup commits together, so a retry starts from
+        // either a complete signup or none at all.
+        { Put: { TableName: process.env.TABLE_NAME, Item: marshall(subscriberEventRecord(tenantId, normalizedEmail, addedAt, timestamp)) } }
       ]
     }));
     return true;
@@ -370,19 +382,13 @@ const addSubscriber = async (tenantId, contact, normalizedEmail, detectionData) 
   }
 };
 
-const createSubscriberEventRecord = async (tenantId, email, addedAt, timestamp) => {
-  const ttl = Math.floor(Date.now() / 1000) + (90 * 24 * 60 * 60); // 90 days from now
-
-  await ddb.send(new PutItemCommand({
-    TableName: process.env.TABLE_NAME,
-    Item: marshall({
-      pk: tenantId,
-      sk: `subscriber#${timestamp}#${email}`,
-      GSI1PK: tenantId,
-      GSI1SK: `subscriber#${timestamp}`,
-      email,
-      addedAt,
-      ttl
-    })
-  }));
-};
+/** The activity-timeline record for a signup, as a transaction item's Item. */
+const subscriberEventRecord = (tenantId, email, addedAt, timestamp) => ({
+  pk: tenantId,
+  sk: `subscriber#${timestamp}#${email}`,
+  GSI1PK: tenantId,
+  GSI1SK: `subscriber#${timestamp}`,
+  email,
+  addedAt,
+  ttl: Math.floor(Date.now() / 1000) + (90 * 24 * 60 * 60) // 90 days from now
+});

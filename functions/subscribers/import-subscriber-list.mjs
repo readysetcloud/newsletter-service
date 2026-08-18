@@ -1,8 +1,7 @@
-import { DynamoDBClient, UpdateItemCommand, TransactWriteItemsCommand, QueryCommand } from "@aws-sdk/client-dynamodb";
+import { DynamoDBClient, TransactWriteItemsCommand } from "@aws-sdk/client-dynamodb";
 import { marshall } from "@aws-sdk/util-dynamodb";
 import { getTenant, formatResponse, throttle, sendWithRetry } from "../utils/helpers.mjs";
 import { sanitizeName } from "../utils/subscriber-name.mjs";
-import { SEGMENT_KEY_PREFIX } from "../utils/subscriber-record.mjs";
 import { getSuppression, suppressionConditionCheck } from "../utils/suppression.mjs";
 
 const ddb = new DynamoDBClient();
@@ -59,9 +58,6 @@ export const handler = async (event) => {
         console.error(`Failed item ${idx}:`, failure.reason?.message || failure.reason);
       });
 
-      // Update count with successful imports only
-      await updateSubscriberCount(tenantId);
-
       // Return partial success with failure details
       return {
         success: false,
@@ -75,7 +71,6 @@ export const handler = async (event) => {
       };
     }
 
-    await updateSubscriberCount(tenantId);
     console.log(`Successfully added ${created} contacts (${existing} already subscribed)`);
 
     return {
@@ -152,13 +147,33 @@ const addSubscriber = async (tenantId, contact) => {
             Item: marshall(subscriberItem),
             ConditionExpression: 'attribute_not_exists(tenantId)'
           }
+        },
+        // The tenant count moves with the row that changed it, matching the
+        // public signup path. The import used to recount the whole partition
+        // at the end and SET the absolute total, which raced with every live
+        // signup and unsubscribe: a signup committing between the recount's
+        // Query and its write was simply erased by the stale total. Strong
+        // consistency does not help — it says what was true when the Query
+        // ran, not that it stays true until a later write.
+        //
+        // A duplicate or a suppression cancels the whole transaction, so the
+        // increment only ever happens for a row this import actually created.
+        {
+          Update: {
+            TableName: process.env.TABLE_NAME,
+            Key: marshall({ pk: tenantId, sk: 'tenant' }),
+            UpdateExpression: 'SET #subscribers = if_not_exists(#subscribers, :zero) + :one',
+            ExpressionAttributeNames: { '#subscribers': 'subscribers' },
+            ExpressionAttributeValues: marshall({ ':one': 1, ':zero': 0 })
+          }
         }
       ]
     })), 'TransactWriteItems');
   } catch (err) {
     if (err.name === 'TransactionCanceledException') {
       const codes = (err.CancellationReasons || []).map((reason) => reason.Code);
-      // Guard order matches TransactItems: [suppression check, subscriber put].
+      // Guard order matches TransactItems:
+      // [suppression check, subscriber put, tenant count].
       if (codes[0] === 'ConditionalCheckFailed') {
         console.log(`Skipping ${normalizedEmail}; a suppression landed during the import`);
         return { suppressed: true, email: normalizedEmail };
@@ -175,62 +190,3 @@ const addSubscriber = async (tenantId, contact) => {
   }
 };
 
-/**
- * Count a tenant's actual subscribers.
- *
- * Two things a plain `Select: 'COUNT'` over the tenant partition got wrong.
- * The segments feature stores its own records in this table under the same
- * partition, overloading the `email` sort key (`SEGMENT#...`, memberships,
- * name guards, rebuild jobs), so counting the partition counted bookkeeping
- * rows as subscribers and overstated every segment-using tenant. The filter
- * excludes that namespace DynamoDB-side; `Select: 'COUNT'` still returns the
- * post-filter count, so nothing is paid to transfer items.
- *
- * And this runs immediately after the import's own writes, where an
- * eventually consistent read can miss rows that just committed — and then
- * overwrite the stored count with the low number. Strongly consistent because
- * it is a repair, and a repair that reads stale data writes damage.
- */
-const getSubscriberCount = async (tenantId) => {
-  let total = 0;
-  let lastEvaluatedKey;
-
-  do {
-    const response = await sendWithRetry(() => ddb.send(new QueryCommand({
-      TableName: process.env.SUBSCRIBERS_TABLE_NAME,
-      KeyConditionExpression: 'tenantId = :tenantId',
-      FilterExpression: 'NOT begins_with(#email, :segmentPrefix)',
-      ExpressionAttributeNames: { '#email': 'email' },
-      ExpressionAttributeValues: marshall({
-        ':tenantId': tenantId,
-        ':segmentPrefix': SEGMENT_KEY_PREFIX
-      }),
-      Select: 'COUNT',
-      ConsistentRead: true,
-      ExclusiveStartKey: lastEvaluatedKey
-    })), 'QuerySubscriberCount');
-
-    total += response.Count || 0;
-    lastEvaluatedKey = response.LastEvaluatedKey;
-  } while (lastEvaluatedKey);
-
-  return total;
-};
-
-const updateSubscriberCount = async (tenantId) => {
-  const count = await getSubscriberCount(tenantId);
-  await ddb.send(new UpdateItemCommand({
-    TableName: process.env.TABLE_NAME,
-    Key: marshall({
-      pk: tenantId,
-      sk: 'tenant'
-    }),
-    UpdateExpression: 'SET #subscribers = :val',
-    ExpressionAttributeNames: {
-      '#subscribers': 'subscribers'
-    },
-    ExpressionAttributeValues: {
-      ':val': { N: `${count}` }
-    }
-  }));
-};

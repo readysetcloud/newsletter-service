@@ -186,11 +186,18 @@ export const unsubscribeUser = async (tenantId, emailAddress, method = 'encrypte
         // leave the count for reconciliation rather than refusing to
         // unsubscribe someone over a stale metric.
         console.warn('Subscriber count already at minimum; removing without decrementing', { tenantId });
-        await ddb.send(new DeleteItemCommand({
+        // `ALL_OLD` because this is a second attempt, and the row may have gone
+        // between the cancelled transaction and here — a concurrent unsubscribe
+        // of the same address. Assuming the delete removed something would let
+        // both requests report a removal and both credit the issue's
+        // `unsubscribes` counter for one person leaving. The transaction could
+        // not return this; a plain DeleteItem can.
+        const fallbackDelete = await ddb.send(new DeleteItemCommand({
           TableName: process.env.SUBSCRIBERS_TABLE_NAME,
-          Key: marshall({ tenantId, email })
+          Key: marshall({ tenantId, email }),
+          ReturnValues: 'ALL_OLD'
         }));
-        actuallyRemoved = true;
+        actuallyRemoved = Boolean(fallbackDelete.Attributes);
       } else {
         throw txErr;
       }

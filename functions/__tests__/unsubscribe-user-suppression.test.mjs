@@ -104,6 +104,30 @@ describe('unsubscribeUser suppression trail', () => {
   // already wrong. Refusing the unsubscribe over it would punish the person
   // opting out for a bookkeeping error, so the removal proceeds alone.
   test('still removes the subscriber when the count is already at zero', async () => {
+    ddbSend.mockImplementation((cmd) => {
+      if (cmd.__type === 'TransactWrite') {
+        return Promise.reject(cancelWith(['None', 'ConditionalCheckFailed']));
+      }
+      if (cmd.__type === 'DeleteItem') {
+        return Promise.resolve({ Attributes: { email: 'a@b.com' } });
+      }
+      return Promise.resolve({});
+    });
+
+    const result = await unsubscribeUser('tenant1', 'a@b.com', 'one-click');
+
+    expect(result).toEqual({ success: true, actuallyRemoved: true });
+    const fallback = ddbSend.mock.calls
+      .map(([cmd]) => cmd)
+      .find((cmd) => cmd.__type === 'DeleteItem');
+    expect(fallback.ReturnValues).toBe('ALL_OLD');
+  });
+
+  // The row can go between the cancelled transaction and the fallback delete —
+  // a concurrent unsubscribe of the same address. Reporting a removal on an
+  // empty delete would let both requests credit the issue's `unsubscribes`
+  // counter for one person leaving.
+  test('reports nothing removed when the fallback delete finds no row', async () => {
     ddbSend.mockImplementation((cmd) =>
       cmd.__type === 'TransactWrite'
         ? Promise.reject(cancelWith(['None', 'ConditionalCheckFailed']))
@@ -112,8 +136,7 @@ describe('unsubscribeUser suppression trail', () => {
 
     const result = await unsubscribeUser('tenant1', 'a@b.com', 'one-click');
 
-    expect(result).toEqual({ success: true, actuallyRemoved: true });
-    expect(ddbSend.mock.calls.map(([cmd]) => cmd.__type)).toContain('DeleteItem');
+    expect(result).toEqual({ success: true, actuallyRemoved: false });
   });
 
   // A cancellation that is neither guard is a real failure, not a no-op.

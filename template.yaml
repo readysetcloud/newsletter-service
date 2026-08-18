@@ -1510,6 +1510,9 @@ Resources:
           Statement:
             - Effect: Allow
               Action:
+                # UpdateItem is the tenant-count increment that now rides in
+                # each address's transaction, replacing the end-of-import
+                # recount that raced with live signups and unsubscribes.
                 - dynamodb:UpdateItem
                 - dynamodb:GetItem
                 # ConditionCheck half of the transactional add — see
@@ -1519,7 +1522,6 @@ Resources:
             - Effect: Allow
               Action:
                 - dynamodb:PutItem
-                - dynamodb:Query
               Resource: !GetAtt SubscribersTable.Arn
       Environment:
         Variables:

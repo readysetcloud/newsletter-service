@@ -121,21 +121,54 @@ describe('import-subscriber-list suppression', () => {
     expect(result.total).toBe(2);
   });
 
-  // The recount that repairs tenant.subscribers has to count subscribers.
-  // Segments store their bookkeeping in the same partition under the same sort
-  // key, so counting the partition counted those as people.
-  test('recounts only subscriber rows, consistently', async () => {
+  // The count moves with the row that changed it. The import used to recount
+  // the whole partition at the end and SET the absolute total, which raced
+  // with live traffic: a signup committing between the recount's Query and its
+  // write was erased by the stale total. Strong consistency does not help —
+  // it says what was true when the Query ran, not that it stays true.
+  test('increments the tenant count inside each address transaction', async () => {
+    await handler(importEvent(['a@example.com', 'b@example.com']));
+
+    const writes = ddbSend.mock.calls
+      .map(([cmd]) => cmd)
+      .filter((cmd) => cmd.__type === 'TransactWrite');
+
+    expect(writes).toHaveLength(2);
+    for (const write of writes) {
+      expect(write.TransactItems).toHaveLength(3);
+      expect(write.TransactItems[2].Update.Key).toEqual({ pk: 'tenant1', sk: 'tenant' });
+      expect(write.TransactItems[2].Update.UpdateExpression)
+        .toBe('SET #subscribers = if_not_exists(#subscribers, :zero) + :one');
+    }
+  });
+
+  test('never overwrites the tenant count from a separate snapshot', async () => {
     await handler(importEvent(['a@example.com']));
 
-    const countQuery = ddbSend.mock.calls
-      .map(([cmd]) => cmd)
-      .find((cmd) => cmd.__type === 'Query' && cmd.Select === 'COUNT');
+    const commands = ddbSend.mock.calls.map(([cmd]) => cmd);
+    // No end-of-import recount, and no absolute SET of the count outside the
+    // per-address transactions.
+    expect(commands.filter((cmd) => cmd.Select === 'COUNT')).toHaveLength(0);
+    expect(commands.filter((cmd) => cmd.__type === 'UpdateItem')).toHaveLength(0);
+  });
 
-    expect(countQuery.FilterExpression).toBe('NOT begins_with(#email, :segmentPrefix)');
-    expect(countQuery.ExpressionAttributeValues[':segmentPrefix']).toBe('SEGMENT');
-    // Runs immediately after this import's own writes, so a stale read would
-    // overwrite the stored count with a number missing the rows just committed.
-    expect(countQuery.ConsistentRead).toBe(true);
+  // A duplicate cancels the whole transaction, so the count is not touched for
+  // a row this import did not create.
+  test('does not increment the count for an address that already exists', async () => {
+    ddbSend.mockImplementation((cmd) => {
+      if (cmd.__type !== 'TransactWrite') {
+        return Promise.resolve({ Count: 0 });
+      }
+      return Promise.reject(Object.assign(new Error('exists'), {
+        name: 'TransactionCanceledException',
+        CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }, { Code: 'None' }]
+      }));
+    });
+
+    const result = await handler(importEvent(['already@example.com']));
+
+    expect(result.imported).toBe(0);
+    expect(result.existing).toBe(1);
   });
 
   // An unreachable consent store must never read as consent. The address fails

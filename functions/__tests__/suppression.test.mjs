@@ -104,15 +104,79 @@ describe('suppression', () => {
       expect(values[':verified']).toBe(expected);
     });
 
-    // A verified revocation must not be downgraded by a later unverified one.
-    test('does not overwrite the original verification status', async () => {
-      mockSend.mockResolvedValueOnce({});
+    // `verified` is monotonic false -> true. Unlike the other fields here it
+    // does not answer "what happened first?" but "has proof of ownership ever
+    // arrived?", and proof arriving second is still proof.
+    //
+    // Applied against a tiny in-memory DynamoDB that actually evaluates
+    // `if_not_exists`, so this asserts the durable state after a sequence
+    // rather than the shape of the expression that produced it.
+    describe('verified is monotonic', () => {
+      /** Apply an UpdateItem's SET clauses to a stored item, honouring if_not_exists. */
+      const applyUpdate = (item, { UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues }) => {
+        const values = unmarshall(ExpressionAttributeValues);
+        const names = ExpressionAttributeNames || {};
+        const next = { ...item };
 
-      await recordSuppression('tenant1', 'a@b.com', 'manual-form');
+        for (const clause of UpdateExpression.replace(/^SET /, '').split(/,\s*(?=[#\w]+\s*=)/)) {
+          const [rawField, rawValue] = clause.split(/\s*=\s*/);
+          const field = names[rawField.trim()] || rawField.trim();
+          const expr = rawValue.trim();
 
-      const { UpdateExpression } = mockSend.mock.calls[0][0].input;
-      expect(UpdateExpression).toContain('verified = if_not_exists(verified, :verified)');
-      expect(UpdateExpression).toContain('lastVerified = :verified');
+          const guarded = expr.match(/^if_not_exists\(([#\w]+),\s*(:\w+)\)$/);
+          if (guarded) {
+            const guardedField = names[guarded[1]] || guarded[1];
+            next[field] = next[guardedField] === undefined ? values[guarded[2]] : next[guardedField];
+          } else {
+            next[field] = values[expr];
+          }
+        }
+
+        return next;
+      };
+
+      /** Run a sequence of revocations and return the resulting stored item. */
+      const applySequence = async (methods) => {
+        let stored;
+        for (const method of methods) {
+          mockSend.mockResolvedValueOnce({});
+          await recordSuppression('tenant1', 'a@b.com', method);
+          stored = applyUpdate(stored ?? {}, mockSend.mock.calls.at(-1)[0].input);
+        }
+        return stored;
+      };
+
+      test('an unverified revocation records verified=false', async () => {
+        expect((await applySequence(['manual-form'])).verified).toBe(false);
+      });
+
+      // The upgrade a write-once field would have discarded: someone types
+      // their address into the fallback form, then uses the real one-click
+      // link. The proof must win.
+      test('a later verified revocation upgrades an unverified record', async () => {
+        expect((await applySequence(['manual-form', 'one-click'])).verified).toBe(true);
+      });
+
+      test('a later unverified revocation cannot downgrade it', async () => {
+        expect((await applySequence(['manual-form', 'one-click', 'manual-form'])).verified).toBe(true);
+      });
+
+      // The sequence `lastVerified` alone could not answer: it ends false, and
+      // without a monotonic field the row would no longer record that a
+      // verified revocation ever happened.
+      test('survives manual -> complaint -> manual', async () => {
+        const stored = await applySequence(['manual-form', 'complaint', 'manual-form']);
+        expect(stored.verified).toBe(true);
+        expect(stored.lastVerified).toBe(false);
+      });
+
+      // The first revocation's instant and method are still write-once — those
+      // do answer "what happened first?".
+      test('leaves the original revocation untouched throughout', async () => {
+        const stored = await applySequence(['manual-form', 'one-click']);
+        expect(stored.method).toBe('manual-form');
+        expect(stored.lastMethod).toBe('one-click');
+      });
     });
 
     // Consent fails closed: reporting a durable unsubscribe that was never

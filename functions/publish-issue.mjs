@@ -3,6 +3,7 @@ import defaultTemplate from '../templates/newsletter.hbs';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { DynamoDBClient, PutItemCommand, GetItemCommand, QueryCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { getTenant } from './utils/helpers.mjs';
+import { assertEventsPublished } from './utils/eventbridge.mjs';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { publishIssueEvent, EVENT_TYPES } from './utils/event-publisher.mjs';
 import { recordIssueEvent, ISSUE_EVENTS } from './utils/issue-timeline.mjs';
@@ -322,16 +323,9 @@ const sendEmail = async (params) => {
     }]
   }));
 
-  // EventBridge returns a successful API response while rejecting individual
-  // entries, so an awaited call is not a published event. Unchecked, the
-  // publish recorded SEND_HANDED_OFF and reported success for an issue whose
-  // only send entry was refused — the issue looks sent and nothing was.
-  if (result.FailedEntryCount > 0) {
-    const [failure] = (result.Entries || []).filter((entry) => entry.ErrorCode);
-    throw new Error(
-      `Send Email v2 event rejected by EventBridge: ${failure?.ErrorCode || 'unknown'} ${failure?.ErrorMessage || ''}`.trim()
-    );
-  }
+  // Unchecked, the publish recorded SEND_HANDED_OFF and reported success for
+  // an issue whose only send entry was refused — it looks sent and nothing was.
+  assertEventsPublished(result, 'Send Email v2 event');
 };
 
 const padIssueNumber = (issueNumber) => {

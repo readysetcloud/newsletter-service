@@ -201,6 +201,25 @@ describe('send-email-v2 local send', () => {
       expect(parseScheduleDetail(schedules[0]).localSendGroup.timeZone).toBe('__catch_all__');
     });
 
+    // EventBridge accepts the API call while rejecting entries, so an awaited
+    // PutEvents is not a published event. A rejected entry here loses a whole
+    // timezone group's send, and the handler used to report it as emitted.
+    it('fails the send when a local-send group event is rejected', async () => {
+      mockVerifiedSender();
+      listSubscribers.mockResolvedValue({
+        subscribers: [
+          { email: 'ny@example.com', timeZone: 'America/New_York' }
+        ],
+        lastEvaluatedKey: undefined
+      });
+      eventBridgeInstance.send.mockResolvedValue({
+        FailedEntryCount: 1,
+        Entries: [{ ErrorCode: 'InternalException', ErrorMessage: 'try again' }]
+      });
+
+      await expect(handler(baseEvent())).rejects.toThrow(/rejected by EventBridge/);
+    });
+
     // D9, both halves. A timezone east of the base zone reaches its own 9am
     // *before* the base instant, so whether it gets one depends entirely on
     // when the fan-out runs. That is what the publish lead time buys

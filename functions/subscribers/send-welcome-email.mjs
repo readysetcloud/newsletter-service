@@ -4,6 +4,7 @@ import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import Handlebars from 'handlebars';
 import welcomeTemplate from '../../templates/welcome.hbs';
 import { mintSubscriberToken } from '../utils/subscriber-token.mjs';
+import { assertEventsPublished } from '../utils/eventbridge.mjs';
 
 // Key patterns for DynamoDB (previously from ../senders/types.mjs)
 const KEY_PATTERNS = {
@@ -95,16 +96,9 @@ export const handler = async (event) => {
       }]
     }));
 
-    // EventBridge answers 200 to the API call and reports per-entry failures in
-    // the body, so an accepted call is not a published event. Ignoring
-    // `FailedEntryCount` meant a rejected entry looked exactly like a delivered
-    // welcome email.
-    if (putResult.FailedEntryCount > 0) {
-      const [failure] = (putResult.Entries || []).filter((entry) => entry.ErrorCode);
-      throw new Error(
-        `Welcome email event rejected by EventBridge: ${failure?.ErrorCode || 'unknown'} ${failure?.ErrorMessage || ''}`.trim()
-      );
-    }
+    // Ignoring per-entry failures meant a rejected entry looked exactly like a
+    // delivered welcome email.
+    assertEventsPublished(putResult, 'Welcome email event');
 
     console.log('Welcome email event published:', { tenantId, email });
 

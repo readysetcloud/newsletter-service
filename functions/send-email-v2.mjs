@@ -5,6 +5,7 @@ import { EventBridgeClient, PutEventsCommand } from "@aws-sdk/client-eventbridge
 import { DynamoDBClient, QueryCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { sendWithRetry } from './utils/helpers.mjs';
+import { assertEventsPublished } from './utils/eventbridge.mjs';
 import { mintSubscriberToken } from './utils/subscriber-token.mjs';
 import { listSuppressedEmails, getSuppression } from './utils/suppression.mjs';
 import { listSubscribers, getSubscriberByEmail, updateSubscriberSendMetadata } from './utils/subscriber.mjs';
@@ -262,7 +263,7 @@ const normalizeLocalSend = (localSend) => {
  */
 const emitSendEvent = async (payload) => {
   await sendWithRetry(async () => {
-    return await eventBridge.send(new PutEventsCommand({
+    const result = await eventBridge.send(new PutEventsCommand({
       Entries: [{
         EventBusName: 'default',
         Source: 'newsletter-service',
@@ -270,6 +271,10 @@ const emitSendEvent = async (payload) => {
         Detail: JSON.stringify(payload)
       }]
     }));
+    // A rejected entry here loses a whole timezone group's send. Throwing puts
+    // it back through sendWithRetry rather than logging a success.
+    assertEventsPublished(result, 'Local-send group event');
+    return result;
   }, 'Emit local-send group event');
 };
 
@@ -1055,13 +1060,17 @@ const fanOutSendTimeVariants = async ({ data, subject, html, to, tenantId, repla
     };
 
     await sendWithRetry(async () => {
-      return await eventBridge.send(new PutEventsCommand({
+      const result = await eventBridge.send(new PutEventsCommand({
         Entries: [{
           Source: 'newsletter-service',
           DetailType: 'Send Email v2',
           Detail: JSON.stringify(detail)
         }]
       }));
+      // A rejected entry drops this variant's whole bucket, and the log below
+      // would still claim it was fanned out.
+      assertEventsPublished(result, `Send-time variant ${variant.variantId}`);
+      return result;
     }, `Fan out send-time variant ${variant.variantId}`);
 
     console.log(`[A/B] Fanned out send-time variant ${variant.variantId} at ${variant.sendAt || 'now'} for ${data.referenceNumber}`);

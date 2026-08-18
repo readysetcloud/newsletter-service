@@ -2,6 +2,7 @@ import { DynamoDBClient, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { isSubscriberRecord } from './utils/subscriber-record.mjs';
+import { assertEventsPublished } from './utils/eventbridge.mjs';
 
 const ddb = new DynamoDBClient();
 const eventBridge = new EventBridgeClient();
@@ -220,16 +221,9 @@ async function publishPricingEvent(tenantId) {
     }]
   }));
 
-  // EventBridge answers the API call successfully while rejecting individual
-  // entries, so an awaited PutEvents is not a published event. Unchecked, the
-  // concurrency wrapper counted this tenant as dispatched and the job reported
-  // a clean run whose recalculation never reached the bus.
-  if (result.FailedEntryCount > 0) {
-    const [failure] = (result.Entries || []).filter((entry) => entry.ErrorCode);
-    throw new Error(
-      `Pricing event rejected by EventBridge for ${tenantId}: ${failure?.ErrorCode || 'unknown'} ${failure?.ErrorMessage || ''}`.trim()
-    );
-  }
+  // Unchecked, the concurrency wrapper counted this tenant as dispatched and
+  // the job reported a clean run whose recalculation never reached the bus.
+  assertEventsPublished(result, `Pricing event for ${tenantId}`);
 }
 
 // ---------------------------------------------------------------------------

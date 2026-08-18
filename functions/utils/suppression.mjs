@@ -80,6 +80,11 @@ export const listSuppressedEmails = async (tenantId) => {
       ExpressionAttributeNames: { '#pk': 'pk', '#sk': 'sk' },
       ExpressionAttributeValues: marshall({ ':pk': tenantId, ':prefix': 'suppression#' }),
       ProjectionExpression: 'email',
+      // Strongly consistent for the same reason the single-address read is:
+      // this is the last check before mail leaves, so a suppression written
+      // moments earlier must not be briefly invisible to it. Runs against the
+      // base table, so DynamoDB supports it.
+      ConsistentRead: true,
       ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey })
     }));
 

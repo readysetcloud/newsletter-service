@@ -253,15 +253,20 @@ describe('add-subscriber handler (isolated)', () => {
     expect(typeof details.addedAt).toBe('string');
   });
 
-  test('ConditionalCheckFailedException → still 201, no DDB increment or event', async () => {
+  test('cancelled transaction on an existing subscriber → still 201, no DDB increment or event', async () => {
     const tenant = { id: 't1', list: 'list-1', subscribers: 5 };
     mockGetTenant.mockResolvedValue(tenant);
     // The consent lookup runs first and must resolve clean, or the rejection
-    // lands on the read instead of the subscriber write it is aiming at.
+    // lands on the read instead of the subscriber write it is aiming at. The
+    // write is the Put half of a transaction, so an existing subscriber shows
+    // up as a cancellation whose second reason is ConditionalCheckFailed.
     ddbInstance.send.mockImplementation((cmd) =>
       cmd.__type === 'GetItem'
         ? Promise.resolve({})
-        : Promise.reject(Object.assign(new Error('exists'), { name: 'ConditionalCheckFailedException' }))
+        : Promise.reject(Object.assign(new Error('exists'), {
+          name: 'TransactionCanceledException',
+          CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }]
+        }))
     );
 
     const event = {
@@ -318,12 +323,16 @@ describe('add-subscriber property-based tests', () => {
           const tenant = { id: 'test-tenant', list: 'test-list', subscribers: subscriberCount };
           mockGetTenant.mockResolvedValue(tenant);
 
-          // Simulate ConditionalCheckFailedException for duplicate subscriber.
-          // The consent lookup precedes it and resolves clean.
+          // Simulate the transaction cancelling on the subscriber Put because
+          // the address is already on the list. The consent lookup precedes it
+          // and resolves clean.
           ddbInstance.send.mockImplementation((cmd) =>
             cmd.__type === 'GetItem'
               ? Promise.resolve({})
-              : Promise.reject(Object.assign(new Error('Subscriber already exists'), { name: 'ConditionalCheckFailedException' }))
+              : Promise.reject(Object.assign(new Error('Subscriber already exists'), {
+                name: 'TransactionCanceledException',
+                CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }]
+              }))
           );
 
           const event = {

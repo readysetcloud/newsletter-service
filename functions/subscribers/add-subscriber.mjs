@@ -319,16 +319,32 @@ const addSubscriber = async (tenantId, contact, normalizedEmail, detectionData) 
     }));
     return true;
   } catch (err) {
-    // A cancelled transaction covers both guards. The duplicate case is the
-    // ordinary one and stays a silent no-op; a suppression appearing in the
-    // window is the race this transaction exists to lose, and is also a no-op
-    // — the earlier read already answered the common case, so reaching here
-    // means the opt-out arrived mid-request and must win.
-    if (err.name === 'TransactionCanceledException' || err.name === 'ConditionalCheckFailedException') {
-      const reasons = (err.CancellationReasons || []).map((reason) => reason.Code).join(',');
-      console.info(`Subscriber not added for ${tenantId}`, { reasons: reasons || err.name });
-      return false;
+    // Only the two guards this transaction declares mean "not added, and that
+    // is fine". DynamoDB also cancels transactions for conflicts, throttling
+    // and validation errors, and treating those as an ordinary no-op would
+    // return `201 Contact added` having added nobody — the same false success
+    // this handler deliberately stopped returning for consent-read failures.
+    // Anything else rethrows so the handler answers 500 and the signup can be
+    // retried.
+    if (err.name === 'TransactionCanceledException') {
+      // Positions match TransactItems: [suppression check, subscriber put].
+      const codes = (err.CancellationReasons || []).map((reason) => reason.Code);
+
+      if (codes[0] === 'ConditionalCheckFailed') {
+        // The race this transaction exists to lose: the opt-out arrived after
+        // the preflight read and must win.
+        console.info(`Subscriber not added for ${tenantId}; a suppression landed mid-request`);
+        return false;
+      }
+
+      if (codes[1] === 'ConditionalCheckFailed') {
+        // The ordinary duplicate.
+        return false;
+      }
+
+      console.error(`Subscriber transaction cancelled for ${tenantId}`, { reasons: codes });
     }
+
     throw err;
   }
 };

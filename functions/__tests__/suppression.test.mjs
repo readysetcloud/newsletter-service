@@ -1,7 +1,7 @@
 import { jest } from '@jest/globals';
-import { DynamoDBClient, PutItemCommand, GetItemCommand, DeleteItemCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, PutItemCommand, GetItemCommand, DeleteItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
-import { recordSuppression, getSuppression, clearSuppression } from '../utils/suppression.mjs';
+import { recordSuppression, getSuppression, clearSuppression, listSuppressedEmails } from '../utils/suppression.mjs';
 
 describe('suppression', () => {
   let mockSend;
@@ -60,6 +60,7 @@ describe('suppression', () => {
       const cmd = mockSend.mock.calls[0][0];
       expect(cmd).toBeInstanceOf(GetItemCommand);
       expect(unmarshall(cmd.input.Key)).toEqual({ pk: 'tenant1', sk: 'suppression#a@b.com' });
+      expect(cmd.input.ConsistentRead).toBe(true);
     });
 
     test('returns null for an unsuppressed address', async () => {
@@ -76,6 +77,40 @@ describe('suppression', () => {
       mockSend.mockRejectedValueOnce(new Error('DynamoDB down'));
 
       await expect(getSuppression('tenant1', 'a@b.com')).rejects.toThrow('DynamoDB down');
+    });
+  });
+
+  describe('listSuppressedEmails', () => {
+    test('collects every suppressed address across pages, lowercased', async () => {
+      mockSend
+        .mockResolvedValueOnce({
+          Items: [marshall({ email: 'One@Example.com' })],
+          LastEvaluatedKey: marshall({ pk: 'tenant1', sk: 'suppression#one@example.com' })
+        })
+        .mockResolvedValueOnce({ Items: [marshall({ email: 'two@example.com' })] });
+
+      const suppressed = await listSuppressedEmails('tenant1');
+
+      expect(suppressed).toEqual(new Set(['one@example.com', 'two@example.com']));
+    });
+
+    // The send-time filter is the last check before mail leaves, so a
+    // suppression written moments earlier must not be briefly invisible to it.
+    // Asserted here so this path and the single-address read cannot drift apart.
+    test('reads strongly consistently, like the single-address lookup', async () => {
+      mockSend.mockResolvedValueOnce({ Items: [] });
+
+      await listSuppressedEmails('tenant1');
+
+      const cmd = mockSend.mock.calls[0][0];
+      expect(cmd).toBeInstanceOf(QueryCommand);
+      expect(cmd.input.ConsistentRead).toBe(true);
+    });
+
+    test('throws rather than reporting an empty set when it cannot read', async () => {
+      mockSend.mockRejectedValueOnce(new Error('DynamoDB down'));
+
+      await expect(listSuppressedEmails('tenant1')).rejects.toThrow('DynamoDB down');
     });
   });
 

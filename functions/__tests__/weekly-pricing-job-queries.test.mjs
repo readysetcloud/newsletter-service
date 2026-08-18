@@ -122,4 +122,95 @@ describe('weekly-pricing-job DynamoDB access', () => {
 
     expect(eventBridgeSend).not.toHaveBeenCalled();
   });
+
+  // `Limit` counts items evaluated, not items returned: DynamoDB reads up to
+  // the limit and only then applies the filter. A tenant whose newest issue is
+  // still `realtime` produced an empty first page with a LastEvaluatedKey
+  // pointing at the consolidated issues right behind it, and stopping there
+  // made an eligible tenant invisible to pricing.
+  describe('consolidated-issue existence check', () => {
+    /** Serve the issue query as pages, everything else as before. */
+    const withIssuePages = (pages) => {
+      let page = 0;
+      ddbSend.mockImplementation(async (cmd) => {
+        if (cmd.TableName === 'test-subscribers-table') {
+          return { Items: [{ email: 'real@example.com' }] };
+        }
+        if (cmd.IndexName === 'GSI1' && cmd.ExpressionAttributeValues[':gsi1pk'] === 'tenant') {
+          return { Items: [{ pk: 'tenant-1' }] };
+        }
+        return pages[page++] ?? { Items: [] };
+      });
+    };
+
+    test('keeps paging when a page is filtered empty but more remain', async () => {
+      withIssuePages([
+        // Page 1: the filter removed everything, but there is more to read.
+        { Items: [], LastEvaluatedKey: { pk: 'tenant-1#30' } },
+        // Page 2: the consolidated issue the first page hid.
+        { Items: [{ pk: 'tenant-1#29' }] }
+      ]);
+
+      await handler({});
+
+      expect(eventBridgeSend).toHaveBeenCalledTimes(1);
+    });
+
+    test('reports no consolidated issue only when the pages run out', async () => {
+      withIssuePages([
+        { Items: [], LastEvaluatedKey: { pk: 'tenant-1#30' } },
+        { Items: [] }
+      ]);
+
+      await handler({});
+
+      expect(eventBridgeSend).not.toHaveBeenCalled();
+    });
+
+    // The existence check stops at the first match rather than reading the
+    // whole partition.
+    test('stops at the first consolidated issue', async () => {
+      withIssuePages([
+        { Items: [{ pk: 'tenant-1#42' }], LastEvaluatedKey: { pk: 'tenant-1#42' } },
+        { Items: [{ pk: 'tenant-1#41' }] }
+      ]);
+
+      await handler({});
+
+      const issueQueries = ddbSend.mock.calls
+        .map(([cmd]) => cmd)
+        .filter((cmd) => cmd.ExpressionAttributeValues?.[':phase'] === 'consolidated');
+      expect(issueQueries).toHaveLength(1);
+    });
+  });
+
+  // EventBridge accepts the API call while rejecting entries, so the job
+  // reported a clean run for a tenant whose recalculation never reached the
+  // bus.
+  describe('pricing event publication', () => {
+    test('counts a rejected entry as a failure, not a dispatch', async () => {
+      withSubscriberRows([{ email: 'real@example.com' }]);
+      eventBridgeSend.mockResolvedValue({
+        FailedEntryCount: 1,
+        Entries: [{ ErrorCode: 'InternalException', ErrorMessage: 'try again' }]
+      });
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      const result = await handler({});
+
+      expect(result.succeeded).toBe(0);
+      expect(result.failed).toBe(1);
+      errorSpy.mockRestore();
+    });
+
+    test('counts an accepted entry as a dispatch', async () => {
+      withSubscriberRows([{ email: 'real@example.com' }]);
+      eventBridgeSend.mockResolvedValue({ FailedEntryCount: 0, Entries: [{ EventId: 'e-1' }] });
+
+      const result = await handler({});
+
+      expect(result.succeeded).toBe(1);
+      expect(result.failed).toBe(0);
+    });
+  });
 });

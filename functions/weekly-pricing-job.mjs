@@ -58,21 +58,42 @@ async function getAllTenants() {
  * (status "published", statsPhase "consolidated").
  *
  * Uses GSI1 with GSI1PK = `{tenantId}#issue` and filters for consolidated stats.
+ *
+ * Paginates, because `Limit` counts items *evaluated*, not items returned:
+ * DynamoDB reads up to `Limit` items and only then applies the filter. So a
+ * tenant whose newest issue is still `realtime` produced an empty first page —
+ * with a `LastEvaluatedKey` pointing at the consolidated issues right behind
+ * it — and treating that empty page as the answer made an eligible tenant
+ * invisible to pricing. An empty page means "not on this page", never "not
+ * anywhere".
+ *
+ * Still cheap: this is an existence check, so it stops at the first match and
+ * only keeps reading while DynamoDB says there is more.
  */
 async function hasPublishedIssueWithAnalytics(tenantId) {
-  const result = await ddb.send(new QueryCommand({
-    TableName: TABLE_NAME,
-    IndexName: 'GSI1',
-    KeyConditionExpression: 'GSI1PK = :gsi1pk',
-    FilterExpression: 'statsPhase = :phase',
-    ExpressionAttributeValues: marshall({
-      ':gsi1pk': `${tenantId}#issue`,
-      ':phase': 'consolidated'
-    }),
-    Limit: 1
-  }));
+  let lastKey;
 
-  return (result.Items?.length ?? 0) > 0;
+  do {
+    const result = await ddb.send(new QueryCommand({
+      TableName: TABLE_NAME,
+      IndexName: 'GSI1',
+      KeyConditionExpression: 'GSI1PK = :gsi1pk',
+      FilterExpression: 'statsPhase = :phase',
+      ExpressionAttributeValues: marshall({
+        ':gsi1pk': `${tenantId}#issue`,
+        ':phase': 'consolidated'
+      }),
+      ...(lastKey && { ExclusiveStartKey: lastKey })
+    }));
+
+    if ((result.Items?.length ?? 0) > 0) {
+      return true;
+    }
+
+    lastKey = result.LastEvaluatedKey;
+  } while (lastKey);
+
+  return false;
 }
 
 /**
@@ -187,7 +208,7 @@ async function processWithConcurrency(items, concurrency, fn) {
  * Publish a pricing recalculation event to EventBridge for a single tenant.
  */
 async function publishPricingEvent(tenantId) {
-  await eventBridge.send(new PutEventsCommand({
+  const result = await eventBridge.send(new PutEventsCommand({
     Entries: [{
       Source: 'newsletter-service',
       DetailType: 'PRICING_RECALCULATION_REQUESTED',
@@ -198,6 +219,17 @@ async function publishPricingEvent(tenantId) {
       })
     }]
   }));
+
+  // EventBridge answers the API call successfully while rejecting individual
+  // entries, so an awaited PutEvents is not a published event. Unchecked, the
+  // concurrency wrapper counted this tenant as dispatched and the job reported
+  // a clean run whose recalculation never reached the bus.
+  if (result.FailedEntryCount > 0) {
+    const [failure] = (result.Entries || []).filter((entry) => entry.ErrorCode);
+    throw new Error(
+      `Pricing event rejected by EventBridge for ${tenantId}: ${failure?.ErrorCode || 'unknown'} ${failure?.ErrorMessage || ''}`.trim()
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

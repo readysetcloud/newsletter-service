@@ -272,6 +272,20 @@ describe('SettingsPage', () => {
   });
 
   describe('issue URL', () => {
+    /**
+     * Every keystroke here re-renders the whole page, and that includes the
+     * timezone `<select>` with one option per IANA zone — several hundred
+     * nodes rebuilt in jsdom for a change to an unrelated field. It takes
+     * ~110ms on an idle machine, comfortably inside the 1s default, but this
+     * suite runs 105 files in parallel on a shared runner and the margin is
+     * not as large as it looks: this assertion timed out in CI while passing
+     * on every developer machine.
+     *
+     * The wait is longer rather than the assertion weaker — the preview still
+     * has to appear with exactly the right URL, it is just given room to.
+     */
+    const RENDER_TIMEOUT = { timeout: 5000 };
+
     it('previews the URL a specific issue would get', async () => {
       renderPage();
 
@@ -280,7 +294,9 @@ describe('SettingsPage', () => {
         target: { value: 'https://example.com/newsletter/{{number}}' },
       });
 
-      expect(await screen.findByText('https://example.com/newsletter/128')).toBeInTheDocument();
+      expect(
+        await screen.findByText('https://example.com/newsletter/128', undefined, RENDER_TIMEOUT)
+      ).toBeInTheDocument();
     });
 
     it('requires an absolute URL containing the issue number', async () => {
@@ -290,11 +306,15 @@ describe('SettingsPage', () => {
 
       fireEvent.change(field, { target: { value: '/newsletter/{{number}}' } });
       fireEvent.click(screen.getByRole('button', { name: /save settings/i }));
-      expect(await screen.findByText(/full URL starting with https/i)).toBeInTheDocument();
+      expect(
+        await screen.findByText(/full URL starting with https/i, undefined, RENDER_TIMEOUT)
+      ).toBeInTheDocument();
 
       fireEvent.change(field, { target: { value: 'https://example.com/newsletter' } });
       fireEvent.click(screen.getByRole('button', { name: /save settings/i }));
-      expect(await screen.findByText(/Include \{\{number\}\}/)).toBeInTheDocument();
+      expect(
+        await screen.findByText(/Include \{\{number\}\}/, undefined, RENDER_TIMEOUT)
+      ).toBeInTheDocument();
 
       expect(mockedService.updateSettings).not.toHaveBeenCalled();
     });

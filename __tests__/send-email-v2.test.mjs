@@ -38,8 +38,20 @@ jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
 
 // Mock helpers
 jest.unstable_mockModule('../functions/utils/helpers.mjs', () => ({
-  encrypt: jest.fn((email) => `encrypted_${email}`),
   sendWithRetry: jest.fn(async (fn, operationName) => await fn())
+}));
+
+// Tokens are minted here now, bound to the tenant so they cannot be replayed
+// against another tenant's unsubscribe endpoint.
+jest.unstable_mockModule('../functions/utils/subscriber-token.mjs', () => ({
+  mintSubscriberToken: jest.fn((tenantId, email) => `token_${tenantId}_${email}`)
+}));
+
+// Suppression is the final authority on who may be mailed; default to nobody
+// having opted out so existing send assertions stay about the send path.
+jest.unstable_mockModule('../functions/utils/suppression.mjs', () => ({
+  listSuppressedEmails: jest.fn(async () => new Set()),
+  getSuppression: jest.fn(async () => null)
 }));
 
 // Mock subscriber utility
@@ -237,6 +249,384 @@ describe('send-email-v2', () => {
       };
 
       await expect(handler(event)).rejects.toThrow('Missing required field: tenantId');
+    });
+  });
+
+  // Suppression is the final authority on who may be mailed, not just a gate on
+  // the add paths. The Subscribers table can disagree with it after a partial
+  // failure — a recorded revocation whose subscriber delete then failed leaves
+  // an active row for someone who opted out — and this is the last point where
+  // that can be caught.
+  describe('send-time suppression filter', () => {
+    const senderLookup = () => {
+      ddbInstance.send.mockResolvedValueOnce({
+        Items: [{
+          unmarshalled: {
+            senderId: 'sender-123',
+            email: 'sender@example.com',
+            verificationStatus: 'verified',
+            isDefault: false
+          }
+        }]
+      });
+    };
+
+    const issueSend = () => ({
+      detail: {
+        subject: 'Issue',
+        html: '<p>content</p>',
+        to: { list: 'my-list' },
+        from: 'sender@example.com',
+        tenantId: 'tenant-123',
+        referenceNumber: 'tenant-123_42'
+      }
+    });
+
+    beforeEach(() => {
+      process.env.API_BASE_URL = 'https://api.example.com';
+      sesInstance.send.mockResolvedValue({ MessageId: 'msg-123' });
+    });
+
+    afterEach(async () => {
+      delete process.env.API_BASE_URL;
+      // `clearAllMocks` does not drain a `...Once` queue, so an unconsumed one
+      // would surface in a later test as a phantom suppression.
+      const { listSuppressedEmails, getSuppression } = await import('../functions/utils/suppression.mjs');
+      listSuppressedEmails.mockReset().mockResolvedValue(new Set());
+      getSuppression.mockReset().mockResolvedValue(null);
+    });
+
+    test('withholds a subscriber who has a recorded opt-out', async () => {
+      const { listSuppressedEmails } = await import('../functions/utils/suppression.mjs');
+      listSuppressedEmails.mockResolvedValueOnce(new Set(['optedout@example.com']));
+      listSubscribers.mockResolvedValue({
+        subscribers: [
+          { email: 'fine@example.com', lastIssueSent: null },
+          { email: 'optedout@example.com', lastIssueSent: null }
+        ],
+        lastEvaluatedKey: undefined
+      });
+      senderLookup();
+
+      const result = await handler(issueSend());
+
+      expect(result.recipients).toBe(1);
+      const sentTo = sesInstance.send.mock.calls.map((call) => call[0].Destination.ToAddresses[0]);
+      expect(sentTo).toEqual(['fine@example.com']);
+    });
+
+    test('sends nothing when every recipient has opted out', async () => {
+      const { listSuppressedEmails } = await import('../functions/utils/suppression.mjs');
+      listSuppressedEmails.mockResolvedValueOnce(new Set(['one@example.com', 'two@example.com']));
+      listSubscribers.mockResolvedValue({
+        subscribers: [
+          { email: 'one@example.com', lastIssueSent: null },
+          { email: 'two@example.com', lastIssueSent: null }
+        ],
+        lastEvaluatedKey: undefined
+      });
+      senderLookup();
+
+      const result = await handler(issueSend());
+
+      expect(result.recipients).toBe(0);
+      expect(sesInstance.send).not.toHaveBeenCalled();
+    });
+
+    // An unreadable consent store is not evidence that nobody opted out.
+    test('fails the send rather than mailing when suppression cannot be read', async () => {
+      const { listSuppressedEmails } = await import('../functions/utils/suppression.mjs');
+      listSuppressedEmails.mockRejectedValueOnce(new Error('DynamoDB down'));
+      listSubscribers.mockResolvedValue({
+        subscribers: [
+          { email: 'a@example.com', lastIssueSent: null },
+          { email: 'b@example.com', lastIssueSent: null }
+        ],
+        lastEvaluatedKey: undefined
+      });
+      senderLookup();
+
+      await expect(handler(issueSend())).rejects.toThrow('DynamoDB down');
+      expect(sesInstance.send).not.toHaveBeenCalled();
+    });
+
+    // Admin alerts ride the same event type to the operator's own inbox and are
+    // not subscriber mail — filtering them would drop operational messages.
+    test('leaves non-marketing sends unfiltered', async () => {
+      const { listSuppressedEmails, getSuppression } = await import('../functions/utils/suppression.mjs');
+      senderLookup();
+
+      await handler({
+        detail: {
+          subject: '[Alert] Something failed',
+          html: '<p>alert</p>',
+          to: { email: 'operator@example.com' },
+          from: 'sender@example.com',
+          tenantId: 'tenant-123'
+        }
+      });
+
+      expect(listSuppressedEmails).not.toHaveBeenCalled();
+      expect(getSuppression).not.toHaveBeenCalled();
+      expect(sesInstance.send).toHaveBeenCalledTimes(1);
+    });
+
+    test('checks a single marketing recipient without loading the whole set', async () => {
+      const { listSuppressedEmails, getSuppression } = await import('../functions/utils/suppression.mjs');
+      getSuppression.mockResolvedValueOnce({ unsubscribedAt: '2026-08-01T00:00:00.000Z' });
+      senderLookup();
+
+      const result = await handler({
+        detail: {
+          subject: 'Welcome!',
+          html: '<p>welcome</p>',
+          to: { email: 'optedout@example.com' },
+          from: 'sender@example.com',
+          tenantId: 'tenant-123',
+          listUnsubscribe: true
+        }
+      });
+
+      expect(getSuppression).toHaveBeenCalledWith('tenant-123', 'optedout@example.com');
+      expect(listSuppressedEmails).not.toHaveBeenCalled();
+      expect(result.recipients).toBe(0);
+      expect(sesInstance.send).not.toHaveBeenCalled();
+    });
+  });
+
+  // RFC 8058 one-click unsubscribe headers: required by Gmail and Yahoo on
+  // bulk promotional mail, and the way out a recipient sees before "report
+  // spam". Issue sends (referenceNumber) and explicit opt-ins get them;
+  // admin alerts and previews must not.
+  describe('List-Unsubscribe headers', () => {
+    const senderLookup = () => {
+      ddbInstance.send.mockResolvedValueOnce({
+        Items: [{
+          unmarshalled: {
+            senderId: 'sender-123',
+            email: 'sender@example.com',
+            verificationStatus: 'verified',
+            isDefault: false
+          }
+        }]
+      });
+    };
+
+    beforeEach(() => {
+      process.env.API_BASE_URL = 'https://api.example.com';
+      sesInstance.send.mockResolvedValue({ MessageId: 'msg-123' });
+    });
+
+    afterEach(() => {
+      delete process.env.API_BASE_URL;
+    });
+
+    test('issue sends carry the one-click headers with a per-recipient token', async () => {
+      const { mintSubscriberToken } = await import('../functions/utils/subscriber-token.mjs');
+      mintSubscriberToken.mockReturnValueOnce('iv+x:data+y:tag+z');
+      senderLookup();
+
+      await handler({
+        detail: {
+          subject: 'Issue',
+          html: '<p>content</p>',
+          to: { email: 'recipient@example.com' },
+          from: 'sender@example.com',
+          tenantId: 'tenant-123',
+          referenceNumber: 'tenant-123_42'
+        }
+      });
+
+      const headers = sesInstance.send.mock.calls[0][0].Content.Simple.Headers;
+      expect(headers).toEqual([
+        {
+          Name: 'List-Unsubscribe',
+          Value: `<https://api.example.com/tenant-123/unsubscribe?email=${encodeURIComponent('iv+x:data+y:tag+z')}>`
+        },
+        { Name: 'List-Unsubscribe-Post', Value: 'List-Unsubscribe=One-Click' }
+      ]);
+    });
+
+    test('explicit opt-in (welcome email) carries the headers without a referenceNumber', async () => {
+      senderLookup();
+
+      await handler({
+        detail: {
+          subject: 'Welcome!',
+          html: '<p>welcome</p>',
+          to: { email: 'recipient@example.com' },
+          from: 'sender@example.com',
+          tenantId: 'tenant-123',
+          listUnsubscribe: true
+        }
+      });
+
+      const headers = sesInstance.send.mock.calls[0][0].Content.Simple.Headers;
+      expect(headers?.[0]?.Name).toBe('List-Unsubscribe');
+    });
+
+    // An admin alert with these headers would let the operator one-click
+    // themselves off their own list from their own notification.
+    test('plain sends (admin alerts) carry no unsubscribe headers', async () => {
+      senderLookup();
+
+      await handler({
+        detail: {
+          subject: '[Alert] Something failed',
+          html: '<p>alert</p>',
+          to: { email: 'operator@example.com' },
+          from: 'sender@example.com',
+          tenantId: 'tenant-123'
+        }
+      });
+
+      expect(sesInstance.send.mock.calls[0][0].Content.Simple.Headers).toBeUndefined();
+    });
+
+    // The complaint handler treats this tag as authority to unsubscribe the
+    // recipient, so it must ride only on mail that carries an unsubscribe link.
+    // Tagging every send with a tenantId meant an operator who marked their own
+    // analytics report as spam wrote a durable suppression against their own
+    // address — and lost their subscriber row if they read their own
+    // newsletter.
+    describe('tenantId complaint-routing tag', () => {
+      const tagsOf = () =>
+        (sesInstance.send.mock.calls[0][0].EmailTags ?? []).map((tag) => tag.Name);
+
+      test('issue sends carry it', async () => {
+        senderLookup();
+
+        await handler({
+          detail: {
+            subject: 'Issue',
+            html: '<p>content</p>',
+            to: { email: 'recipient@example.com' },
+            from: 'sender@example.com',
+            tenantId: 'tenant-123',
+            referenceNumber: 'tenant-123_42'
+          }
+        });
+
+        expect(tagsOf()).toContain('tenantId');
+      });
+
+      test('welcome sends carry it', async () => {
+        senderLookup();
+
+        await handler({
+          detail: {
+            subject: 'Welcome!',
+            html: '<p>welcome</p>',
+            to: { email: 'recipient@example.com' },
+            from: 'sender@example.com',
+            tenantId: 'tenant-123',
+            listUnsubscribe: true
+          }
+        });
+
+        expect(tagsOf()).toContain('tenantId');
+      });
+
+      test('admin alerts and reports do not', async () => {
+        senderLookup();
+
+        await handler({
+          detail: {
+            subject: 'Your monthly analytics report',
+            html: '<p>report</p>',
+            to: { email: 'operator@example.com' },
+            from: 'sender@example.com',
+            tenantId: 'tenant-123'
+          }
+        });
+
+        expect(tagsOf()).not.toContain('tenantId');
+      });
+
+      // The tag and the headers are decided by one predicate. If they could
+      // diverge, a message could invite a complaint that acts on a
+      // subscription while carrying no way to unsubscribe — or the reverse.
+      // API_BASE_URL being unset suppresses the headers but must not suppress
+      // complaint routing for a genuine issue send.
+      test('a missing API_BASE_URL drops the headers but keeps the tag', async () => {
+        delete process.env.API_BASE_URL;
+        senderLookup();
+
+        await handler({
+          detail: {
+            subject: 'Issue',
+            html: '<p>content</p>',
+            to: { email: 'recipient@example.com' },
+            from: 'sender@example.com',
+            tenantId: 'tenant-123',
+            referenceNumber: 'tenant-123_42'
+          }
+        });
+
+        expect(sesInstance.send.mock.calls[0][0].Content.Simple.Headers).toBeUndefined();
+        expect(tagsOf()).toContain('tenantId');
+      });
+    });
+
+    test('a missing API_BASE_URL sends without headers instead of failing', async () => {
+      delete process.env.API_BASE_URL;
+      senderLookup();
+
+      await handler({
+        detail: {
+          subject: 'Issue',
+          html: '<p>content</p>',
+          to: { email: 'recipient@example.com' },
+          from: 'sender@example.com',
+          tenantId: 'tenant-123',
+          referenceNumber: 'tenant-123_42'
+        }
+      });
+
+      expect(sesInstance.send).toHaveBeenCalledTimes(1);
+      expect(sesInstance.send.mock.calls[0][0].Content.Simple.Headers).toBeUndefined();
+    });
+  });
+
+  // Every use of this marker is inside a query string — the unsubscribe and
+  // preference-centre links. `encrypt` emits standard base64, and a `+` in a
+  // query value decodes to a space, which shifts the base64 and makes the GCM
+  // auth tag reject the token: the click lands on "invalid or expired link",
+  // the subscriber stays subscribed, and the issue's `unsubscribes` never moves.
+  describe('unsubscribe link personalization', () => {
+    test('percent-encodes the encrypted address in the link', async () => {
+      const { mintSubscriberToken } = await import('../functions/utils/subscriber-token.mjs');
+      mintSubscriberToken.mockReturnValueOnce('iv+part/x==:data+part:tag+part');
+
+      ddbInstance.send.mockResolvedValueOnce({
+        Items: [{
+          unmarshalled: {
+            senderId: 'sender-123',
+            email: 'sender@example.com',
+            verificationStatus: 'verified',
+            isDefault: false
+          }
+        }]
+      });
+      sesInstance.send.mockResolvedValue({ MessageId: 'msg-123' });
+
+      await handler({
+        detail: {
+          subject: 'Test Subject',
+          html: '<a href="https://api.example.com/t/unsubscribe?email=__EMAIL_HASH__">Unsubscribe</a>',
+          to: { email: 'recipient@example.com' },
+          from: 'sender@example.com',
+          tenantId: 'tenant-123',
+          replacements: { emailAddressHash: '__EMAIL_HASH__' }
+        }
+      });
+
+      const sent = sesInstance.send.mock.calls[0][0];
+      const html = sent.Content.Simple.Body.Html.Data;
+      const token = html.match(/unsubscribe\?email=([^"]+)/)[1];
+
+      expect(token).not.toContain('+');
+      expect(decodeURIComponent(token)).toBe('iv+part/x==:data+part:tag+part');
     });
   });
 

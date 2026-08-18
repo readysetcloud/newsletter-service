@@ -689,8 +689,14 @@ export const IssueDetailPage: React.FC = () => {
 
   const averageMetrics = useMemo<IssueMetrics | null>(() => {
     if (!trendsData?.aggregates) return null;
-    const issueCount = trendsData.issues.length || 1;
-    const avgSubscribers = trendsData.issues.reduce((sum, i) => sum + i.metrics.subscribers, 0) / issueCount;
+    // Averaged over the issues that recorded a list size, not over all of them:
+    // counting an unrecorded issue as 0 drags the comparison baseline down.
+    const measured = trendsData.issues
+      .map(i => i.metrics.subscribers)
+      .filter((value): value is number => value !== undefined);
+    const avgSubscribers = measured.length > 0
+      ? measured.reduce((sum, value) => sum + value, 0) / measured.length
+      : undefined;
 
     return {
       openRate: trendsData.aggregates.avgOpenRate,
@@ -702,7 +708,7 @@ export const IssueDetailPage: React.FC = () => {
       clicks: 0,
       bounces: 0,
       complaints: 0,
-      subscribers: Math.round(avgSubscribers),
+      ...(avgSubscribers !== undefined && { subscribers: Math.round(avgSubscribers) }),
     };
   }, [trendsData]);
 
@@ -926,7 +932,7 @@ export const IssueDetailPage: React.FC = () => {
                       Scheduled for {formatDate(issue.scheduledAt)}
                     </PageHeroChip>
                   )}
-                  {isPublished && issue.stats && issue.stats.subscribers > 0 && (
+                  {isPublished && !!issue.stats?.subscribers && (
                     <PageHeroChip icon={<Users className="w-3.5 h-3.5" />}>
                       {issue.stats.subscribers.toLocaleString('en-US')} recipients
                     </PageHeroChip>

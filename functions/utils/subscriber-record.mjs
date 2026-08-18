@@ -15,7 +15,15 @@
  * that forgets to exclude them treats bookkeeping keys as sendable addresses.
  */
 
-/** Sort-key prefix owned by the segments feature. */
+/**
+ * Sort-key prefix owned by the segments feature.
+ *
+ * Deliberately not exported. It is tempting to hand it to a DynamoDB
+ * `FilterExpression` so a count can be done server-side, but `email` is the
+ * subscribers table's sort key and DynamoDB rejects key attributes in a filter
+ * — that query fails at runtime, not at review. Readers page the rows and use
+ * the predicate below.
+ */
 const SEGMENT_KEY_PREFIX = 'SEGMENT';
 
 /**

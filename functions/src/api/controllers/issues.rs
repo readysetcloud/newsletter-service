@@ -249,7 +249,16 @@ pub struct IssueStats {
     sends: i64,
     bounces: i64,
     complaints: i64,
-    subscribers: i64,
+    /// List size at the moment the issue was published — a snapshot, not a
+    /// counter, and the only stats field nothing accumulates into afterwards.
+    /// `None` means no snapshot was ever taken, which is not the same fact as
+    /// "this issue went to nobody": the stats record is created by whichever
+    /// writer touches it first, and only `publish-issue` knows the list size.
+    /// A record opened by an SES event, an attribution counter or the GSI
+    /// backfill therefore carries every other metric and no `subscribers`.
+    /// Defaulting that absence to 0 reported a healthy list as wiped out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subscribers: Option<i64>,
     subscribes: i64,
     unsubscribes: i64,
     cleaned: i64,
@@ -289,7 +298,9 @@ pub struct IssueMetrics {
     clicks: i64,
     bounces: i64,
     complaints: i64,
-    subscribers: i64,
+    /// Omitted when the issue has no list-size snapshot. See `IssueStats`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subscribers: Option<i64>,
     subscribes: i64,
     unsubscribes: i64,
     cleaned: i64,
@@ -3464,11 +3475,14 @@ fn parse_issue_stats(item: &HashMap<String, AttributeValue>) -> Result<IssueStat
         .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or(0);
 
+    // Deliberately not defaulted: every other counter starts at 0 and is added
+    // to, so 0 is a true reading for them. `subscribers` is a snapshot only
+    // `publish-issue` writes, and its absence means "never recorded" — the one
+    // value that must not be reported as an audience of zero.
     let subscribers = item
         .get("subscribers")
         .and_then(|v| v.as_n().ok())
-        .and_then(|s| s.parse::<i64>().ok())
-        .unwrap_or(0);
+        .and_then(|s| s.parse::<i64>().ok());
 
     let subscribes = item
         .get("subscribes")
@@ -6754,7 +6768,7 @@ Thanks!"#;
         assert_eq!(stats.deliveries, 500);
         assert_eq!(stats.bounces, 5);
         assert_eq!(stats.complaints, 2);
-        assert_eq!(stats.subscribers, 480);
+        assert_eq!(stats.subscribers, Some(480));
         assert_eq!(stats.subscribes, 12);
         assert_eq!(stats.unsubscribes, 3);
         assert_eq!(stats.cleaned, 1);
@@ -6774,7 +6788,8 @@ Thanks!"#;
         assert_eq!(stats.deliveries, 0);
         assert_eq!(stats.bounces, 0);
         assert_eq!(stats.complaints, 0);
-        assert_eq!(stats.subscribers, 0);
+        // Every other counter defaults to 0; the list-size snapshot stays None.
+        assert_eq!(stats.subscribers, None);
         assert_eq!(stats.subscribes, 0);
         assert_eq!(stats.unsubscribes, 0);
         assert_eq!(stats.cleaned, 0);
@@ -6909,7 +6924,7 @@ Thanks!"#;
             sends: 500,
             bounces: 5,
             complaints: 2,
-            subscribers: 0,
+            subscribers: Some(0),
             subscribes: 0,
             unsubscribes: 0,
             cleaned: 0,
@@ -8567,7 +8582,7 @@ Thanks!"#;
             sends: 1000,
             bounces: 20,
             complaints: 5,
-            subscribers: 900,
+            subscribers: Some(900),
             subscribes: 0,
             unsubscribes: 0,
             cleaned: 0,
@@ -8596,7 +8611,7 @@ Thanks!"#;
             sends: 0,
             bounces: 0,
             complaints: 0,
-            subscribers: 0,
+            subscribers: Some(0),
             subscribes: 0,
             unsubscribes: 0,
             cleaned: 0,
@@ -8616,6 +8631,69 @@ Thanks!"#;
         assert_eq!(metrics.manual_removals, 0);
     }
 
+    // An issue whose stats record was opened by an SES event, the analytics
+    // claim or an attribution counter carries every counter and no list size.
+    // Reporting that as `subscribers: 0` is what made the dashboard show a
+    // healthy list as wiped out, so the absence has to survive parsing, metric
+    // calculation and serialization as an absence.
+    #[test]
+    fn test_stats_without_a_subscriber_snapshot_stay_unrecorded() {
+        let mut item = HashMap::new();
+        item.insert("opens".to_string(), AttributeValue::N("120".to_string()));
+        item.insert("clicks".to_string(), AttributeValue::N("30".to_string()));
+        item.insert(
+            "deliveries".to_string(),
+            AttributeValue::N("400".to_string()),
+        );
+
+        let stats = parse_issue_stats(&item).unwrap();
+        assert_eq!(stats.subscribers, None);
+
+        let metrics = calculate_issue_metrics(&stats);
+        assert_eq!(metrics.subscribers, None);
+        // The rest of the record is unaffected — only the snapshot is missing.
+        assert_eq!(metrics.delivered, 400);
+        assert_eq!(metrics.open_rate, 30.0);
+
+        let json = serde_json::to_value(&metrics).unwrap();
+        assert!(
+            json.get("subscribers").is_none(),
+            "an unrecorded list size must be omitted, never sent as 0"
+        );
+    }
+
+    #[test]
+    fn test_recorded_subscriber_snapshot_is_serialized() {
+        let mut item = HashMap::new();
+        item.insert(
+            "subscribers".to_string(),
+            AttributeValue::N("1450".to_string()),
+        );
+
+        let metrics = calculate_issue_metrics(&parse_issue_stats(&item).unwrap());
+
+        assert_eq!(metrics.subscribers, Some(1450));
+        let json = serde_json::to_value(&metrics).unwrap();
+        assert_eq!(json.get("subscribers").and_then(|v| v.as_i64()), Some(1450));
+    }
+
+    // Zero is a real reading and must not be confused with the absence above:
+    // a tenant whose list is genuinely empty at publish time gets a `0`.
+    #[test]
+    fn test_zero_subscriber_snapshot_is_kept_distinct_from_unrecorded() {
+        let mut item = HashMap::new();
+        item.insert(
+            "subscribers".to_string(),
+            AttributeValue::N("0".to_string()),
+        );
+
+        let metrics = calculate_issue_metrics(&parse_issue_stats(&item).unwrap());
+
+        assert_eq!(metrics.subscribers, Some(0));
+        let json = serde_json::to_value(&metrics).unwrap();
+        assert_eq!(json.get("subscribers").and_then(|v| v.as_i64()), Some(0));
+    }
+
     #[test]
     fn test_calculate_issue_metrics_rounding() {
         let stats = IssueStats {
@@ -8625,7 +8703,7 @@ Thanks!"#;
             sends: 1000,
             bounces: 7,
             complaints: 2,
-            subscribers: 1000,
+            subscribers: Some(1000),
             subscribes: 0,
             unsubscribes: 0,
             cleaned: 0,
@@ -8654,7 +8732,7 @@ Thanks!"#;
             sends: 1000,
             bounces: 10,
             complaints: 1,
-            subscribers: 1000,
+            subscribers: Some(1000),
             subscribes: 0,
             unsubscribes: 0,
             cleaned: 0,
@@ -8701,7 +8779,7 @@ Thanks!"#;
                 clicks: 125,
                 bounces: 20,
                 complaints: 5,
-                subscribers: 980,
+                subscribers: Some(980),
                 subscribes: 0,
                 unsubscribes: 0,
                 cleaned: 0,
@@ -8735,7 +8813,7 @@ Thanks!"#;
                     clicks: 100,
                     bounces: 20,
                     complaints: 5,
-                    subscribers: 950,
+                    subscribers: Some(950),
                     subscribes: 0,
                     unsubscribes: 0,
                     cleaned: 0,
@@ -8755,7 +8833,7 @@ Thanks!"#;
                     clicks: 225,
                     bounces: 45,
                     complaints: 10,
-                    subscribers: 1200,
+                    subscribers: Some(1200),
                     subscribes: 0,
                     unsubscribes: 0,
                     cleaned: 0,
@@ -8775,7 +8853,7 @@ Thanks!"#;
                     clicks: 150,
                     bounces: 30,
                     complaints: 8,
-                    subscribers: 1100,
+                    subscribers: Some(1100),
                     subscribes: 0,
                     unsubscribes: 0,
                     cleaned: 0,
@@ -8810,7 +8888,7 @@ Thanks!"#;
                     clicks: 111,
                     bounces: 22,
                     complaints: 5,
-                    subscribers: 980,
+                    subscribers: Some(980),
                     subscribes: 0,
                     unsubscribes: 0,
                     cleaned: 0,
@@ -8830,7 +8908,7 @@ Thanks!"#;
                     clicks: 200,
                     bounces: 17,
                     complaints: 8,
-                    subscribers: 1200,
+                    subscribers: Some(1200),
                     subscribes: 0,
                     unsubscribes: 0,
                     cleaned: 0,
@@ -8935,7 +9013,7 @@ Thanks!"#;
                 sends: 0,
                 bounces: 0,
                 complaints: 0,
-                subscribers: 0,
+                subscribers: Some(0),
                 subscribes: 0,
                 unsubscribes: 0,
                 cleaned: 0,

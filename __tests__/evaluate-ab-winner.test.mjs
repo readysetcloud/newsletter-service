@@ -279,6 +279,44 @@ describe('evaluate-ab-winner', () => {
     expect(updateCalls.find((v) => v[':v'] !== undefined)).toBeUndefined();
   });
 
+  // A rejected entry is not a thrown call: EventBridge answers 200 and reports
+  // the rejection in the body. The winner goes to everyone held out of the
+  // test — the majority of the list — so treating that as sent would record a
+  // winner nobody received, and release the claim as though the work was done.
+  it('treats a rejected winner entry the same as a failed publish', async () => {
+    const updateCalls = [];
+    ddbSend.mockImplementation(async (cmd) => {
+      if (cmd.__type === 'GetItem') {
+        const sk = unmarshall(cmd.Key).sk;
+        if (sk === 'newsletter') {
+          return { Item: marshall({ abTest: JSON.stringify(abTestConfig()) }) };
+        }
+        if (sk === 'stats#v#a') return { Item: marshall({ opens: 200, clicks: 10, deliveries: 1000 }) };
+        if (sk === 'stats#v#b') return { Item: marshall({ opens: 400, clicks: 20, deliveries: 1000 }) };
+        return { Item: null };
+      }
+      if (cmd.__type === 'UpdateItem') {
+        updateCalls.push(unmarshall(cmd.ExpressionAttributeValues));
+      }
+      return {};
+    });
+    eventBridgeSend.mockResolvedValueOnce({
+      FailedEntryCount: 1,
+      Entries: [{ ErrorCode: 'InternalException', ErrorMessage: 'try again' }]
+    });
+
+    const result = await handler(baseEvent);
+
+    expect(result).toBe(false);
+    // The claim was taken and released, which proves the handler got as far as
+    // the send — without this an empty `updateCalls` would satisfy the
+    // finalize assertion below for the wrong reason.
+    expect(updateCalls.find((v) => v[':claim'] === 'evaluating')).toBeDefined();
+    // No finalize write: the test is not marked decided when the winner did
+    // not actually go out.
+    expect(updateCalls.find((v) => v[':v'] !== undefined)).toBeUndefined();
+  });
+
   it('send-time: keeps base subject, records winning send time, applies winning time', async () => {
     const winnerSendAt = new Date(Date.now() + 3600 * 1000).toISOString();
     wireDdb({

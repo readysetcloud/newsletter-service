@@ -3,6 +3,7 @@ import defaultTemplate from '../templates/newsletter.hbs';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { DynamoDBClient, PutItemCommand, GetItemCommand, QueryCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { getTenant } from './utils/helpers.mjs';
+import { assertEventsPublished } from './utils/eventbridge.mjs';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { publishIssueEvent, EVENT_TYPES } from './utils/event-publisher.mjs';
 import { recordIssueEvent, ISSUE_EVENTS } from './utils/issue-timeline.mjs';
@@ -33,7 +34,8 @@ export const handler = async (state) => {
     } else {
       const tenant = await getTenant(state.tenantId);
       const publishedAt = resolvePublishedAt(state.sendAtDate);
-      await setupIssueStats(tenant, state.data.metadata.number, state.subject, publishedAt);
+      const subscriberCount = await readSubscriberCount(state.tenantId);
+      await setupIssueStats(tenant, state.data.metadata.number, state.subject, publishedAt, subscriberCount);
 
       // Send configs (abTest, localSend, contentAssembly) are persisted on the
       // issue record by the API. Reading them here (rather than threading them
@@ -137,7 +139,7 @@ export const handler = async (state) => {
         type: ISSUE_EVENTS.SEND_HANDED_OFF,
         detail: {
           sendAt: state.sendAtDate ?? 'now',
-          subscribers: tenant.subscribers,
+          subscribers: subscriberCount,
           ...(activeAbTest && { abTest: activeAbTest.dimension }),
           ...(activeLocalSend && { localSend: activeLocalSend.mode ?? 'timezone' })
         }
@@ -152,7 +154,7 @@ export const handler = async (state) => {
           issueNumber: state.data.metadata.number,
           subject: state.subject,
           publishedAt,
-          subscriberCount: tenant.subscribers,
+          subscriberCount,
           metadata: state.data.metadata
         }
       );
@@ -296,7 +298,7 @@ const getSnippets = async (tenantId) => {
  * @param {Object} [params.contentAssembly] - Optional interest-aware assembly flag ({ enabled: true })
  */
 const sendEmail = async (params) => {
-  await eventBridge.send(new PutEventsCommand({
+  const result = await eventBridge.send(new PutEventsCommand({
     Entries: [{
       Source: 'newsletter-service',
       DetailType: 'Send Email v2',
@@ -320,6 +322,10 @@ const sendEmail = async (params) => {
       })
     }]
   }));
+
+  // Unchecked, the publish recorded SEND_HANDED_OFF and reported success for
+  // an issue whose only send entry was refused — it looks sent and nothing was.
+  assertEventsPublished(result, 'Send Email v2 event');
 };
 
 const padIssueNumber = (issueNumber) => {
@@ -456,7 +462,46 @@ const resolvePublishedAt = (sendAtDate) => {
     : now.toISOString();
 };
 
-const setupIssueStats = async (tenant, issueNumber, subject, publishedAt) => {
+/**
+ * The tenant's subscriber count, read fresh for this snapshot.
+ *
+ * Not taken from `getTenant()`: that memoizes the whole tenant record for the
+ * life of a warm execution environment, and `subscribers` is mutable. A
+ * container that loaded the tenant before a run of signups would snapshot a
+ * count from an arbitrary point in the past and freeze it into the issue's
+ * stats forever — a wrong number is worse here than the missing one this PR
+ * spent its first commit learning to represent.
+ *
+ * Strongly consistent, and projected down to the single field, since the point
+ * is to be current rather than cheap.
+ *
+ * This defines `subscribers` as the list size at publish (content freeze), not
+ * at delivery — the publish workflow starts up to the send lead time before
+ * mail actually goes out. That is the reading the field has always had; if the
+ * product wants list-size-at-send, the snapshot belongs in the send path
+ * instead, which is a deliberate move rather than a fix.
+ *
+ * Returns undefined when the tenant has no count recorded, which
+ * `setupIssueStats` omits rather than writing as a zero.
+ */
+const readSubscriberCount = async (tenantId) => {
+  const result = await ddb.send(new GetItemCommand({
+    TableName: process.env.TABLE_NAME,
+    Key: marshall({ pk: tenantId, sk: 'tenant' }),
+    ProjectionExpression: '#subscribers',
+    ExpressionAttributeNames: { '#subscribers': 'subscribers' },
+    ConsistentRead: true
+  }));
+
+  if (!result.Item) {
+    return undefined;
+  }
+
+  const { subscribers } = unmarshall(result.Item);
+  return typeof subscribers === 'number' ? subscribers : undefined;
+};
+
+const setupIssueStats = async (tenant, issueNumber, subject, publishedAt, subscriberCount) => {
   try {
     await ddb.send(new PutItemCommand({
       TableName: process.env.TABLE_NAME,
@@ -473,7 +518,10 @@ const setupIssueStats = async (tenant, issueNumber, subject, publishedAt) => {
         complaints: 0,
         deliveries: 0,
         sends: 0,
-        subscribers: tenant.subscribers,
+        // Omitted rather than written as a placeholder when the tenant record
+        // has no count: the API distinguishes "no snapshot" from "zero", and
+        // marshalling an undefined here would throw and fail the publish.
+        ...(typeof subscriberCount === 'number' && { subscribers: subscriberCount }),
         failedAddresses: [],
         statsPhase: 'realtime'
       }),
@@ -497,8 +545,60 @@ const setupIssueStats = async (tenant, issueNumber, subject, publishedAt) => {
         tenantId: tenant.pk,
         issueNumber
       });
+      await backfillSubscriberSnapshot(tenant, issueNumber, subscriberCount);
       return;
     }
     throw err;
+  }
+};
+
+/**
+ * Write the list-size snapshot onto a stats record the seed did not create.
+ *
+ * The seed is the only writer of `subscribers`, and it only runs when it also
+ * creates the record. But it is not the only writer that can *create* it:
+ * `handle-email-status` opens one with `ADD <stat> :val` on the first SES
+ * event, `aggregate-issue-analytics` opens one with its `statsPhase` claim, and
+ * the attribution counters (`subscribes`, `unsubscribes`, `manualRemovals`) are
+ * bare `ADD`s. DynamoDB upserts all of those, so whichever lands first leaves a
+ * stats record with every counter and no `subscribers` — permanently, because
+ * the seed then declines to touch it. The dashboard reads that hole as a list
+ * that fell to zero.
+ *
+ * Guarded on the attribute rather than the item so it can only ever fill a
+ * hole: an issue that already has its snapshot (every resend, every re-stage)
+ * fails the condition and keeps the number it was published with.
+ */
+const backfillSubscriberSnapshot = async (tenant, issueNumber, subscriberCount) => {
+  if (typeof subscriberCount !== 'number') {
+    return;
+  }
+
+  try {
+    await ddb.send(new UpdateItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({ pk: `${tenant.pk}#${issueNumber}`, sk: 'stats' }),
+      UpdateExpression: 'SET subscribers = :subscribers',
+      ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(subscribers)',
+      ExpressionAttributeValues: marshall({ ':subscribers': subscriberCount })
+    }));
+
+    console.log('[PUBLISH] Backfilled the subscriber snapshot on an existing stats record', {
+      tenantId: tenant.pk,
+      issueNumber,
+      subscribers: subscriberCount
+    });
+  } catch (err) {
+    if (err.name === 'ConditionalCheckFailedException') {
+      return;
+    }
+    // Never fail a publish over the snapshot. The issue still sends; the
+    // dashboard shows the issue without a list size, which is what it now
+    // renders for any issue that has none.
+    console.error('[PUBLISH] Could not backfill the subscriber snapshot', {
+      tenantId: tenant.pk,
+      issueNumber,
+      error: err.message
+    });
   }
 };

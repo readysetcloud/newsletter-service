@@ -4278,7 +4278,6 @@ components:
         - deliveries
         - bounces
         - complaints
-        - subscribers
       properties:
         opens:
           type: integer
@@ -4305,7 +4304,11 @@ components:
           description: Number of spam complaints
         subscribers:
           type: integer
-          description: Subscriber count at send time
+          description: >
+            List size captured when the issue was published. Omitted when no
+            snapshot was recorded for the issue — an absence, which is not the
+            same as a send that reached nobody, and must not be rendered as a
+            count of zero.
         subscribes:
           type: integer
           minimum: 0
@@ -4411,7 +4414,6 @@ components:
         - clicks
         - bounces
         - complaints
-        - subscribers
       properties:
         openRate:
           type: number
@@ -4448,7 +4450,10 @@ components:
         subscribers:
           type: integer
           format: int64
-          description: Subscriber count at send time
+          description: >
+            List size captured when the issue was published. Omitted when no
+            snapshot was recorded for the issue — an absence, not a count of
+            zero.
         subscribes:
           type: integer
           format: int64

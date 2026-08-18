@@ -36,8 +36,20 @@ jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
 }));
 
 jest.unstable_mockModule('../functions/utils/helpers.mjs', () => ({
-  encrypt: jest.fn((email) => `encrypted_${email}`),
   sendWithRetry: jest.fn(async (fn) => await fn())
+}));
+
+// Tokens are minted here now, bound to the tenant so they cannot be replayed
+// against another tenant's unsubscribe endpoint.
+jest.unstable_mockModule('../functions/utils/subscriber-token.mjs', () => ({
+  mintSubscriberToken: jest.fn((tenantId, email) => `token_${tenantId}_${email}`)
+}));
+
+// Suppression is the final authority on who may be mailed; default to nobody
+// having opted out so existing send assertions stay about the send path.
+jest.unstable_mockModule('../functions/utils/suppression.mjs', () => ({
+  listSuppressedEmails: jest.fn(async () => new Set()),
+  getSuppression: jest.fn(async () => null)
 }));
 
 jest.unstable_mockModule('../functions/utils/subscriber.mjs', () => ({
@@ -187,6 +199,25 @@ describe('send-email-v2 local send', () => {
       const schedules = schedulerCalls();
       expect(schedules).toHaveLength(1);
       expect(parseScheduleDetail(schedules[0]).localSendGroup.timeZone).toBe('__catch_all__');
+    });
+
+    // EventBridge accepts the API call while rejecting entries, so an awaited
+    // PutEvents is not a published event. A rejected entry here loses a whole
+    // timezone group's send, and the handler used to report it as emitted.
+    it('fails the send when a local-send group event is rejected', async () => {
+      mockVerifiedSender();
+      listSubscribers.mockResolvedValue({
+        subscribers: [
+          { email: 'ny@example.com', timeZone: 'America/New_York' }
+        ],
+        lastEvaluatedKey: undefined
+      });
+      eventBridgeInstance.send.mockResolvedValue({
+        FailedEntryCount: 1,
+        Entries: [{ ErrorCode: 'InternalException', ErrorMessage: 'try again' }]
+      });
+
+      await expect(handler(baseEvent())).rejects.toThrow(/rejected by EventBridge/);
     });
 
     // D9, both halves. A timezone east of the base zone reaches its own 9am

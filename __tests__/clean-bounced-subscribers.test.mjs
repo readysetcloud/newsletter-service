@@ -13,12 +13,23 @@ const loadIsolated = async () => {
     mockGetMostRecentPublishedIssue = jest.fn();
     mockIncrementIssueCounter = jest.fn();
 
+    // The removal now goes through utils/subscriber.mjs, which builds its own
+    // client from this same mocked constructor, so every command that module
+    // imports has to exist here too.
     jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
       DynamoDBClient: jest.fn(() => ({ send: ddbSend })),
       GetItemCommand: jest.fn((params) => ({ __type: 'GetItem', ...params })),
+      PutItemCommand: jest.fn((params) => ({ __type: 'PutItem', ...params })),
       UpdateItemCommand: jest.fn((params) => ({ __type: 'UpdateItem', ...params })),
       DeleteItemCommand: jest.fn((params) => ({ __type: 'DeleteItem', ...params })),
+      TransactWriteItemsCommand: jest.fn((params) => ({ __type: 'TransactWrite', ...params })),
       QueryCommand: jest.fn((params) => ({ __type: 'Query', ...params })),
+    }));
+
+    jest.unstable_mockModule('../functions/utils/suppression.mjs', () => ({
+      // A bounce is not a consent revocation, so this path must never record
+      // one. Present so the import resolves; asserted unused below.
+      recordSuppression: jest.fn(),
     }));
 
     jest.unstable_mockModule('@aws-sdk/client-eventbridge', () => ({
@@ -108,14 +119,12 @@ describe('clean-bounced-subscribers', () => {
             failedAddresses: { L: [{ S: 'bounce1@example.com' }, { S: 'bounce2@example.com' }] }
           }
         })
-        // DeleteItemCommand for bounce1 (successful)
-        .mockResolvedValueOnce({ Attributes: { email: { S: 'bounce1@example.com' } } })
-        // DeleteItemCommand for bounce2 (successful)
-        .mockResolvedValueOnce({ Attributes: { email: { S: 'bounce2@example.com' } } })
-        // updateSubscriberCount query
-        .mockResolvedValueOnce({ Count: 10 })
-        // updateSubscriberCount update
+        // The removal transaction for bounce1, then bounce2 — each commits the
+        // subscriber delete with the tenant-count decrement.
         .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({})
+        // readSubscriberCount, for the notification email only
+        .mockResolvedValueOnce({ Item: { subscribers: { N: '10' } } })
         // eventBridge send
         ;
       eventBridgeSend.mockResolvedValueOnce({});
@@ -157,9 +166,8 @@ describe('clean-bounced-subscribers', () => {
             failedAddresses: { L: [{ S: 'bounce1@example.com' }] }
           }
         })
-        .mockResolvedValueOnce({ Attributes: { email: { S: 'bounce1@example.com' } } })
-        .mockResolvedValueOnce({ Count: 10 })
-        .mockResolvedValueOnce({});
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({ Item: { subscribers: { N: '10' } } });
       eventBridgeSend.mockResolvedValueOnce({});
 
       const event = {
@@ -195,9 +203,8 @@ describe('clean-bounced-subscribers', () => {
             failedAddresses: { L: [{ S: 'bounce1@example.com' }] }
           }
         })
-        .mockResolvedValueOnce({ Attributes: { email: { S: 'bounce1@example.com' } } })
-        .mockResolvedValueOnce({ Count: 10 })
-        .mockResolvedValueOnce({});
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({ Item: { subscribers: { N: '10' } } });
       eventBridgeSend.mockResolvedValueOnce({});
 
       const event = {
@@ -232,9 +239,8 @@ describe('clean-bounced-subscribers', () => {
             failedAddresses: { L: [{ S: 'bounce1@example.com' }] }
           }
         })
-        .mockResolvedValueOnce({ Attributes: { email: { S: 'bounce1@example.com' } } })
-        .mockResolvedValueOnce({ Count: 10 })
-        .mockResolvedValueOnce({});
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({ Item: { subscribers: { N: '10' } } });
       eventBridgeSend.mockResolvedValueOnce({});
 
       const event = {
@@ -269,12 +275,16 @@ describe('clean-bounced-subscribers', () => {
             failedAddresses: { L: [{ S: 'bounce1@example.com' }, { S: 'bounce2@example.com' }] }
           }
         })
-        // bounce1 already absent (no Attributes returned)
+        // bounce1 already absent: the transaction cancels on the delete's
+        // attribute_exists guard, which is how the shared removal helper
+        // reports "nobody was removed" now that it cannot use ReturnValues.
+        .mockRejectedValueOnce(Object.assign(new Error('cancelled'), {
+          name: 'TransactionCanceledException',
+          CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }]
+        }))
+        // bounce2 successfully removed
         .mockResolvedValueOnce({})
-        // bounce2 successfully deleted
-        .mockResolvedValueOnce({ Attributes: { email: { S: 'bounce2@example.com' } } })
-        .mockResolvedValueOnce({ Count: 10 })
-        .mockResolvedValueOnce({});
+        .mockResolvedValueOnce({ Item: { subscribers: { N: '10' } } });
       eventBridgeSend.mockResolvedValueOnce({});
 
       const event = {
@@ -314,9 +324,8 @@ describe('clean-bounced-subscribers', () => {
             failedAddresses: { L: [{ S: 'bounce@example.com' }] }
           }
         })
-        .mockResolvedValueOnce({ Attributes: { email: { S: 'bounce@example.com' } } })
-        .mockResolvedValueOnce({ Count: 10 })
-        .mockResolvedValueOnce({});
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({ Item: { subscribers: { N: '10' } } });
       eventBridgeSend.mockResolvedValueOnce({});
 
       const event = {
@@ -330,7 +339,7 @@ describe('clean-bounced-subscribers', () => {
       await handler(event);
 
       // Cleanup should proceed — delete was called
-      const deleteCalls = ddbSend.mock.calls.filter(call => call[0].__type === 'DeleteItem');
+      const deleteCalls = ddbSend.mock.calls.filter(call => call[0].__type === 'TransactWrite');
       expect(deleteCalls.length).toBe(1);
       expect(mockIncrementIssueCounter).toHaveBeenCalledTimes(1);
     });

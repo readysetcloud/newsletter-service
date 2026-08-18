@@ -5,7 +5,7 @@ import {
   DeleteItemCommand
 } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
-import { decrypt } from '../utils/helpers.mjs';
+import { readSubscriberToken } from '../utils/subscriber-token.mjs';
 import {
   TOPICS,
   VALID_TOPICS,
@@ -282,7 +282,14 @@ const tryDecrypt = (token, tenantId) => {
     return null;
   }
   try {
-    return decrypt(token);
+    // Tenant-checked: the same token type reaches the unsubscribe endpoint, and
+    // a token minted under another tenant must not open this subscriber's
+    // preferences here (utils/subscriber-token.mjs).
+    const { email, legacy } = readSubscriberToken(token, tenantId);
+    if (legacy) {
+      console.log('Preference token is a legacy (pre-tenant-binding) token', { tenantId });
+    }
+    return email;
   } catch (err) {
     console.error('Preference token decryption failed:', {
       error: err.message,

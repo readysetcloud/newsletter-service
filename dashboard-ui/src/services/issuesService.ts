@@ -261,7 +261,14 @@ class IssuesService {
         return {};
       }
 
-      const averageSubscribers = otherIssues.reduce((sum, issue) => sum + issue.metrics.subscribers, 0) / otherIssues.length;
+      // Only issues that recorded a list size count toward the average; an
+      // issue without a snapshot is unmeasured, not an issue with no audience.
+      const measuredSubscribers = otherIssues
+        .map(issue => issue.metrics.subscribers)
+        .filter((value): value is number => value !== undefined);
+      const averageSubscribers = measuredSubscribers.length > 0
+        ? measuredSubscribers.reduce((sum, value) => sum + value, 0) / measuredSubscribers.length
+        : undefined;
 
       // Calculate average metrics from aggregates
       const average: IssueMetrics = {
@@ -274,7 +281,7 @@ class IssuesService {
         clicks: 0,
         bounces: 0,
         complaints: 0,
-        subscribers: Math.round(averageSubscribers),
+        ...(averageSubscribers !== undefined && { subscribers: Math.round(averageSubscribers) }),
       };
 
       // Get last issue (most recent)

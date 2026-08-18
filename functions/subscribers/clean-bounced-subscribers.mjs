@@ -1,8 +1,9 @@
-import { DynamoDBClient, GetItemCommand, UpdateItemCommand, DeleteItemCommand, QueryCommand } from "@aws-sdk/client-dynamodb";
+import { DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { EventBridgeClient, PutEventsCommand } from "@aws-sdk/client-eventbridge";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { getTenant, sendWithRetry, throttle } from "../utils/helpers.mjs";
 import { getMostRecentPublishedIssue, incrementIssueCounter } from "../utils/issue-attribution.mjs";
+import { removeSubscriberAndDecrement } from "../utils/subscriber.mjs";
 
 const ddb = new DynamoDBClient();
 const eventBridge = new EventBridgeClient();
@@ -67,16 +68,17 @@ export const handler = async (event) => {
     const removedAddresses = [];
     const removeTasks = persistentFailures.map((emailAddress) => async () => {
       try {
-        const deleteResult = await sendWithRetry(() => ddb.send(new DeleteItemCommand({
-          TableName: process.env.SUBSCRIBERS_TABLE_NAME,
-          Key: marshall({
-            tenantId: tenantId.id,
-            email: emailAddress.toLowerCase()
-          }),
-          ReturnValues: 'ALL_OLD'
-        })));
+        // Shared with the unsubscribe path: the row and the tenant count
+        // commit together. This used to delete rows and then recount the whole
+        // partition and overwrite `tenant.subscribers` with an absolute total —
+        // a read followed by a write, which erased every signup that landed
+        // between the two. The same defect the import recount was removed for.
+        const removed = await sendWithRetry(() => removeSubscriberAndDecrement(
+          tenantId.id,
+          emailAddress.toLowerCase()
+        ));
 
-        if (deleteResult.Attributes) {
+        if (removed) {
           successfulRemovals++;
           removedAddresses.push(emailAddress);
           console.log(`Successfully removed ${emailAddress} from Subscribers table`);
@@ -103,8 +105,10 @@ export const handler = async (event) => {
 
     console.log(`Successfully removed ${successfulRemovals}/${persistentFailures.length} addresses`);
 
-    // Update subscriber count by getting actual count from Subscribers table
-    const subscriberCount = await updateSubscriberCount(tenantId.id);
+    // Read for the notification email only — the count itself was already
+    // maintained by each removal above. Consistent so the operator's mail
+    // quotes the number the removals actually produced.
+    const subscriberCount = await readSubscriberCount(tenantId.id);
 
     // Send notification email to tenant if any subscribers were removed
     if (successfulRemovals > 0) {
@@ -136,53 +140,33 @@ const loadStatsRecord = async (issueId) => {
   }
 };
 
-const updateSubscriberCount = async (tenantId) => {
+/**
+ * The tenant's current subscriber count, for display in the operator's
+ * notification email.
+ *
+ * A read, never a write. The previous version recounted the partition and
+ * overwrote `tenant.subscribers` with the total, which raced with every live
+ * signup and unsubscribe — a signup committing between the count and the write
+ * was simply erased. Each removal above now maintains the count atomically, so
+ * there is nothing left for this to repair and nothing it should overwrite.
+ */
+const readSubscriberCount = async (tenantId) => {
   try {
-    let totalCount = 0;
-    let lastEvaluatedKey;
-
-    // Query Subscribers table to count all subscribers for this tenant
-    do {
-      const queryParams = {
-        TableName: process.env.SUBSCRIBERS_TABLE_NAME,
-        KeyConditionExpression: 'tenantId = :tenantId',
-        ExpressionAttributeValues: marshall({
-          ':tenantId': tenantId
-        }),
-        Select: 'COUNT'
-      };
-
-      if (lastEvaluatedKey) {
-        queryParams.ExclusiveStartKey = lastEvaluatedKey;
-      }
-
-      const result = await sendWithRetry(() => ddb.send(new QueryCommand(queryParams)));
-
-      totalCount += result.Count || 0;
-      lastEvaluatedKey = result.LastEvaluatedKey;
-    } while (lastEvaluatedKey);
-
-    // Update the tenant record with the actual count
-    await ddb.send(new UpdateItemCommand({
+    const result = await ddb.send(new GetItemCommand({
       TableName: process.env.TABLE_NAME,
-      Key: marshall({
-        pk: tenantId,
-        sk: 'tenant'
-      }),
-      UpdateExpression: 'SET #subscribers = :count',
-      ExpressionAttributeNames: {
-        '#subscribers': 'subscribers'
-      },
-      ExpressionAttributeValues: {
-        ':count': { N: totalCount.toString() }
-      }
+      Key: marshall({ pk: tenantId, sk: 'tenant' }),
+      ProjectionExpression: '#subscribers',
+      ExpressionAttributeNames: { '#subscribers': 'subscribers' },
+      ConsistentRead: true
     }));
 
-    console.log(`Updated subscriber count to actual count: ${totalCount}`);
-    return totalCount;
+    const { subscribers } = result.Item ? unmarshall(result.Item) : {};
+    return typeof subscribers === 'number' ? subscribers : null;
   } catch (error) {
-    console.error('Error updating subscriber count:', error);
-    return '???';
+    // The cleanup itself already succeeded; a failed read here should not fail
+    // it. The email says "unknown" rather than a wrong number.
+    console.error('Error reading subscriber count for notification:', error);
+    return null;
   }
 };
 
@@ -233,7 +217,9 @@ const sendNotificationEmail = async (tenant, removedAddresses, successfulRemoval
               <h4>What happens next?</h4>
               <p>These addresses have been permanently removed from your contact list. If any of these were legitimate subscribers who want to continue receiving your newsletter, they can re-subscribe through your normal signup process.</p>
 
-              <p>Your subscriber count (${subscriberCount}) has been updated to reflect the current accurate number of active subscribers.</p>
+              <p>${typeof subscriberCount === 'number'
+    ? `Your subscriber count is now ${subscriberCount}.`
+    : 'Your subscriber count has been updated to reflect the removals.'}</p>
             </div>
 
             <div class="footer">

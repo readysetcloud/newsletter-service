@@ -473,6 +473,36 @@ describe('publish-issue', () => {
       errorSpy.mockRestore();
     });
 
+    // EventBridge answers the API call successfully while rejecting individual
+    // entries, so an awaited PutEvents is not a published event. Unchecked, the
+    // publish stamped SEND_HANDED_OFF and reported success for an issue whose
+    // only send entry was refused — it looked sent and nothing was.
+    it('fails the publish when the send entry is rejected', async () => {
+      mockIssueRecord({
+        localSend: JSON.stringify({ enabled: true, defaultTimeZone: 'America/New_York', mode: 'timezone' })
+      });
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      eventBridgeSend.mockResolvedValueOnce({
+        FailedEntryCount: 1,
+        Entries: [{ ErrorCode: 'InternalException', ErrorMessage: 'try again' }]
+      });
+
+      const result = await handler(publishEvent);
+
+      expect(result.success).toBe(false);
+
+      // And the sending claim is released, exactly as for a thrown PutEvents —
+      // otherwise the issue is stranded in `sending` with nothing able to move
+      // it.
+      const statusWrites = ddbSend.mock.calls
+        .map(([cmd]) => cmd)
+        .filter((cmd) => cmd.__type === 'UpdateItem')
+        .map((cmd) => unmarshall(cmd.ExpressionAttributeValues));
+      expect(statusWrites).toHaveLength(2);
+      expect(statusWrites[1][':inProgress']).toBe('in progress');
+      errorSpy.mockRestore();
+    });
+
     it('does not release a claim it never took', async () => {
       mockIssueRecord({});
       const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -649,6 +679,158 @@ describe('publish-issue', () => {
       expect(result.success).toBe(true);
       expect(eventBridgeSend).toHaveBeenCalled();
       logSpy.mockRestore();
+    });
+  });
+
+  // The seed is the only writer of `subscribers`, but not the only writer that
+  // can create the record it lives on: handle-email-status, the analytics claim
+  // and the attribution counters all upsert `{pk, sk: 'stats'}`. Whichever lands
+  // first leaves a stats record with every counter and no list size, and the
+  // seed then declines to touch it — so the dashboard read the hole as a list
+  // that had fallen to zero.
+  describe('subscriber snapshot on a record the seed did not create', () => {
+    // The snapshot is read fresh from the tenant record rather than taken from
+    // the memoized `getTenant()`, so the tests have to answer that read.
+    const tenantCount = (subscribers) => {
+      ddbSend.mockImplementation(async (cmd) => {
+        if (cmd.__type === 'GetItem' && cmd.Key?.sk?.S === 'tenant') {
+          return subscribers === undefined ? {} : { Item: marshall({ subscribers }) };
+        }
+        return {};
+      });
+    };
+
+    beforeEach(() => tenantCount(100));
+
+    const rejectSeedWithConditionFailure = () => {
+      const passThrough = ddbSend.getMockImplementation();
+      ddbSend.mockImplementation((command) => {
+        if (command.__type === 'PutItem' && command.Item?.sk?.S === 'stats') {
+          const error = new Error('The conditional request failed');
+          error.name = 'ConditionalCheckFailedException';
+          return Promise.reject(error);
+        }
+        return passThrough(command);
+      });
+    };
+
+    const backfillWrite = () =>
+      ddbSend.mock.calls
+        .map(([cmd]) => cmd)
+        .find((cmd) => cmd.__type === 'UpdateItem' && cmd.Key?.sk?.S === 'stats');
+
+    const publishEvent = () => ({
+      data: sampleData,
+      subject: 'Subject',
+      tenantId: 'tenant-1',
+      sendAtDate: 'now'
+    });
+
+    it('fills in the list size, guarded so it can only ever fill a hole', async () => {
+      const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+      rejectSeedWithConditionFailure();
+
+      await handler(publishEvent());
+
+      const update = backfillWrite();
+      expect(update).toBeDefined();
+      expect(update.Key.pk.S).toBe('tenant-1#42');
+      expect(update.UpdateExpression).toBe('SET subscribers = :subscribers');
+      expect(update.ConditionExpression).toBe(
+        'attribute_exists(pk) AND attribute_not_exists(subscribers)'
+      );
+      expect(update.ExpressionAttributeValues[':subscribers']).toEqual({ N: '100' });
+      logSpy.mockRestore();
+    });
+
+    // A resend hits the same path with a snapshot already in place. The
+    // condition rejects the write, and that rejection is the expected outcome,
+    // not a publish failure.
+    it('publishes successfully when the snapshot is already there', async () => {
+      const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+      const passThrough = ddbSend.getMockImplementation();
+      ddbSend.mockImplementation((command) => {
+        if (
+          (command.__type === 'PutItem' || command.__type === 'UpdateItem')
+          && (command.Item?.sk?.S === 'stats' || command.Key?.sk?.S === 'stats')
+        ) {
+          const error = new Error('The conditional request failed');
+          error.name = 'ConditionalCheckFailedException';
+          return Promise.reject(error);
+        }
+        return passThrough(command);
+      });
+
+      const result = await handler(publishEvent());
+
+      expect(result.success).toBe(true);
+      expect(eventBridgeSend).toHaveBeenCalled();
+      logSpy.mockRestore();
+    });
+
+    // The snapshot is worth a repair attempt, never a send.
+    it('still publishes when the backfill itself fails', async () => {
+      const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const passThrough = ddbSend.getMockImplementation();
+      ddbSend.mockImplementation((command) => {
+        if (command.__type === 'PutItem' && command.Item?.sk?.S === 'stats') {
+          const error = new Error('The conditional request failed');
+          error.name = 'ConditionalCheckFailedException';
+          return Promise.reject(error);
+        }
+        if (command.__type === 'UpdateItem' && command.Key?.sk?.S === 'stats') {
+          return Promise.reject(new Error('ProvisionedThroughputExceededException'));
+        }
+        return passThrough(command);
+      });
+
+      const result = await handler(publishEvent());
+
+      expect(result.success).toBe(true);
+      expect(eventBridgeSend).toHaveBeenCalled();
+      logSpy.mockRestore();
+      errorSpy.mockRestore();
+    });
+
+    // `getTenant()` memoizes the whole tenant record for the life of a warm
+    // container, and `subscribers` is mutable — so a container that loaded the
+    // tenant before a run of signups would freeze a stale count into the issue
+    // forever. The read is its own, consistent, and projected to the field.
+    it('reads the count fresh and consistently rather than from the tenant cache', async () => {
+      const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+      // The cached record disagrees with the stored one; the stored one wins.
+      getTenant.mockResolvedValue({ pk: 'tenant-1', list: 'main-list', subscribers: 100 });
+      tenantCount(4200);
+
+      await handler(publishEvent());
+
+      const countRead = ddbSend.mock.calls
+        .map(([cmd]) => cmd)
+        .find((cmd) => cmd.__type === 'GetItem' && cmd.Key?.sk?.S === 'tenant');
+      expect(countRead.ConsistentRead).toBe(true);
+      expect(countRead.ProjectionExpression).toBe('#subscribers');
+
+      const seed = ddbSend.mock.calls
+        .map(([cmd]) => cmd)
+        .find((cmd) => cmd.__type === 'PutItem' && cmd.Item?.sk?.S === 'stats');
+      expect(seed.Item.subscribers).toEqual({ N: '4200' });
+      logSpy.mockRestore();
+    });
+
+    // marshalling an undefined would throw and take the whole publish with it.
+    it('omits the field from the seed when the tenant has no count', async () => {
+      getTenant.mockResolvedValue({ pk: 'tenant-1', list: 'main-list' });
+      tenantCount(undefined);
+
+      const result = await handler(publishEvent());
+
+      const seed = ddbSend.mock.calls
+        .map(([cmd]) => cmd)
+        .find((cmd) => cmd.__type === 'PutItem' && cmd.Item?.sk?.S === 'stats');
+      expect(result.success).toBe(true);
+      expect(seed.Item.subscribers).toBeUndefined();
+      expect(backfillWrite()).toBeUndefined();
     });
   });
 });

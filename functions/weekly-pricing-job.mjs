@@ -1,6 +1,8 @@
-import { DynamoDBClient, ScanCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
+import { isSubscriberRecord } from './utils/subscriber-record.mjs';
+import { assertEventsPublished } from './utils/eventbridge.mjs';
 
 const ddb = new DynamoDBClient();
 const eventBridge = new EventBridgeClient();
@@ -13,20 +15,28 @@ const SUBSCRIBERS_TABLE_NAME = process.env.SUBSCRIBERS_TABLE_NAME;
 // ---------------------------------------------------------------------------
 
 /**
- * Query all distinct tenant IDs from the NewsletterTable.
+ * List all tenant IDs via GSI1 (`GSI1PK = "tenant"`), the same way
+ * `monthly-report-job.mjs` does.
  *
- * Tenants are identified by scanning for items whose sk = "newsletter"
- * (the tenant metadata record). The pk of those items is the tenantId.
+ * This used to Scan for `sk = "newsletter"`, which matches nothing: tenant
+ * metadata lives at `{ pk: tenantId, sk: 'tenant' }`. So the job enumerated an
+ * empty set and silently priced nobody — a scan returning zero rows looks
+ * exactly like a account with no tenants.
+ *
+ * NOTE: a tenant record only appears here once it carries `GSI1PK="tenant"`.
+ * Both onboarding paths set it, but records that predate the key need
+ * `scripts/backfill-tenant-gsi.mjs` run once against the table.
  */
 async function getAllTenants() {
   const tenants = [];
   let lastKey;
 
   do {
-    const result = await ddb.send(new ScanCommand({
+    const result = await ddb.send(new QueryCommand({
       TableName: TABLE_NAME,
-      FilterExpression: 'sk = :sk',
-      ExpressionAttributeValues: marshall({ ':sk': 'newsletter' }),
+      IndexName: 'GSI1',
+      KeyConditionExpression: 'GSI1PK = :gsi1pk',
+      ExpressionAttributeValues: marshall({ ':gsi1pk': 'tenant' }),
       ProjectionExpression: 'pk',
       ...(lastKey && { ExclusiveStartKey: lastKey })
     }));
@@ -49,25 +59,59 @@ async function getAllTenants() {
  * (status "published", statsPhase "consolidated").
  *
  * Uses GSI1 with GSI1PK = `{tenantId}#issue` and filters for consolidated stats.
+ *
+ * Paginates, because `Limit` counts items *evaluated*, not items returned:
+ * DynamoDB reads up to `Limit` items and only then applies the filter. So a
+ * tenant whose newest issue is still `realtime` produced an empty first page —
+ * with a `LastEvaluatedKey` pointing at the consolidated issues right behind
+ * it — and treating that empty page as the answer made an eligible tenant
+ * invisible to pricing. An empty page means "not on this page", never "not
+ * anywhere".
+ *
+ * Still cheap: this is an existence check, so it stops at the first match and
+ * only keeps reading while DynamoDB says there is more.
  */
 async function hasPublishedIssueWithAnalytics(tenantId) {
-  const result = await ddb.send(new QueryCommand({
-    TableName: TABLE_NAME,
-    IndexName: 'GSI1',
-    KeyConditionExpression: 'GSI1PK = :gsi1pk',
-    FilterExpression: 'statsPhase = :phase',
-    ExpressionAttributeValues: marshall({
-      ':gsi1pk': `${tenantId}#issue`,
-      ':phase': 'consolidated'
-    }),
-    Limit: 1
-  }));
+  let lastKey;
 
-  return (result.Items?.length ?? 0) > 0;
+  do {
+    const result = await ddb.send(new QueryCommand({
+      TableName: TABLE_NAME,
+      IndexName: 'GSI1',
+      KeyConditionExpression: 'GSI1PK = :gsi1pk',
+      FilterExpression: 'statsPhase = :phase',
+      ExpressionAttributeValues: marshall({
+        ':gsi1pk': `${tenantId}#issue`,
+        ':phase': 'consolidated'
+      }),
+      ...(lastKey && { ExclusiveStartKey: lastKey })
+    }));
+
+    if ((result.Items?.length ?? 0) > 0) {
+      return true;
+    }
+
+    lastKey = result.LastEvaluatedKey;
+  } while (lastKey);
+
+  return false;
 }
 
 /**
  * Get the subscriber count for a tenant from the SubscribersTable.
+ *
+ * The segments feature stores its records in this table under the same tenant
+ * partition, overloading the `email` sort key, so counting the partition
+ * counted segments, memberships and rebuild jobs as subscribers. Here that
+ * decides eligibility (`subscriberCount > 0`), so a tenant with no subscribers
+ * at all but some leftover segment bookkeeping looked eligible.
+ *
+ * The namespace cannot be excluded with a `FilterExpression`: DynamoDB rejects
+ * key attributes there, and `email` is this table's sort key. So the rows come
+ * back and `isSubscriberRecord` — the same predicate every other reader uses —
+ * decides what counts. `Select: 'COUNT'` is not available with that approach,
+ * which is the price of the correct answer; only `email` is projected, so the
+ * rows are as small as they can be.
  */
 async function getSubscriberCount(tenantId) {
   let count = 0;
@@ -78,11 +122,16 @@ async function getSubscriberCount(tenantId) {
       TableName: SUBSCRIBERS_TABLE_NAME,
       KeyConditionExpression: 'tenantId = :tenantId',
       ExpressionAttributeValues: marshall({ ':tenantId': tenantId }),
-      Select: 'COUNT',
+      ProjectionExpression: 'email',
       ...(lastKey && { ExclusiveStartKey: lastKey })
     }));
 
-    count += result.Count || 0;
+    for (const item of result.Items || []) {
+      if (isSubscriberRecord(unmarshall(item))) {
+        count++;
+      }
+    }
+
     lastKey = result.LastEvaluatedKey;
   } while (lastKey);
 
@@ -160,7 +209,7 @@ async function processWithConcurrency(items, concurrency, fn) {
  * Publish a pricing recalculation event to EventBridge for a single tenant.
  */
 async function publishPricingEvent(tenantId) {
-  await eventBridge.send(new PutEventsCommand({
+  const result = await eventBridge.send(new PutEventsCommand({
     Entries: [{
       Source: 'newsletter-service',
       DetailType: 'PRICING_RECALCULATION_REQUESTED',
@@ -171,6 +220,10 @@ async function publishPricingEvent(tenantId) {
       })
     }]
   }));
+
+  // Unchecked, the concurrency wrapper counted this tenant as dispatched and
+  // the job reported a clean run whose recalculation never reached the bus.
+  assertEventsPublished(result, `Pricing event for ${tenantId}`);
 }
 
 // ---------------------------------------------------------------------------

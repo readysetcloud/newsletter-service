@@ -493,8 +493,17 @@ export function DashboardPage() {
                         </div>
                         <div>
                           <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Subscribers</div>
-                          <div className="text-lg sm:text-xl font-bold font-display text-foreground tabular-nums">{formatNumber(trendsData.issues[0].metrics.subscribers)}</div>
-                          <div className="text-xs text-muted-foreground">List size</div>
+                          {/* An issue with no snapshot is not an issue with no
+                              audience — say "not recorded" rather than print a
+                              zero that reads as a list wiped out. */}
+                          <div className="text-lg sm:text-xl font-bold font-display text-foreground tabular-nums">
+                            {trendsData.issues[0].metrics.subscribers === undefined
+                              ? '—'
+                              : formatNumber(trendsData.issues[0].metrics.subscribers)}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {trendsData.issues[0].metrics.subscribers === undefined ? 'Not recorded' : 'List size'}
+                          </div>
                         </div>
                       </div>
                       {trendsData.issues[0].metrics.complaints > 0 && (

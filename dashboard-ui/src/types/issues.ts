@@ -36,7 +36,13 @@ export interface IssueStats {
   sends: number;
   bounces: number;
   complaints: number;
-  subscribers: number;
+  /**
+   * List size when the issue was published. Absent on issues that never got a
+   * snapshot — the stats record belongs to whichever writer touched it first,
+   * and only the publish step knows the list size. Absent is not zero, and
+   * must never be rendered as a count.
+   */
+  subscribers?: number;
   subscribes?: number;
   unsubscribes?: number;
   cleaned?: number;
@@ -281,7 +287,8 @@ export interface IssueMetrics {
   clicks: number;
   bounces: number;
   complaints: number;
-  subscribers: number;
+  /** List size when the issue was published; absent if never recorded. */
+  subscribers?: number;
   subscribes?: number;
   unsubscribes?: number;
   cleaned?: number;

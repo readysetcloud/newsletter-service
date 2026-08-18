@@ -6,15 +6,42 @@ const ddb = new DynamoDBClient();
 const PAGE_SIZE = 10;
 
 /**
- * Look up the most recently published issue for a tenant.
- * Queries GSI1 in descending order, paginating until a published issue
- * (one with publishedAt defined) is found, or no more items remain.
+ * True when an issue has actually reached inboxes, which is what "most recently
+ * published" has to mean for attribution.
+ *
+ * `publishedAt` is stamped when the publish workflow starts, but the workflow
+ * starts `IssueSendLeadTimeMinutes` (26 hours by default) *before* the send so
+ * the local-send fan-out can schedule eastward timezones for their own morning
+ * — and it stamps the future send instant, not the current time. So for that
+ * whole window the newest issue is one nobody has received. Attributing to it
+ * credited unsubscribes and removals to an issue that had not gone out, and
+ * took them from the issue the reader actually had in front of them.
+ *
+ * @param {string|undefined} publishedAt - ISO instant from the stats record
+ * @param {number} now - epoch ms to compare against
+ */
+const hasBeenSent = (publishedAt, now) => {
+  if (publishedAt === undefined || publishedAt === null) {
+    return false;
+  }
+
+  const sentAt = Date.parse(publishedAt);
+  // An unparseable stamp is old data, not a scheduled send — the lead-time
+  // window is the only thing being excluded here, so keep it attributable.
+  return Number.isNaN(sentAt) || sentAt <= now;
+};
+
+/**
+ * Look up the most recently sent issue for a tenant.
+ * Queries GSI1 in descending order, paginating until an issue that has actually
+ * gone out is found, or no more items remain.
  *
  * @param {string} tenantId
  * @returns {Promise<{pk: string, issueNumber: number} | null>}
  */
 export async function getMostRecentPublishedIssue(tenantId) {
   let lastEvaluatedKey;
+  const now = Date.now();
 
   do {
     const result = await ddb.send(new QueryCommand({
@@ -32,7 +59,7 @@ export async function getMostRecentPublishedIssue(tenantId) {
     const items = (result.Items || []).map(item => unmarshall(item));
 
     for (const item of items) {
-      if (item.publishedAt !== undefined && item.publishedAt !== null) {
+      if (hasBeenSent(item.publishedAt, now)) {
         const issueNumber = typeof item.issueNumber === 'number'
           ? item.issueNumber
           : parseInt(item.pk?.split('#')[1], 10);

@@ -17,29 +17,37 @@ export const SubscriberGrowthChart: React.FC<SubscriberGrowthChartProps> = ({ tr
   const tickColor = 'rgb(var(--muted-foreground))';
   const gridColor = 'rgb(var(--border) / 0.45)';
 
+  // An issue with no list-size snapshot plots as a gap, not as zero: `null` is
+  // what Recharts skips (and `connectNulls` below bridges), whereas a 0 draws a
+  // cliff to the axis and reads as an audience that vanished. /subscribers/trends
+  // drops such points server-side, so only the issue-trends branch can carry them.
   const data = ('points' in trendsData
     ? [...trendsData.points]
         .reverse()
         .map(point => ({
           issue: `#${point.issueNumber}`,
-          subscribers: point.subscribers
+          subscribers: point.subscribers as number | null
         }))
     : [...trendsData.issues]
         .reverse()
         .map(issue => ({
           issue: `#${issue.id}`,
-          subscribers: issue.metrics.subscribers
+          subscribers: issue.metrics.subscribers ?? null
         })));
 
+  const recordedValues = useMemo(
+    () => data.map(d => d.subscribers).filter((value): value is number => value !== null),
+    [data]
+  );
+
   const yDomain = useMemo(() => {
-    const values = data.map(d => d.subscribers);
-    const min = Math.min(...values);
-    const max = Math.max(...values);
+    const min = Math.min(...recordedValues);
+    const max = Math.max(...recordedValues);
     const padding = Math.max(Math.round((max - min) * 0.1), 1);
     return [min - padding, max + padding] as [number, number];
-  }, [data]);
+  }, [recordedValues]);
 
-  if (data.length === 0) {
+  if (recordedValues.length === 0) {
     return (
       <div className="text-sm text-muted-foreground py-6 text-center">
         No subscriber data yet

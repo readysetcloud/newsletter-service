@@ -1,20 +1,28 @@
-import Handlebars from 'handlebars';
-import unsubscribeTemplate from '../../templates/unsubscribe-success.hbs';
-import { DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
-import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
-import { decrypt, getTenant } from "../utils/helpers.mjs";
-import { unsubscribeUser } from "../utils/subscriber.mjs";
-import { getMostRecentPublishedIssue, incrementIssueCounter } from "../utils/issue-attribution.mjs";
+import { getTenant } from "../utils/helpers.mjs";
+import { readSubscriberToken } from "../utils/subscriber-token.mjs";
+import { htmlResponse, getConfirmationPage, getUnsubscribePage } from "./unsubscribe-pages.mjs";
 
-const ddb = new DynamoDBClient();
 const eventBridge = new EventBridgeClient();
-const unsubscribeHtml = Handlebars.compile(unsubscribeTemplate);
 
+/**
+ * GET /{tenant}/unsubscribe — the footer link's landing page.
+ *
+ * Renders and nothing else. This handler used to delete the subscriber during
+ * the GET, which meant anyone who *fetched* the link unsubscribed — and
+ * corporate mail security (Outlook SafeLinks, Proofpoint, Mimecast) fetches
+ * every link in a message before the recipient sees it, exactly the behaviour
+ * this codebase's own scanner-clicks module documents. Subscribers behind
+ * those gateways were being silently removed without ever opening the email,
+ * indistinguishably from a real unsubscribe.
+ *
+ * The removal now lives behind POST on the same path (manual-unsubscribe.mjs):
+ * the confirmation form here posts to it, the RFC 8058 List-Unsubscribe header
+ * posts to it, and scanners — which only GET — can no longer touch the list.
+ */
 export const handler = async (event) => {
   let emailAddress = null;
   let tenantId = null;
-  let success = false;
 
   try {
     tenantId = event.pathParameters.tenant;
@@ -29,7 +37,15 @@ export const handler = async (event) => {
     }
 
     try {
-      emailAddress = decrypt(email);
+      // Must be the same decode the POST handler uses. Tokens carry a JSON
+      // payload now, so `decrypt` alone would hand the serialized object
+      // straight to the confirmation page where the address belongs — and
+      // would skip the cross-tenant check the payload exists for.
+      const { email: decoded, legacy } = readSubscriberToken(email, tenantId);
+      emailAddress = decoded;
+      if (legacy) {
+        console.log('Unsubscribe page rendered from a legacy (pre-tenant-binding) token', { tenantId });
+      }
     } catch (decryptErr) {
       console.error('Email decryption failed:', {
         error: decryptErr.message,
@@ -40,34 +56,7 @@ export const handler = async (event) => {
       throw new Error('Invalid or expired unsubscribe link');
     }
 
-    const ipAddress = event.requestContext?.identity?.sourceIp ||
-                      event.headers?.['X-Forwarded-For']?.split(',')[0]?.trim() ||
-                      'unknown';
-
-    const userAgent = event.headers?.['User-Agent'] || event.headers?.['user-agent'] || 'unknown';
-
-    const metadata = {
-      ipAddress,
-      userAgent
-    };
-
-    const result = await unsubscribeUser(tenantId, emailAddress, 'encrypted-link', metadata);
-    success = result.success;
-
-    if (result.actuallyRemoved) {
-      try {
-        const recentIssue = await getMostRecentPublishedIssue(tenantId);
-        if (recentIssue) {
-          await incrementIssueCounter(recentIssue.pk, 'unsubscribes');
-        } else {
-          console.warn('No published issue found for unsubscribe attribution:', { tenantId });
-        }
-      } catch (attrErr) {
-        console.warn('Failed to increment unsubscribe counter:', { tenantId, error: attrErr.message });
-      }
-    } else if (!result.success) {
-      await notifyAdminOfFailure(tenantId, emailAddress, 'encrypted-link', metadata);
-    }
+    return htmlResponse(getConfirmationPage(tenantId, emailAddress));
   } catch (err) {
     console.error('Unsubscribe error:', {
       error: err.message,
@@ -76,22 +65,18 @@ export const handler = async (event) => {
       stack: err.stack
     });
 
-    if (tenantId && emailAddress) {
+    if (tenantId) {
       try {
         await notifyAdminOfFailure(tenantId, emailAddress, 'encrypted-link', { error: err.message });
       } catch (notifyErr) {
         console.error('Failed to notify admin of unsubscribe failure:', notifyErr);
       }
     }
-  }
 
-  return {
-    statusCode: 200,
-    headers: {
-      'Content-Type': 'text/html'
-    },
-    body: await getUnsubscribePage(tenantId, success, emailAddress)
-  };
+    // The error page carries the manual unsubscribe form, so a dead link still
+    // leaves the person a way off the list.
+    return htmlResponse(await getUnsubscribePage(tenantId, false, emailAddress));
+  }
 };
 
 const notifyAdminOfFailure = async (tenantId, emailAddress, method, metadata = {}) => {
@@ -109,15 +94,13 @@ const notifyAdminOfFailure = async (tenantId, emailAddress, method, metadata = {
 
       <h3>Details:</h3>
       <ul>
-        <li><strong>Email:</strong> ${emailAddress}</li>
+        <li><strong>Email:</strong> ${emailAddress || 'could not be determined'}</li>
         <li><strong>Method:</strong> ${method}</li>
         <li><strong>Time:</strong> ${new Date().toISOString()}</li>
         ${metadata.error ? `<li><strong>Error:</strong> ${metadata.error}</li>` : ''}
-        ${metadata.ipAddress ? `<li><strong>IP Address:</strong> ${metadata.ipAddress}</li>` : ''}
-        ${metadata.userAgent ? `<li><strong>User Agent:</strong> ${metadata.userAgent}</li>` : ''}
       </ul>
 
-      <p>The user was shown a success message for privacy and UX reasons, but the unsubscribe did not complete successfully.</p>
+      <p>The user was shown the manual unsubscribe form, so they can still remove themselves.</p>
       <p>Please manually verify and remove this email address from your contact list if needed.</p>
     `;
 
@@ -139,47 +122,4 @@ const notifyAdminOfFailure = async (tenantId, emailAddress, method, metadata = {
     console.error('Failed to notify admin:', err);
     throw err;
   }
-};
-
-/**
- * Get unsubscribe page template for tenant
- */
-const getUnsubscribeTemplate = async (tenantId) => {
-  try {
-    const result = await ddb.send(new GetItemCommand({
-      TableName: process.env.TABLE_NAME,
-      Key: marshall({
-        pk: `${tenantId}#unsubscribe`,
-        sk: 'templates'
-      })
-    }));
-
-    if (result.Item) {
-      return unmarshall(result.Item);
-    }
-
-    return {};
-  } catch (error) {
-    console.error('Error fetching unsubscribe template:', error);
-    return {};
-  }
-};
-
-/**
- * Generate unsubscribe page HTML using tenant template
- * Always shows the form for security/UX - users can always unsubscribe manually
- */
-const getUnsubscribePage = async (tenantId, wasSuccessful, emailAddress) => {
-  const template = await getUnsubscribeTemplate(tenantId);
-
-  // Use custom template if tenant has one, otherwise use default
-  if (template.success) {
-    return template.success;
-  }
-
-  return unsubscribeHtml({
-    tenantId,
-    wasSuccessful,
-    emailAddress: emailAddress || ''
-  });
 };

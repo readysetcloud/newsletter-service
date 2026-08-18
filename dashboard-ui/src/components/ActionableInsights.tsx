@@ -95,10 +95,13 @@ export const ActionableInsights: React.FC<ActionableInsightsProps> = ({ trendsDa
       });
     }
 
-    // Subscriber growth/churn
-    if (issues.length >= 2) {
-      const latest = issues[0].metrics.subscribers;
-      const oldest = issues[issues.length - 1].metrics.subscribers;
+    // Subscriber growth/churn. Only issues that actually recorded a list size
+    // can bound the window — an issue without a snapshot used to enter here as
+    // 0 and produce "List size shrank 100%" on a list that never moved.
+    const measured = issues.filter(issue => issue.metrics.subscribers !== undefined);
+    if (measured.length >= 2) {
+      const latest = measured[0].metrics.subscribers!;
+      const oldest = measured[measured.length - 1].metrics.subscribers!;
       const growthPct = oldest > 0 ? ((latest - oldest) / oldest) * 100 : 0;
 
       if (growthPct > 5) {
@@ -106,7 +109,7 @@ export const ActionableInsights: React.FC<ActionableInsightsProps> = ({ trendsDa
           id: 'sub-growth',
           icon: TrendingUp,
           iconColor: 'text-success-500',
-          message: `Your list grew ${growthPct.toFixed(1)}% over the last ${issues.length} issues. Nice momentum.`,
+          message: `Your list grew ${growthPct.toFixed(1)}% over the last ${measured.length} issues. Nice momentum.`,
           severity: 'positive',
         });
       } else if (growthPct < -2) {

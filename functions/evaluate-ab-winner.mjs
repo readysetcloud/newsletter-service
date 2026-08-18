@@ -4,6 +4,7 @@ import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { evaluateAbResult } from './utils/ab-stats.mjs';
 import { buildAbHistoryRecord } from './utils/ab-history.mjs';
 import { publishIssueEvent, EVENT_TYPES } from './utils/event-publisher.mjs';
+import { assertEventsPublished } from './utils/eventbridge.mjs';
 
 const ddb = new DynamoDBClient();
 const eventBridge = new EventBridgeClient();
@@ -308,11 +309,16 @@ const sendWinner = async (sendPayload, winningSubject, winningSendAt) => {
     detail.sendAt = winningSendAt;
   }
 
-  await eventBridge.send(new PutEventsCommand({
+  const result = await eventBridge.send(new PutEventsCommand({
     Entries: [{
       Source: 'newsletter-service',
       DetailType: 'Send Email v2',
       Detail: JSON.stringify(detail)
     }]
   }));
+
+  // The winning variant goes to everyone who was held out of the test — the
+  // majority of the list. A rejected entry loses that send entirely, and the
+  // A/B evaluation would still record a winner as though it had been sent.
+  assertEventsPublished(result, 'A/B winner send');
 };

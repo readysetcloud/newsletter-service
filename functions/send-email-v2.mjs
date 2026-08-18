@@ -4,7 +4,10 @@ import { recordIssueEvent, ISSUE_EVENTS, issueNumberFromReference } from './util
 import { EventBridgeClient, PutEventsCommand } from "@aws-sdk/client-eventbridge";
 import { DynamoDBClient, QueryCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
-import { encrypt, sendWithRetry } from './utils/helpers.mjs';
+import { sendWithRetry } from './utils/helpers.mjs';
+import { assertEventsPublished } from './utils/eventbridge.mjs';
+import { mintSubscriberToken } from './utils/subscriber-token.mjs';
+import { listSuppressedEmails, getSuppression } from './utils/suppression.mjs';
 import { listSubscribers, getSubscriberByEmail, updateSubscriberSendMetadata } from './utils/subscriber.mjs';
 import { splitRecipients, selectHoldoutSample } from './utils/ab-variants.mjs';
 import {
@@ -260,7 +263,7 @@ const normalizeLocalSend = (localSend) => {
  */
 const emitSendEvent = async (payload) => {
   await sendWithRetry(async () => {
-    return await eventBridge.send(new PutEventsCommand({
+    const result = await eventBridge.send(new PutEventsCommand({
       Entries: [{
         EventBusName: 'default',
         Source: 'newsletter-service',
@@ -268,6 +271,10 @@ const emitSendEvent = async (payload) => {
         Detail: JSON.stringify(payload)
       }]
     }));
+    // A rejected entry here loses a whole timezone group's send. Throwing puts
+    // it back through sendWithRetry rather than logging a success.
+    assertEventsPublished(result, 'Local-send group event');
+    return result;
   }, 'Emit local-send group event');
 };
 
@@ -612,15 +619,97 @@ const prepareAssemblyPhase = async (html, subscribers, referenceNumber) => {
 };
 
 /**
+ * Decide whether this send carries the RFC 8058 one-click unsubscribe headers,
+ * and against which endpoint.
+ *
+ * Marketing mail to subscribers gets them: issue sends (anything with a
+ * referenceNumber) and events that opt in explicitly (`listUnsubscribe: true`,
+ * set by the welcome email). Nothing else does — admin alerts and previews ride
+ * this same event type to the operator's own inbox, and an unsubscribe header
+ * there would let the operator one-click themselves off their own list.
+ *
+ * Gmail and Yahoo have required these headers on bulk promotional mail since
+ * 2024; without them the only way out a recipient sees at the top of the
+ * message is "report spam", which is the complaint rate that decides
+ * deliverability.
+ *
+ * @param {Object} data - The Send Email v2 event detail
+ * @returns {{baseUrl: string, tenantId: string} | null}
+ */
+/**
+ * Whether this send is marketing mail to subscribers, as opposed to an admin
+ * alert or preview going to the operator's own inbox on the same event type.
+ * Decides both the one-click headers and whether suppression is enforced —
+ * they have to agree, or a message could carry an unsubscribe link while
+ * ignoring the record that link writes.
+ */
+const isMarketingSend = (data) =>
+  (Boolean(data.referenceNumber) || data.listUnsubscribe === true) && Boolean(data.tenantId);
+
+/**
+ * Drop recipients with a suppression on record.
+ *
+ * Throws rather than sending on a read failure: an unreadable consent store is
+ * not evidence that nobody opted out, and mailing someone who did is the one
+ * outcome worth failing a send over.
+ */
+const filterSuppressedPhase = async (tenantId, subscribers) => {
+  // A single-recipient send (welcome mail, a test) asks about one address
+  // rather than pulling the tenant's whole suppression partition to check it.
+  if (subscribers.length === 1) {
+    const only = subscribers[0];
+    const suppression = await getSuppression(tenantId, only.email);
+    if (suppression) {
+      console.warn('[SUPPRESSION] Withheld a recipient with a recorded opt-out still on the subscriber list');
+      return [];
+    }
+    return subscribers;
+  }
+
+  const suppressed = await listSuppressedEmails(tenantId);
+  if (suppressed.size === 0) {
+    return subscribers;
+  }
+
+  const allowed = subscribers.filter((subscriber) => !suppressed.has(subscriber.email?.toLowerCase()));
+  const removed = subscribers.length - allowed.length;
+
+  if (removed > 0) {
+    console.warn(`[SUPPRESSION] Withheld ${removed} recipient(s) with a recorded opt-out still on the subscriber list`);
+  }
+
+  return allowed;
+};
+
+const resolveListUnsubscribe = (data) => {
+  if (!isMarketingSend(data)) {
+    return null;
+  }
+
+  if (!process.env.API_BASE_URL) {
+    console.warn('[HEADERS] API_BASE_URL not set - sending without List-Unsubscribe headers');
+    return null;
+  }
+
+  return {
+    baseUrl: process.env.API_BASE_URL.replace(/\/+$/, ''),
+    tenantId: data.tenantId
+  };
+};
+
+/**
  * Send emails to recipients with personalization and TPS throttling
  * @param {string[]} emailAddresses - Array of recipient email addresses
  * @param {Object} emailConfig - Email configuration object
  * @param {string} emailConfig.subject - Email subject line
  * @param {string} emailConfig.html - Email HTML body
+ * @param {string} emailConfig.tenantId - Tenant the recipients belong to; binds each minted token to it
  * @param {Object} emailConfig.replacements - Replacement tokens for personalization
  * @param {string} emailConfig.referenceNumber - Optional reference number for tracking
  * @param {string} [emailConfig.variant] - Optional A/B variant id ("a"/"b") tagged on the send
  * @param {Object} [emailConfig.assembly] - Optional prepared interest assembly ({ prepared, interestByEmail }) from prepareAssemblyPhase
+ * @param {{baseUrl: string, tenantId: string}} [emailConfig.listUnsubscribe] - When set, each message carries RFC 8058 one-click unsubscribe headers built from this endpoint
+ * @param {boolean} [emailConfig.marketing] - True for subscriber marketing mail. Gates the `tenantId` SES tag, which is what lets a complaint unsubscribe the recipient; admin alerts and previews must not carry it
  * @param {string} senderEmail - Sender email address
  * @returns {Promise<{sentCount: number, sentRecipients: string[]}>} Send stats and sent recipients
  */
@@ -658,11 +747,22 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
         );
       }
 
+      // One encrypted token per recipient serves both the in-body links and
+      // the List-Unsubscribe header. Percent-encoded because every use is
+      // inside a query string, and `encrypt` emits standard base64 — whose `+`
+      // a query parser decodes as a space, corrupting the token before the
+      // handler ever sees it.
+      const needsToken = Boolean(emailConfig.replacements?.emailAddressHash || emailConfig.listUnsubscribe);
+      // Tenant-bound (utils/subscriber-token.mjs): a bare encrypted address
+      // could be replayed against any other tenant's unsubscribe endpoint.
+      const encodedToken = needsToken
+        ? encodeURIComponent(mintSubscriberToken(emailConfig.tenantId, email))
+        : null;
+
       if (emailConfig.replacements?.emailAddressHash) {
-        const emailHash = encrypt(email);
         personalizedHtml = personalizedHtml.replace(
           new RegExp(emailConfig.replacements.emailAddressHash, 'g'),
-          emailHash
+          encodedToken
         );
       }
 
@@ -670,9 +770,41 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
       if (emailConfig.referenceNumber) {
         emailTags.push({ Name: 'referenceNumber', Value: emailConfig.referenceNumber });
       }
+      // Complaint handling needs a tenant even when there is no issue to point
+      // at. Welcome mail carries no referenceNumber, so a "report spam" on one
+      // had nothing to resolve a tenant from and was dropped.
+      //
+      // Gated on `marketing`, not merely on a tenant id being present. The
+      // complaint handler treats this tag as authority to unsubscribe the
+      // complained-about address, so tagging an admin alert or a report would
+      // mean an operator marking their own operational mail as spam wrote a
+      // durable suppression against their address — and deleted their
+      // subscriber row if they read their own newsletter. Only mail that
+      // carries an unsubscribe link may carry the tag that acts on one.
+      //
+      // SES message tag values allow only letters, digits, dashes and
+      // underscores, so a tenant id outside that set is left off rather than
+      // failing the send.
+      if (emailConfig.marketing && emailConfig.tenantId && /^[A-Za-z0-9_-]+$/.test(emailConfig.tenantId)) {
+        emailTags.push({ Name: 'tenantId', Value: emailConfig.tenantId });
+      }
       if (emailConfig.variant) {
         emailTags.push({ Name: 'variant', Value: emailConfig.variant });
       }
+
+      // RFC 8058 one-click unsubscribe. The POST endpoint acts without
+      // confirmation — that is safe where the footer link is not, because mail
+      // clients POST only on an explicit unsubscribe action, while link
+      // scanners GET every URL in the message.
+      const messageHeaders = emailConfig.listUnsubscribe
+        ? [
+          {
+            Name: 'List-Unsubscribe',
+            Value: `<${emailConfig.listUnsubscribe.baseUrl}/${emailConfig.listUnsubscribe.tenantId}/unsubscribe?email=${encodedToken}>`
+          },
+          { Name: 'List-Unsubscribe-Post', Value: 'List-Unsubscribe=One-Click' }
+        ]
+        : undefined;
 
       await ses.send(new SendEmailCommand({
         FromEmailAddress: senderEmail,
@@ -680,7 +812,8 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
         Content: {
           Simple: {
             Subject: { Data: emailConfig.subject },
-            Body: { Html: { Data: personalizedHtml } }
+            Body: { Html: { Data: personalizedHtml } },
+            ...messageHeaders && { Headers: messageHeaders }
           }
         },
         ...emailTags.length > 0 && { EmailTags: emailTags },
@@ -927,13 +1060,17 @@ const fanOutSendTimeVariants = async ({ data, subject, html, to, tenantId, repla
     };
 
     await sendWithRetry(async () => {
-      return await eventBridge.send(new PutEventsCommand({
+      const result = await eventBridge.send(new PutEventsCommand({
         Entries: [{
           Source: 'newsletter-service',
           DetailType: 'Send Email v2',
           Detail: JSON.stringify(detail)
         }]
       }));
+      // A rejected entry drops this variant's whole bucket, and the log below
+      // would still claim it was fanned out.
+      assertEventsPublished(result, `Send-time variant ${variant.variantId}`);
+      return result;
     }, `Fan out send-time variant ${variant.variantId}`);
 
     console.log(`[A/B] Fanned out send-time variant ${variant.variantId} at ${variant.sendAt || 'now'} for ${data.referenceNumber}`);
@@ -1091,6 +1228,30 @@ export const handler = async (event) => {
       }
     }
 
+    // Suppression is the final authority on who may be mailed, not just a gate
+    // on the add paths. The Subscribers table can disagree with it after a
+    // partial failure — a recorded revocation whose subscriber delete then
+    // failed leaves an active row for someone who opted out — and this is the
+    // last point where that can be caught before mail goes out. One query per
+    // send, not a lookup per recipient.
+    if (isMarketingSend(data)) {
+      subscribers = await executePhase('Suppression Filter', async () => {
+        return await filterSuppressedPhase(tenantId, subscribers);
+      });
+
+      if (subscribers.length === 0) {
+        console.log('[EXECUTION COMPLETE] Every recipient has opted out');
+        await reportGroupProgress(data, { recipients: 0, skipped: 0 });
+        return {
+          sent: true,
+          recipients: 0,
+          skipped: 0,
+          senderEmail,
+          senderId: senderRecord?.senderId
+        };
+      }
+    }
+
     const { recipients: emailAddresses, skippedCount } = await executePhase('Idempotency Filter', async () => {
       return await filterIdempotentRecipientsPhase(tenantId, subscribers, data.referenceNumber);
     });
@@ -1135,6 +1296,14 @@ export const handler = async (event) => {
     const variants = abTest?.variants ?? (Array.isArray(data.variants) ? data.variants : null);
     const allEmails = subscribers.map(subscriber => subscriber.email);
     const eligibleSet = new Set(emailAddresses);
+    const listUnsubscribe = resolveListUnsubscribe(data);
+    // Whether this send is subscriber marketing mail. Decides the complaint
+    // routing tag as well as the headers, and it must be the same predicate for
+    // both: a message that carries an unsubscribe link is exactly the set of
+    // messages whose complaints may act on a subscription. `listUnsubscribe`
+    // cannot stand in for it — that goes null when API_BASE_URL is unset, which
+    // would silently drop complaint routing for a real issue send.
+    const marketing = isMarketingSend(data);
     const { sentCount, sentRecipients } = await executePhase('Email Sending', async () => {
       if (variants?.length && to.list) {
         const subjectByVariant = Object.fromEntries(
@@ -1168,10 +1337,13 @@ export const handler = async (event) => {
           const result = await sendEmailsPhase(bucketRecipients, {
             subject: subjectByVariant[variantId] ?? subject,
             html,
+            tenantId,
             replacements,
             referenceNumber: data.referenceNumber,
             variant: variantId,
-            ...assembly && { assembly }
+            marketing,
+            ...assembly && { assembly },
+            ...listUnsubscribe && { listUnsubscribe }
           }, senderEmail);
 
           total += result.sentCount;
@@ -1184,9 +1356,12 @@ export const handler = async (event) => {
       return await sendEmailsPhase(emailAddresses, {
         subject,
         html,
+        tenantId,
         replacements,
         referenceNumber: data.referenceNumber,
-        ...assembly && { assembly }
+        marketing,
+        ...assembly && { assembly },
+        ...listUnsubscribe && { listUnsubscribe }
       }, senderEmail);
     });
 

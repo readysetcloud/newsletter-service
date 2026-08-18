@@ -1,4 +1,4 @@
-import { DynamoDBClient, UpdateItemCommand, PutItemCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, TransactWriteItemsCommand } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
 import { formatResponse, getTenant } from '../utils/helpers.mjs';
 import { publishSubscriberEvent, publishEvent, EVENT_TYPES } from '../utils/event-publisher.mjs';
@@ -22,6 +22,7 @@ import { sanitizeName } from '../utils/subscriber-name.mjs';
 import { checkRateLimit } from '../utils/rate-limiter.mjs';
 import { createLogger } from '../utils/structured-logger.mjs';
 import { getMostRecentPublishedIssue, incrementIssueCounter } from '../utils/issue-attribution.mjs';
+import { getSuppression, suppressionConditionCheck } from '../utils/suppression.mjs';
 
 const ddb = new DynamoDBClient();
 
@@ -154,6 +155,53 @@ export const handler = async (event) => {
       return formatResponse(201, 'Contact added');
     }
 
+    // Step 8.5: Refuse an address that has already opted out.
+    //
+    // This endpoint is unauthenticated and takes a caller-supplied address, so
+    // a submission here is not evidence that its owner sent it — anyone who
+    // knows an address could use this to erase that person's opt-out and put
+    // them back on the list. Reactivation needs proof of ownership (a
+    // confirmation link sent to the address itself), which does not exist yet,
+    // so until it does a suppressed address stays suppressed.
+    //
+    // A suppressed address gets the same silent 201 the bot filters return, so
+    // this endpoint still says nothing about whether an address is known.
+    //
+    // A read failure is different: nobody is added either way — an unreachable
+    // consent store must never read as consent — but a legitimate signup lost
+    // to a transient blip deserves to be told, so the form can surface an
+    // error and the person can try again rather than silently never hearing
+    // from us. The failure is independent of whether a record exists, so
+    // reporting it leaks nothing.
+    let suppression;
+    try {
+      suppression = await getSuppression(tenantId, normalizedEmail);
+    } catch (suppressionErr) {
+      console.error('Refusing signup: consent state could not be read', {
+        tenantId,
+        error: suppressionErr.message
+      });
+      return formatResponse(500, 'Something went wrong');
+    }
+
+    if (suppression) {
+      emitBotProtectionLog(logger, 'signup.suppressed', {
+        tenantId,
+        normalizedEmail,
+        sourceIp,
+        userAgent,
+        detectionFlags,
+        rejectionReason: 'previously_unsubscribed',
+        requestCountInWindow: rateLimitResult.count
+      });
+      return formatResponse(201, 'Contact added');
+    }
+
+    // Stamped before the write, because the subscriber row and its timeline
+    // record share these values and both commit in the same transaction.
+    const addedAt = new Date().toISOString();
+    const timestamp = Date.now();
+
     // Step 9: Attempt to create subscriber (duplicate check via ConditionExpression)
     const isNew = await addSubscriber(tenantId, contact, normalizedEmail, {
       sourceIp,
@@ -161,7 +209,7 @@ export const handler = async (event) => {
       detectionFlags,
       requestCountInWindow: rateLimitResult.count,
       elapsedMs: sanitizedElapsedMs
-    });
+    }, { addedAt, timestamp });
 
     if (isNew) {
       // Emit signup.flagged log if any detection flag is true
@@ -178,11 +226,9 @@ export const handler = async (event) => {
         });
       }
 
-      const addedAt = new Date().toISOString();
-      const timestamp = Date.now();
-
-      await updateSubscriberCount(tenantId);
-      await createSubscriberEventRecord(tenantId, normalizedEmail, addedAt, timestamp);
+      // The tenant count and the timeline record are already committed — they
+      // are the third and fourth items of the transaction that created the
+      // subscriber.
 
       // Attribute the new subscriber to the most recently sent issue
       try {
@@ -232,9 +278,7 @@ export const handler = async (event) => {
   }
 };
 
-const addSubscriber = async (tenantId, contact, normalizedEmail, detectionData) => {
-  const addedAt = new Date().toISOString();
-
+const addSubscriber = async (tenantId, contact, normalizedEmail, detectionData, { addedAt, timestamp }) => {
   const subscriberItem = {
     tenantId,
     email: normalizedEmail,
@@ -257,51 +301,94 @@ const addSubscriber = async (tenantId, contact, normalizedEmail, detectionData) 
   };
 
   try {
-    await ddb.send(new PutItemCommand({
-      TableName: process.env.SUBSCRIBERS_TABLE_NAME,
-      Item: marshall(subscriberItem),
-      ConditionExpression: 'attribute_not_exists(tenantId)'
+    // The consent check is committed with the write, not merely performed
+    // before it. A preflight read leaves a window where an unsubscribe lands
+    // between the check and the Put, ending with an active subscriber and a
+    // suppression on record at once. Inside the transaction the record is a
+    // real guard: if a suppression exists at commit time, nothing is written.
+    await ddb.send(new TransactWriteItemsCommand({
+      TransactItems: [
+        suppressionConditionCheck(tenantId, normalizedEmail),
+        {
+          Put: {
+            TableName: process.env.SUBSCRIBERS_TABLE_NAME,
+            Item: marshall(subscriberItem),
+            ConditionExpression: 'attribute_not_exists(tenantId)'
+          }
+        },
+        // The tenant counter rides along rather than following as a separate
+        // write. Incrementing afterwards meant a counter failure returned 500
+        // with the subscriber already committed, and the retry could not
+        // repair it: the Put hits the duplicate guard, the handler takes the
+        // "already subscribed" path, and the increment never happens again.
+        // The count stayed low permanently. Here the subscriber and the count
+        // commit together or not at all.
+        //
+        // `if_not_exists` because a tenant that has never had a subscriber has
+        // no attribute to add to, and a bare `#subscribers + :one` fails on it.
+        {
+          Update: {
+            TableName: process.env.TABLE_NAME,
+            Key: marshall({ pk: tenantId, sk: 'tenant' }),
+            UpdateExpression: 'SET #subscribers = if_not_exists(#subscribers, :zero) + :one',
+            ExpressionAttributeNames: { '#subscribers': 'subscribers' },
+            ExpressionAttributeValues: marshall({ ':one': 1, ':zero': 0 })
+          }
+        },
+        // The activity-timeline record commits here too, for the same reason
+        // the counter does. Written after the transaction it was unreplayable:
+        // a failure returned 500 with the subscriber already committed, and the
+        // retry hit the duplicate guard and took the "already subscribed"
+        // branch — skipping this record *and* the `Subscriber Added` event, so
+        // the welcome email was lost with EventBridge working perfectly.
+        //
+        // The event publication itself stays outside; it is a different system
+        // and cannot be transacted with DynamoDB. But everything durable that
+        // represents this signup commits together, so a retry starts from
+        // either a complete signup or none at all.
+        { Put: { TableName: process.env.TABLE_NAME, Item: marshall(subscriberEventRecord(tenantId, normalizedEmail, addedAt, timestamp)) } }
+      ]
     }));
     return true;
   } catch (err) {
-    if (err.name === 'ConditionalCheckFailedException') {
-      return false;
-    } else {
-      throw err;
+    // Only the two guards this transaction declares mean "not added, and that
+    // is fine". DynamoDB also cancels transactions for conflicts, throttling
+    // and validation errors, and treating those as an ordinary no-op would
+    // return `201 Contact added` having added nobody — the same false success
+    // this handler deliberately stopped returning for consent-read failures.
+    // Anything else rethrows so the handler answers 500 and the signup can be
+    // retried.
+    if (err.name === 'TransactionCanceledException') {
+      // Positions match TransactItems:
+      // [suppression check, subscriber put, tenant count].
+      const codes = (err.CancellationReasons || []).map((reason) => reason.Code);
+
+      if (codes[0] === 'ConditionalCheckFailed') {
+        // The race this transaction exists to lose: the opt-out arrived after
+        // the preflight read and must win.
+        console.info(`Subscriber not added for ${tenantId}; a suppression landed mid-request`);
+        return false;
+      }
+
+      if (codes[1] === 'ConditionalCheckFailed') {
+        // The ordinary duplicate.
+        return false;
+      }
+
+      console.error(`Subscriber transaction cancelled for ${tenantId}`, { reasons: codes });
     }
+
+    throw err;
   }
 };
 
-const updateSubscriberCount = async (tenantId) => {
-  await ddb.send(new UpdateItemCommand({
-    TableName: process.env.TABLE_NAME,
-    Key: marshall({
-      pk: tenantId,
-      sk: 'tenant'
-    }),
-    UpdateExpression: 'SET #subscribers = #subscribers + :val',
-    ExpressionAttributeNames: {
-      '#subscribers': 'subscribers'
-    },
-    ExpressionAttributeValues: {
-      ':val': { N: '1' }
-    }
-  }));
-};
-
-const createSubscriberEventRecord = async (tenantId, email, addedAt, timestamp) => {
-  const ttl = Math.floor(Date.now() / 1000) + (90 * 24 * 60 * 60); // 90 days from now
-
-  await ddb.send(new PutItemCommand({
-    TableName: process.env.TABLE_NAME,
-    Item: marshall({
-      pk: tenantId,
-      sk: `subscriber#${timestamp}#${email}`,
-      GSI1PK: tenantId,
-      GSI1SK: `subscriber#${timestamp}`,
-      email,
-      addedAt,
-      ttl
-    })
-  }));
-};
+/** The activity-timeline record for a signup, as a transaction item's Item. */
+const subscriberEventRecord = (tenantId, email, addedAt, timestamp) => ({
+  pk: tenantId,
+  sk: `subscriber#${timestamp}#${email}`,
+  GSI1PK: tenantId,
+  GSI1SK: `subscriber#${timestamp}`,
+  email,
+  addedAt,
+  ttl: Math.floor(Date.now() / 1000) + (90 * 24 * 60 * 60) // 90 days from now
+});

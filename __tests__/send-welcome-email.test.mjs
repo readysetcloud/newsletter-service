@@ -5,7 +5,9 @@ import * as fc from 'fast-check';
 
 const mockDdbSend = jest.fn();
 const mockEventBridgeSend = jest.fn();
-const mockEncrypt = jest.fn((email) => `encrypted_${email}`);
+// Now tenant-bound: the token carries the tenant so it cannot be replayed
+// against another tenant's unsubscribe endpoint.
+const mockEncrypt = jest.fn((tenantId, email) => `encrypted_${tenantId}_${email}`);
 const mockTemplate = jest.fn((data) => `<html>Welcome ${data.subscriberFirstName || ''} to ${data.brandName}</html>`);
 
 jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
@@ -24,8 +26,8 @@ jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
   unmarshall: jest.fn((obj) => obj),
 }));
 
-jest.unstable_mockModule('../functions/utils/helpers.mjs', () => ({
-  encrypt: mockEncrypt,
+jest.unstable_mockModule('../functions/utils/subscriber-token.mjs', () => ({
+  mintSubscriberToken: mockEncrypt,
 }));
 
 jest.unstable_mockModule('handlebars', () => ({
@@ -53,6 +55,7 @@ describe('send-welcome-email handler', () => {
     jest.clearAllMocks();
     process.env.TABLE_NAME = 'test-table';
     process.env.ORIGIN = 'https://example.com';
+    process.env.API_BASE_URL = 'https://api.example.com';
 
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -303,8 +306,20 @@ describe('send-welcome-email handler', () => {
             },
           };
 
-          // Property: Handler should not throw an exception
-          await expect(handler(event)).resolves.not.toThrow();
+          // Property: a scenario with nothing to send resolves; a scenario
+          // where the send itself failed rejects.
+          //
+          // These are not the same kind of error. A missing tenant or an
+          // unconfigured sender means there is no welcome email to send and
+          // retrying changes nothing. An EventBridge failure means there was
+          // one and it was lost — and because this is an async invocation,
+          // returning normally tells Lambda the work succeeded and the retry
+          // never happens. That subscriber would never hear from us.
+          if (scenario.errorType === 'eventbridge_failure') {
+            await expect(handler(event)).rejects.toThrow();
+          } else {
+            await expect(handler(event)).resolves.not.toThrow();
+          }
 
           // Property: Errors should be logged when error scenarios occur
           if (scenario.errorType === 'tenant_not_found' || scenario.errorType === 'no_default_sender' || scenario.errorType === 'eventbridge_failure') {
@@ -325,6 +340,62 @@ describe('send-welcome-email handler', () => {
 
       // Property: Should log error
       expect(console.error).toHaveBeenCalled();
+    });
+  });
+
+  // EventBridge answers 200 to the API call and reports per-entry failures in
+  // the response body, so an accepted call is not a published event. Ignoring
+  // FailedEntryCount made a rejected entry indistinguishable from a delivered
+  // welcome email — and because this is an async invocation, reporting success
+  // meant Lambda never retried it.
+  describe('event publication is verified, not assumed', () => {
+    const workingLookups = () => {
+      mockDdbSend.mockImplementation((command) => {
+        if (command.__type === 'GetItem') {
+          return Promise.resolve({
+            Item: { pk: 'test-tenant', sk: 'tenant', brandName: 'Test Newsletter' },
+          });
+        }
+        if (command.__type === 'Query') {
+          return Promise.resolve({
+            Items: [{
+              email: 'sender@example.com',
+              senderId: 'sender-123',
+              verificationStatus: 'verified',
+              isDefault: true,
+            }],
+          });
+        }
+        return Promise.resolve({});
+      });
+    };
+
+    const event = {
+      detail: { tenantId: 'test-tenant', data: { email: 'subscriber@example.com' } },
+    };
+
+    test('throws when an entry is rejected despite an accepted call', async () => {
+      workingLookups();
+      mockEventBridgeSend.mockResolvedValue({
+        FailedEntryCount: 1,
+        Entries: [{ ErrorCode: 'InternalException', ErrorMessage: 'try again' }],
+      });
+
+      await expect(handler(event)).rejects.toThrow(/InternalException/);
+    });
+
+    test('throws when the call itself is rejected', async () => {
+      workingLookups();
+      mockEventBridgeSend.mockRejectedValue(new Error('EventBridge unavailable'));
+
+      await expect(handler(event)).rejects.toThrow('EventBridge unavailable');
+    });
+
+    test('resolves when every entry is accepted', async () => {
+      workingLookups();
+      mockEventBridgeSend.mockResolvedValue({ FailedEntryCount: 0, Entries: [{ EventId: 'e-1' }] });
+
+      await expect(handler(event)).resolves.not.toThrow();
     });
   });
 
@@ -411,6 +482,62 @@ describe('send-welcome-email handler', () => {
       expect(detail.to.email).toBe('subscriber@example.com');
       expect(detail.subject).toContain('Test Newsletter');
       expect(detail.html).toBeDefined();
+    });
+
+    // The token is standard base64 and rides in a query string, where a `+`
+    // decodes to a space and corrupts it before the unsubscribe handler can
+    // decrypt it.
+    test('percent-encodes the token in the unsubscribe link', async () => {
+      mockEncrypt.mockReturnValueOnce('iv+part/x==:data+part:tag+part');
+      mockDdbSend.mockImplementation((command) => {
+        if (command.__type === 'GetItem') {
+          return Promise.resolve({ Item: { pk: 'test-tenant', sk: 'tenant', brandName: 'Test Newsletter' } });
+        }
+        if (command.__type === 'Query') {
+          return Promise.resolve({
+            Items: [{ email: 'sender@example.com', senderId: 'sender-123', verificationStatus: 'verified', isDefault: true }],
+          });
+        }
+        return Promise.resolve({});
+      });
+      mockEventBridgeSend.mockResolvedValue({});
+
+      await handler({
+        detail: { tenantId: 'test-tenant', data: { email: 'subscriber@example.com' } },
+      });
+
+      const { unsubscribeUrl } = mockTemplate.mock.calls.at(-1)[0];
+      const token = unsubscribeUrl.split('?email=')[1];
+
+      expect(token).not.toContain('+');
+      expect(decodeURIComponent(token)).toBe('iv+part/x==:data+part:tag+part');
+      // The route lives on the public API, not the marketing site (ORIGIN) —
+      // built from ORIGIN, every welcome email's unsubscribe link 404'd.
+      expect(unsubscribeUrl).toMatch(/^https:\/\/api\.example\.com\/test-tenant\/unsubscribe\?email=/);
+    });
+
+    // Welcome emails are marketing mail to a subscriber, so the send event
+    // opts into the RFC 8058 one-click headers the way an issue send does.
+    test('opts the send into List-Unsubscribe headers', async () => {
+      mockDdbSend.mockImplementation((command) => {
+        if (command.__type === 'GetItem') {
+          return Promise.resolve({ Item: { pk: 'test-tenant', sk: 'tenant', brandName: 'Test Newsletter' } });
+        }
+        if (command.__type === 'Query') {
+          return Promise.resolve({
+            Items: [{ email: 'sender@example.com', senderId: 'sender-123', verificationStatus: 'verified', isDefault: true }],
+          });
+        }
+        return Promise.resolve({});
+      });
+      mockEventBridgeSend.mockResolvedValue({});
+
+      await handler({
+        detail: { tenantId: 'test-tenant', data: { email: 'subscriber@example.com' } },
+      });
+
+      const detail = JSON.parse(mockEventBridgeSend.mock.calls[0][0].Entries[0].Detail);
+      expect(detail.listUnsubscribe).toBe(true);
     });
   });
 });

@@ -60,10 +60,20 @@ async function loadIsolated() {
       DynamoDBClient: jest.fn(() => ddbInstance),
       UpdateItemCommand: jest.fn((params) => ({ __type: 'UpdateItem', ...params })),
       PutItemCommand: jest.fn((params) => ({ __type: 'PutItem', ...params })),
+      GetItemCommand: jest.fn((params) => ({ __type: 'GetItem', ...params })),
+      // Imported by utils/suppression.mjs for clearSuppression, which is
+      // deliberately unwired from this path — signup is unauthenticated and
+      // cannot be treated as proof of address ownership.
+      DeleteItemCommand: jest.fn((params) => ({ __type: 'DeleteItem', ...params })),
+      QueryCommand: jest.fn((params) => ({ __type: 'Query', ...params })),
+      // The subscriber write commits with a ConditionCheck on the suppression
+      // key, so the consent record guards the write instead of preceding it.
+      TransactWriteItemsCommand: jest.fn((params) => ({ __type: 'TransactWrite', ...params })),
     }));
 
     jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
       marshall: jest.fn((k) => k),
+      unmarshall: jest.fn((k) => k),
     }));
 
     // issue attribution (no published issue → no per-issue counter writes)
@@ -179,6 +189,34 @@ describe('add-subscriber handler — bot protection integration', () => {
     });
   });
 
+
+  /**
+   * Signup now reads the suppression record before writing the subscriber, so
+   * a bare `mockRejectedValue` would fail that read instead of the write it is
+   * aiming at. This resolves the consent lookup (no suppression on record) and
+   * applies `rest` to every call after it.
+   */
+  const withCleanSuppressionCheck = (rest) => {
+    ddbInstance.send.mockImplementation((cmd) =>
+      cmd.__type === 'GetItem' ? Promise.resolve({}) : rest(cmd)
+    );
+  };
+
+  /**
+   * The subscriber write is now the Put half of a transaction, so an existing
+   * subscriber surfaces as a cancelled transaction whose second reason (the
+   * Put's, positionally) is `ConditionalCheckFailed` — not as a bare
+   * `ConditionalCheckFailedException` off a standalone PutItem.
+   */
+  const rejectAsDuplicateSubscriber = () => {
+    withCleanSuppressionCheck(() => Promise.reject(
+      Object.assign(new Error('exists'), {
+        name: 'TransactionCanceledException',
+        CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }]
+      })
+    ));
+  };
+
   // 1. HTTP 400 for invalid email format
   test('returns HTTP 400 for invalid email format', async () => {
     mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
@@ -265,10 +303,12 @@ describe('add-subscriber handler — bot protection integration', () => {
     const res = await handler(makeEvent({ email: 'user@tempmail.com' }));
 
     expect(res.statusCode).toBe(201);
-    // Subscriber PutItem should have been called (record created)
+    // The subscriber write is the Put half of the transaction whose other half
+    // is the suppression ConditionCheck.
     expect(ddbInstance.send).toHaveBeenCalled();
-    const putCall = ddbInstance.send.mock.calls[0][0];
-    expect(putCall.__type).toBe('PutItem');
+    const transactCall = ddbInstance.send.mock.calls[1][0];
+    expect(transactCall.__type).toBe('TransactWrite');
+    const putCall = transactCall.TransactItems[1].Put;
     expect(putCall.Item.disposableDomain).toBe(true);
     // Should emit signup.flagged log since disposableDomain flag is true
     expect(mockEmitBotProtectionLog).toHaveBeenCalledWith(
@@ -281,16 +321,15 @@ describe('add-subscriber handler — bot protection integration', () => {
   // 6. HTTP 201 for duplicate email (no additional writes)
   test('returns HTTP 201 for duplicate email with no additional writes', async () => {
     mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
-    // First DDB send (PutItem for subscriber) throws ConditionalCheckFailedException
-    ddbInstance.send.mockRejectedValue(
-      Object.assign(new Error('exists'), { name: 'ConditionalCheckFailedException' })
-    );
+    // An existing subscriber cancels the transaction on the Put half
+    rejectAsDuplicateSubscriber();
 
     const res = await handler(makeEvent({ email: 'dup@example.com' }));
 
     expect(res.statusCode).toBe(201);
-    // Only one DDB call — the failed PutItem; no UpdateItem or event record
-    expect(ddbInstance.send).toHaveBeenCalledTimes(1);
+    // Two DDB calls — the consent lookup and the cancelled transaction; no
+    // UpdateItem or event record.
+    expect(ddbInstance.send).toHaveBeenCalledTimes(2);
     expect(mockPublishSubscriberEvent).not.toHaveBeenCalled();
   });
 
@@ -315,9 +354,13 @@ describe('add-subscriber handler — bot protection integration', () => {
     const res = await handler(makeEvent({ email: 'real@example.com', elapsedMs: 500 }));
 
     expect(res.statusCode).toBe(201);
-    // First DDB call is PutItem for subscriber
-    const putCall = ddbInstance.send.mock.calls[0][0];
-    expect(putCall.__type).toBe('PutItem');
+    // The consent lookup runs first; the transactional subscriber write is next.
+    const transactCall = ddbInstance.send.mock.calls[1][0];
+    expect(transactCall.__type).toBe('TransactWrite');
+    // Guard first, write second — the record has to gate the write, not follow it.
+    expect(transactCall.TransactItems[0].ConditionCheck.ConditionExpression)
+      .toBe('attribute_not_exists(pk)');
+    const putCall = transactCall.TransactItems[1].Put;
     expect(putCall.Item.sourceIp).toBe('10.0.0.1');
     expect(putCall.Item.userAgent).toBe('TestAgent');
     expect(putCall.Item.honeypotTriggered).toBe(false);
@@ -339,9 +382,7 @@ describe('add-subscriber handler — bot protection integration', () => {
   test('emits duplicate_abuse log when requestCount > 3 for duplicate email', async () => {
     mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
     mockCheckRateLimit.mockResolvedValue({ count: 4, limited: false, retryAfterSeconds: null });
-    ddbInstance.send.mockRejectedValue(
-      Object.assign(new Error('exists'), { name: 'ConditionalCheckFailedException' })
-    );
+    rejectAsDuplicateSubscriber();
 
     const res = await handler(makeEvent({ email: 'dup@example.com' }));
 
@@ -359,9 +400,7 @@ describe('add-subscriber handler — bot protection integration', () => {
   test('does NOT emit duplicate_abuse log when requestCount <= 3 for duplicate email', async () => {
     mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
     mockCheckRateLimit.mockResolvedValue({ count: 3, limited: false, retryAfterSeconds: null });
-    ddbInstance.send.mockRejectedValue(
-      Object.assign(new Error('exists'), { name: 'ConditionalCheckFailedException' })
-    );
+    rejectAsDuplicateSubscriber();
 
     const res = await handler(makeEvent({ email: 'dup@example.com' }));
 
@@ -461,9 +500,7 @@ describe('add-subscriber handler — bot protection integration', () => {
     test('emits signup.duplicate_abuse log with correct fields', async () => {
       mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
       mockCheckRateLimit.mockResolvedValue({ count: 5, limited: false, retryAfterSeconds: null });
-      ddbInstance.send.mockRejectedValue(
-        Object.assign(new Error('exists'), { name: 'ConditionalCheckFailedException' })
-      );
+      rejectAsDuplicateSubscriber();
 
       await handler(makeEvent({ email: 'dup@example.com' }));
 
@@ -497,6 +534,193 @@ describe('add-subscriber handler — bot protection integration', () => {
           requestCountInWindow: 11
         })
       );
+    });
+  });
+
+  // Signup is unauthenticated and takes a caller-supplied address, so it is not
+  // proof that its owner sent it. Treating it as fresh consent would have let
+  // anyone re-create a subscriber and erase that person's durable opt-out.
+  describe('previously unsubscribed addresses', () => {
+    test('refuses a suppressed address and writes nothing', async () => {
+      mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
+      ddbInstance.send.mockImplementation((cmd) =>
+        cmd.__type === 'GetItem'
+          ? Promise.resolve({ Item: { unsubscribedAt: '2026-08-01T00:00:00.000Z', method: 'one-click' } })
+          : Promise.resolve({})
+      );
+
+      const res = await handler(makeEvent({ email: 'optedout@example.com' }));
+
+      // Silent 201, same as the bot filters: the endpoint must not reveal that
+      // an address is known, let alone that it opted out.
+      expect(res.statusCode).toBe(201);
+      // The consent lookup, and nothing else.
+      expect(ddbInstance.send).toHaveBeenCalledTimes(1);
+      expect(mockPublishSubscriberEvent).not.toHaveBeenCalled();
+      expect(mockEmitBotProtectionLog).toHaveBeenCalledWith(
+        mockLogger,
+        'signup.suppressed',
+        expect.objectContaining({ rejectionReason: 'previously_unsubscribed' })
+      );
+    });
+
+    // A cancelled transaction is not automatically the duplicate/suppression
+    // case. Conflicts, throttling and validation errors cancel too, and
+    // swallowing those would answer "Contact added" having added nobody —
+    // the same false success this handler stopped returning for read failures.
+    test.each([
+      ['a transaction conflict', ['None', 'TransactionConflict']],
+      ['throttling', ['ThrottlingError', 'None']],
+      ['capacity exceeded', ['None', 'ProvisionedThroughputExceeded']]
+    ])('reports %s as a failure rather than a silent no-op', async (_label, codes) => {
+      mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
+      withCleanSuppressionCheck(() => {
+        const err = Object.assign(new Error('cancelled'), {
+          name: 'TransactionCanceledException',
+          CancellationReasons: codes.map((Code) => ({ Code }))
+        });
+        return Promise.reject(err);
+      });
+
+      const res = await handler(makeEvent({ email: 'new@example.com' }));
+
+      expect(res.statusCode).toBe(500);
+      expect(mockPublishSubscriberEvent).not.toHaveBeenCalled();
+    });
+
+    test.each([
+      ['a suppression landing mid-request', ['ConditionalCheckFailed', 'None']],
+      ['an existing subscriber', ['None', 'ConditionalCheckFailed']]
+    ])('treats %s as a silent no-op', async (_label, codes) => {
+      mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
+      withCleanSuppressionCheck(() => {
+        const err = Object.assign(new Error('cancelled'), {
+          name: 'TransactionCanceledException',
+          CancellationReasons: codes.map((Code) => ({ Code }))
+        });
+        return Promise.reject(err);
+      });
+
+      const res = await handler(makeEvent({ email: 'new@example.com' }));
+
+      expect(res.statusCode).toBe(201);
+      expect(mockPublishSubscriberEvent).not.toHaveBeenCalled();
+    });
+
+    // The subscriber and the tenant count are one commit. Incrementing after
+    // the write meant a counter failure returned 500 with the subscriber
+    // already committed — and the retry could not repair it, because the Put
+    // hits the duplicate guard and the handler takes the "already subscribed"
+    // path where no increment happens. The count stayed low forever.
+    test('commits the tenant count with the subscriber write', async () => {
+      mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
+      withCleanSuppressionCheck(() => Promise.resolve({}));
+
+      const res = await handler(makeEvent({ email: 'new@example.com' }));
+
+      expect(res.statusCode).toBe(201);
+
+      const transact = ddbInstance.send.mock.calls
+        .map(([cmd]) => cmd)
+        .find((cmd) => cmd.__type === 'TransactWrite');
+
+      expect(transact.TransactItems).toHaveLength(4);
+      expect(transact.TransactItems[2].Update.Key).toEqual({ pk: 't1', sk: 'tenant' });
+      expect(transact.TransactItems[2].Update.UpdateExpression)
+        .toBe('SET #subscribers = if_not_exists(#subscribers, :zero) + :one');
+
+      // Nothing increments the count outside the transaction any more.
+      const standaloneCountUpdates = ddbInstance.send.mock.calls
+        .map(([cmd]) => cmd)
+        .filter((cmd) => cmd.__type === 'UpdateItem');
+      expect(standaloneCountUpdates).toHaveLength(0);
+    });
+
+    // The timeline record commits with the row, not after it. Written
+    // afterwards it was unreplayable: a failure returned 500 with the
+    // subscriber already committed, and the retry hit the duplicate guard and
+    // skipped every remaining creation step — including the `Subscriber Added`
+    // event the welcome email depends on.
+    test('commits the timeline record with the subscriber write', async () => {
+      mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
+      withCleanSuppressionCheck(() => Promise.resolve({}));
+
+      await handler(makeEvent({ email: 'new@example.com' }));
+
+      const transact = ddbInstance.send.mock.calls
+        .map(([cmd]) => cmd)
+        .find((cmd) => cmd.__type === 'TransactWrite');
+
+      const timelinePut = transact.TransactItems[3].Put;
+      expect(timelinePut.TableName).toBe('test-table');
+      expect(timelinePut.Item.sk).toMatch(/^subscriber#\d+#new@example\.com$/);
+      expect(timelinePut.Item.email).toBe('new@example.com');
+      // Same instant on both rows — stamped once, before the transaction.
+      expect(timelinePut.Item.addedAt).toBe(transact.TransactItems[1].Put.Item.addedAt);
+
+      // No PutItem outside the transaction: there is no post-commit write left
+      // that a retry would skip.
+      const standalonePuts = ddbInstance.send.mock.calls
+        .map(([cmd]) => cmd)
+        .filter((cmd) => cmd.__type === 'PutItem');
+      expect(standalonePuts).toHaveLength(0);
+    });
+
+    // A failure at the timeline record now rolls the subscriber back too, so
+    // the retry sees a clean slate rather than a committed subscriber it will
+    // treat as an ordinary duplicate.
+    test('a timeline-record failure leaves no committed subscriber for a retry to mistake for a duplicate', async () => {
+      mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
+      withCleanSuppressionCheck(() => Promise.reject(Object.assign(new Error('cancelled'), {
+        name: 'TransactionCanceledException',
+        // Fourth position is the timeline record.
+        CancellationReasons: [{ Code: 'None' }, { Code: 'None' }, { Code: 'None' }, { Code: 'ValidationError' }]
+      })));
+
+      const res = await handler(makeEvent({ email: 'new@example.com' }));
+
+      expect(res.statusCode).toBe(500);
+      expect(mockPublishSubscriberEvent).not.toHaveBeenCalled();
+    });
+
+    // The counter can no longer fail on its own, so there is no state where a
+    // subscriber exists with an unchanged count: a cancellation rolls the
+    // whole thing back, and the retry starts from nothing committed.
+    test('a counter failure commits no subscriber at all', async () => {
+      mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
+      withCleanSuppressionCheck(() => Promise.reject(Object.assign(new Error('cancelled'), {
+        name: 'TransactionCanceledException',
+        // Third position is the tenant count.
+        CancellationReasons: [{ Code: 'None' }, { Code: 'None' }, { Code: 'ValidationError' }]
+      })));
+
+      const res = await handler(makeEvent({ email: 'new@example.com' }));
+
+      expect(res.statusCode).toBe(500);
+      expect(mockPublishSubscriberEvent).not.toHaveBeenCalled();
+      // No event record either — the retry sees a clean slate.
+      const puts = ddbInstance.send.mock.calls
+        .map(([cmd]) => cmd)
+        .filter((cmd) => cmd.__type === 'PutItem');
+      expect(puts).toHaveLength(0);
+    });
+
+    // An unreachable consent store must never read as consent — but a
+    // legitimate signup lost to a blip deserves to be told, so the form can
+    // surface an error rather than the person silently never hearing from us.
+    test('reports a consent-store read failure instead of adding', async () => {
+      mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
+      ddbInstance.send.mockImplementation((cmd) =>
+        cmd.__type === 'GetItem'
+          ? Promise.reject(new Error('DynamoDB down'))
+          : Promise.resolve({})
+      );
+
+      const res = await handler(makeEvent({ email: 'new@example.com' }));
+
+      expect(res.statusCode).toBe(500);
+      expect(ddbInstance.send).toHaveBeenCalledTimes(1);
+      expect(mockPublishSubscriberEvent).not.toHaveBeenCalled();
     });
   });
 });

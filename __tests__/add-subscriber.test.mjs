@@ -21,11 +21,21 @@ async function loadIsolated() {
       DynamoDBClient: jest.fn(() => ddbInstance),
       UpdateItemCommand: jest.fn((params) => ({ __type: 'UpdateItem', ...params })),
       PutItemCommand: jest.fn((params) => ({ __type: 'PutItem', ...params })),
+      GetItemCommand: jest.fn((params) => ({ __type: 'GetItem', ...params })),
+      // Imported by utils/suppression.mjs for clearSuppression, which is
+      // deliberately unwired from this path — signup is unauthenticated and
+      // cannot be treated as proof of address ownership.
+      DeleteItemCommand: jest.fn((params) => ({ __type: 'DeleteItem', ...params })),
+      QueryCommand: jest.fn((params) => ({ __type: 'Query', ...params })),
+      // The subscriber write commits with a ConditionCheck on the suppression
+      // key, so the consent record guards the write instead of preceding it.
+      TransactWriteItemsCommand: jest.fn((params) => ({ __type: 'TransactWrite', ...params })),
     }));
 
     // util-dynamodb
     jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({
       marshall: jest.fn((k) => k),
+      unmarshall: jest.fn((k) => k),
     }));
 
     // issue attribution (no published issue → no per-issue counter writes)
@@ -180,12 +190,26 @@ describe('add-subscriber handler (isolated)', () => {
     const res = await handler(event);
     expect(res && res.statusCode).toBe(201);
 
-    // DDB calls: PutItem (subscriber) + UpdateItem (increment) + PutItem (event record)
-    expect(ddbInstance.send).toHaveBeenCalledTimes(3);
+    // Two DDB calls: GetItem (suppression check — an opted-out address is
+    // refused) + TransactWriteItems carrying everything durable about the
+    // signup: the subscriber Put, the tenant count, and the timeline record.
+    // Both the count and the record used to be separate writes after the
+    // transaction, and either failing left a committed subscriber that a retry
+    // would treat as a duplicate, skipping the rest of the creation work.
+    expect(ddbInstance.send).toHaveBeenCalledTimes(2);
 
-    // First call: PutItem for subscriber in Subscribers table
-    const subscriberPutArg = ddbInstance.send.mock.calls[0][0];
-    expect(subscriberPutArg.__type).toBe('PutItem');
+    // First call: GetItem checking whether this address has opted out
+    const suppressionGetArg = ddbInstance.send.mock.calls[0][0];
+    expect(suppressionGetArg.__type).toBe('GetItem');
+    expect(suppressionGetArg.Key).toEqual({ pk: 't1', sk: 'suppression#test@example.com' });
+
+    // Second call: the transactional subscriber write — the suppression
+    // ConditionCheck commits with the Put so the record guards it.
+    const transactArg = ddbInstance.send.mock.calls[1][0];
+    expect(transactArg.__type).toBe('TransactWrite');
+    expect(transactArg.TransactItems[0].ConditionCheck.ConditionExpression)
+      .toBe('attribute_not_exists(pk)');
+    const subscriberPutArg = transactArg.TransactItems[1].Put;
     expect(subscriberPutArg.TableName).toBe('test-subscribers-table');
     expect(subscriberPutArg.ConditionExpression).toBe('attribute_not_exists(tenantId)');
 
@@ -197,15 +221,15 @@ describe('add-subscriber handler (isolated)', () => {
     expect(subscriberItem.lastName).toBe('Doe');
     expect(typeof subscriberItem.addedAt).toBe('string');
 
-    // Second call: UpdateItem for subscriber count
-    const updateArg = ddbInstance.send.mock.calls[1][0];
-    expect(updateArg.__type).toBe('UpdateItem');
-    expect(updateArg.TableName).toBe('test-table');
-    expect(updateArg.UpdateExpression).toBe('SET #subscribers = #subscribers + :val');
+    // Third transaction item: the tenant count, incremented in the same commit.
+    const countUpdate = transactArg.TransactItems[2].Update;
+    expect(countUpdate.TableName).toBe('test-table');
+    expect(countUpdate.Key).toEqual({ pk: 't1', sk: 'tenant' });
+    expect(countUpdate.UpdateExpression)
+      .toBe('SET #subscribers = if_not_exists(#subscribers, :zero) + :one');
 
-    // Third call: PutItem for subscriber event record
-    const eventPutArg = ddbInstance.send.mock.calls[2][0];
-    expect(eventPutArg.__type).toBe('PutItem');
+    // Fourth transaction item: the subscriber event record.
+    const eventPutArg = transactArg.TransactItems[3].Put;
     expect(eventPutArg.TableName).toBe('test-table');
 
     // Verify the event record structure
@@ -233,10 +257,21 @@ describe('add-subscriber handler (isolated)', () => {
     expect(typeof details.addedAt).toBe('string');
   });
 
-  test('ConditionalCheckFailedException → still 201, no DDB increment or event', async () => {
+  test('cancelled transaction on an existing subscriber → still 201, no DDB increment or event', async () => {
     const tenant = { id: 't1', list: 'list-1', subscribers: 5 };
     mockGetTenant.mockResolvedValue(tenant);
-    ddbInstance.send.mockRejectedValue(Object.assign(new Error('exists'), { name: 'ConditionalCheckFailedException' }));
+    // The consent lookup runs first and must resolve clean, or the rejection
+    // lands on the read instead of the subscriber write it is aiming at. The
+    // write is the Put half of a transaction, so an existing subscriber shows
+    // up as a cancellation whose second reason is ConditionalCheckFailed.
+    ddbInstance.send.mockImplementation((cmd) =>
+      cmd.__type === 'GetItem'
+        ? Promise.resolve({})
+        : Promise.reject(Object.assign(new Error('exists'), {
+          name: 'TransactionCanceledException',
+          CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }]
+        }))
+    );
 
     const event = {
       pathParameters: { tenant: 't1' },
@@ -246,8 +281,8 @@ describe('add-subscriber handler (isolated)', () => {
     const res = await handler(event);
     expect(res && res.statusCode).toBe(201);
 
-    // Only one DDB call (the failed PutItem for subscriber)
-    expect(ddbInstance.send).toHaveBeenCalledTimes(1);
+    // Two DDB calls: the consent lookup and the failed PutItem for subscriber
+    expect(ddbInstance.send).toHaveBeenCalledTimes(2);
     expect(publishSubscriberEvent).not.toHaveBeenCalled();
   });
 
@@ -292,9 +327,16 @@ describe('add-subscriber property-based tests', () => {
           const tenant = { id: 'test-tenant', list: 'test-list', subscribers: subscriberCount };
           mockGetTenant.mockResolvedValue(tenant);
 
-          // Simulate ConditionalCheckFailedException for duplicate subscriber
-          ddbInstance.send.mockRejectedValue(
-            Object.assign(new Error('Subscriber already exists'), { name: 'ConditionalCheckFailedException' })
+          // Simulate the transaction cancelling on the subscriber Put because
+          // the address is already on the list. The consent lookup precedes it
+          // and resolves clean.
+          ddbInstance.send.mockImplementation((cmd) =>
+            cmd.__type === 'GetItem'
+              ? Promise.resolve({})
+              : Promise.reject(Object.assign(new Error('Subscriber already exists'), {
+                name: 'TransactionCanceledException',
+                CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }]
+              }))
           );
 
           const event = {
@@ -307,8 +349,8 @@ describe('add-subscriber property-based tests', () => {
           // Should still return 201 (success response)
           expect(res && res.statusCode).toBe(201);
 
-          // Should only call DynamoDB once (the failed PutItem for subscriber)
-          expect(ddbInstance.send).toHaveBeenCalledTimes(1);
+          // Two DynamoDB calls: the consent lookup, then the failed PutItem
+          expect(ddbInstance.send).toHaveBeenCalledTimes(2);
 
           // Should NOT publish subscriber added event
           expect(publishSubscriberEvent).not.toHaveBeenCalled();

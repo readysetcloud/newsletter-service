@@ -122,13 +122,32 @@ export const encrypt = (email) => {
   return `${iv.toString('base64')}:${encrypted}:${authTag}`;
 };
 
+/**
+ * Undo the one transformation a query string makes to a base64 token.
+ *
+ * `encrypt` emits standard base64, whose alphabet includes `+`. Every producer
+ * of these tokens puts one in a URL's query string, and `+` in a query value
+ * decodes to a space — so `?email=<token>` arrives at the handler with each `+`
+ * turned into ` `. Node's base64 decoder then *skips* the space rather than
+ * failing on it, which shifts every subsequent byte and makes the GCM auth tag
+ * reject the payload. Roughly seven in ten tokens contain at least one `+`, so
+ * that is most unsubscribe links, not an edge case.
+ *
+ * Producers now percent-encode the token, but the links already sitting in
+ * delivered inboxes cannot be recalled and will keep arriving corrupted for as
+ * long as those emails exist. Repairing it on the way in is what actually
+ * honours them. A space is never valid base64, so there is nothing else it
+ * could have been.
+ */
+const restoreQueryEncodedBase64 = (token) => token.replace(/ /g, '+');
+
 export const decrypt = (encrypted) => {
   try {
     if (!encrypted || typeof encrypted !== 'string') {
       throw new Error('Invalid encrypted data: must be a non-empty string');
     }
 
-    const parts = encrypted.split(':');
+    const parts = restoreQueryEncodedBase64(encrypted).split(':');
     if (parts.length !== 3) {
       throw new Error('Invalid encrypted data format: expected 3 parts separated by colons');
     }

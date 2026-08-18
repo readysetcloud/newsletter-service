@@ -74,7 +74,7 @@ export const handler = async (event) => {
 
     const html = template(templateData);
 
-    await eventBridge.send(new PutEventsCommand({
+    const putResult = await eventBridge.send(new PutEventsCommand({
       Entries: [{
         Source: 'newsletter-service',
         DetailType: 'Send Email v2',
@@ -95,13 +95,35 @@ export const handler = async (event) => {
       }]
     }));
 
+    // EventBridge answers 200 to the API call and reports per-entry failures in
+    // the body, so an accepted call is not a published event. Ignoring
+    // `FailedEntryCount` meant a rejected entry looked exactly like a delivered
+    // welcome email.
+    if (putResult.FailedEntryCount > 0) {
+      const [failure] = (putResult.Entries || []).filter((entry) => entry.ErrorCode);
+      throw new Error(
+        `Welcome email event rejected by EventBridge: ${failure?.ErrorCode || 'unknown'} ${failure?.ErrorMessage || ''}`.trim()
+      );
+    }
+
     console.log('Welcome email event published:', { tenantId, email });
 
   } catch (error) {
+    // Rethrow. This is an async invocation, so returning normally is a
+    // successful one and Lambda never retries — a transient EventBridge
+    // failure would leave a subscriber who was added with no welcome email and
+    // nothing to try again. Throwing is what reaches the retry and the DLQ.
+    //
+    // The earlier hop is not covered by this: `publishSubscriberEvent` in
+    // add-subscriber still swallows its own EventBridge failures, so a signup
+    // can lose the `Subscriber Added` event before this function is ever
+    // invoked. Closing that needs a durable outbox and is deliberately not in
+    // this change — this handler is retryable, the handoff into it is not yet.
     console.error('Send welcome email error:', {
       error: error.message,
       stack: error.stack
     });
+    throw error;
   }
 };
 

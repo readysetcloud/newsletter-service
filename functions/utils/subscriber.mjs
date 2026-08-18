@@ -1,4 +1,4 @@
-import { DynamoDBClient, PutItemCommand, QueryCommand, DeleteItemCommand, UpdateItemCommand, GetItemCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, PutItemCommand, QueryCommand, DeleteItemCommand, UpdateItemCommand, GetItemCommand, TransactWriteItemsCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { isSubscriberRecord } from './subscriber-record.mjs';
 import { recordSuppression } from './suppression.mjs';
@@ -127,51 +127,78 @@ export const unsubscribeUser = async (tenantId, emailAddress, method = 'encrypte
       return { success: false, actuallyRemoved: false };
     }
 
-    // Delete subscriber from Subscribers table only if it exists
-    // Using ReturnValues to check if an item was actually deleted
-    const deleteResult = await ddb.send(new DeleteItemCommand({
-      TableName: process.env.SUBSCRIBERS_TABLE_NAME,
-      Key: marshall({
-        tenantId: tenantId,
-        email: email
-      }),
-      ReturnValues: 'ALL_OLD'
-    }));
-
-    const actuallyRemoved = !!deleteResult.Attributes;
-
-    // Only decrement count if a subscriber was actually removed
-    if (actuallyRemoved) {
-      await ddb.send(new UpdateItemCommand({
-        TableName: process.env.TABLE_NAME,
-        Key: marshall({
-          pk: tenantId,
-          sk: 'tenant'
-        }),
-        UpdateExpression: 'SET subscribers = if_not_exists(subscribers, :zero) - :dec',
-        ExpressionAttributeValues: marshall({
-          ':dec': 1,
-          ':zero': 0
-        }),
-        // Prevent count from going below zero
-        ConditionExpression: 'if_not_exists(subscribers, :zero) >= :dec'
+    // The removal and the tenant count commit together.
+    //
+    // Deleting first and decrementing afterwards drifted permanently: if the
+    // delete succeeded and the count update then failed, this returned
+    // `success: false` for an unsubscribe that had in fact happened. The
+    // provider's retry rewrote the suppression, found no subscriber to delete,
+    // and so never attempted the decrement — the count stayed one too high
+    // with no path back. Consent was honoured and the number was wrong forever.
+    //
+    // `attribute_exists` on the Delete replaces the `ReturnValues: ALL_OLD`
+    // this used to read (transactions do not support it): if the subscriber is
+    // already gone the transaction cancels at index 0, which tells us
+    // `actuallyRemoved` just as well and leaves the count untouched.
+    let actuallyRemoved;
+    try {
+      await ddb.send(new TransactWriteItemsCommand({
+        TransactItems: [
+          {
+            Delete: {
+              TableName: process.env.SUBSCRIBERS_TABLE_NAME,
+              Key: marshall({ tenantId, email }),
+              ConditionExpression: 'attribute_exists(tenantId)'
+            }
+          },
+          {
+            Update: {
+              TableName: process.env.TABLE_NAME,
+              Key: marshall({ pk: tenantId, sk: 'tenant' }),
+              UpdateExpression: 'SET subscribers = if_not_exists(subscribers, :zero) - :dec',
+              ExpressionAttributeValues: marshall({ ':dec': 1, ':zero': 0 }),
+              // Keep the count off negative numbers.
+              ConditionExpression: 'if_not_exists(subscribers, :zero) >= :dec'
+            }
+          }
+        ]
       }));
-
+      actuallyRemoved = true;
       console.log('Unsubscribe successful:', { tenantId, emailAddress });
-    } else {
-      console.log('Unsubscribe skipped - subscriber not found:', { tenantId, emailAddress });
+    } catch (txErr) {
+      if (txErr.name !== 'TransactionCanceledException') {
+        throw txErr;
+      }
+
+      // Positions match TransactItems: [subscriber delete, tenant count].
+      const codes = (txErr.CancellationReasons || []).map((reason) => reason.Code);
+
+      if (codes[0] === 'ConditionalCheckFailed') {
+        // Not on the list. The suppression above is the whole point of the
+        // request — an unsubscribe click on an old email is still a statement
+        // about future sends — so this is a success with nothing removed.
+        console.log('Unsubscribe skipped - subscriber not found:', { tenantId, emailAddress });
+        actuallyRemoved = false;
+      } else if (codes[1] === 'ConditionalCheckFailed') {
+        // The count is already at zero while a subscriber row exists, so the
+        // stored number is wrong independently of this request. Removing the
+        // person matters more than the counter, so retry the delete alone and
+        // leave the count for reconciliation rather than refusing to
+        // unsubscribe someone over a stale metric.
+        console.warn('Subscriber count already at minimum; removing without decrementing', { tenantId });
+        await ddb.send(new DeleteItemCommand({
+          TableName: process.env.SUBSCRIBERS_TABLE_NAME,
+          Key: marshall({ tenantId, email })
+        }));
+        actuallyRemoved = true;
+      } else {
+        throw txErr;
+      }
     }
 
     return { success: true, actuallyRemoved };
 
   } catch (error) {
-    // If the condition fails (count would go negative), log but still return success
-    // The subscriber was deleted but count couldn't be decremented
-    if (error.name === 'ConditionalCheckFailedException') {
-      console.warn('Subscriber count already at minimum:', { tenantId });
-      return { success: true, actuallyRemoved: true };
-    }
-
     console.error('Unsubscribe failed:', {
       tenantId,
       email: '[REDACTED]',

@@ -1,6 +1,7 @@
 import { DynamoDBClient, ScanCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
+import { SEGMENT_KEY_PREFIX } from './utils/subscriber-record.mjs';
 
 const ddb = new DynamoDBClient();
 const eventBridge = new EventBridgeClient();
@@ -68,6 +69,12 @@ async function hasPublishedIssueWithAnalytics(tenantId) {
 
 /**
  * Get the subscriber count for a tenant from the SubscribersTable.
+ *
+ * The segments feature stores its records in this table under the same tenant
+ * partition, overloading the `email` sort key, so counting the partition
+ * counted segments, memberships and rebuild jobs as subscribers. Here that
+ * decided eligibility (`subscriberCount > 0`), which meant a tenant with no
+ * subscribers at all but some leftover segment bookkeeping looked eligible.
  */
 async function getSubscriberCount(tenantId) {
   let count = 0;
@@ -77,7 +84,12 @@ async function getSubscriberCount(tenantId) {
     const result = await ddb.send(new QueryCommand({
       TableName: SUBSCRIBERS_TABLE_NAME,
       KeyConditionExpression: 'tenantId = :tenantId',
-      ExpressionAttributeValues: marshall({ ':tenantId': tenantId }),
+      FilterExpression: 'NOT begins_with(#email, :segmentPrefix)',
+      ExpressionAttributeNames: { '#email': 'email' },
+      ExpressionAttributeValues: marshall({
+        ':tenantId': tenantId,
+        ':segmentPrefix': SEGMENT_KEY_PREFIX
+      }),
       Select: 'COUNT',
       ...(lastKey && { ExclusiveStartKey: lastKey })
     }));

@@ -33,6 +33,23 @@ export const handler = async (event) => {
 };
 
 /**
+ * The issue stats key a complaint's own reference tag points at, or null.
+ *
+ * SES tag values allow no `#`, so `publish-issue` emits `<tenantPk>_<number>`
+ * and the stats key is the same string with the final separator swapped back.
+ * Split on the LAST underscore: a tenant id may contain one, and splitting on
+ * the first would truncate it.
+ */
+const issuePkFromReference = (referenceNumber) => {
+  const separatorIndex = referenceNumber?.lastIndexOf('_') ?? -1;
+  if (separatorIndex <= 0) {
+    return null;
+  }
+
+  return `${referenceNumber.slice(0, separatorIndex)}#${referenceNumber.slice(separatorIndex + 1)}`;
+};
+
+/**
  * Which tenant a complained-about message belongs to.
  *
  * The `tenantId` tag is preferred because it is on every marketing send,
@@ -53,7 +70,8 @@ const resolveTenantId = (detail, emailAddress) => {
     return null;
   }
 
-  return referenceNumber[0].replace(/_/g, '#').split('#')[0];
+  const issuePk = issuePkFromReference(referenceNumber[0]);
+  return issuePk ? issuePk.split('#')[0] : null;
 };
 
 const processComplaintUnsubscribe = async (emailAddress, detail) => {
@@ -77,9 +95,18 @@ const processComplaintUnsubscribe = async (emailAddress, detail) => {
 
   if (result.actuallyRemoved) {
     try {
-      const recentIssue = await getMostRecentPublishedIssue(tenantId);
-      if (recentIssue) {
-        await incrementIssueCounter(recentIssue.pk, 'unsubscribes');
+      // The complaint names the message that produced it, so use that rather
+      // than asking which issue is newest. "Most recent" is only ever a guess,
+      // and it guesses wrong exactly when it matters: complaints can arrive
+      // days late, so a complaint about issue 42 that lands after issue 43 has
+      // gone out was being charged to 43 — the issue that did nothing wrong.
+      // Falls back to the newest sent issue only for events with no reference
+      // tag (welcome mail, and anything sent before the tag existed).
+      const taggedIssuePk = issuePkFromReference(detail.mail?.tags?.referenceNumber?.[0]);
+      const issuePk = taggedIssuePk ?? (await getMostRecentPublishedIssue(tenantId))?.pk;
+
+      if (issuePk) {
+        await incrementIssueCounter(issuePk, 'unsubscribes');
       } else {
         console.warn('No published issue found for unsubscribe attribution:', { tenantId });
       }

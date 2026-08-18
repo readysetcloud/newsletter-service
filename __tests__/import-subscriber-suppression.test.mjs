@@ -91,7 +91,51 @@ describe('import-subscriber-list suppression', () => {
 
     expect(result.success).toBe(true);
     expect(result.imported).toBe(2);
+    expect(result.existing).toBe(0);
     expect(result.suppressed).toBe(0);
+  });
+
+  // `imported` used to be total minus failures minus suppressions, so a
+  // re-import of a list that was already on the system reported every address
+  // as a fresh import even though nothing was written.
+  test('reports addresses that were already subscribed separately', async () => {
+    ddbSend.mockImplementation((cmd) => {
+      if (cmd.__type !== 'TransactWrite') {
+        return Promise.resolve({ Count: 0 });
+      }
+      const email = cmd.TransactItems[1].Put.Item.email;
+      if (email === 'already@example.com') {
+        return Promise.reject(Object.assign(new Error('exists'), {
+          name: 'TransactionCanceledException',
+          CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }]
+        }));
+      }
+      return Promise.resolve({});
+    });
+
+    const result = await handler(importEvent(['fresh@example.com', 'already@example.com']));
+
+    expect(result.success).toBe(true);
+    expect(result.imported).toBe(1);
+    expect(result.existing).toBe(1);
+    expect(result.total).toBe(2);
+  });
+
+  // The recount that repairs tenant.subscribers has to count subscribers.
+  // Segments store their bookkeeping in the same partition under the same sort
+  // key, so counting the partition counted those as people.
+  test('recounts only subscriber rows, consistently', async () => {
+    await handler(importEvent(['a@example.com']));
+
+    const countQuery = ddbSend.mock.calls
+      .map(([cmd]) => cmd)
+      .find((cmd) => cmd.__type === 'Query' && cmd.Select === 'COUNT');
+
+    expect(countQuery.FilterExpression).toBe('NOT begins_with(#email, :segmentPrefix)');
+    expect(countQuery.ExpressionAttributeValues[':segmentPrefix']).toBe('SEGMENT');
+    // Runs immediately after this import's own writes, so a stale read would
+    // overwrite the stored count with a number missing the rows just committed.
+    expect(countQuery.ConsistentRead).toBe(true);
   });
 
   // An unreachable consent store must never read as consent. The address fails

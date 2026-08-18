@@ -704,6 +704,7 @@ const resolveListUnsubscribe = (data) => {
  * @param {string} [emailConfig.variant] - Optional A/B variant id ("a"/"b") tagged on the send
  * @param {Object} [emailConfig.assembly] - Optional prepared interest assembly ({ prepared, interestByEmail }) from prepareAssemblyPhase
  * @param {{baseUrl: string, tenantId: string}} [emailConfig.listUnsubscribe] - When set, each message carries RFC 8058 one-click unsubscribe headers built from this endpoint
+ * @param {boolean} [emailConfig.marketing] - True for subscriber marketing mail. Gates the `tenantId` SES tag, which is what lets a complaint unsubscribe the recipient; admin alerts and previews must not carry it
  * @param {string} senderEmail - Sender email address
  * @returns {Promise<{sentCount: number, sentRecipients: string[]}>} Send stats and sent recipients
  */
@@ -766,10 +767,20 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
       }
       // Complaint handling needs a tenant even when there is no issue to point
       // at. Welcome mail carries no referenceNumber, so a "report spam" on one
-      // had nothing to resolve a tenant from and was dropped. SES message tag
-      // values allow only letters, digits, dashes and underscores, so a tenant
-      // id outside that set is left off rather than failing the send.
-      if (emailConfig.tenantId && /^[A-Za-z0-9_-]+$/.test(emailConfig.tenantId)) {
+      // had nothing to resolve a tenant from and was dropped.
+      //
+      // Gated on `marketing`, not merely on a tenant id being present. The
+      // complaint handler treats this tag as authority to unsubscribe the
+      // complained-about address, so tagging an admin alert or a report would
+      // mean an operator marking their own operational mail as spam wrote a
+      // durable suppression against their address — and deleted their
+      // subscriber row if they read their own newsletter. Only mail that
+      // carries an unsubscribe link may carry the tag that acts on one.
+      //
+      // SES message tag values allow only letters, digits, dashes and
+      // underscores, so a tenant id outside that set is left off rather than
+      // failing the send.
+      if (emailConfig.marketing && emailConfig.tenantId && /^[A-Za-z0-9_-]+$/.test(emailConfig.tenantId)) {
         emailTags.push({ Name: 'tenantId', Value: emailConfig.tenantId });
       }
       if (emailConfig.variant) {
@@ -1277,6 +1288,13 @@ export const handler = async (event) => {
     const allEmails = subscribers.map(subscriber => subscriber.email);
     const eligibleSet = new Set(emailAddresses);
     const listUnsubscribe = resolveListUnsubscribe(data);
+    // Whether this send is subscriber marketing mail. Decides the complaint
+    // routing tag as well as the headers, and it must be the same predicate for
+    // both: a message that carries an unsubscribe link is exactly the set of
+    // messages whose complaints may act on a subscription. `listUnsubscribe`
+    // cannot stand in for it — that goes null when API_BASE_URL is unset, which
+    // would silently drop complaint routing for a real issue send.
+    const marketing = isMarketingSend(data);
     const { sentCount, sentRecipients } = await executePhase('Email Sending', async () => {
       if (variants?.length && to.list) {
         const subjectByVariant = Object.fromEntries(
@@ -1314,6 +1332,7 @@ export const handler = async (event) => {
             replacements,
             referenceNumber: data.referenceNumber,
             variant: variantId,
+            marketing,
             ...assembly && { assembly },
             ...listUnsubscribe && { listUnsubscribe }
           }, senderEmail);
@@ -1331,6 +1350,7 @@ export const handler = async (event) => {
         tenantId,
         replacements,
         referenceNumber: data.referenceNumber,
+        marketing,
         ...assembly && { assembly },
         ...listUnsubscribe && { listUnsubscribe }
       }, senderEmail);

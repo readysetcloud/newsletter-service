@@ -483,6 +483,91 @@ describe('send-email-v2', () => {
       expect(sesInstance.send.mock.calls[0][0].Content.Simple.Headers).toBeUndefined();
     });
 
+    // The complaint handler treats this tag as authority to unsubscribe the
+    // recipient, so it must ride only on mail that carries an unsubscribe link.
+    // Tagging every send with a tenantId meant an operator who marked their own
+    // analytics report as spam wrote a durable suppression against their own
+    // address — and lost their subscriber row if they read their own
+    // newsletter.
+    describe('tenantId complaint-routing tag', () => {
+      const tagsOf = () =>
+        (sesInstance.send.mock.calls[0][0].EmailTags ?? []).map((tag) => tag.Name);
+
+      test('issue sends carry it', async () => {
+        senderLookup();
+
+        await handler({
+          detail: {
+            subject: 'Issue',
+            html: '<p>content</p>',
+            to: { email: 'recipient@example.com' },
+            from: 'sender@example.com',
+            tenantId: 'tenant-123',
+            referenceNumber: 'tenant-123_42'
+          }
+        });
+
+        expect(tagsOf()).toContain('tenantId');
+      });
+
+      test('welcome sends carry it', async () => {
+        senderLookup();
+
+        await handler({
+          detail: {
+            subject: 'Welcome!',
+            html: '<p>welcome</p>',
+            to: { email: 'recipient@example.com' },
+            from: 'sender@example.com',
+            tenantId: 'tenant-123',
+            listUnsubscribe: true
+          }
+        });
+
+        expect(tagsOf()).toContain('tenantId');
+      });
+
+      test('admin alerts and reports do not', async () => {
+        senderLookup();
+
+        await handler({
+          detail: {
+            subject: 'Your monthly analytics report',
+            html: '<p>report</p>',
+            to: { email: 'operator@example.com' },
+            from: 'sender@example.com',
+            tenantId: 'tenant-123'
+          }
+        });
+
+        expect(tagsOf()).not.toContain('tenantId');
+      });
+
+      // The tag and the headers are decided by one predicate. If they could
+      // diverge, a message could invite a complaint that acts on a
+      // subscription while carrying no way to unsubscribe — or the reverse.
+      // API_BASE_URL being unset suppresses the headers but must not suppress
+      // complaint routing for a genuine issue send.
+      test('a missing API_BASE_URL drops the headers but keeps the tag', async () => {
+        delete process.env.API_BASE_URL;
+        senderLookup();
+
+        await handler({
+          detail: {
+            subject: 'Issue',
+            html: '<p>content</p>',
+            to: { email: 'recipient@example.com' },
+            from: 'sender@example.com',
+            tenantId: 'tenant-123',
+            referenceNumber: 'tenant-123_42'
+          }
+        });
+
+        expect(sesInstance.send.mock.calls[0][0].Content.Simple.Headers).toBeUndefined();
+        expect(tagsOf()).toContain('tenantId');
+      });
+    });
+
     test('a missing API_BASE_URL sends without headers instead of failing', async () => {
       delete process.env.API_BASE_URL;
       senderLookup();

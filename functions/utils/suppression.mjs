@@ -1,4 +1,4 @@
-import { DynamoDBClient, PutItemCommand, GetItemCommand, DeleteItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, UpdateItemCommand, GetItemCommand, DeleteItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 
 const ddb = new DynamoDBClient();
@@ -113,19 +113,75 @@ export const listSuppressedEmails = async (tenantId) => {
  * durable unsubscribe it could not record, so the one-click endpoint answers
  * 5xx and the mail provider retries.
  */
+/**
+ * Which revocation methods carry proof that the address's owner is the one
+ * acting.
+ *
+ * `one-click` and `encrypted-link` both require a token we minted into a
+ * message delivered to that address, and a `complaint` comes from the
+ * recipient's own mail provider. `manual-form` is the odd one out: it is the
+ * no-token fallback where anyone can type any address, so it proves nothing
+ * about who sent it.
+ *
+ * The distinction is recorded rather than acted on. Every suppression blocks
+ * mail today — erring toward honouring an opt-out is the right default, and an
+ * unverified request is still far more likely to be genuine than malicious.
+ * But a suppression is durable and the add paths refuse to clear it, so an
+ * unverified one is a state a third party can impose on someone with no
+ * self-service way out. The confirmed re-opt-in flow needs to know which
+ * suppressions were never verified in the first place, and that fact only
+ * exists if it is written down when the record is made.
+ */
+const VERIFIED_METHODS = new Set(['one-click', 'encrypted-link', 'complaint']);
+
 export const recordSuppression = async (tenantId, emailAddress, method, metadata = {}) => {
+  const now = new Date().toISOString();
+  const names = { '#unsubscribedAt': 'unsubscribedAt', '#method': 'method' };
+  const values = {
+    ':now': now,
+    ':method': method,
+    ':email': emailAddress.toLowerCase(),
+    ':verified': VERIFIED_METHODS.has(method)
+  };
+
+  // An `UpdateItem` with `if_not_exists`, not a `Put`.
+  //
+  // A Put to this deterministic key overwrote the record every time anything
+  // touched it: a provider retrying a one-click POST, a spam complaint landing
+  // after the person had already used the footer link, someone clicking an old
+  // issue months later. Each of those rewrote `unsubscribedAt` and `method`,
+  // so the record kept only the most recent duplicate signal.
+  //
+  // The fact this record exists to hold is *when consent was first revoked* —
+  // that is the date that answers "were we allowed to send this?". So the
+  // original instant and method are written once and never overwritten, while
+  // `lastUnsubscribedAt` / `lastMethod` track the operational history. Retries
+  // stay idempotent without erasing the chronology.
+  let updateExpression =
+    'SET #unsubscribedAt = if_not_exists(#unsubscribedAt, :now), '
+    + '#method = if_not_exists(#method, :method), '
+    + 'verified = if_not_exists(verified, :verified), '
+    + 'email = :email, lastUnsubscribedAt = :now, lastMethod = :method, lastVerified = :verified';
+
+  if (metadata.ipAddress) {
+    values[':ipAddress'] = metadata.ipAddress;
+    updateExpression += ', ipAddress = if_not_exists(ipAddress, :ipAddress), lastIpAddress = :ipAddress';
+  }
+  if (metadata.userAgent) {
+    values[':userAgent'] = metadata.userAgent;
+    updateExpression += ', userAgent = if_not_exists(userAgent, :userAgent), lastUserAgent = :userAgent';
+  }
+
   try {
-    await ddb.send(new PutItemCommand({
+    await ddb.send(new UpdateItemCommand({
       TableName: process.env.TABLE_NAME,
-      Item: marshall({
+      Key: marshall({
         pk: tenantId,
-        sk: suppressionSk(emailAddress),
-        email: emailAddress.toLowerCase(),
-        unsubscribedAt: new Date().toISOString(),
-        method,
-        ...(metadata.ipAddress && { ipAddress: metadata.ipAddress }),
-        ...(metadata.userAgent && { userAgent: metadata.userAgent })
-      })
+        sk: suppressionSk(emailAddress)
+      }),
+      UpdateExpression: updateExpression,
+      ExpressionAttributeNames: names,
+      ExpressionAttributeValues: marshall(values)
     }));
   } catch (err) {
     console.error('Failed to write suppression record', {

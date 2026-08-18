@@ -607,6 +607,57 @@ describe('add-subscriber handler — bot protection integration', () => {
       expect(mockPublishSubscriberEvent).not.toHaveBeenCalled();
     });
 
+    // The subscriber and the tenant count are one commit. Incrementing after
+    // the write meant a counter failure returned 500 with the subscriber
+    // already committed — and the retry could not repair it, because the Put
+    // hits the duplicate guard and the handler takes the "already subscribed"
+    // path where no increment happens. The count stayed low forever.
+    test('commits the tenant count with the subscriber write', async () => {
+      mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
+      withCleanSuppressionCheck(() => Promise.resolve({}));
+
+      const res = await handler(makeEvent({ email: 'new@example.com' }));
+
+      expect(res.statusCode).toBe(201);
+
+      const transact = ddbInstance.send.mock.calls
+        .map(([cmd]) => cmd)
+        .find((cmd) => cmd.__type === 'TransactWrite');
+
+      expect(transact.TransactItems).toHaveLength(3);
+      expect(transact.TransactItems[2].Update.Key).toEqual({ pk: 't1', sk: 'tenant' });
+      expect(transact.TransactItems[2].Update.UpdateExpression)
+        .toBe('SET #subscribers = if_not_exists(#subscribers, :zero) + :one');
+
+      // Nothing increments the count outside the transaction any more.
+      const standaloneCountUpdates = ddbInstance.send.mock.calls
+        .map(([cmd]) => cmd)
+        .filter((cmd) => cmd.__type === 'UpdateItem');
+      expect(standaloneCountUpdates).toHaveLength(0);
+    });
+
+    // The counter can no longer fail on its own, so there is no state where a
+    // subscriber exists with an unchanged count: a cancellation rolls the
+    // whole thing back, and the retry starts from nothing committed.
+    test('a counter failure commits no subscriber at all', async () => {
+      mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
+      withCleanSuppressionCheck(() => Promise.reject(Object.assign(new Error('cancelled'), {
+        name: 'TransactionCanceledException',
+        // Third position is the tenant count.
+        CancellationReasons: [{ Code: 'None' }, { Code: 'None' }, { Code: 'ValidationError' }]
+      })));
+
+      const res = await handler(makeEvent({ email: 'new@example.com' }));
+
+      expect(res.statusCode).toBe(500);
+      expect(mockPublishSubscriberEvent).not.toHaveBeenCalled();
+      // No event record either — the retry sees a clean slate.
+      const puts = ddbInstance.send.mock.calls
+        .map(([cmd]) => cmd)
+        .filter((cmd) => cmd.__type === 'PutItem');
+      expect(puts).toHaveLength(0);
+    });
+
     // An unreachable consent store must never read as consent — but a
     // legitimate signup lost to a blip deserves to be told, so the form can
     // surface an error rather than the person silently never hearing from us.

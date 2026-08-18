@@ -1,4 +1,4 @@
-import { DynamoDBClient, UpdateItemCommand, PutItemCommand, TransactWriteItemsCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, PutItemCommand, TransactWriteItemsCommand } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
 import { formatResponse, getTenant } from '../utils/helpers.mjs';
 import { publishSubscriberEvent, publishEvent, EVENT_TYPES } from '../utils/event-publisher.mjs';
@@ -224,7 +224,8 @@ export const handler = async (event) => {
       const addedAt = new Date().toISOString();
       const timestamp = Date.now();
 
-      await updateSubscriberCount(tenantId);
+      // The tenant count is already committed — it is the third item of the
+      // transaction that created the subscriber.
       await createSubscriberEventRecord(tenantId, normalizedEmail, addedAt, timestamp);
 
       // Attribute the new subscriber to the most recently sent issue
@@ -314,6 +315,25 @@ const addSubscriber = async (tenantId, contact, normalizedEmail, detectionData) 
             Item: marshall(subscriberItem),
             ConditionExpression: 'attribute_not_exists(tenantId)'
           }
+        },
+        // The tenant counter rides along rather than following as a separate
+        // write. Incrementing afterwards meant a counter failure returned 500
+        // with the subscriber already committed, and the retry could not
+        // repair it: the Put hits the duplicate guard, the handler takes the
+        // "already subscribed" path, and the increment never happens again.
+        // The count stayed low permanently. Here the subscriber and the count
+        // commit together or not at all.
+        //
+        // `if_not_exists` because a tenant that has never had a subscriber has
+        // no attribute to add to, and a bare `#subscribers + :one` fails on it.
+        {
+          Update: {
+            TableName: process.env.TABLE_NAME,
+            Key: marshall({ pk: tenantId, sk: 'tenant' }),
+            UpdateExpression: 'SET #subscribers = if_not_exists(#subscribers, :zero) + :one',
+            ExpressionAttributeNames: { '#subscribers': 'subscribers' },
+            ExpressionAttributeValues: marshall({ ':one': 1, ':zero': 0 })
+          }
         }
       ]
     }));
@@ -327,7 +347,8 @@ const addSubscriber = async (tenantId, contact, normalizedEmail, detectionData) 
     // Anything else rethrows so the handler answers 500 and the signup can be
     // retried.
     if (err.name === 'TransactionCanceledException') {
-      // Positions match TransactItems: [suppression check, subscriber put].
+      // Positions match TransactItems:
+      // [suppression check, subscriber put, tenant count].
       const codes = (err.CancellationReasons || []).map((reason) => reason.Code);
 
       if (codes[0] === 'ConditionalCheckFailed') {
@@ -347,23 +368,6 @@ const addSubscriber = async (tenantId, contact, normalizedEmail, detectionData) 
 
     throw err;
   }
-};
-
-const updateSubscriberCount = async (tenantId) => {
-  await ddb.send(new UpdateItemCommand({
-    TableName: process.env.TABLE_NAME,
-    Key: marshall({
-      pk: tenantId,
-      sk: 'tenant'
-    }),
-    UpdateExpression: 'SET #subscribers = #subscribers + :val',
-    ExpressionAttributeNames: {
-      '#subscribers': 'subscribers'
-    },
-    ExpressionAttributeValues: {
-      ':val': { N: '1' }
-    }
-  }));
 };
 
 const createSubscriberEventRecord = async (tenantId, email, addedAt, timestamp) => {

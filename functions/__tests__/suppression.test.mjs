@@ -1,5 +1,5 @@
 import { jest } from '@jest/globals';
-import { DynamoDBClient, PutItemCommand, GetItemCommand, DeleteItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, UpdateItemCommand, GetItemCommand, DeleteItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { recordSuppression, getSuppression, clearSuppression, listSuppressedEmails } from '../utils/suppression.mjs';
 
@@ -23,14 +23,96 @@ describe('suppression', () => {
       });
 
       const cmd = mockSend.mock.calls[0][0];
-      expect(cmd).toBeInstanceOf(PutItemCommand);
-      const item = unmarshall(cmd.input.Item);
-      expect(item.pk).toBe('tenant1');
-      expect(item.sk).toBe('suppression#person@example.com');
-      expect(item.email).toBe('person@example.com');
-      expect(item.method).toBe('one-click');
-      expect(item.ipAddress).toBe('10.0.0.1');
-      expect(typeof item.unsubscribedAt).toBe('string');
+      expect(cmd).toBeInstanceOf(UpdateItemCommand);
+      const key = unmarshall(cmd.input.Key);
+      expect(key.pk).toBe('tenant1');
+      expect(key.sk).toBe('suppression#person@example.com');
+
+      const values = unmarshall(cmd.input.ExpressionAttributeValues);
+      expect(values[':email']).toBe('person@example.com');
+      expect(values[':method']).toBe('one-click');
+      expect(values[':ipAddress']).toBe('10.0.0.1');
+      expect(values[':userAgent']).toBe('Mozilla/5.0');
+      expect(typeof values[':now']).toBe('string');
+    });
+
+    // The record's job is to answer "when was consent revoked?". A retry, a
+    // complaint arriving after the person already used the footer link, or a
+    // click on a months-old issue must not rewrite that answer — the first
+    // revocation is the one that decides whether a send was allowed.
+    test('never overwrites the original revocation instant or method', async () => {
+      mockSend.mockResolvedValueOnce({});
+
+      await recordSuppression('tenant1', 'a@b.com', 'complaint', {
+        ipAddress: '10.0.0.1',
+        userAgent: 'Mozilla/5.0'
+      });
+
+      const { UpdateExpression } = mockSend.mock.calls[0][0].input;
+
+      expect(UpdateExpression).toContain('#unsubscribedAt = if_not_exists(#unsubscribedAt, :now)');
+      expect(UpdateExpression).toContain('#method = if_not_exists(#method, :method)');
+      expect(UpdateExpression).toContain('ipAddress = if_not_exists(ipAddress, :ipAddress)');
+      expect(UpdateExpression).toContain('userAgent = if_not_exists(userAgent, :userAgent)');
+    });
+
+    // Operational history is still kept, just not in the fields that answer the
+    // compliance question.
+    test('tracks the latest signal separately from the first', async () => {
+      mockSend.mockResolvedValueOnce({});
+
+      await recordSuppression('tenant1', 'a@b.com', 'complaint', { ipAddress: '10.0.0.1' });
+
+      const { UpdateExpression } = mockSend.mock.calls[0][0].input;
+
+      expect(UpdateExpression).toContain('lastUnsubscribedAt = :now');
+      expect(UpdateExpression).toContain('lastMethod = :method');
+      expect(UpdateExpression).toContain('lastIpAddress = :ipAddress');
+    });
+
+    // Absent metadata must not put an undefined value into the expression.
+    test('omits metadata clauses when there is no metadata', async () => {
+      mockSend.mockResolvedValueOnce({});
+
+      await recordSuppression('tenant1', 'a@b.com', 'one-click');
+
+      const { UpdateExpression, ExpressionAttributeValues } = mockSend.mock.calls[0][0].input;
+
+      expect(UpdateExpression).not.toContain('ipAddress');
+      expect(UpdateExpression).not.toContain('userAgent');
+      expect(Object.keys(ExpressionAttributeValues)).toEqual(
+        expect.not.arrayContaining([':ipAddress', ':userAgent'])
+      );
+    });
+
+    // Every suppression blocks mail. The flag exists so the confirmed
+    // re-opt-in flow can tell which ones were never proof of ownership — a
+    // typed address on the no-token form is a state anyone can impose on
+    // someone else, and that fact has to be written down when the record is
+    // made or it is gone.
+    test.each([
+      ['one-click', true],
+      ['encrypted-link', true],
+      ['complaint', true],
+      ['manual-form', false]
+    ])('marks a %s revocation verified=%s', async (method, expected) => {
+      mockSend.mockResolvedValueOnce({});
+
+      await recordSuppression('tenant1', 'a@b.com', method);
+
+      const values = unmarshall(mockSend.mock.calls[0][0].input.ExpressionAttributeValues);
+      expect(values[':verified']).toBe(expected);
+    });
+
+    // A verified revocation must not be downgraded by a later unverified one.
+    test('does not overwrite the original verification status', async () => {
+      mockSend.mockResolvedValueOnce({});
+
+      await recordSuppression('tenant1', 'a@b.com', 'manual-form');
+
+      const { UpdateExpression } = mockSend.mock.calls[0][0].input;
+      expect(UpdateExpression).toContain('verified = if_not_exists(verified, :verified)');
+      expect(UpdateExpression).toContain('lastVerified = :verified');
     });
 
     // Consent fails closed: reporting a durable unsubscribe that was never

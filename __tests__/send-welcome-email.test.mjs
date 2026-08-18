@@ -306,8 +306,20 @@ describe('send-welcome-email handler', () => {
             },
           };
 
-          // Property: Handler should not throw an exception
-          await expect(handler(event)).resolves.not.toThrow();
+          // Property: a scenario with nothing to send resolves; a scenario
+          // where the send itself failed rejects.
+          //
+          // These are not the same kind of error. A missing tenant or an
+          // unconfigured sender means there is no welcome email to send and
+          // retrying changes nothing. An EventBridge failure means there was
+          // one and it was lost — and because this is an async invocation,
+          // returning normally tells Lambda the work succeeded and the retry
+          // never happens. That subscriber would never hear from us.
+          if (scenario.errorType === 'eventbridge_failure') {
+            await expect(handler(event)).rejects.toThrow();
+          } else {
+            await expect(handler(event)).resolves.not.toThrow();
+          }
 
           // Property: Errors should be logged when error scenarios occur
           if (scenario.errorType === 'tenant_not_found' || scenario.errorType === 'no_default_sender' || scenario.errorType === 'eventbridge_failure') {
@@ -328,6 +340,62 @@ describe('send-welcome-email handler', () => {
 
       // Property: Should log error
       expect(console.error).toHaveBeenCalled();
+    });
+  });
+
+  // EventBridge answers 200 to the API call and reports per-entry failures in
+  // the response body, so an accepted call is not a published event. Ignoring
+  // FailedEntryCount made a rejected entry indistinguishable from a delivered
+  // welcome email — and because this is an async invocation, reporting success
+  // meant Lambda never retried it.
+  describe('event publication is verified, not assumed', () => {
+    const workingLookups = () => {
+      mockDdbSend.mockImplementation((command) => {
+        if (command.__type === 'GetItem') {
+          return Promise.resolve({
+            Item: { pk: 'test-tenant', sk: 'tenant', brandName: 'Test Newsletter' },
+          });
+        }
+        if (command.__type === 'Query') {
+          return Promise.resolve({
+            Items: [{
+              email: 'sender@example.com',
+              senderId: 'sender-123',
+              verificationStatus: 'verified',
+              isDefault: true,
+            }],
+          });
+        }
+        return Promise.resolve({});
+      });
+    };
+
+    const event = {
+      detail: { tenantId: 'test-tenant', data: { email: 'subscriber@example.com' } },
+    };
+
+    test('throws when an entry is rejected despite an accepted call', async () => {
+      workingLookups();
+      mockEventBridgeSend.mockResolvedValue({
+        FailedEntryCount: 1,
+        Entries: [{ ErrorCode: 'InternalException', ErrorMessage: 'try again' }],
+      });
+
+      await expect(handler(event)).rejects.toThrow(/InternalException/);
+    });
+
+    test('throws when the call itself is rejected', async () => {
+      workingLookups();
+      mockEventBridgeSend.mockRejectedValue(new Error('EventBridge unavailable'));
+
+      await expect(handler(event)).rejects.toThrow('EventBridge unavailable');
+    });
+
+    test('resolves when every entry is accepted', async () => {
+      workingLookups();
+      mockEventBridgeSend.mockResolvedValue({ FailedEntryCount: 0, Entries: [{ EventId: 'e-1' }] });
+
+      await expect(handler(event)).resolves.not.toThrow();
     });
   });
 

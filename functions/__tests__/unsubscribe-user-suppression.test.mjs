@@ -15,6 +15,7 @@ async function loadIsolated() {
       GetItemCommand: jest.fn((params) => ({ __type: 'GetItem', ...params })),
       DeleteItemCommand: jest.fn((params) => ({ __type: 'DeleteItem', ...params })),
       UpdateItemCommand: jest.fn((params) => ({ __type: 'UpdateItem', ...params })),
+      TransactWriteItemsCommand: jest.fn((params) => ({ __type: 'TransactWrite', ...params })),
       QueryCommand: jest.fn((params) => ({ __type: 'Query', ...params })),
     }));
 
@@ -27,6 +28,12 @@ async function loadIsolated() {
   });
 }
 
+/** A cancelled transaction with the given per-item reason codes. */
+const cancelWith = (codes) => Object.assign(new Error('cancelled'), {
+  name: 'TransactionCanceledException',
+  CancellationReasons: codes.map((Code) => ({ Code }))
+});
+
 describe('unsubscribeUser suppression trail', () => {
   beforeEach(async () => {
     jest.resetModules();
@@ -35,8 +42,8 @@ describe('unsubscribeUser suppression trail', () => {
     await loadIsolated();
   });
 
-  test('records the revocation before deleting the subscriber', async () => {
-    ddbSend.mockResolvedValue({ Attributes: { email: 'a@b.com' } });
+  test('records the revocation before removing the subscriber', async () => {
+    ddbSend.mockResolvedValue({});
 
     const result = await unsubscribeUser('tenant1', 'A@B.com', 'one-click', {
       ipAddress: '10.0.0.1',
@@ -47,12 +54,31 @@ describe('unsubscribeUser suppression trail', () => {
 
     const calls = ddbSend.mock.calls.map(([cmd]) => cmd);
     // Suppression first: a crash after it still leaves the revocation on record.
-    expect(calls[0].__type).toBe('PutItem');
+    expect(calls[0].__type).toBe('UpdateItem');
     expect(calls[0].TableName).toBe('newsletter-table');
-    expect(calls[0].Item.sk).toBe('suppression#a@b.com');
-    expect(calls[0].Item.method).toBe('one-click');
-    expect(calls[1].__type).toBe('DeleteItem');
-    expect(calls[1].TableName).toBe('subscribers-table');
+    expect(calls[0].Key.sk).toBe('suppression#a@b.com');
+    expect(calls[0].ExpressionAttributeValues[':method']).toBe('one-click');
+    expect(calls[1].__type).toBe('TransactWrite');
+  });
+
+  // The removal and the count are one commit. Splitting them drifted: a delete
+  // that succeeded followed by a failed decrement reported failure for an
+  // unsubscribe that had happened, and the retry found nothing left to delete
+  // so the count was never repaired.
+  test('removes the subscriber and decrements the count in one transaction', async () => {
+    ddbSend.mockResolvedValue({});
+
+    await unsubscribeUser('tenant1', 'a@b.com', 'one-click');
+
+    const transaction = ddbSend.mock.calls
+      .map(([cmd]) => cmd)
+      .find((cmd) => cmd.__type === 'TransactWrite');
+
+    expect(transaction.TransactItems).toHaveLength(2);
+    expect(transaction.TransactItems[0].Delete.TableName).toBe('subscribers-table');
+    expect(transaction.TransactItems[0].Delete.ConditionExpression).toBe('attribute_exists(tenantId)');
+    expect(transaction.TransactItems[1].Update.TableName).toBe('newsletter-table');
+    expect(transaction.TransactItems[1].Update.UpdateExpression).toContain('- :dec');
   });
 
   // An unsubscribe click on an old email after the address already left the
@@ -60,7 +86,9 @@ describe('unsubscribeUser suppression trail', () => {
   // suppression even though there is nothing to delete.
   test('records the revocation even when the address is not on the list', async () => {
     ddbSend.mockImplementation((cmd) =>
-      Promise.resolve(cmd.__type === 'DeleteItem' ? {} : {})
+      cmd.__type === 'TransactWrite'
+        ? Promise.reject(cancelWith(['ConditionalCheckFailed', 'None']))
+        : Promise.resolve({})
     );
 
     const result = await unsubscribeUser('tenant1', 'gone@b.com', 'encrypted-link');
@@ -68,8 +96,37 @@ describe('unsubscribeUser suppression trail', () => {
     expect(result).toEqual({ success: true, actuallyRemoved: false });
     const suppressionWrite = ddbSend.mock.calls
       .map(([cmd]) => cmd)
-      .find((cmd) => cmd.__type === 'PutItem');
-    expect(suppressionWrite.Item.sk).toBe('suppression#gone@b.com');
+      .find((cmd) => cmd.__type === 'UpdateItem');
+    expect(suppressionWrite.Key.sk).toBe('suppression#gone@b.com');
+  });
+
+  // A stored count of zero alongside a live subscriber row means the number is
+  // already wrong. Refusing the unsubscribe over it would punish the person
+  // opting out for a bookkeeping error, so the removal proceeds alone.
+  test('still removes the subscriber when the count is already at zero', async () => {
+    ddbSend.mockImplementation((cmd) =>
+      cmd.__type === 'TransactWrite'
+        ? Promise.reject(cancelWith(['None', 'ConditionalCheckFailed']))
+        : Promise.resolve({})
+    );
+
+    const result = await unsubscribeUser('tenant1', 'a@b.com', 'one-click');
+
+    expect(result).toEqual({ success: true, actuallyRemoved: true });
+    expect(ddbSend.mock.calls.map(([cmd]) => cmd.__type)).toContain('DeleteItem');
+  });
+
+  // A cancellation that is neither guard is a real failure, not a no-op.
+  test('reports a transaction conflict as a failure', async () => {
+    ddbSend.mockImplementation((cmd) =>
+      cmd.__type === 'TransactWrite'
+        ? Promise.reject(cancelWith(['TransactionConflict', 'None']))
+        : Promise.resolve({})
+    );
+
+    const result = await unsubscribeUser('tenant1', 'a@b.com', 'one-click');
+
+    expect(result).toEqual({ success: false, actuallyRemoved: false });
   });
 
   // Fails closed. Removing the subscriber anyway would report a durable
@@ -78,15 +135,17 @@ describe('unsubscribeUser suppression trail', () => {
   // Leaving them subscribed and reporting failure means the provider retries.
   test('a failed suppression write aborts the removal', async () => {
     ddbSend.mockImplementation((cmd) => {
-      if (cmd.__type === 'PutItem') {
+      if (cmd.__type === 'UpdateItem') {
         return Promise.reject(new Error('DynamoDB down'));
       }
-      return Promise.resolve(cmd.__type === 'DeleteItem' ? { Attributes: { email: 'a@b.com' } } : {});
+      return Promise.resolve({});
     });
 
     const result = await unsubscribeUser('tenant1', 'a@b.com', 'complaint');
 
     expect(result).toEqual({ success: false, actuallyRemoved: false });
-    expect(ddbSend.mock.calls.map(([cmd]) => cmd.__type)).not.toContain('DeleteItem');
+    const types = ddbSend.mock.calls.map(([cmd]) => cmd.__type);
+    expect(types).not.toContain('TransactWrite');
+    expect(types).not.toContain('DeleteItem');
   });
 });

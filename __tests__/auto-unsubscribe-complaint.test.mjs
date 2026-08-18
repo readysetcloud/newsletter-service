@@ -89,6 +89,42 @@ describe('auto-unsubscribe-complaint', () => {
     expect(eventBridgeSend).toHaveBeenCalled();
   });
 
+  // The complaint names the message that produced it. Crediting "whatever
+  // issue is newest now" charged a delayed complaint about issue 42 to issue
+  // 43 — the issue that had done nothing wrong — and quietly moved the blame
+  // every time a new issue went out before the complaint arrived.
+  test('attributes the unsubscribe to the issue the complaint names', async () => {
+    unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: true });
+
+    await handler(complaint({ referenceNumber: ['tenant-1_42'], tenantId: ['tenant-1'] }));
+
+    expect(incrementIssueCounter).toHaveBeenCalledWith('tenant-1#42', 'unsubscribes');
+    expect(getMostRecentPublishedIssue).not.toHaveBeenCalled();
+  });
+
+  // Welcome mail and pre-tag messages have no reference to go on.
+  test('falls back to the most recent sent issue with no reference tag', async () => {
+    unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: true });
+
+    await handler(complaint({ tenantId: ['tenant-1'] }));
+
+    expect(getMostRecentPublishedIssue).toHaveBeenCalledWith('tenant-1');
+    expect(incrementIssueCounter).toHaveBeenCalledWith('tenant-1#5', 'unsubscribes');
+  });
+
+  // A tenant id may itself contain an underscore, so the issue number is what
+  // follows the LAST one — splitting on the first truncated the tenant.
+  test('splits the reference on the last underscore', async () => {
+    unsubscribeUser.mockResolvedValue({ success: true, actuallyRemoved: true });
+
+    await handler(complaint({ referenceNumber: ['my_tenant_7'] }));
+
+    expect(unsubscribeUser).toHaveBeenCalledWith(
+      'my_tenant', 'angry@example.com', 'complaint', expect.any(Object)
+    );
+    expect(incrementIssueCounter).toHaveBeenCalledWith('my_tenant#7', 'unsubscribes');
+  });
+
   test('does nothing when no tenant can be resolved', async () => {
     await handler(complaint({}));
 

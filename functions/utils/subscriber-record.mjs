@@ -15,8 +15,14 @@
  * that forgets to exclude them treats bookkeeping keys as sendable addresses.
  */
 
-/** Sort-key prefix owned by the segments feature. */
-const SEGMENT_KEY_PREFIX = 'SEGMENT';
+/**
+ * Sort-key prefix owned by the segments feature.
+ *
+ * Exported so a DynamoDB-side filter can exclude the same namespace this
+ * predicate excludes in memory — a counting query cannot afford to pull every
+ * item back just to run `isSubscriberRecord` over it, but it must agree with it.
+ */
+export const SEGMENT_KEY_PREFIX = 'SEGMENT';
 
 /**
  * Whether a raw record from the subscribers table is an actual subscriber.

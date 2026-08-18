@@ -2,6 +2,7 @@ import { DynamoDBClient, UpdateItemCommand, TransactWriteItemsCommand, QueryComm
 import { marshall } from "@aws-sdk/util-dynamodb";
 import { getTenant, formatResponse, throttle, sendWithRetry } from "../utils/helpers.mjs";
 import { sanitizeName } from "../utils/subscriber-name.mjs";
+import { SEGMENT_KEY_PREFIX } from "../utils/subscriber-record.mjs";
 import { getSuppression, suppressionConditionCheck } from "../utils/suppression.mjs";
 
 const ddb = new DynamoDBClient();
@@ -17,14 +18,26 @@ export const handler = async (event) => {
     const tasks = list.items.map(item => () => addSubscriber(tenantId, item));
     console.log(`Processing ${tasks.length} contacts with throttling enabled`);
 
-    // Track failures during import while keeping bounded concurrency
+    // Track failures during import while keeping bounded concurrency.
+    //
+    // Outcomes are counted, not inferred. `imported` used to be total minus
+    // failures minus suppressions, which quietly counted addresses that were
+    // already subscribers: re-importing a 100-address list where 99 already
+    // existed reported 99 more imports than actually happened, and the
+    // operator had no way to see that from the result.
     const results = [];
     const suppressed = [];
+    let created = 0;
+    let existing = 0;
     const trackedTasks = tasks.map(task => async () => {
       try {
         const outcome = await task();
         if (outcome?.suppressed) {
           suppressed.push(outcome.email);
+        } else if (outcome?.existing) {
+          existing++;
+        } else {
+          created++;
         }
         results.push({ status: 'fulfilled' });
       } catch (error) {
@@ -52,7 +65,8 @@ export const handler = async (event) => {
       // Return partial success with failure details
       return {
         success: false,
-        imported: tasks.length - failures.length - suppressed.length,
+        imported: created,
+        existing,
         failed: failures.length,
         suppressed: suppressed.length,
         suppressedAddresses: suppressed,
@@ -62,11 +76,12 @@ export const handler = async (event) => {
     }
 
     await updateSubscriberCount(tenantId);
-    console.log(`Successfully added ${list.items.length - suppressed.length} contacts`);
+    console.log(`Successfully added ${created} contacts (${existing} already subscribed)`);
 
     return {
       success: true,
-      imported: list.items.length - suppressed.length,
+      imported: created,
+      existing,
       failed: 0,
       suppressed: suppressed.length,
       suppressedAddresses: suppressed,
@@ -150,7 +165,7 @@ const addSubscriber = async (tenantId, contact) => {
       }
       if (codes[1] === 'ConditionalCheckFailed') {
         console.info(`Subscriber ${normalizedEmail} already exists, leaving their record untouched`);
-        return;
+        return { existing: true, email: normalizedEmail };
       }
     }
 
@@ -160,6 +175,22 @@ const addSubscriber = async (tenantId, contact) => {
   }
 };
 
+/**
+ * Count a tenant's actual subscribers.
+ *
+ * Two things a plain `Select: 'COUNT'` over the tenant partition got wrong.
+ * The segments feature stores its own records in this table under the same
+ * partition, overloading the `email` sort key (`SEGMENT#...`, memberships,
+ * name guards, rebuild jobs), so counting the partition counted bookkeeping
+ * rows as subscribers and overstated every segment-using tenant. The filter
+ * excludes that namespace DynamoDB-side; `Select: 'COUNT'` still returns the
+ * post-filter count, so nothing is paid to transfer items.
+ *
+ * And this runs immediately after the import's own writes, where an
+ * eventually consistent read can miss rows that just committed — and then
+ * overwrite the stored count with the low number. Strongly consistent because
+ * it is a repair, and a repair that reads stale data writes damage.
+ */
 const getSubscriberCount = async (tenantId) => {
   let total = 0;
   let lastEvaluatedKey;
@@ -168,10 +199,14 @@ const getSubscriberCount = async (tenantId) => {
     const response = await sendWithRetry(() => ddb.send(new QueryCommand({
       TableName: process.env.SUBSCRIBERS_TABLE_NAME,
       KeyConditionExpression: 'tenantId = :tenantId',
+      FilterExpression: 'NOT begins_with(#email, :segmentPrefix)',
+      ExpressionAttributeNames: { '#email': 'email' },
       ExpressionAttributeValues: marshall({
-        ':tenantId': tenantId
+        ':tenantId': tenantId,
+        ':segmentPrefix': SEGMENT_KEY_PREFIX
       }),
       Select: 'COUNT',
+      ConsistentRead: true,
       ExclusiveStartKey: lastEvaluatedKey
     })), 'QuerySubscriberCount');
 

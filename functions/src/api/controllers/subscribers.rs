@@ -1,4 +1,5 @@
-use aws_sdk_dynamodb::types::AttributeValue;
+use aws_sdk_dynamodb::operation::transact_write_items::TransactWriteItemsError;
+use aws_sdk_dynamodb::types::{AttributeValue, Delete, TransactWriteItem, Update};
 use aws_smithy_types::error::display::DisplayErrorContext;
 use chrono_tz::Tz;
 use lambda_http::{Body, Error, Request, RequestExt, Response};
@@ -505,34 +506,114 @@ async fn handle_delete_subscriber(
     let newsletter_table = get_newsletter_table_name()?;
     let ddb_client = aws_clients::get_dynamodb_client().await;
 
-    // Delete subscriber, return old item to check if it existed
-    let delete_result = ddb_client
-        .delete_item()
-        .table_name(&subscribers_table)
-        .key("tenantId", AttributeValue::S(tenant_id.clone()))
-        .key("email", AttributeValue::S(decoded_email.clone()))
-        .return_values(aws_sdk_dynamodb::types::ReturnValue::AllOld)
+    // The removal and the count commit together, matching `unsubscribeUser` on
+    // the JS side.
+    //
+    // Deleting and then decrementing separately drifted permanently: if the
+    // delete committed and the count update failed, the request returned an
+    // error with the subscriber already gone, and a retry got `NotFound` and
+    // never reached the decrement. The count stayed one too high with no path
+    // back.
+    //
+    // `attribute_exists` on the delete stands in for the `ReturnValues::AllOld`
+    // this used to read — transactions do not support it — so a cancellation on
+    // the delete half is how "no such subscriber" is detected.
+    let transaction = ddb_client
+        .transact_write_items()
+        .transact_items(
+            TransactWriteItem::builder()
+                .delete(
+                    Delete::builder()
+                        .table_name(&subscribers_table)
+                        .key("tenantId", AttributeValue::S(tenant_id.clone()))
+                        .key("email", AttributeValue::S(decoded_email.clone()))
+                        .condition_expression("attribute_exists(tenantId)")
+                        .build()
+                        .map_err(|e| {
+                            AppError::AwsError(format!("Failed to build delete: {}", e))
+                        })?,
+                )
+                .build(),
+        )
+        .transact_items(
+            TransactWriteItem::builder()
+                .update(
+                    Update::builder()
+                        .table_name(&newsletter_table)
+                        .key("pk", AttributeValue::S(tenant_id.clone()))
+                        .key("sk", AttributeValue::S("tenant".to_string()))
+                        .update_expression(
+                            "SET subscribers = if_not_exists(subscribers, :zero) - :dec",
+                        )
+                        .expression_attribute_values(":dec", AttributeValue::N("1".to_string()))
+                        .expression_attribute_values(":zero", AttributeValue::N("0".to_string()))
+                        // Keep the count off negative numbers.
+                        .condition_expression("if_not_exists(subscribers, :zero) >= :dec")
+                        .build()
+                        .map_err(|e| {
+                            AppError::AwsError(format!("Failed to build update: {}", e))
+                        })?,
+                )
+                .build(),
+        )
         .send()
-        .await
-        .map_err(|e| AppError::AwsError(format!("DynamoDB DeleteItem failed: {}", e)))?;
+        .await;
 
-    if delete_result.attributes().is_none() || delete_result.attributes().unwrap().is_empty() {
-        return Err(AppError::NotFound("Subscriber not found".to_string()));
+    if let Err(err) = transaction {
+        let service_err = err.into_service_error();
+        let reasons: Vec<String> = match &service_err {
+            TransactWriteItemsError::TransactionCanceledException(cancelled) => cancelled
+                .cancellation_reasons()
+                .iter()
+                .map(|reason| reason.code().unwrap_or("None").to_string())
+                .collect(),
+            _ => Vec::new(),
+        };
+
+        // Positions match the transact items: [subscriber delete, tenant count].
+        match (
+            reasons.first().map(String::as_str),
+            reasons.get(1).map(String::as_str),
+        ) {
+            (Some("ConditionalCheckFailed"), _) => {
+                return Err(AppError::NotFound("Subscriber not found".to_string()));
+            }
+            (_, Some("ConditionalCheckFailed")) => {
+                // The stored count is already at zero while the row exists, so
+                // the number is wrong independently of this request. Removing
+                // the subscriber matters more than the counter — the same rule
+                // the unsubscribe path follows — so delete alone and leave the
+                // count to be reconciled.
+                tracing::warn!(
+                    tenant_id = %tenant_id,
+                    "Subscriber count already at minimum; removing without decrementing"
+                );
+
+                let fallback = ddb_client
+                    .delete_item()
+                    .table_name(&subscribers_table)
+                    .key("tenantId", AttributeValue::S(tenant_id.clone()))
+                    .key("email", AttributeValue::S(decoded_email.clone()))
+                    .return_values(aws_sdk_dynamodb::types::ReturnValue::AllOld)
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        AppError::AwsError(format!("DynamoDB DeleteItem failed: {}", e))
+                    })?;
+
+                // The row can go between the cancelled transaction and here.
+                if fallback.attributes().is_none_or(|old| old.is_empty()) {
+                    return Err(AppError::NotFound("Subscriber not found".to_string()));
+                }
+            }
+            _ => {
+                return Err(AppError::AwsError(format!(
+                    "DynamoDB TransactWriteItems failed: {}",
+                    DisplayErrorContext(&service_err)
+                )));
+            }
+        }
     }
-
-    // Decrement subscriber count
-    ddb_client
-        .update_item()
-        .table_name(&newsletter_table)
-        .key("pk", AttributeValue::S(tenant_id.clone()))
-        .key("sk", AttributeValue::S("tenant".to_string()))
-        .update_expression("SET subscribers = if_not_exists(subscribers, :zero) - :dec")
-        .expression_attribute_values(":dec", AttributeValue::N("1".to_string()))
-        .expression_attribute_values(":zero", AttributeValue::N("0".to_string()))
-        .condition_expression("if_not_exists(subscribers, :zero) >= :dec")
-        .send()
-        .await
-        .map_err(|e| AppError::AwsError(format!("Failed to decrement subscriber count: {}", e)))?;
 
     // Increment manualRemovals counter on the most recently published issue (fire-and-forget)
     match get_most_recent_published_issue(ddb_client, &newsletter_table, &tenant_id).await {

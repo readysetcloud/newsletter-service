@@ -227,7 +227,12 @@ export const handler = async (state) => {
     const clicks = n(issue.clicks_total) || issueClicks;
     const bounces = n(issue.bounces);
     const unsubscribes = n(issue.unsubscribes);
-    const subscribers = n(issue.subscribers);
+    // Not coerced to zero. `subscribers` is a snapshot, not a counter, and an
+    // issue published before the field was recorded has no measurement — which
+    // is the exact distinction this PR's first commit restored in the API and
+    // the dashboard. Mapping it to 0 here rebuilt the original bug inside the
+    // monthly report: "list of 4,000" became "list of nobody".
+    const subscribers = typeof issue.subscribers === 'number' ? issue.subscribers : null;
 
     summary.totalDelivered += delivered;
     summary.totalSends += sends;
@@ -266,15 +271,28 @@ export const handler = async (state) => {
   summary.avgClickToOpenRate = pct(summary.totalClicks, summary.totalUniqueOpens);
   summary.avgBounceRate = pct(summary.totalBounces, summary.totalSends);
 
-  // Subscriber growth across the month, derived from the per-issue snapshots.
-  const startCount = n(monthIssues[0].subscribers);
-  const endCount = n(monthIssues[monthIssues.length - 1].subscribers);
-  const netChange = endCount - startCount;
+  // Subscriber growth across the month, derived from the per-issue snapshots —
+  // and only from the ones that were actually measured.
+  //
+  // Taking the first and last issue unconditionally and coercing missing
+  // snapshots to zero produced growth figures out of nothing: an unmeasured
+  // first issue reported the entire list as new subscribers that month, an
+  // unmeasured last issue reported the whole list leaving. Both are the
+  // "shrank 100%" failure the dashboard just stopped showing. With fewer than
+  // two measured points there is no growth to report, and the field says so
+  // rather than guessing.
+  const measured = issues.filter((issue) => typeof issue.subscribers === 'number');
+  const startCount = measured.length ? measured[0].subscribers : null;
+  const endCount = measured.length ? measured[measured.length - 1].subscribers : null;
+  const hasGrowth = measured.length >= 2;
   const subscriberGrowth = {
     startCount,
     endCount,
-    netChange,
-    growthRate: startCount > 0 ? round(((endCount - startCount) / startCount) * 100) : 0,
+    netChange: hasGrowth ? endCount - startCount : null,
+    growthRate: hasGrowth && startCount > 0 ? round(((endCount - startCount) / startCount) * 100) : null,
+    // How many of the month's issues carry a snapshot, so a reader can tell a
+    // flat month from an unmeasured one.
+    measuredIssues: measured.length,
     byIssue: issues.map((i) => ({ issue: i.issueNumber, date: i.publishedAt, subscribers: i.subscribers }))
   };
 

@@ -1759,8 +1759,11 @@ Resources:
               Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
             - Effect: Allow
               Action:
+                # The removal is a TransactWriteItems pairing this Delete with
+                # the tenant-count Update above, so the count can no longer
+                # drift from the rows. Query is gone with the partition recount
+                # it served, which raced with live signups and unsubscribes.
                 - dynamodb:DeleteItem
-                - dynamodb:Query
               Resource: !GetAtt SubscribersTable.Arn
       Environment:
         Variables:
@@ -4749,8 +4752,10 @@ Resources:
             - Effect: Allow
               Action:
                 - dynamodb:GetItem
+                # Scan is gone: tenants are enumerated through GSI1
+                # (GSI1PK = "tenant") like monthly-report-job does, rather than
+                # scanning for an `sk` value no record has ever carried.
                 - dynamodb:Query
-                - dynamodb:Scan
               Resource:
                 - !GetAtt NewsletterTable.Arn
                 - !Sub "${NewsletterTable.Arn}/index/*"

@@ -92,6 +92,87 @@ export const listSubscribers = async (tenantId, options = {}) => {
 };
 
 /**
+ * Remove a subscriber row and decrement the tenant's count as one commit.
+ *
+ * The two used to be separate writes wherever a subscriber was removed, and
+ * that always drifted the same way: the delete commits, the decrement fails,
+ * and the retry finds nothing left to delete so it never decrements. The count
+ * stays one too high with no path back. Every removal path shares this now —
+ * consent-driven unsubscribes and the bounce cleanup — so the invariant has one
+ * implementation rather than one per caller.
+ *
+ * `attribute_exists` on the Delete stands in for the `ReturnValues: ALL_OLD`
+ * transactions do not support: if the row is already gone the transaction
+ * cancels at index 0, which answers "did this remove anyone?" just as well and
+ * leaves the count untouched.
+ *
+ * @returns {Promise<boolean>} whether a subscriber row was actually removed
+ */
+export const removeSubscriberAndDecrement = async (tenantId, email) => {
+  try {
+    await ddb.send(new TransactWriteItemsCommand({
+      TransactItems: [
+        {
+          Delete: {
+            TableName: process.env.SUBSCRIBERS_TABLE_NAME,
+            Key: marshall({ tenantId, email }),
+            ConditionExpression: 'attribute_exists(tenantId)'
+          }
+        },
+        {
+          Update: {
+            TableName: process.env.TABLE_NAME,
+            Key: marshall({ pk: tenantId, sk: 'tenant' }),
+            UpdateExpression: 'SET subscribers = if_not_exists(subscribers, :zero) - :dec',
+            ExpressionAttributeValues: marshall({ ':dec': 1, ':zero': 0 }),
+            // Keep the count off negative numbers.
+            ConditionExpression: 'if_not_exists(subscribers, :zero) >= :dec'
+          }
+        }
+      ]
+    }));
+    return true;
+  } catch (txErr) {
+    if (txErr.name !== 'TransactionCanceledException') {
+      throw txErr;
+    }
+
+    // Positions match TransactItems: [subscriber delete, tenant count].
+    const codes = (txErr.CancellationReasons || []).map((reason) => reason.Code);
+
+    if (codes[0] === 'ConditionalCheckFailed') {
+      // Not on the list. Callers decide what that means for them; for an
+      // unsubscribe it is still a success, since the suppression is the point.
+      console.log('Subscriber removal skipped - not found:', { tenantId });
+      return false;
+    }
+
+    if (codes[1] === 'ConditionalCheckFailed') {
+      // The count is already at zero while a subscriber row exists, so the
+      // stored number is wrong independently of this request. Removing the
+      // person matters more than the counter, so retry the delete alone and
+      // leave the count for reconciliation rather than refusing to remove
+      // someone over a stale metric.
+      console.warn('Subscriber count already at minimum; removing without decrementing', { tenantId });
+      // `ALL_OLD` because this is a second attempt, and the row may have gone
+      // between the cancelled transaction and here — a concurrent removal of
+      // the same address. Assuming the delete removed something would let both
+      // callers report a removal and both credit the issue counter for one
+      // person leaving. The transaction could not return this; a plain
+      // DeleteItem can.
+      const fallbackDelete = await ddb.send(new DeleteItemCommand({
+        TableName: process.env.SUBSCRIBERS_TABLE_NAME,
+        Key: marshall({ tenantId, email }),
+        ReturnValues: 'ALL_OLD'
+      }));
+      return Boolean(fallbackDelete.Attributes);
+    }
+
+    throw txErr;
+  }
+};
+
+/**
  * Unsubscribe user from tenant's mailing list
  * @param {string} tenantId - Tenant identifier
  * @param {string} emailAddress - Email address to unsubscribe
@@ -127,81 +208,7 @@ export const unsubscribeUser = async (tenantId, emailAddress, method = 'encrypte
       return { success: false, actuallyRemoved: false };
     }
 
-    // The removal and the tenant count commit together.
-    //
-    // Deleting first and decrementing afterwards drifted permanently: if the
-    // delete succeeded and the count update then failed, this returned
-    // `success: false` for an unsubscribe that had in fact happened. The
-    // provider's retry rewrote the suppression, found no subscriber to delete,
-    // and so never attempted the decrement — the count stayed one too high
-    // with no path back. Consent was honoured and the number was wrong forever.
-    //
-    // `attribute_exists` on the Delete replaces the `ReturnValues: ALL_OLD`
-    // this used to read (transactions do not support it): if the subscriber is
-    // already gone the transaction cancels at index 0, which tells us
-    // `actuallyRemoved` just as well and leaves the count untouched.
-    let actuallyRemoved;
-    try {
-      await ddb.send(new TransactWriteItemsCommand({
-        TransactItems: [
-          {
-            Delete: {
-              TableName: process.env.SUBSCRIBERS_TABLE_NAME,
-              Key: marshall({ tenantId, email }),
-              ConditionExpression: 'attribute_exists(tenantId)'
-            }
-          },
-          {
-            Update: {
-              TableName: process.env.TABLE_NAME,
-              Key: marshall({ pk: tenantId, sk: 'tenant' }),
-              UpdateExpression: 'SET subscribers = if_not_exists(subscribers, :zero) - :dec',
-              ExpressionAttributeValues: marshall({ ':dec': 1, ':zero': 0 }),
-              // Keep the count off negative numbers.
-              ConditionExpression: 'if_not_exists(subscribers, :zero) >= :dec'
-            }
-          }
-        ]
-      }));
-      actuallyRemoved = true;
-      console.log('Unsubscribe successful:', { tenantId, emailAddress });
-    } catch (txErr) {
-      if (txErr.name !== 'TransactionCanceledException') {
-        throw txErr;
-      }
-
-      // Positions match TransactItems: [subscriber delete, tenant count].
-      const codes = (txErr.CancellationReasons || []).map((reason) => reason.Code);
-
-      if (codes[0] === 'ConditionalCheckFailed') {
-        // Not on the list. The suppression above is the whole point of the
-        // request — an unsubscribe click on an old email is still a statement
-        // about future sends — so this is a success with nothing removed.
-        console.log('Unsubscribe skipped - subscriber not found:', { tenantId, emailAddress });
-        actuallyRemoved = false;
-      } else if (codes[1] === 'ConditionalCheckFailed') {
-        // The count is already at zero while a subscriber row exists, so the
-        // stored number is wrong independently of this request. Removing the
-        // person matters more than the counter, so retry the delete alone and
-        // leave the count for reconciliation rather than refusing to
-        // unsubscribe someone over a stale metric.
-        console.warn('Subscriber count already at minimum; removing without decrementing', { tenantId });
-        // `ALL_OLD` because this is a second attempt, and the row may have gone
-        // between the cancelled transaction and here — a concurrent unsubscribe
-        // of the same address. Assuming the delete removed something would let
-        // both requests report a removal and both credit the issue's
-        // `unsubscribes` counter for one person leaving. The transaction could
-        // not return this; a plain DeleteItem can.
-        const fallbackDelete = await ddb.send(new DeleteItemCommand({
-          TableName: process.env.SUBSCRIBERS_TABLE_NAME,
-          Key: marshall({ tenantId, email }),
-          ReturnValues: 'ALL_OLD'
-        }));
-        actuallyRemoved = Boolean(fallbackDelete.Attributes);
-      } else {
-        throw txErr;
-      }
-    }
+    const actuallyRemoved = await removeSubscriberAndDecrement(tenantId, email);
 
     return { success: true, actuallyRemoved };
 

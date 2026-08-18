@@ -270,8 +270,8 @@ const notifyAdminOfFailure = async (tenant, emailAddress, method, metadata = {})
         ${metadata.userAgent ? `<li><strong>User Agent:</strong> ${metadata.userAgent}</li>` : ''}
       </ul>
 
-      <p>The user was shown a success message for privacy and UX reasons, but the unsubscribe did not complete successfully.</p>
-      <p>Please manually verify and remove this email address from your contact list if needed.</p>
+      <p>The request failed and the person was told to try again, so they may retry themselves — but they are still subscribed until something removes them.</p>
+      <p>Please manually verify and remove this email address from your contact list if the retry does not happen.</p>
     `;
 
     await eventBridge.send(new PutEventsCommand({

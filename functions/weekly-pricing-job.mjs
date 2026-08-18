@@ -1,7 +1,7 @@
-import { DynamoDBClient, ScanCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
-import { SEGMENT_KEY_PREFIX } from './utils/subscriber-record.mjs';
+import { isSubscriberRecord } from './utils/subscriber-record.mjs';
 
 const ddb = new DynamoDBClient();
 const eventBridge = new EventBridgeClient();
@@ -14,20 +14,28 @@ const SUBSCRIBERS_TABLE_NAME = process.env.SUBSCRIBERS_TABLE_NAME;
 // ---------------------------------------------------------------------------
 
 /**
- * Query all distinct tenant IDs from the NewsletterTable.
+ * List all tenant IDs via GSI1 (`GSI1PK = "tenant"`), the same way
+ * `monthly-report-job.mjs` does.
  *
- * Tenants are identified by scanning for items whose sk = "newsletter"
- * (the tenant metadata record). The pk of those items is the tenantId.
+ * This used to Scan for `sk = "newsletter"`, which matches nothing: tenant
+ * metadata lives at `{ pk: tenantId, sk: 'tenant' }`. So the job enumerated an
+ * empty set and silently priced nobody — a scan returning zero rows looks
+ * exactly like a account with no tenants.
+ *
+ * NOTE: a tenant record only appears here once it carries `GSI1PK="tenant"`.
+ * Both onboarding paths set it, but records that predate the key need
+ * `scripts/backfill-tenant-gsi.mjs` run once against the table.
  */
 async function getAllTenants() {
   const tenants = [];
   let lastKey;
 
   do {
-    const result = await ddb.send(new ScanCommand({
+    const result = await ddb.send(new QueryCommand({
       TableName: TABLE_NAME,
-      FilterExpression: 'sk = :sk',
-      ExpressionAttributeValues: marshall({ ':sk': 'newsletter' }),
+      IndexName: 'GSI1',
+      KeyConditionExpression: 'GSI1PK = :gsi1pk',
+      ExpressionAttributeValues: marshall({ ':gsi1pk': 'tenant' }),
       ProjectionExpression: 'pk',
       ...(lastKey && { ExclusiveStartKey: lastKey })
     }));
@@ -73,8 +81,15 @@ async function hasPublishedIssueWithAnalytics(tenantId) {
  * The segments feature stores its records in this table under the same tenant
  * partition, overloading the `email` sort key, so counting the partition
  * counted segments, memberships and rebuild jobs as subscribers. Here that
- * decided eligibility (`subscriberCount > 0`), which meant a tenant with no
- * subscribers at all but some leftover segment bookkeeping looked eligible.
+ * decides eligibility (`subscriberCount > 0`), so a tenant with no subscribers
+ * at all but some leftover segment bookkeeping looked eligible.
+ *
+ * The namespace cannot be excluded with a `FilterExpression`: DynamoDB rejects
+ * key attributes there, and `email` is this table's sort key. So the rows come
+ * back and `isSubscriberRecord` — the same predicate every other reader uses —
+ * decides what counts. `Select: 'COUNT'` is not available with that approach,
+ * which is the price of the correct answer; only `email` is projected, so the
+ * rows are as small as they can be.
  */
 async function getSubscriberCount(tenantId) {
   let count = 0;
@@ -84,17 +99,17 @@ async function getSubscriberCount(tenantId) {
     const result = await ddb.send(new QueryCommand({
       TableName: SUBSCRIBERS_TABLE_NAME,
       KeyConditionExpression: 'tenantId = :tenantId',
-      FilterExpression: 'NOT begins_with(#email, :segmentPrefix)',
-      ExpressionAttributeNames: { '#email': 'email' },
-      ExpressionAttributeValues: marshall({
-        ':tenantId': tenantId,
-        ':segmentPrefix': SEGMENT_KEY_PREFIX
-      }),
-      Select: 'COUNT',
+      ExpressionAttributeValues: marshall({ ':tenantId': tenantId }),
+      ProjectionExpression: 'email',
       ...(lastKey && { ExclusiveStartKey: lastKey })
     }));
 
-    count += result.Count || 0;
+    for (const item of result.Items || []) {
+      if (isSubscriberRecord(unmarshall(item))) {
+        count++;
+      }
+    }
+
     lastKey = result.LastEvaluatedKey;
   } while (lastKey);
 

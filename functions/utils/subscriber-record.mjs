@@ -18,11 +18,13 @@
 /**
  * Sort-key prefix owned by the segments feature.
  *
- * Exported so a DynamoDB-side filter can exclude the same namespace this
- * predicate excludes in memory — a counting query cannot afford to pull every
- * item back just to run `isSubscriberRecord` over it, but it must agree with it.
+ * Deliberately not exported. It is tempting to hand it to a DynamoDB
+ * `FilterExpression` so a count can be done server-side, but `email` is the
+ * subscribers table's sort key and DynamoDB rejects key attributes in a filter
+ * — that query fails at runtime, not at review. Readers page the rows and use
+ * the predicate below.
  */
-export const SEGMENT_KEY_PREFIX = 'SEGMENT';
+const SEGMENT_KEY_PREFIX = 'SEGMENT';
 
 /**
  * Whether a raw record from the subscribers table is an actual subscriber.

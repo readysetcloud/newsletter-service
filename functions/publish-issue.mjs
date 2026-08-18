@@ -33,7 +33,8 @@ export const handler = async (state) => {
     } else {
       const tenant = await getTenant(state.tenantId);
       const publishedAt = resolvePublishedAt(state.sendAtDate);
-      await setupIssueStats(tenant, state.data.metadata.number, state.subject, publishedAt);
+      const subscriberCount = await readSubscriberCount(state.tenantId);
+      await setupIssueStats(tenant, state.data.metadata.number, state.subject, publishedAt, subscriberCount);
 
       // Send configs (abTest, localSend, contentAssembly) are persisted on the
       // issue record by the API. Reading them here (rather than threading them
@@ -137,7 +138,7 @@ export const handler = async (state) => {
         type: ISSUE_EVENTS.SEND_HANDED_OFF,
         detail: {
           sendAt: state.sendAtDate ?? 'now',
-          subscribers: tenant.subscribers,
+          subscribers: subscriberCount,
           ...(activeAbTest && { abTest: activeAbTest.dimension }),
           ...(activeLocalSend && { localSend: activeLocalSend.mode ?? 'timezone' })
         }
@@ -152,7 +153,7 @@ export const handler = async (state) => {
           issueNumber: state.data.metadata.number,
           subject: state.subject,
           publishedAt,
-          subscriberCount: tenant.subscribers,
+          subscriberCount,
           metadata: state.data.metadata
         }
       );
@@ -296,7 +297,7 @@ const getSnippets = async (tenantId) => {
  * @param {Object} [params.contentAssembly] - Optional interest-aware assembly flag ({ enabled: true })
  */
 const sendEmail = async (params) => {
-  await eventBridge.send(new PutEventsCommand({
+  const result = await eventBridge.send(new PutEventsCommand({
     Entries: [{
       Source: 'newsletter-service',
       DetailType: 'Send Email v2',
@@ -320,6 +321,17 @@ const sendEmail = async (params) => {
       })
     }]
   }));
+
+  // EventBridge returns a successful API response while rejecting individual
+  // entries, so an awaited call is not a published event. Unchecked, the
+  // publish recorded SEND_HANDED_OFF and reported success for an issue whose
+  // only send entry was refused — the issue looks sent and nothing was.
+  if (result.FailedEntryCount > 0) {
+    const [failure] = (result.Entries || []).filter((entry) => entry.ErrorCode);
+    throw new Error(
+      `Send Email v2 event rejected by EventBridge: ${failure?.ErrorCode || 'unknown'} ${failure?.ErrorMessage || ''}`.trim()
+    );
+  }
 };
 
 const padIssueNumber = (issueNumber) => {
@@ -456,7 +468,46 @@ const resolvePublishedAt = (sendAtDate) => {
     : now.toISOString();
 };
 
-const setupIssueStats = async (tenant, issueNumber, subject, publishedAt) => {
+/**
+ * The tenant's subscriber count, read fresh for this snapshot.
+ *
+ * Not taken from `getTenant()`: that memoizes the whole tenant record for the
+ * life of a warm execution environment, and `subscribers` is mutable. A
+ * container that loaded the tenant before a run of signups would snapshot a
+ * count from an arbitrary point in the past and freeze it into the issue's
+ * stats forever — a wrong number is worse here than the missing one this PR
+ * spent its first commit learning to represent.
+ *
+ * Strongly consistent, and projected down to the single field, since the point
+ * is to be current rather than cheap.
+ *
+ * This defines `subscribers` as the list size at publish (content freeze), not
+ * at delivery — the publish workflow starts up to the send lead time before
+ * mail actually goes out. That is the reading the field has always had; if the
+ * product wants list-size-at-send, the snapshot belongs in the send path
+ * instead, which is a deliberate move rather than a fix.
+ *
+ * Returns undefined when the tenant has no count recorded, which
+ * `setupIssueStats` omits rather than writing as a zero.
+ */
+const readSubscriberCount = async (tenantId) => {
+  const result = await ddb.send(new GetItemCommand({
+    TableName: process.env.TABLE_NAME,
+    Key: marshall({ pk: tenantId, sk: 'tenant' }),
+    ProjectionExpression: '#subscribers',
+    ExpressionAttributeNames: { '#subscribers': 'subscribers' },
+    ConsistentRead: true
+  }));
+
+  if (!result.Item) {
+    return undefined;
+  }
+
+  const { subscribers } = unmarshall(result.Item);
+  return typeof subscribers === 'number' ? subscribers : undefined;
+};
+
+const setupIssueStats = async (tenant, issueNumber, subject, publishedAt, subscriberCount) => {
   try {
     await ddb.send(new PutItemCommand({
       TableName: process.env.TABLE_NAME,
@@ -476,7 +527,7 @@ const setupIssueStats = async (tenant, issueNumber, subject, publishedAt) => {
         // Omitted rather than written as a placeholder when the tenant record
         // has no count: the API distinguishes "no snapshot" from "zero", and
         // marshalling an undefined here would throw and fail the publish.
-        ...(typeof tenant.subscribers === 'number' && { subscribers: tenant.subscribers }),
+        ...(typeof subscriberCount === 'number' && { subscribers: subscriberCount }),
         failedAddresses: [],
         statsPhase: 'realtime'
       }),
@@ -500,7 +551,7 @@ const setupIssueStats = async (tenant, issueNumber, subject, publishedAt) => {
         tenantId: tenant.pk,
         issueNumber
       });
-      await backfillSubscriberSnapshot(tenant, issueNumber);
+      await backfillSubscriberSnapshot(tenant, issueNumber, subscriberCount);
       return;
     }
     throw err;
@@ -524,8 +575,8 @@ const setupIssueStats = async (tenant, issueNumber, subject, publishedAt) => {
  * hole: an issue that already has its snapshot (every resend, every re-stage)
  * fails the condition and keeps the number it was published with.
  */
-const backfillSubscriberSnapshot = async (tenant, issueNumber) => {
-  if (typeof tenant.subscribers !== 'number') {
+const backfillSubscriberSnapshot = async (tenant, issueNumber, subscriberCount) => {
+  if (typeof subscriberCount !== 'number') {
     return;
   }
 
@@ -535,13 +586,13 @@ const backfillSubscriberSnapshot = async (tenant, issueNumber) => {
       Key: marshall({ pk: `${tenant.pk}#${issueNumber}`, sk: 'stats' }),
       UpdateExpression: 'SET subscribers = :subscribers',
       ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(subscribers)',
-      ExpressionAttributeValues: marshall({ ':subscribers': tenant.subscribers })
+      ExpressionAttributeValues: marshall({ ':subscribers': subscriberCount })
     }));
 
     console.log('[PUBLISH] Backfilled the subscriber snapshot on an existing stats record', {
       tenantId: tenant.pk,
       issueNumber,
-      subscribers: tenant.subscribers
+      subscribers: subscriberCount
     });
   } catch (err) {
     if (err.name === 'ConditionalCheckFailedException') {

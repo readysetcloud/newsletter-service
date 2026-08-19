@@ -1,5 +1,5 @@
 import { jest } from '@jest/globals';
-import { DynamoDBClient, GetItemCommand, PutItemCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, GetItemCommand, PutItemCommand, UpdateItemCommand, TransactWriteItemsCommand } from '@aws-sdk/client-dynamodb';
 import { unmarshall } from '@aws-sdk/util-dynamodb';
 import crypto from 'crypto';
 import { handler } from '../handle-email-status.mjs';
@@ -68,18 +68,23 @@ describe('handle-email-status click position capture', () => {
       }
     });
 
-    const putCalls = mockSend.mock.calls.filter(([command]) => command instanceof PutItemCommand);
-    const clickEventCall = putCalls.find(([command]) => {
-      const item = unmarshall(command.input.Item);
-      return item.eventType === 'click';
-    });
+    // The click's analytics record and its stat now commit together inside one
+    // TransactWriteItems rather than as independent writes.
+    const commit = mockSend.mock.calls
+      .map(([command]) => command)
+      .find((command) => command instanceof TransactWriteItemsCommand);
+    expect(commit).toBeDefined();
 
-    expect(clickEventCall).toBeDefined();
-    const clickEvent = unmarshall(clickEventCall[0].input.Item);
-    expect(clickEvent.linkPosition).toBe(2);
+    const clickEventPut = commit.input.TransactItems
+      .map((item) => item.Put)
+      .filter(Boolean)
+      .find((put) => unmarshall(put.Item).eventType === 'click');
 
-    const updateCalls = mockSend.mock.calls.filter(([command]) => command instanceof UpdateItemCommand);
-    expect(updateCalls.length).toBeGreaterThan(0);
+    expect(clickEventPut).toBeDefined();
+    expect(unmarshall(clickEventPut.Item).linkPosition).toBe(2);
+
+    const statsUpdates = commit.input.TransactItems.map((item) => item.Update).filter(Boolean);
+    expect(statsUpdates.length).toBeGreaterThan(0);
   });
 });
 
@@ -109,23 +114,24 @@ describe('handle-email-status click tracking without link records', () => {
     return err;
   };
 
-  const statsUpdate = () =>
-    mockSend.mock.calls
+  const transactItems = () => {
+    const commit = mockSend.mock.calls
       .map(([command]) => command)
-      .find(
-        (command) =>
-          command instanceof UpdateItemCommand &&
-          unmarshall(command.input.Key).sk === 'stats'
-      );
+      .find((command) => command instanceof TransactWriteItemsCommand);
+    return commit ? commit.input.TransactItems : [];
+  };
+
+  const statsUpdate = () =>
+    transactItems()
+      .map((item) => item.Update)
+      .filter(Boolean)
+      .find((update) => unmarshall(update.Key).sk === 'stats');
 
   const clickEventPut = () =>
-    mockSend.mock.calls
-      .map(([command]) => command)
-      .find(
-        (command) =>
-          command instanceof PutItemCommand &&
-          unmarshall(command.input.Item).eventType === 'click'
-      );
+    transactItems()
+      .map((item) => item.Put)
+      .filter(Boolean)
+      .find((put) => unmarshall(put.Item).eventType === 'click');
 
   beforeEach(() => {
     originalTable = process.env.TABLE_NAME;
@@ -150,7 +156,7 @@ describe('handle-email-status click tracking without link records', () => {
 
     await expect(handler(clickEvent)).resolves.toBe(true);
 
-    expect(statsUpdate()?.input.ExpressionAttributeNames['#stat']).toBe('clicks');
+    expect(statsUpdate()?.ExpressionAttributeNames['#stat']).toBe('clicks');
     expect(clickEventPut()).toBeDefined();
   });
 
@@ -166,7 +172,7 @@ describe('handle-email-status click tracking without link records', () => {
 
     await expect(handler(clickEvent)).resolves.toBe(true);
 
-    expect(statsUpdate()?.input.ExpressionAttributeNames['#stat']).toBe('clicks');
+    expect(statsUpdate()?.ExpressionAttributeNames['#stat']).toBe('clicks');
     expect(clickEventPut()).toBeDefined();
   });
 
@@ -199,7 +205,7 @@ describe('handle-email-status click tracking without link records', () => {
 
     await expect(handler(clickEvent)).resolves.toBe(true);
 
-    expect(statsUpdate()?.input.ExpressionAttributeNames['#stat']).toBe('clicks');
+    expect(statsUpdate()?.ExpressionAttributeNames['#stat']).toBe('clicks');
   });
 });
 

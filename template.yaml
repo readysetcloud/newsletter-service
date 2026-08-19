@@ -1718,8 +1718,8 @@ Resources:
               Action: sqs:SendMessage
               Resource: !GetAtt EmailPipelineDLQ.Arn
       # The handler rethrows on failure now instead of swallowing, so a
-      # bounce or complaint that cannot be recorded retries and then parks
-      # in the DLQ for redrive - previously it was silently lost, and the
+      # bounce or complaint that cannot be recorded retries and is then
+      # retained in the DLQ - previously it was silently lost, and the
       # bounce list clean-bounced-subscribers works from went stale.
       EventInvokeConfig:
         MaximumRetryAttempts: 2
@@ -2272,9 +2272,12 @@ Resources:
               Action: sqs:SendMessage
               Resource: !GetAtt EmailPipelineDLQ.Arn
       # A send event that exhausts its retries is an issue whose recipients
-      # are half-mailed. It parks in the DLQ for redrive instead of
-      # evaporating; the checkpointed lastIssueSent markers make the redrive
-      # resume where the send stopped rather than re-mail from the top.
+      # are half-mailed. It is retained in the DLQ instead of evaporating.
+      # Note the envelope: a Lambda OnFailure record wraps the original event
+      # rather than being one, so replaying means extracting the request
+      # payload first (see EmailPipelineDLQ). Once republished, the
+      # checkpointed lastIssueSent markers make the replay resume where the
+      # send stopped rather than re-mail from the top.
       EventInvokeConfig:
         MaximumRetryAttempts: 2
         DestinationConfig:
@@ -3900,12 +3903,25 @@ Resources:
           DLQ_URL: !Ref StripeEventDLQ
           ALERT_TOPIC_ARN: !Ref EventBridgeCriticalAlertsTopic
 
-  # Failed async email-pipeline work parks here for manual redrive: Send
-  # Email v2 events whose retries were exhausted (an issue send that would
-  # otherwise vanish, its recipients half-mailed) and SES status events
-  # (bounces, complaints, opens, clicks) that could not be recorded. It has
-  # no consumer on purpose - the 14-day retention IS the recovery window,
-  # and EmailPipelineDLQAlarm is what surfaces arrivals.
+  # Failed async email-pipeline work parks here: Send Email v2 events whose
+  # retries were exhausted (an issue send that would otherwise vanish, its
+  # recipients half-mailed) and SES status events (bounces, complaints, opens,
+  # clicks) that could not be recorded. It has no consumer on purpose - the
+  # 14-day retention IS the recovery window, and EmailPipelineDLQAlarm is what
+  # surfaces arrivals.
+  #
+  # IMPORTANT for recovery: this queue holds TWO message shapes, and neither
+  # can be handed straight back to the function that failed.
+  #   * EventBridge rule DeadLetterConfig (delivery never reached the function)
+  #     sends the original event plus EventBridge failure metadata - error
+  #     code, retry attempts, rule and target ARNs.
+  #   * Lambda OnFailure destinations (the function ran and threw) send an
+  #     invocation record that WRAPS the original request payload alongside
+  #     invocation metadata.
+  # Replaying therefore means identifying the failure source, extracting the
+  # original event from whichever envelope carries it, and republishing it -
+  # not forwarding the raw SQS message. That normalizing replay tool does not
+  # exist yet; until it does, redrive is a deliberate manual operation.
   #
   # SSE-SQS rather than the aws/sqs KMS key: EventBridge cannot deliver to a
   # queue encrypted with the AWS-managed KMS key, whose policy cannot grant
@@ -3942,7 +3958,7 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub "${AWS::StackName}-email-pipeline-dlq-messages"
-      AlarmDescription: "CRITICAL: send or SES-status events exhausted retries and are parked in the email pipeline DLQ - inspect and redrive within 14 days"
+      AlarmDescription: "CRITICAL: send or SES-status events exhausted retries and are parked in the email pipeline DLQ - inspect within the 14-day retention; replay requires unwrapping the envelope, see the queue definition"
       MetricName: ApproximateNumberOfVisibleMessages
       Namespace: AWS/SQS
       Statistic: Maximum

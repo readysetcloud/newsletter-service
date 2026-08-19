@@ -749,7 +749,7 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
   const logInterval = Math.min(50, Math.ceil(totalCount / 10));
 
   for (const email of emailAddresses) {
-    await sendWithRetry(async () => {
+    const sendOne = () => sendWithRetry(async () => {
       // Apply personalization replacements
       let personalizedHtml = emailConfig.html;
 
@@ -845,6 +845,25 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
         ConfigurationSetName: process.env.CONFIGURATION_SET
       }));
     }, `Send email to ${email}`);
+
+    try {
+      await sendOne();
+    } catch (sendError) {
+      // A controlled failure does not have to behave like a hard crash. The
+      // recipients confirmed sent since the last checkpoint already have their
+      // mail; flushing their markers before propagating means the retry skips
+      // them rather than mailing them twice. Only a hard termination (timeout,
+      // OOM) can still strand a partial checkpoint, which is what the periodic
+      // flush above bounds.
+      try {
+        await flushTracking();
+      } catch (flushError) {
+        console.error('[SENDING] Could not checkpoint confirmed sends before failing', {
+          error: flushError.message
+        });
+      }
+      throw sendError;
+    }
 
     sentCount++;
     sentRecipients.push(email);

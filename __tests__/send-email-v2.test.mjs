@@ -1442,6 +1442,82 @@ describe('send-email-v2 property-based tests', () => {
       expect(firstTrackingOrder).toBeLessThan(lastSesOrder);
     }, 30000);
 
+    test('checkpoints confirmed sends before propagating a send failure', async () => {
+      ddbInstance.send.mockResolvedValueOnce({
+        Items: [{
+          unmarshalled: {
+            senderId: 'sender-123',
+            email: 'sender@example.com',
+            verificationStatus: 'verified',
+            isDefault: false
+          }
+        }]
+      });
+      ddbInstance.send.mockResolvedValue({});
+      listSubscribers.mockResolvedValue({
+        subscribers: sixtySubscribers(),
+        lastEvaluatedKey: undefined
+      });
+
+      // Six succeed past the 50-send checkpoint, then one throws. A hard crash
+      // could not do better than the checkpoint, but a controlled failure can:
+      // the six already have their mail and must not be mailed again.
+      let sent = 0;
+      sesInstance.send.mockImplementation(() => {
+        sent++;
+        if (sent === 57) {
+          return Promise.reject(new Error('SES said no'));
+        }
+        return Promise.resolve({ MessageId: 'msg-123' });
+      });
+
+      await expect(handler(listEvent())).rejects.toThrow('SES said no');
+
+      expect(updateSubscriberSendMetadata).toHaveBeenCalledTimes(56);
+      expect(updateSubscriberSendMetadata).toHaveBeenCalledWith('tenant-123', 'reader55@example.com', 'tenant-123_42');
+      // The recipient that failed never got mail, so it must not be marked.
+      expect(updateSubscriberSendMetadata).not.toHaveBeenCalledWith('tenant-123', 'reader56@example.com', 'tenant-123_42');
+    }, 30000);
+
+    test('propagates the original send failure even when the final flush fails', async () => {
+      ddbInstance.send.mockResolvedValueOnce({
+        Items: [{
+          unmarshalled: {
+            senderId: 'sender-123',
+            email: 'sender@example.com',
+            verificationStatus: 'verified',
+            isDefault: false
+          }
+        }]
+      });
+      ddbInstance.send.mockResolvedValue({});
+      listSubscribers.mockResolvedValue({
+        subscribers: [
+          { email: 'reader0@example.com', lastIssueSent: null },
+          { email: 'reader1@example.com', lastIssueSent: null }
+        ],
+        lastEvaluatedKey: undefined
+      });
+
+      let sent = 0;
+      sesInstance.send.mockImplementation(() => {
+        sent++;
+        if (sent === 2) {
+          return Promise.reject(new Error('SES said no'));
+        }
+        return Promise.resolve({ MessageId: 'msg-123' });
+      });
+      updateSubscriberSendMetadata.mockRejectedValue(new Error('marker write down'));
+
+      try {
+        // The send error is the diagnosis; a secondary flush failure must not
+        // mask it.
+        await expect(handler(listEvent())).rejects.toThrow('SES said no');
+      } finally {
+        updateSubscriberSendMetadata.mockImplementation(() => Promise.resolve());
+      }
+    }, 30000);
+
     test('stops sending when a checkpoint flush fails, instead of outrunning its markers', async () => {
       ddbInstance.send.mockResolvedValueOnce({
         Items: [{

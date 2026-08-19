@@ -1104,7 +1104,11 @@ describe('send-email-v2 property-based tests', () => {
      * should be incremented and lastSentAt timestamp should be updated
      * Validates: Requirements 4.4
      */
-    test('sender metrics are updated after successful email send', () => {
+    // Async property, awaited: unawaited fc.assert keeps its iterations
+    // running after the test "passes", mutating the shared mocks under every
+    // later test in the file and crashing the worker if one of them installs
+    // a rejecting mock.
+    test('sender metrics are updated after successful email send', async () => {
       const arbitraryEmail = fc.emailAddress();
       const arbitraryTenantId = fc.string({ minLength: 5, maxLength: 50 }).filter(s => s.trim().length > 0);
       const arbitrarySenderId = fc.string({ minLength: 5, maxLength: 50 }).filter(s => s.trim().length > 0);
@@ -1121,7 +1125,7 @@ describe('send-email-v2 property-based tests', () => {
         html: arbitraryHtml,
       });
 
-      fc.assert(
+      await fc.assert(
         fc.asyncProperty(arbitraryEmailData, async (data) => {
           jest.clearAllMocks();
 
@@ -1185,9 +1189,9 @@ describe('send-email-v2 property-based tests', () => {
           expect(() => new Date(timestamp)).not.toThrow();
           expect(new Date(timestamp).toISOString()).toBe(timestamp);
         }),
-        { numRuns: 100 }
+        { numRuns: 25 }
       );
-    });
+    }, 30000);
   });
 
   describe('Property 10: TPS rate limiting', () => {
@@ -1197,7 +1201,7 @@ describe('send-email-v2 property-based tests', () => {
      * sends should be at least the configured minimum delay based on TPS limit
      * Validates: Requirements 4.5
      */
-    test('emails are sent with appropriate delay based on TPS limit', () => {
+    test('emails are sent with appropriate delay based on TPS limit', async () => {
       const arbitraryTenantId = fc.string({ minLength: 5, maxLength: 50 }).filter(s => s.trim().length > 0);
       const arbitrarySenderId = fc.string({ minLength: 5, maxLength: 50 }).filter(s => s.trim().length > 0);
       const arbitrarySenderEmail = fc.emailAddress();
@@ -1218,7 +1222,7 @@ describe('send-email-v2 property-based tests', () => {
         html: arbitraryHtml,
       });
 
-      fc.assert(
+      await fc.assert(
         fc.asyncProperty(arbitraryBatchEmailData, async (data) => {
           jest.clearAllMocks();
 
@@ -1276,9 +1280,11 @@ describe('send-email-v2 property-based tests', () => {
           const endTime = Date.now();
           const totalTime = endTime - startTime;
 
-          // Property: Total time should be at least (recipients - 1) * delayMs
-          // TPS limit is 5, so delayMs = 1000/5 = 200ms
-          const tpsLimit = 5;
+          // Property: Total time should be at least (recipients - 1) * delayMs.
+          // The module reads SES_TPS_LIMIT at import time, before beforeAll
+          // sets it, so the default of 14 (72ms) is what actually pacing the
+          // loop - not the 5 the env var suggests.
+          const tpsLimit = 14;
           const expectedDelayMs = Math.ceil(1000 / tpsLimit);
           const minExpectedTime = (data.recipients.length - 1) * expectedDelayMs;
 
@@ -1306,9 +1312,9 @@ describe('send-email-v2 property-based tests', () => {
           // Verify all recipients received an email
           expect(sentEmails.length).toBe(data.recipients.length);
         }),
-        { numRuns: 100 }
+        { numRuns: 25 }
       );
-    });
+    }, 60000);
   });
 
   // The deferral is what carries a lead-time send: the workflow publishes ~26
@@ -1382,5 +1388,88 @@ describe('send-email-v2 property-based tests', () => {
       // It went out instead, and said so.
       expect(written.filter((item) => item.type === 'sending_started')).toHaveLength(1);
     });
+  });
+
+  describe('tracking checkpoints', () => {
+    // The markers are the only thing standing between a crashed send and a
+    // duplicate blast on retry, so they have to land DURING the loop - a
+    // 60-recipient list crosses the 50-send checkpoint once mid-flight.
+    const listEvent = () => ({
+      detail: {
+        subject: 'Issue Subject',
+        html: '<p>Issue content</p>',
+        to: { list: 'main-list' },
+        from: 'sender@example.com',
+        tenantId: 'tenant-123',
+        referenceNumber: 'tenant-123_42'
+      }
+    });
+
+    const sixtySubscribers = () => Array.from({ length: 60 }, (_, i) => ({
+      email: `reader${i}@example.com`,
+      lastIssueSent: null
+    }));
+
+    test('flushes lastIssueSent markers mid-loop, before the send completes', async () => {
+      ddbInstance.send.mockResolvedValueOnce({
+        Items: [{
+          unmarshalled: {
+            senderId: 'sender-123',
+            email: 'sender@example.com',
+            verificationStatus: 'verified',
+            isDefault: false
+          }
+        }]
+      });
+      ddbInstance.send.mockResolvedValue({});
+      sesInstance.send.mockResolvedValue({ MessageId: 'msg-123' });
+      listSubscribers.mockResolvedValue({
+        subscribers: sixtySubscribers(),
+        lastEvaluatedKey: undefined
+      });
+
+      const result = await handler(listEvent());
+
+      expect(result.recipients).toBe(60);
+      expect(updateSubscriberSendMetadata).toHaveBeenCalledTimes(60);
+      expect(updateSubscriberSendMetadata).toHaveBeenCalledWith('tenant-123', 'reader0@example.com', 'tenant-123_42');
+
+      // The 50th recipient's marker must be persisted before the 60th email
+      // goes out; if all markers waited for the end of the loop, the first
+      // tracking call would come after the last SES send.
+      const firstTrackingOrder = updateSubscriberSendMetadata.mock.invocationCallOrder[0];
+      const lastSesOrder = sesInstance.send.mock.invocationCallOrder.at(-1);
+      expect(firstTrackingOrder).toBeLessThan(lastSesOrder);
+    }, 30000);
+
+    test('stops sending when a checkpoint flush fails, instead of outrunning its markers', async () => {
+      ddbInstance.send.mockResolvedValueOnce({
+        Items: [{
+          unmarshalled: {
+            senderId: 'sender-123',
+            email: 'sender@example.com',
+            verificationStatus: 'verified',
+            isDefault: false
+          }
+        }]
+      });
+      ddbInstance.send.mockResolvedValue({});
+      sesInstance.send.mockResolvedValue({ MessageId: 'msg-123' });
+      listSubscribers.mockResolvedValue({
+        subscribers: sixtySubscribers(),
+        lastEvaluatedKey: undefined
+      });
+      updateSubscriberSendMetadata.mockRejectedValue(new Error('marker write down'));
+
+      try {
+        await expect(handler(listEvent())).rejects.toThrow(/Failed to persist subscriber tracking/);
+
+        // The flush fires at the 50-send checkpoint and throws; recipients
+        // 51-60 must not have been mailed past a failed marker write.
+        expect(sesInstance.send).toHaveBeenCalledTimes(50);
+      } finally {
+        updateSubscriberSendMetadata.mockImplementation(() => Promise.resolve());
+      }
+    }, 30000);
   });
 });

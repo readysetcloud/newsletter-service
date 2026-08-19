@@ -17,16 +17,79 @@ const padIssueNumber = (issueNumber) => {
   return String(issueNumber).padStart(5, '0');
 };
 
+/**
+ * Identity of one SES event, for dedup under EventBridge's at-least-once
+ * delivery. messageId + eventType alone is not unique - the same message can
+ * legitimately be opened or clicked many times - so the event's own timestamp
+ * (millisecond precision, identical on a redelivery, different on a real
+ * repeat) and, for clicks, the link disambiguate. Returns null when the event
+ * carries no messageId; such an event is processed without dedup rather than
+ * dropped.
+ */
+const processedMarkerSk = (detail) => {
+  const messageId = detail.mail?.messageId;
+  if (!messageId) {
+    return null;
+  }
+
+  const eventType = detail.eventType.toLowerCase();
+  const eventTimestamp = detail[eventType]?.timestamp || detail.mail.timestamp || '';
+  const linkDiscriminator = eventType === 'click' && detail.click?.link
+    ? `#${hash(detail.click.link)}`
+    : '';
+
+  return `processed#${messageId}#${eventType}#${eventTimestamp}${linkDiscriminator}`;
+};
+
+const wasEventProcessed = async (issueId, markerSk) => {
+  const result = await ddb.send(new GetItemCommand({
+    TableName: process.env.TABLE_NAME,
+    Key: marshall({ pk: issueId, sk: markerSk }),
+    // The redelivery being guarded against can arrive seconds after the
+    // original - an eventually-consistent read could miss its marker.
+    ConsistentRead: true,
+    ProjectionExpression: 'pk'
+  }));
+  return Boolean(result.Item);
+};
+
+// Written only after every write for the event has succeeded, so a failed
+// attempt leaves no marker and the retry reprocesses from the top. The TTL
+// only has to outlive the redelivery window (retries plus a manual DLQ
+// redrive), not the analytics records themselves.
+const markEventProcessed = async (issueId, markerSk) => {
+  await ddb.send(new PutItemCommand({
+    TableName: process.env.TABLE_NAME,
+    Item: marshall({
+      pk: issueId,
+      sk: markerSk,
+      ttl: Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60)
+    })
+  }));
+};
+
 export const handler = async (event) => {
+  const { detail } = event ?? {};
+  // Not one of ours (or a malformed relay) - nothing to retry, so don't throw.
+  if (!detail?.mail?.tags || !detail.eventType) {
+    console.warn('Ignoring email status event without mail tags or an event type');
+    return;
+  }
+
   try {
-    const { detail } = event;
     console.log(JSON.stringify(detail));
     const referenceNumber = detail.mail.tags.referenceNumber;
     if (!referenceNumber?.length) {
       return;
     }
 
+    const markerSk = processedMarkerSk(detail);
+
     const issueId = referenceNumber[0].replace(/_/g, '#');
+    if (markerSk && await wasEventProcessed(issueId, markerSk)) {
+      console.log('Skipping already-processed email status event', { issueId, eventType: detail.eventType });
+      return true;
+    }
     const [tenantId, issueNumber] = issueId.split('#');
     let stat;
     let failedEmail;
@@ -137,10 +200,22 @@ export const handler = async (event) => {
       }
     }
 
+    if (markerSk) {
+      await markEventProcessed(issueId, markerSk);
+    }
+
     return true;
   } catch (err) {
-    console.error(err);
-    return false;
+    // Rethrow so the platform retries and, once retries are exhausted, the
+    // event lands in the on-failure queue instead of evaporating. A swallowed
+    // error here used to lose the stat forever - including the bounce and
+    // complaint records that clean-bounced-subscribers and deliverability
+    // depend on.
+    console.error('Email status processing failed - rethrowing for retry', {
+      eventType: detail.eventType,
+      error: err.message
+    });
+    throw err;
   }
 };
 

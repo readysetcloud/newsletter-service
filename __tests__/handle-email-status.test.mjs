@@ -1314,7 +1314,7 @@ describe('handle-email-status', () => {
       expect(ddbSend).not.toHaveBeenCalled();
     });
 
-    it('should return false on unexpected errors', async () => {
+    it('rethrows unexpected errors so the platform retries the event', async () => {
       // GetItem succeeds, but PutItem (captureOpenEvent) fails
       ddbSend.mockResolvedValueOnce({ Item: null }); // GetItem
       ddbSend.mockRejectedValueOnce(new Error('Unexpected error')); // PutItem fails
@@ -1332,9 +1332,96 @@ describe('handle-email-status', () => {
         }
       };
 
-      const result = await handler(event);
+      await expect(handler(event)).rejects.toThrow('Unexpected error');
+    });
+  });
 
-      expect(result).toBe(false);
+  describe('At-least-once delivery dedup', () => {
+    const sendEvent = (messageId) => ({
+      detail: {
+        eventType: 'Send',
+        mail: {
+          tags: { referenceNumber: ['tenant123_42'] },
+          destination: ['subscriber@example.com'],
+          ...(messageId && { messageId }),
+          timestamp: '2025-01-21T10:30:00.000Z'
+        }
+      }
+    });
+
+    it('skips an event whose processed marker already exists', async () => {
+      ddbSend.mockResolvedValueOnce({ Item: { pk: { S: 'tenant123#42' } } }); // marker GetItem
+
+      const result = await handler(sendEvent('msg-1'));
+
+      expect(result).toBe(true);
+      expect(ddbSend).toHaveBeenCalledTimes(1);
+      const markerCheck = ddbSend.mock.calls[0][0];
+      expect(markerCheck.__type).toBe('GetItem');
+      expect(markerCheck.ConsistentRead).toBe(true);
+      expect(markerCheck.Key.sk.S).toBe('processed#msg-1#send#2025-01-21T10:30:00.000Z');
+    });
+
+    it('writes the processed marker only after the stat update succeeds', async () => {
+      ddbSend.mockResolvedValueOnce({ Item: null }); // marker GetItem
+      ddbSend.mockResolvedValueOnce({}); // stats UpdateItem
+      ddbSend.mockResolvedValueOnce({}); // marker PutItem
+
+      const result = await handler(sendEvent('msg-2'));
+
+      expect(result).toBe(true);
+      expect(ddbSend).toHaveBeenCalledTimes(3);
+      expect(ddbSend.mock.calls[1][0].__type).toBe('UpdateItem');
+      const marker = ddbSend.mock.calls[2][0];
+      expect(marker.__type).toBe('PutItem');
+      expect(marker.Item.sk.S).toBe('processed#msg-2#send#2025-01-21T10:30:00.000Z');
+      expect(marker.Item.ttl.N).toBeDefined();
+    });
+
+    it('leaves no marker when the stat update fails, so a retry reprocesses', async () => {
+      ddbSend.mockResolvedValueOnce({ Item: null }); // marker GetItem
+      ddbSend.mockRejectedValueOnce(new Error('throttled')); // stats UpdateItem
+
+      await expect(handler(sendEvent('msg-3'))).rejects.toThrow('throttled');
+
+      expect(ddbSend).toHaveBeenCalledTimes(2);
+      expect(ddbSend.mock.calls.every(([command]) => command.__type !== 'PutItem')).toBe(true);
+    });
+
+    it('processes events without a messageId, without dedup', async () => {
+      ddbSend.mockResolvedValueOnce({}); // stats UpdateItem
+
+      const result = await handler(sendEvent(undefined));
+
+      expect(result).toBe(true);
+      expect(ddbSend).toHaveBeenCalledTimes(1);
+      expect(ddbSend.mock.calls[0][0].__type).toBe('UpdateItem');
+    });
+
+    it('distinguishes two real clicks on different links from a redelivery', async () => {
+      const clickEvent = (link) => ({
+        detail: {
+          eventType: 'Click',
+          mail: {
+            tags: { referenceNumber: ['tenant123_42'] },
+            destination: ['subscriber@example.com'],
+            messageId: 'msg-4',
+            timestamp: '2025-01-21T10:30:00.000Z'
+          },
+          click: { link, timestamp: '2025-01-21T10:31:00.000Z' }
+        }
+      });
+
+      ddbSend.mockResolvedValue({ Item: null });
+
+      await handler(clickEvent('https://a.example.com'));
+      await handler(clickEvent('https://b.example.com'));
+
+      const markerChecks = ddbSend.mock.calls
+        .map(([command]) => command)
+        .filter((command) => command.__type === 'GetItem' && command.Key?.sk?.S?.startsWith('processed#'));
+      expect(markerChecks).toHaveLength(2);
+      expect(markerChecks[0].Key.sk.S).not.toBe(markerChecks[1].Key.sk.S);
     });
   });
 

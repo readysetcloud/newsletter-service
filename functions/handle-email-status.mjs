@@ -64,6 +64,40 @@ const wasEventProcessed = async (issueId, markerSk) => {
 // new event and double-count it. 30 days keeps headroom over that horizon.
 const PROCESSED_MARKER_TTL_SECONDS = 30 * 24 * 60 * 60;
 
+const TRANSACTION_MAX_ATTEMPTS = 4;
+const TRANSACTION_RETRY_BASE_MS = 20;
+const RETRYABLE_TRANSACTION_CANCELLATION_CODES = new Set([
+  'TransactionConflict',
+  'ThrottlingError',
+  'ProvisionedThroughputExceeded'
+]);
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * A transaction cancellation is locally retryable only when every concrete
+ * cancellation reason is transient. Conditional failures must escape so the
+ * caller can preserve their semantics: marker failure means duplicate success,
+ * while the first-open condition needs a fresh handler pass to reclassify the
+ * event as a reopen.
+ */
+const isRetryableTransactionCancellation = (reasons) => {
+  let sawRetryableReason = false;
+
+  for (const reason of reasons) {
+    const code = reason?.Code;
+    if (!code || code === 'None') {
+      continue;
+    }
+    if (!RETRYABLE_TRANSACTION_CANCELLATION_CODES.has(code)) {
+      return false;
+    }
+    sawRetryableReason = true;
+  }
+
+  return sawRetryableReason;
+};
+
 /**
  * Stable id for the event's analytics record, so a reprocessed event rewrites
  * the same row instead of creating a second physical record for one logical
@@ -178,27 +212,54 @@ const commitEventAccounting = async ({
     return true;
   }
 
-  try {
-    await ddb.send(new TransactWriteItemsCommand({ TransactItems: transactItems }));
-    return true;
-  } catch (err) {
-    if (err.name === 'TransactionCanceledException') {
+  for (let attempt = 1; attempt <= TRANSACTION_MAX_ATTEMPTS; attempt++) {
+    try {
+      await ddb.send(new TransactWriteItemsCommand({ TransactItems: transactItems }));
+      return true;
+    } catch (err) {
+      if (err.name !== 'TransactionCanceledException') {
+        throw err;
+      }
+
       const reasons = err.CancellationReasons ?? [];
+      const reasonCodes = reasons.map((reason) => reason?.Code);
+
       // The marker is always item 0 when present. Its condition failing means
       // another invocation got there first - that is a duplicate, not an error.
       if (markerSk && reasons[0]?.Code === 'ConditionalCheckFailed') {
         return false;
       }
-      // Anything else (e.g. two distinct opens racing on the unique-open
-      // marker) rethrows: nothing was written, so the retry recomputes - and
-      // the loser of that race correctly reclassifies its open as a reopen.
+
+      // DynamoDB does not SDK-retry transaction cancellations. Events for one
+      // issue all touch its stats item, so short-lived conflicts/throttling are
+      // normal contention and cheaper to absorb here than via Lambda's coarse
+      // async invocation retry. Do not retry other cancellation reasons: a
+      // first-open conditional failure, for example, needs a fresh read so it
+      // can be reclassified as a reopen.
+      if (attempt < TRANSACTION_MAX_ATTEMPTS && isRetryableTransactionCancellation(reasons)) {
+        const exponentialMs = TRANSACTION_RETRY_BASE_MS * (2 ** (attempt - 1));
+        const delayMs = exponentialMs + Math.floor(Math.random() * exponentialMs);
+        console.warn('Retrying transient email status accounting cancellation', {
+          issueId,
+          attempt,
+          maxAttempts: TRANSACTION_MAX_ATTEMPTS,
+          delayMs,
+          reasons: reasonCodes
+        });
+        await sleep(delayMs);
+        continue;
+      }
+
       console.warn('Email status accounting transaction cancelled', {
         issueId,
-        reasons: reasons.map((reason) => reason?.Code)
+        attempts: attempt,
+        reasons: reasonCodes
       });
+      throw err;
     }
-    throw err;
   }
+
+  throw new Error('Email status accounting retry loop exited unexpectedly');
 };
 
 export const handler = async (event) => {

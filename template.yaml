@@ -29,6 +29,15 @@ Parameters:
     Type: String
     Default: "/stripe/api-key"
     Description: SSM Parameter Store path for Stripe API key (secure string)
+  SlackWebhookUrl:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: >
+      Slack incoming webhook that CloudWatch alarm notifications are posted to.
+      Empty disables posting - the notifier logs and returns rather than
+      failing, so an unconfigured stack still deploys and alarms still fire
+      into the SNS topic.
 
   VerifiedFromEmail:
     Type: String
@@ -342,8 +351,19 @@ Resources:
 
   NewsletterTable:
     Type: AWS::DynamoDB::Table
+    # Retain on stack delete AND on any change that would replace the table
+    # (a logical-id or key-schema edit). This table holds the suppression
+    # records that utils/suppression.mjs calls the only proof of compliance
+    # there is, plus billing state and every issue - none of it reconstructible.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       BillingMode: PAY_PER_REQUEST
+      # A bad bulk write is otherwise unrecoverable; PITR is the difference
+      # between an incident and a restore.
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      DeletionProtectionEnabled: true
       KeySchema:
         - AttributeName: pk
           KeyType: HASH
@@ -393,8 +413,14 @@ Resources:
 
   SubscribersTable:
     Type: AWS::DynamoDB::Table
+    # Every subscriber for every tenant. Losing this is losing the product.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      DeletionProtectionEnabled: true
       KeySchema:
         - AttributeName: tenantId
           KeyType: HASH
@@ -3980,6 +4006,117 @@ Resources:
         - !Ref EventBridgeCriticalAlertsTopic
       TreatMissingData: notBreaching
 
+  # The depth alarm above only sees failures that REACHED the queue. If the
+  # failed delivery cannot write to the DLQ at all, depth stays at zero and
+  # that alarm never fires - work is lost and the recovery mechanism is silent
+  # about it. These two cover the other half:
+  #
+  #   DLQ depth > 0        -> work failed, recovery data retained
+  #   delivery failures > 0 -> work failed AND recovery failed
+  #
+  # Summed across the three async paths rather than split per resource: the
+  # signal is "the net is broken, go look", and any occurrence warrants
+  # inspecting all of them anyway.
+  EmailPipelineLambdaDlqDeliveryFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-email-pipeline-lambda-dlq-unreachable"
+      AlarmDescription: "CRITICAL: a Lambda OnFailure destination could not write to the email pipeline DLQ - failed send or SES-status work has been lost, not retained"
+      Metrics:
+        - Id: send
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: DestinationDeliveryFailures
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Ref SendEmailV2Function
+            Period: 300
+            Stat: Sum
+        - Id: status
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: DestinationDeliveryFailures
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Ref HandleEmailStatusFunction
+            Period: 300
+            Stat: Sum
+        - Id: complaint
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: DestinationDeliveryFailures
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Ref AutoUnsubscribeComplaintFunction
+            Period: 300
+            Stat: Sum
+        - Id: total
+          ReturnData: true
+          Expression: "FILL(send, 0) + FILL(status, 0) + FILL(complaint, 0)"
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref EventBridgeCriticalAlertsTopic
+      TreatMissingData: notBreaching
+
+  # RuleName dimensions reference the rules SAM generates from each function's
+  # Events block; the logical id is <FunctionLogicalId><EventLogicalId>.
+  EmailPipelineRuleDlqDeliveryFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-email-pipeline-rule-dlq-unreachable"
+      AlarmDescription: "CRITICAL: EventBridge could not write a failed target invocation to the email pipeline DLQ - the event has been lost, not retained"
+      Metrics:
+        - Id: send
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Events
+              MetricName: InvocationsFailedToBeSentToDlq
+              Dimensions:
+                - Name: RuleName
+                  Value: !Ref SendEmailV2FunctionEmailEvent
+            Period: 300
+            Stat: Sum
+        - Id: status
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Events
+              MetricName: InvocationsFailedToBeSentToDlq
+              Dimensions:
+                - Name: RuleName
+                  Value: !Ref HandleEmailStatusFunctionCreationEvent
+            Period: 300
+            Stat: Sum
+        - Id: complaint
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Events
+              MetricName: InvocationsFailedToBeSentToDlq
+              Dimensions:
+                - Name: RuleName
+                  Value: !Ref AutoUnsubscribeComplaintFunctionComplaintEvent
+            Period: 300
+            Stat: Sum
+        - Id: total
+          ReturnData: true
+          Expression: "FILL(send, 0) + FILL(status, 0) + FILL(complaint, 0)"
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref EventBridgeCriticalAlertsTopic
+      TreatMissingData: notBreaching
+
   SendEmailV2ErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -4085,6 +4222,33 @@ Resources:
       TopicName: !Sub "${AWS::StackName}-billing-critical-alerts"
       DisplayName: "Billing System - Critical Alerts"
       KmsMasterKeyId: alias/aws/sns
+
+  # Every alarm in this stack targets the topic above, which until now had no
+  # subscriptions at all - correct alarms firing into nothing. This is the
+  # subscriber that turns them into something a human sees.
+  NotifyAlarmToSlackFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - notify-alarm-to-slack.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: notify-alarm-to-slack.handler
+      Timeout: 30
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          SLACK_WEBHOOK_URL: !Ref SlackWebhookUrl
+          ENVIRONMENT: !Ref Environment
+      Events:
+        AlarmNotification:
+          Type: SNS
+          Properties:
+            Topic: !Ref EventBridgeCriticalAlertsTopic
 
   EventBridgeNoEventsProcessedAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -4388,13 +4552,18 @@ Resources:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           CRITICAL_ALERTS_TOPIC_ARN: !Ref EventBridgeCriticalAlertsTopic
-      Events:
-        DLQMessages:
-          Type: SQS
-          Properties:
-            Queue: !GetAtt StripeEventDLQ.Arn
-            BatchSize: 5
-            MaximumBatchingWindowInSeconds: 30
+      # Deliberately has NO event source on StripeEventDLQ. It used to poll the
+      # queue, and because it only logs and publishes a metric - it never
+      # re-drives the event, never persists it anywhere durable - a successful
+      # invocation deleted the message. Failed subscription and payment events
+      # were destroyed within ~30 seconds of arriving, which also meant the
+      # 14-day retention was moot and StripeEventDLQAlarm could never see a
+      # visible message to alarm on.
+      #
+      # The queue now parks failed billing events for its full retention and
+      # the depth alarm can actually fire. Invoke this function manually when
+      # inspecting the queue; anything that deletes a message has to re-drive
+      # it first.
 
 
   BootstrapVerificationTemplateFunction:

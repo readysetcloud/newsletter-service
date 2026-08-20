@@ -42,6 +42,17 @@ const delayMs = Math.ceil(1000 / tpsLimit);
 // flushed. Small enough that a crashed invocation re-mails at most one
 // batch on retry; large enough that the flush writes stay a rounding error
 // against the per-recipient SES pacing above.
+//
+// What this does and does not guarantee: checkpointing bounds duplicates
+// caused by OUR failures - a crash, a timeout, a retried invocation. It
+// cannot make delivery exactly-once, because the SES boundary itself is
+// ambiguous: SES can accept a message and still return an error to the
+// caller, in which case the recipient never reaches sentRecipients, never
+// gets a marker, and a retry mails them again. No marker scheme can tell
+// that apart from a genuinely failed send, since the success acknowledgement
+// we would checkpoint on is exactly what went missing. Closing it would take
+// a per-recipient delivery ledger reconciled against SES message ids, which
+// is deliberately out of scope here.
 const TRACKING_CHECKPOINT_INTERVAL = 50;
 
 /**

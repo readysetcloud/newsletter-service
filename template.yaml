@@ -3919,9 +3919,16 @@ Resources:
   #     invocation record that WRAPS the original request payload alongside
   #     invocation metadata.
   # Replaying therefore means identifying the failure source, extracting the
-  # original event from whichever envelope carries it, and republishing it -
-  # not forwarding the raw SQS message. That normalizing replay tool does not
-  # exist yet; until it does, redrive is a deliberate manual operation.
+  # original event from whichever envelope carries it, and republishing it
+  # through EventBridge - not forwarding the raw SQS message.
+  #
+  # Decided during review of #396: one shared queue plus a source-aware
+  # normalizing replay step is the intended architecture, rather than
+  # splitting EventBridge and Lambda failures into separate queues. Splitting
+  # them would not materially improve recovery, since replay has to rebuild
+  # the original event either way. That replay tool does not exist yet; until
+  # it ships, redrive is a deliberate manual operation and this queue provides
+  # retention only.
   #
   # SSE-SQS rather than the aws/sqs KMS key: EventBridge cannot deliver to a
   # queue encrypted with the AWS-managed KMS key, whose policy cannot grant

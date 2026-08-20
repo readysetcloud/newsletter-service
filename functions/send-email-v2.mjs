@@ -38,6 +38,23 @@ const ddb = new DynamoDBClient();
 const tpsLimit = parseInt(process.env.SES_TPS_LIMIT || "14", 10);
 const delayMs = Math.ceil(1000 / tpsLimit);
 
+// How many sends may accumulate before their lastIssueSent markers are
+// flushed. Small enough that a crashed invocation re-mails at most one
+// batch on retry; large enough that the flush writes stay a rounding error
+// against the per-recipient SES pacing above.
+//
+// What this does and does not guarantee: checkpointing bounds duplicates
+// caused by OUR failures - a crash, a timeout, a retried invocation. It
+// cannot make delivery exactly-once, because the SES boundary itself is
+// ambiguous: SES can accept a message and still return an error to the
+// caller, in which case the recipient never reaches sentRecipients, never
+// gets a marker, and a retry mails them again. No marker scheme can tell
+// that apart from a genuinely failed send, since the success acknowledgement
+// we would checkpoint on is exactly what went missing. Closing it would take
+// a per-recipient delivery ledger reconciled against SES message ids, which
+// is deliberately out of scope here.
+const TRACKING_CHECKPOINT_INTERVAL = 50;
+
 /**
  * Execute a phase with logging
  * @param {string} phaseName - Name of the phase
@@ -719,12 +736,31 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
   let sentCount = 0;
   const sentRecipients = [];
   const totalCount = emailAddresses.length;
+  // Index into sentRecipients up to which lastSentAt/lastIssueSent markers
+  // have been persisted.
+  let trackedThrough = 0;
+
+  // Persist the idempotency markers for everyone sent since the last flush.
+  // Runs every TRACKING_CHECKPOINT_INTERVAL sends rather than once after the
+  // loop: the markers are what filterIdempotentRecipientsPhase reads on the
+  // retry after a crash or timeout, and every sent-but-unmarked recipient is
+  // one that retry mails twice. A flush failure aborts the send for the same
+  // reason - stopping with accurate markers beats continuing to mail
+  // recipients a retry cannot distinguish from unsent ones.
+  const flushTracking = async () => {
+    if (!emailConfig.tenantId || trackedThrough >= sentRecipients.length) {
+      return;
+    }
+    const batch = sentRecipients.slice(trackedThrough);
+    await updateSubscriberTrackingPhase(emailConfig.tenantId, batch, emailConfig.referenceNumber);
+    trackedThrough = sentRecipients.length;
+  };
 
   // Calculate progress logging interval: every 10% or every 50 emails, whichever is smaller
   const logInterval = Math.min(50, Math.ceil(totalCount / 10));
 
   for (const email of emailAddresses) {
-    await sendWithRetry(async () => {
+    const sendOne = () => sendWithRetry(async () => {
       // Apply personalization replacements
       let personalizedHtml = emailConfig.html;
 
@@ -821,8 +857,31 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
       }));
     }, `Send email to ${email}`);
 
+    try {
+      await sendOne();
+    } catch (sendError) {
+      // A controlled failure does not have to behave like a hard crash. The
+      // recipients confirmed sent since the last checkpoint already have their
+      // mail; flushing their markers before propagating means the retry skips
+      // them rather than mailing them twice. Only a hard termination (timeout,
+      // OOM) can still strand a partial checkpoint, which is what the periodic
+      // flush above bounds.
+      try {
+        await flushTracking();
+      } catch (flushError) {
+        console.error('[SENDING] Could not checkpoint confirmed sends before failing', {
+          error: flushError.message
+        });
+      }
+      throw sendError;
+    }
+
     sentCount++;
     sentRecipients.push(email);
+
+    if (sentRecipients.length - trackedThrough >= TRACKING_CHECKPOINT_INTERVAL) {
+      await flushTracking();
+    }
 
     // Log progress at intervals or when complete
     if (sentCount % logInterval === 0 || sentCount === totalCount) {
@@ -833,13 +892,19 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
     await new Promise(resolve => setTimeout(resolve, delayMs));
   }
 
+  await flushTracking();
+
   console.log(`[SENDING] Complete - sent ${sentCount} emails`);
   return { sentCount, sentRecipients };
 };
 
 /**
- * Update subscriber tracking fields (lastSentAt, lastIssueSent) after send completes.
- * Throws when subscriber metadata persistence fails for known subscribers.
+ * Update subscriber tracking fields (lastSentAt, lastIssueSent) for a batch of
+ * sent recipients. Called from sendEmailsPhase's checkpoint flush every
+ * TRACKING_CHECKPOINT_INTERVAL sends (and once for the remainder), so the
+ * concurrent write burst is capped at the batch size rather than the whole
+ * list. Throws when subscriber metadata persistence fails for known
+ * subscribers - the caller stops sending rather than outrun its markers.
  * @param {string} tenantId - Tenant identifier
  * @param {string[]} sentRecipients - Recipients that were successfully sent
  * @param {string|undefined} issueIdentifier - Issue identifier/reference that was sent
@@ -1365,10 +1430,10 @@ export const handler = async (event) => {
       }, senderEmail);
     });
 
-    // Phase 3.5: Subscriber Tracking Update (non-critical)
-    await executePhase('Subscriber Tracking Update', async () => {
-      return await updateSubscriberTrackingPhase(tenantId, sentRecipients, data.referenceNumber);
-    });
+    // Subscriber tracking (lastSentAt/lastIssueSent) is checkpointed inside
+    // sendEmailsPhase, batch by batch, so a crashed or timed-out send resumes
+    // where it left off on retry instead of re-mailing everyone. Nothing left
+    // to do for it here.
 
     // Phase 4: Metrics Update
     if (senderRecord) {

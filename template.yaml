@@ -1710,6 +1710,23 @@ Resources:
                 - dynamodb:PutItem
                 - dynamodb:UpdateItem
               Resource: !GetAtt SubscribersTable.Arn
+        - Version: 2012-10-17
+          Statement:
+            # Lambda delivers the failed async event to the OnFailure
+            # destination below with the function's own role.
+            - Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !GetAtt EmailPipelineDLQ.Arn
+      # The handler rethrows on failure now instead of swallowing, so a
+      # bounce or complaint that cannot be recorded retries and is then
+      # retained in the DLQ - previously it was silently lost, and the
+      # bounce list clean-bounced-subscribers works from went stale.
+      EventInvokeConfig:
+        MaximumRetryAttempts: 2
+        DestinationConfig:
+          OnFailure:
+            Type: SQS
+            Destination: !GetAtt EmailPipelineDLQ.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
@@ -1728,6 +1745,8 @@ Resources:
                 - Email Complaint Received
                 - Email Opened
                 - Email Clicked
+            DeadLetterConfig:
+              Arn: !GetAtt EmailPipelineDLQ.Arn
 
   CleanBouncedSubscribersFunction:
     Type: AWS::Serverless::Function
@@ -2247,6 +2266,24 @@ Resources:
                 - dynamodb:GetItem
                 - dynamodb:UpdateItem
               Resource: !GetAtt SubscribersTable.Arn
+            # Lambda delivers the failed async event to the OnFailure
+            # destination below with the function's own role.
+            - Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !GetAtt EmailPipelineDLQ.Arn
+      # A send event that exhausts its retries is an issue whose recipients
+      # are half-mailed. It is retained in the DLQ instead of evaporating.
+      # Note the envelope: a Lambda OnFailure record wraps the original event
+      # rather than being one, so replaying means extracting the request
+      # payload first (see EmailPipelineDLQ). Once republished, the
+      # checkpointed lastIssueSent markers make the replay resume where the
+      # send stopped rather than re-mail from the top.
+      EventInvokeConfig:
+        MaximumRetryAttempts: 2
+        DestinationConfig:
+          OnFailure:
+            Type: SQS
+            Destination: !GetAtt EmailPipelineDLQ.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
@@ -2272,6 +2309,11 @@ Resources:
                 - newsletter-service
               detail-type:
                 - Send Email v2
+            # Catches events EventBridge could not hand to the function at
+            # all (throttled/unavailable); handler failures are covered by
+            # the EventInvokeConfig OnFailure destination above.
+            DeadLetterConfig:
+              Arn: !GetAtt EmailPipelineDLQ.Arn
 
   EvaluateAbWinnerFunction:
     Type: AWS::Serverless::Function
@@ -3861,6 +3903,121 @@ Resources:
           DLQ_URL: !Ref StripeEventDLQ
           ALERT_TOPIC_ARN: !Ref EventBridgeCriticalAlertsTopic
 
+  # Failed async email-pipeline work parks here: Send Email v2 events whose
+  # retries were exhausted (an issue send that would otherwise vanish, its
+  # recipients half-mailed) and SES status events (bounces, complaints, opens,
+  # clicks) that could not be recorded. It has no consumer on purpose - the
+  # 14-day retention IS the recovery window, and EmailPipelineDLQAlarm is what
+  # surfaces arrivals.
+  #
+  # IMPORTANT for recovery: this queue holds TWO message shapes, and neither
+  # can be handed straight back to the function that failed.
+  #   * EventBridge rule DeadLetterConfig (delivery never reached the function)
+  #     sends the original event plus EventBridge failure metadata - error
+  #     code, retry attempts, rule and target ARNs.
+  #   * Lambda OnFailure destinations (the function ran and threw) send an
+  #     invocation record that WRAPS the original request payload alongside
+  #     invocation metadata.
+  # Replaying therefore means identifying the failure source, extracting the
+  # original event from whichever envelope carries it, and republishing it
+  # through EventBridge - not forwarding the raw SQS message.
+  #
+  # Decided during review of #396: one shared queue plus a source-aware
+  # normalizing replay step is the intended architecture, rather than
+  # splitting EventBridge and Lambda failures into separate queues. Splitting
+  # them would not materially improve recovery, since replay has to rebuild
+  # the original event either way. That replay tool does not exist yet; until
+  # it ships, redrive is a deliberate manual operation and this queue provides
+  # retention only.
+  #
+  # SSE-SQS rather than the aws/sqs KMS key: EventBridge cannot deliver to a
+  # queue encrypted with the AWS-managed KMS key, whose policy cannot grant
+  # the service principal.
+  EmailPipelineDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${AWS::StackName}-email-pipeline-dlq"
+      MessageRetentionPeriod: 1209600 # 14 days
+      ReceiveMessageWaitTimeSeconds: 20 # Long polling
+      SqsManagedSseEnabled: true
+
+  # EventBridge delivers rule-level dead letters (events it could not hand to
+  # the function at all); Lambda's OnFailure destination permission rides the
+  # function roles.
+  EmailPipelineDLQPolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref EmailPipelineDLQ
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt EmailPipelineDLQ.Arn
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  EmailPipelineDLQAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-email-pipeline-dlq-messages"
+      AlarmDescription: "CRITICAL: send or SES-status events exhausted retries and are parked in the email pipeline DLQ - inspect within the 14-day retention; replay requires unwrapping the envelope, see the queue definition"
+      MetricName: ApproximateNumberOfVisibleMessages
+      Namespace: AWS/SQS
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt EmailPipelineDLQ.QueueName
+      AlarmActions:
+        - !Ref EventBridgeCriticalAlertsTopic
+      TreatMissingData: notBreaching
+
+  SendEmailV2ErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-send-email-v2-errors"
+      AlarmDescription: "CRITICAL: an issue send invocation failed - it will retry twice, then land in the email pipeline DLQ"
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref SendEmailV2Function
+      AlarmActions:
+        - !Ref EventBridgeCriticalAlertsTopic
+      TreatMissingData: notBreaching
+
+  HandleEmailStatusErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-email-status-errors"
+      AlarmDescription: "WARNING: SES status events (bounces, complaints, opens, clicks) are failing to record; sustained failures land in the email pipeline DLQ"
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref HandleEmailStatusFunction
+      AlarmActions:
+        - !Ref EventBridgeCriticalAlertsTopic
+      TreatMissingData: notBreaching
+
   # Dead Letter Queue for failed Stripe events
   StripeEventDLQ:
     Type: AWS::SQS::Queue
@@ -4456,6 +4613,20 @@ Resources:
               Action:
                 - dynamodb:DeleteItem
               Resource: !GetAtt SubscribersTable.Arn
+            # Lambda delivers the failed async event to the OnFailure
+            # destination below with the function's own role.
+            - Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !GetAtt EmailPipelineDLQ.Arn
+      # The handler rethrows on failure expecting a DLQ behind the retries;
+      # this is that DLQ. A dropped complaint event means someone who hit
+      # "report spam" stays subscribed and keeps receiving mail.
+      EventInvokeConfig:
+        MaximumRetryAttempts: 2
+        DestinationConfig:
+          OnFailure:
+            Type: SQS
+            Destination: !GetAtt EmailPipelineDLQ.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
@@ -4468,6 +4639,8 @@ Resources:
                 - aws.ses
               detail-type:
                 - Email Complaint Received
+            DeadLetterConfig:
+              Arn: !GetAtt EmailPipelineDLQ.Arn
 
   BackfillStatsGSIFunction:
     Type: AWS::Serverless::Function

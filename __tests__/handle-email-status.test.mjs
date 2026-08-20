@@ -1434,14 +1434,32 @@ describe('handle-email-status', () => {
       await expect(handler(sendEvent('msg-race'))).resolves.toBe(true);
     });
 
-    it('rethrows a cancellation that is not the marker losing its race', async () => {
+    it('rethrows a non-marker conditional failure so a fresh pass can reclassify', async () => {
       ddbSend.mockResolvedValueOnce({ Item: null });
       const cancelled = new Error('Transaction cancelled');
       cancelled.name = 'TransactionCanceledException';
-      cancelled.CancellationReasons = [{ Code: 'None' }, { Code: 'TransactionConflict' }];
-      ddbSend.mockRejectedValueOnce(cancelled);
+      // A conditional failure on an item other than the marker - the
+      // unique-open row is the real case. Retrying in-process would re-submit
+      // the same stale open/reopen classification, so this has to escape and
+      // let a fresh invocation re-read.
+      cancelled.CancellationReasons = [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }];
+      ddbSend.mockRejectedValue(cancelled);
 
-      await expect(handler(sendEvent('msg-conflict'))).rejects.toThrow('Transaction cancelled');
+      await expect(handler(sendEvent('msg-cond'))).rejects.toThrow('Transaction cancelled');
+    });
+
+    it('rethrows a structural cancellation without burning retries', async () => {
+      ddbSend.mockResolvedValueOnce({ Item: null });
+      const cancelled = new Error('Transaction cancelled');
+      cancelled.name = 'TransactionCanceledException';
+      cancelled.CancellationReasons = [{ Code: 'ValidationError' }];
+      ddbSend.mockRejectedValue(cancelled);
+
+      await expect(handler(sendEvent('msg-invalid'))).rejects.toThrow('Transaction cancelled');
+
+      // Pre-check GetItem + exactly one commit attempt: a malformed request
+      // will never succeed, so retrying it just delays the failure.
+      expect(ddbSend).toHaveBeenCalledTimes(2);
     });
 
     it('writes nothing when the commit fails, so a retry reprocesses cleanly', async () => {

@@ -23,6 +23,8 @@ import { checkRateLimit } from '../utils/rate-limiter.mjs';
 import { createLogger } from '../utils/structured-logger.mjs';
 import { getMostRecentPublishedIssue, incrementIssueCounter } from '../utils/issue-attribution.mjs';
 import { getSuppression, suppressionConditionCheck } from '../utils/suppression.mjs';
+import { normalizeTimeZone } from '../utils/local-send.mjs';
+import { lookupGeo } from '../utils/geolocation.mjs';
 
 const ddb = new DynamoDBClient();
 
@@ -202,6 +204,14 @@ export const handler = async (event) => {
     const addedAt = new Date().toISOString();
     const timestamp = Date.now();
 
+    // Resolved here rather than inferred later. Until now a subscriber's zone
+    // came only from open/click geolocation, which needs three agreeing
+    // observations including a click before it commits — so most of the list
+    // never got one and local send had nobody to group. Signup is the one
+    // moment the reader is present with a real device, so it is the cheapest
+    // accurate answer there is.
+    const timeZone = await resolveTimeZone(contact.timeZone, sourceIp);
+
     // Step 9: Attempt to create subscriber (duplicate check via ConditionExpression)
     const isNew = await addSubscriber(tenantId, contact, normalizedEmail, {
       sourceIp,
@@ -209,7 +219,7 @@ export const handler = async (event) => {
       detectionFlags,
       requestCountInWindow: rateLimitResult.count,
       elapsedMs: sanitizedElapsedMs
-    }, { addedAt, timestamp });
+    }, { addedAt, timestamp, timeZone });
 
     if (isNew) {
       // Emit signup.flagged log if any detection flag is true
@@ -278,13 +288,59 @@ export const handler = async (event) => {
   }
 };
 
-const addSubscriber = async (tenantId, contact, normalizedEmail, detectionData, { addedAt, timestamp }) => {
+/**
+ * The subscriber's timezone at signup, or null when neither source can supply
+ * one.
+ *
+ * Two sources, in order of how much they can be trusted:
+ *
+ * - What the form sent. The browser reports the zone the device is actually
+ *   configured for, which no amount of geolocation can improve on — a
+ *   traveller, a VPN user and a colocated datacentre IP all defeat the second
+ *   source and none of them defeat this one. It arrives on an unauthenticated
+ *   endpoint though, so it is untrusted input: `normalizeTimeZone` both
+ *   rejects anything that is not a real zone and collapses the aliases `Intl`
+ *   would otherwise let through (`us/central`, `EST5EDT`) onto the one name
+ *   the send grouping keys on.
+ * - The signup IP. Wrong behind a VPN and imprecise in general, but a
+ *   timezone is coarse enough that it is usually right, and unlike the open
+ *   pixel it is the reader's own device rather than an Apple privacy relay —
+ *   the same reason the confirmation rule trusts a click.
+ *
+ * Never throws: a subscriber must not be lost because a geolocation lookup
+ * failed. No timezone simply means this subscriber falls into local send's
+ * default group, which is where they were already.
+ *
+ * @param {unknown} submitted - `timeZone` as posted by the signup form
+ * @param {string} sourceIp - The signup request's source address
+ * @returns {Promise<string|null>} Canonical IANA name, or null
+ */
+const resolveTimeZone = async (submitted, sourceIp) => {
+  const fromForm = normalizeTimeZone(submitted);
+  if (fromForm) {
+    return fromForm;
+  }
+
+  try {
+    const geo = await lookupGeo(sourceIp);
+    return normalizeTimeZone(geo?.timeZone);
+  } catch (err) {
+    console.warn('Timezone geolocation failed at signup', { error: err.message });
+    return null;
+  }
+};
+
+const addSubscriber = async (tenantId, contact, normalizedEmail, detectionData, { addedAt, timestamp, timeZone }) => {
   const subscriberItem = {
     tenantId,
     email: normalizedEmail,
     addedAt,
     ...(contact.firstName && { firstName: contact.firstName }),
     ...(contact.lastName && { lastName: contact.lastName }),
+    // Absent rather than null when unresolved: `groupSubscribersByTimeZone`
+    // and the API's coverage count both read absence as "no confirmed zone",
+    // and a null would have to be special-cased in both.
+    ...(timeZone && { timeZone, timeZoneUpdatedAt: addedAt, timeZoneSource: 'signup' }),
     // Detection attributes
     sourceIp: detectionData.sourceIp,
     userAgent: detectionData.userAgent,

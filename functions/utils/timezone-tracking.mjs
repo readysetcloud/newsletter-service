@@ -31,7 +31,8 @@ const OBSERVATION_SOURCES = new Set(['open', 'click']);
  *   (tzHistory), ordered by issue number, capped at TZ_HISTORY_MAX entries.
  * - When the most recent TZ_CONFIRMATION_STREAK entries all agree, include at
  *   least one click-sourced observation, and differ from the stored timeZone,
- *   the subscriber's timeZone is set (with timeZoneUpdatedAt). An all-open
+ *   the subscriber's timeZone is set (with timeZoneUpdatedAt, and
+ *   timeZoneSource: 'observed', replacing any 'signup' provenance). An all-open
  *   streak never confirms. A subscriber who moves re-confirms the same way, so
  *   the stored zone follows them after three consistent issues.
  * - Optimistic concurrency: the update is conditional on tzHistory being
@@ -99,10 +100,20 @@ export async function recordTimeZoneObservation(tenantId, email, issueNumber, ti
     let updateExpression = 'SET tzHistory = :newHistory';
     const expressionNames = {};
     if (shouldSetTimeZone) {
-      updateExpression += ', #timeZone = :tz, timeZoneUpdatedAt = :now';
+      // `timeZoneSource` moves with the zone it describes. add-subscriber.mjs
+      // stamps 'signup' on a zone taken from the form or the signup IP, and
+      // that zone can be wrong — a VPN, a datacentre IP, or a subscriber who
+      // has since moved. When observations overrule it, leaving the old
+      // provenance behind would have the record claim a zone came from signup
+      // that engagement tracking actually replaced. Only `timeZone` itself is
+      // aliased: TIMEZONE is a DynamoDB reserved word and the compound names
+      // beside it are not, which is why `timeZoneUpdatedAt` needs no alias
+      // either.
+      updateExpression += ', #timeZone = :tz, timeZoneUpdatedAt = :now, timeZoneSource = :source';
       expressionNames['#timeZone'] = 'timeZone';
       expressionValues[':tz'] = confirmed;
       expressionValues[':now'] = new Date().toISOString();
+      expressionValues[':source'] = 'observed';
     }
 
     await getClient().send(new UpdateItemCommand({

@@ -37,6 +37,18 @@ function handleCommand(command) {
       }
     }
 
+    // DynamoDB rejects a value that no part of the expression references, so a
+    // field the util supplies but forgets to assign is a runtime error there,
+    // not a silent no-op. Emulated here because the reverse — reading straight
+    // out of `values` — lets a half-written update look like a working one.
+    for (const key of Object.keys(values)) {
+      const referenced = command.input.UpdateExpression.includes(key)
+        || (condition ?? '').includes(key);
+      if (!referenced) {
+        throw new Error(`ValidationException: value ${key} unused in expressions`);
+      }
+    }
+
     item.tzHistory = values[':newHistory'];
     if (command.input.UpdateExpression.includes('#timeZone = :tz')) {
       // Enforce the reserved-word aliasing DynamoDB requires for "timeZone".
@@ -45,6 +57,11 @@ function handleCommand(command) {
       }
       item.timeZone = values[':tz'];
       item.timeZoneUpdatedAt = values[':now'];
+    }
+    // Assigned only when the expression says so, so provenance cannot appear
+    // to move just because the value happened to be supplied.
+    if (command.input.UpdateExpression.includes('timeZoneSource = :source')) {
+      item.timeZoneSource = values[':source'];
     }
     return {};
   }
@@ -134,6 +151,49 @@ describe('recordTimeZoneObservation', () => {
 
     expect(item.timeZone).toBe('America/New_York');
     expect(item.timeZoneUpdatedAt).toEqual(expect.any(String));
+  });
+
+  it('stamps the confirmed zone as observed, not signup', async () => {
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 1, 'America/New_York', 'open');
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 2, 'America/New_York', 'open');
+    await recordTimeZoneObservation('tenant-1', 'reader@example.com', 3, 'America/New_York', 'click');
+
+    expect(item.timeZoneSource).toBe('observed');
+  });
+
+  /**
+   * The case the provenance field exists to describe. add-subscriber.mjs
+   * stamps 'signup' on a zone taken from the form or the signup IP; that zone
+   * can be wrong (a VPN, a datacentre IP, a subscriber who has since moved),
+   * and observations are what correct it. If the source stayed behind, the
+   * record would attribute an observed zone to signup — and anyone counting
+   * how well the signup capture works would count it as a success.
+   */
+  it('replaces signup provenance when observations overrule the zone', async () => {
+    item.timeZone = 'America/Chicago';
+    item.timeZoneUpdatedAt = '2026-08-24T00:00:00.000Z';
+    item.timeZoneSource = 'signup';
+
+    for (const issue of [1, 2, 3]) {
+      await recordTimeZoneObservation('tenant-1', 'reader@example.com', issue, 'Europe/London', 'click');
+    }
+
+    expect(item.timeZone).toBe('Europe/London');
+    expect(item.timeZoneSource).toBe('observed');
+  });
+
+  // The zone did not change, so nothing is written — including the source,
+  // which is still accurate for the value that is actually stored.
+  it('leaves signup provenance alone when observations agree with it', async () => {
+    item.timeZone = 'Europe/London';
+    item.timeZoneSource = 'signup';
+
+    for (const issue of [1, 2, 3]) {
+      await recordTimeZoneObservation('tenant-1', 'reader@example.com', issue, 'Europe/London', 'click');
+    }
+
+    expect(item.timeZone).toBe('Europe/London');
+    expect(item.timeZoneSource).toBe('signup');
   });
 
   it('does not confirm a timezone from an all-open streak', async () => {

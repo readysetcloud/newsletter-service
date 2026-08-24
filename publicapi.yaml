@@ -526,6 +526,25 @@ components:
           type: integer
           minimum: 0
           description: Client-reported time between form render and submit (ms)
+        timeZone:
+          description: >-
+            Optional IANA timezone name from the signup form, e.g. from
+            Intl.DateTimeFormat().resolvedOptions().timeZone. Seeds local send
+            immediately instead of waiting for open/click geolocation to
+            confirm one. When absent or unusable the handler falls back to
+            geolocating the signup IP.
+
+            Carries no type, deliberately, and not only no length constraint
+            like firstName. This route runs the "Validate All" request
+            validator, so `type: string` would make API Gateway reject the
+            whole signup with a 400 whenever a client sends a non-string —
+            and `"timeZone": null` is what a client gets for free from
+            `{ timeZone: resolveZone() }` when the zone cannot be determined.
+            That is precisely the case the handler is built to shrug off:
+            add-subscriber.mjs validates and canonicalizes the value, ignores
+            it when unusable, and still adds the subscriber. Losing a signup
+            over an optional enrichment field would be the worst possible
+            trade, so nothing about it is enforced here.
 
     MintLinkRequest:
       description: Body for POST /links

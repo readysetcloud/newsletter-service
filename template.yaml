@@ -1077,6 +1077,11 @@ Resources:
       Runtime: nodejs24.x
       CodeUri: functions
       Handler: subscribers/add-subscriber.handler
+      # Supplies the GeoLite2 City database that lookupGeo reads from /opt.
+      # Without it the signup-IP fallback resolves a country and no timezone,
+      # which is the same as having no fallback at all.
+      Layers:
+        - !Ref GeolocationLayer
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17

@@ -35,6 +35,31 @@ export function isValidTimeZone(timeZone) {
 }
 
 /**
+ * The canonical IANA name for a timezone, or null when it is not one.
+ *
+ * `isValidTimeZone` answers whether a runtime accepts a string; it is not
+ * enough on its own for a value that will be stored. `Intl` also accepts
+ * case variants and legacy aliases — `america/chicago`, `US/Central` and
+ * `America/Chicago` are all valid and all mean the same zone — and
+ * `groupSubscribersByTimeZone` keys on the string, so storing them as sent
+ * splits one timezone into several send groups that each fire separately.
+ *
+ * Resolving through `Intl` collapses them to the one name the grouping
+ * expects, and rejects everything else. Callers taking a timezone from
+ * outside the system should use this rather than validating and storing the
+ * raw value.
+ *
+ * @param {unknown} timeZone - Candidate timezone, from any source
+ * @returns {string|null} The canonical IANA name, or null when unusable
+ */
+export function normalizeTimeZone(timeZone) {
+  if (!isValidTimeZone(timeZone)) {
+    return null;
+  }
+  return new Intl.DateTimeFormat('en-US', { timeZone }).resolvedOptions().timeZone;
+}
+
+/**
  * Read the wall-clock fields a UTC instant displays in a timezone.
  * @param {Date|number} instant
  * @param {string} timeZone - IANA timezone name

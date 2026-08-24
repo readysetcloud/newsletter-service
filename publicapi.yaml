@@ -526,6 +526,19 @@ components:
           type: integer
           minimum: 0
           description: Client-reported time between form render and submit (ms)
+        timeZone:
+          type: string
+          description: >-
+            Optional IANA timezone name from the signup form, e.g. from
+            Intl.DateTimeFormat().resolvedOptions().timeZone. Seeds local send
+            immediately instead of waiting for open/click geolocation to
+            confirm one. Deliberately unconstrained for the same reason
+            firstName is: this route runs the "Validate All" request
+            validator, so any constraint here rejects the whole signup at API
+            Gateway. add-subscriber.mjs validates and canonicalizes the value
+            and ignores it when unusable, which costs the reader nothing. When
+            absent or unusable the handler falls back to geolocating the
+            signup IP.
 
     MintLinkRequest:
       description: Body for POST /links

@@ -326,7 +326,7 @@ const formatRobotVoice = (text) => {
   // engine applies them and clips. Keeping the labels inside is what lets the
   // card carry a fill, and it renders the same everywhere with no conditionals.
   return `<div style="margin:24px 0;border-radius:6px;overflow:hidden;background:#EEF2F6;font-family:ui-monospace,'SF Mono','Cascadia Code',Consolas,'Courier New',monospace;">
-  <div style="padding:9px 16px;background:#5B6773;font-size:10px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:#FFFFFF;">\u{1F916}&nbsp; robot voice</div>
+  <div style="padding:9px 16px;background:#5B6773;font-size:10px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:#FFFFFF;">\u{1F916}\u{00A0} robot voice</div>
   <div style="padding:16px;font-size:15px;line-height:1.65;color:#37424C;">
     ${formattedText}
   </div>

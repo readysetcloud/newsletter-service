@@ -284,7 +284,15 @@ describe('SettingsPage', () => {
      * The wait is longer rather than the assertion weaker — the preview still
      * has to appear with exactly the right URL, it is just given room to.
      */
+    // Query budget, deliberately under TEST_TIMEOUT below. These tests await
+    // several queries in sequence, so a per-query budget equal to the test's
+    // own budget guarantees a timeout the moment one query actually uses it -
+    // which is how this file kept failing on loaded runners even after the
+    // query timeouts were raised.
     const RENDER_TIMEOUT = { timeout: 5000 };
+    // Vitest defaults to 5000ms per test. Three sequential queries at up to
+    // 5000ms each cannot fit that, so the test needs headroom over their sum.
+    const TEST_TIMEOUT = 20000;
 
     it('previews the URL a specific issue would get', async () => {
       renderPage();
@@ -297,7 +305,7 @@ describe('SettingsPage', () => {
       expect(
         await screen.findByText('https://example.com/newsletter/128', undefined, RENDER_TIMEOUT)
       ).toBeInTheDocument();
-    });
+    }, TEST_TIMEOUT);
 
     it('requires an absolute URL containing the issue number', async () => {
       renderPage();
@@ -317,7 +325,7 @@ describe('SettingsPage', () => {
       ).toBeInTheDocument();
 
       expect(mockedService.updateSettings).not.toHaveBeenCalled();
-    });
+    }, TEST_TIMEOUT);
   });
 
   describe('unconfigured timezone', () => {

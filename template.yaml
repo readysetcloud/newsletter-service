@@ -29,6 +29,15 @@ Parameters:
     Type: String
     Default: "/stripe/api-key"
     Description: SSM Parameter Store path for Stripe API key (secure string)
+  SlackWebhookUrl:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: >
+      Slack incoming webhook that CloudWatch alarm notifications are posted to.
+      Empty disables posting - the notifier logs and returns rather than
+      failing, so an unconfigured stack still deploys and alarms still fire
+      into the SNS topic.
 
   VerifiedFromEmail:
     Type: String
@@ -342,8 +351,19 @@ Resources:
 
   NewsletterTable:
     Type: AWS::DynamoDB::Table
+    # Retain on stack delete AND on any change that would replace the table
+    # (a logical-id or key-schema edit). This table holds the suppression
+    # records that utils/suppression.mjs calls the only proof of compliance
+    # there is, plus billing state and every issue - none of it reconstructible.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       BillingMode: PAY_PER_REQUEST
+      # A bad bulk write is otherwise unrecoverable; PITR is the difference
+      # between an incident and a restore.
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      DeletionProtectionEnabled: true
       KeySchema:
         - AttributeName: pk
           KeyType: HASH
@@ -393,8 +413,14 @@ Resources:
 
   SubscribersTable:
     Type: AWS::DynamoDB::Table
+    # Every subscriber for every tenant. Losing this is losing the product.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      DeletionProtectionEnabled: true
       KeySchema:
         - AttributeName: tenantId
           KeyType: HASH
@@ -3983,6 +4009,132 @@ Resources:
           Value: !GetAtt EmailPipelineDLQ.QueueName
       AlarmActions:
         - !Ref EventBridgeCriticalAlertsTopic
+      # CloudWatch publishes a recovery only through OKActions. Without this,
+      # Slack shows every alarm firing and never shows one clearing - which
+      # reads as an incident that never ended.
+      OKActions:
+        - !Ref EventBridgeCriticalAlertsTopic
+      TreatMissingData: notBreaching
+
+  # The depth alarm above only sees failures that REACHED the queue. If the
+  # failed delivery cannot write to the DLQ at all, depth stays at zero and
+  # that alarm never fires - work is lost and the recovery mechanism is silent
+  # about it. These two cover the other half:
+  #
+  #   DLQ depth > 0        -> work failed, recovery data retained
+  #   delivery failures > 0 -> work failed AND recovery failed
+  #
+  # Summed across the three async paths rather than split per resource: the
+  # signal is "the net is broken, go look", and any occurrence warrants
+  # inspecting all of them anyway.
+  EmailPipelineLambdaDlqDeliveryFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-email-pipeline-lambda-dlq-unreachable"
+      AlarmDescription: "CRITICAL: a Lambda OnFailure destination could not write to the email pipeline DLQ - failed send or SES-status work has been lost, not retained"
+      Metrics:
+        - Id: send
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: DestinationDeliveryFailures
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Ref SendEmailV2Function
+            Period: 300
+            Stat: Sum
+        - Id: status
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: DestinationDeliveryFailures
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Ref HandleEmailStatusFunction
+            Period: 300
+            Stat: Sum
+        - Id: complaint
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: DestinationDeliveryFailures
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Ref AutoUnsubscribeComplaintFunction
+            Period: 300
+            Stat: Sum
+        - Id: total
+          ReturnData: true
+          Expression: "FILL(send, 0) + FILL(status, 0) + FILL(complaint, 0)"
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref EventBridgeCriticalAlertsTopic
+      # CloudWatch publishes a recovery only through OKActions. Without this,
+      # Slack shows every alarm firing and never shows one clearing - which
+      # reads as an incident that never ended.
+      OKActions:
+        - !Ref EventBridgeCriticalAlertsTopic
+      TreatMissingData: notBreaching
+
+  # RuleName dimensions reference the rules SAM generates from each function's
+  # Events block; the logical id is <FunctionLogicalId><EventLogicalId>.
+  EmailPipelineRuleDlqDeliveryFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-email-pipeline-rule-dlq-unreachable"
+      AlarmDescription: "CRITICAL: EventBridge could not write a failed target invocation to the email pipeline DLQ - the event has been lost, not retained"
+      Metrics:
+        - Id: send
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Events
+              MetricName: InvocationsFailedToBeSentToDlq
+              Dimensions:
+                - Name: RuleName
+                  Value: !Ref SendEmailV2FunctionEmailEvent
+            Period: 300
+            Stat: Sum
+        - Id: status
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Events
+              MetricName: InvocationsFailedToBeSentToDlq
+              Dimensions:
+                - Name: RuleName
+                  Value: !Ref HandleEmailStatusFunctionCreationEvent
+            Period: 300
+            Stat: Sum
+        - Id: complaint
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Events
+              MetricName: InvocationsFailedToBeSentToDlq
+              Dimensions:
+                - Name: RuleName
+                  Value: !Ref AutoUnsubscribeComplaintFunctionComplaintEvent
+            Period: 300
+            Stat: Sum
+        - Id: total
+          ReturnData: true
+          Expression: "FILL(send, 0) + FILL(status, 0) + FILL(complaint, 0)"
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref EventBridgeCriticalAlertsTopic
+      # CloudWatch publishes a recovery only through OKActions. Without this,
+      # Slack shows every alarm firing and never shows one clearing - which
+      # reads as an incident that never ended.
+      OKActions:
+        - !Ref EventBridgeCriticalAlertsTopic
       TreatMissingData: notBreaching
 
   SendEmailV2ErrorsAlarm:
@@ -4001,6 +4153,11 @@ Resources:
         - Name: FunctionName
           Value: !Ref SendEmailV2Function
       AlarmActions:
+        - !Ref EventBridgeCriticalAlertsTopic
+      # CloudWatch publishes a recovery only through OKActions. Without this,
+      # Slack shows every alarm firing and never shows one clearing - which
+      # reads as an incident that never ended.
+      OKActions:
         - !Ref EventBridgeCriticalAlertsTopic
       TreatMissingData: notBreaching
 
@@ -4021,6 +4178,11 @@ Resources:
           Value: !Ref HandleEmailStatusFunction
       AlarmActions:
         - !Ref EventBridgeCriticalAlertsTopic
+      # CloudWatch publishes a recovery only through OKActions. Without this,
+      # Slack shows every alarm firing and never shows one clearing - which
+      # reads as an incident that never ended.
+      OKActions:
+        - !Ref EventBridgeCriticalAlertsTopic
       TreatMissingData: notBreaching
 
   # Dead Letter Queue for failed Stripe events
@@ -4031,7 +4193,45 @@ Resources:
       MessageRetentionPeriod: 1209600 # 14 days
       VisibilityTimeout: 300 # 5 minutes
       ReceiveMessageWaitTimeSeconds: 20 # Long polling
-      KmsMasterKeyId: alias/aws/sqs # Server-side encryption
+      # SSE-SQS, not the AWS-managed KMS key. Three EventBridge rules use this
+      # queue as their DeadLetterConfig, and EventBridge cannot deliver to a
+      # queue encrypted with alias/aws/sqs - that key's policy is AWS-owned and
+      # cannot grant events.amazonaws.com, so dead-letters fail on the way in.
+      # The queue would look healthy and simply never receive anything, which
+      # would make removing the draining consumer above pointless. Same reason
+      # EmailPipelineDLQ uses SSE-SQS. Encryption is kept rather than dropped:
+      # unlike the alerts topic, these messages carry Stripe event payloads
+      # with customer email and billing detail.
+      SqsManagedSseEnabled: true
+
+  # Encryption was only half of what stopped EventBridge writing here. A rule
+  # dead-lettering to a queue also needs the QUEUE's resource policy to allow
+  # events.amazonaws.com to send - the rule's own IAM is not enough - and this
+  # queue had no policy at all, so the three Stripe rules' exhausted retries
+  # were dropped on the way in. Same requirement EmailPipelineDLQPolicy exists
+  # to satisfy for the email pipeline.
+  #
+  # Scoped by aws:SourceAccount rather than by the individual rule ARNs,
+  # matching EmailPipelineDLQPolicy: a SourceArn list has to be kept in step
+  # with every rule that dead-letters here, and a rule accidentally left out of
+  # it fails exactly the way this policy exists to prevent - silently, on the
+  # path that only runs when something has already gone wrong.
+  StripeEventDLQPolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref StripeEventDLQ
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt StripeEventDLQ.Arn
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
 
   StripeEventDLQAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -4050,6 +4250,11 @@ Resources:
           Value: !GetAtt StripeEventDLQ.QueueName
       AlarmActions:
         - !Ref EventBridgeCriticalAlertsTopic
+      # CloudWatch publishes a recovery only through OKActions. Without this,
+      # Slack shows every alarm firing and never shows one clearing - which
+      # reads as an incident that never ended.
+      OKActions:
+        - !Ref EventBridgeCriticalAlertsTopic
       TreatMissingData: notBreaching
 
   EventBridgeHighErrorRateAlarm:
@@ -4067,6 +4272,11 @@ Resources:
       TreatMissingData: notBreaching
       AlarmActions:
         - !Ref EventBridgeCriticalAlertsTopic
+      # CloudWatch publishes a recovery only through OKActions. Without this,
+      # Slack shows every alarm firing and never shows one clearing - which
+      # reads as an incident that never ended.
+      OKActions:
+        - !Ref EventBridgeCriticalAlertsTopic
 
   EventBridgeProcessingDelayAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -4083,13 +4293,58 @@ Resources:
       TreatMissingData: notBreaching
       AlarmActions:
         - !Ref EventBridgeCriticalAlertsTopic
+      # CloudWatch publishes a recovery only through OKActions. Without this,
+      # Slack shows every alarm firing and never shows one clearing - which
+      # reads as an incident that never ended.
+      OKActions:
+        - !Ref EventBridgeCriticalAlertsTopic
 
+  # Deliberately unencrypted. It was previously encrypted with the AWS-managed
+  # key (alias/aws/sns), which silently broke every alarm on it: publishing to
+  # an encrypted topic needs kms:GenerateDataKey* and kms:Decrypt, and that
+  # key's policy is AWS-controlled and cannot be extended to grant
+  # cloudwatch.amazonaws.com. Alarm publishes failed with KMS AccessDenied
+  # before reaching any subscriber - invisible, because a failed alarm
+  # notification is not itself alarmed on.
+  #
+  # Only two configurations actually deliver: a customer-managed key whose
+  # policy grants CloudWatch those actions, or no encryption. This topic
+  # carries alarm names, states, firing reasons and metric names - no PII and
+  # no credentials - so the key is not worth managing for what it protects. Do
+  # NOT "restore" encryption by setting KmsMasterKeyId back to alias/aws/sns;
+  # that returns the topic to silently dropping every alarm.
   EventBridgeCriticalAlertsTopic:
     Type: AWS::SNS::Topic
     Properties:
       TopicName: !Sub "${AWS::StackName}-billing-critical-alerts"
       DisplayName: "Billing System - Critical Alerts"
-      KmsMasterKeyId: alias/aws/sns
+
+  # Every alarm in this stack targets the topic above, which until now had no
+  # subscriptions at all - correct alarms firing into nothing. This is the
+  # subscriber that turns them into something a human sees.
+  NotifyAlarmToSlackFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - notify-alarm-to-slack.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: notify-alarm-to-slack.handler
+      Timeout: 30
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          SLACK_WEBHOOK_URL: !Ref SlackWebhookUrl
+          ENVIRONMENT: !Ref Environment
+      Events:
+        AlarmNotification:
+          Type: SNS
+          Properties:
+            Topic: !Ref EventBridgeCriticalAlertsTopic
 
   EventBridgeNoEventsProcessedAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -4107,6 +4362,11 @@ Resources:
         - Name: FunctionName
           Value: !Ref StripeSubscriptionEventsFunction
       AlarmActions:
+        - !Ref EventBridgeCriticalAlertsTopic
+      # CloudWatch publishes a recovery only through OKActions. Without this,
+      # Slack shows every alarm firing and never shows one clearing - which
+      # reads as an incident that never ended.
+      OKActions:
         - !Ref EventBridgeCriticalAlertsTopic
       TreatMissingData: breaching
 
@@ -4393,13 +4653,18 @@ Resources:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
           CRITICAL_ALERTS_TOPIC_ARN: !Ref EventBridgeCriticalAlertsTopic
-      Events:
-        DLQMessages:
-          Type: SQS
-          Properties:
-            Queue: !GetAtt StripeEventDLQ.Arn
-            BatchSize: 5
-            MaximumBatchingWindowInSeconds: 30
+      # Deliberately has NO event source on StripeEventDLQ. It used to poll the
+      # queue, and because it only logs and publishes a metric - it never
+      # re-drives the event, never persists it anywhere durable - a successful
+      # invocation deleted the message. Failed subscription and payment events
+      # were destroyed within ~30 seconds of arriving, which also meant the
+      # 14-day retention was moot and StripeEventDLQAlarm could never see a
+      # visible message to alarm on.
+      #
+      # The queue now parks failed billing events for its full retention and
+      # the depth alarm can actually fire. Invoke this function manually when
+      # inspecting the queue; anything that deletes a message has to re-drive
+      # it first.
 
 
   BootstrapVerificationTemplateFunction:

@@ -4199,6 +4199,35 @@ Resources:
       # with customer email and billing detail.
       SqsManagedSseEnabled: true
 
+  # Encryption was only half of what stopped EventBridge writing here. A rule
+  # dead-lettering to a queue also needs the QUEUE's resource policy to allow
+  # events.amazonaws.com to send - the rule's own IAM is not enough - and this
+  # queue had no policy at all, so the three Stripe rules' exhausted retries
+  # were dropped on the way in. Same requirement EmailPipelineDLQPolicy exists
+  # to satisfy for the email pipeline.
+  #
+  # Scoped by aws:SourceAccount rather than by the individual rule ARNs,
+  # matching EmailPipelineDLQPolicy: a SourceArn list has to be kept in step
+  # with every rule that dead-letters here, and a rule accidentally left out of
+  # it fails exactly the way this policy exists to prevent - silently, on the
+  # path that only runs when something has already gone wrong.
+  StripeEventDLQPolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref StripeEventDLQ
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt StripeEventDLQ.Arn
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
   StripeEventDLQAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:

@@ -160,7 +160,11 @@ These were settled on 2026-06-25 and define the v1 build:
 - **Override model — override with fallback.** A tenant snippet whose name
   matches a block overrides it; when no such snippet exists, the hardcoded block
   renders. Nothing breaks for tenants who have not defined snippets, and the
-  committed `robotVoice` HTML becomes the seeded default.
+  committed `robotVoice` HTML becomes the seeded default — seed it from
+  `formatRobotVoice` in `functions/parse-md-to-json.mjs`, which is kept
+  byte-identical to the RSC Hugo shortcodes
+  (`layouts/shortcodes/robotVoice.email.html`), not from an older copy of the
+  card.
 - **Body syntax — `{{< >}}` only, strict.** No lenient `{{> }}` alias in the
   body (see decision #2 above).
 - **Content-editor autocomplete — in v1.** The issue/body editor gets its own

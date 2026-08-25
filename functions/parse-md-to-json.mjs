@@ -314,6 +314,10 @@ const convertToHtml = (data, removeOuterParagraph = false) => {
 
 const formatRobotVoice = (text) => {
   const formattedText = convertToHtml(text, true);
+  // Twin of the robotVoice shortcodes in the readysetcloud/ready-set-cloud repo:
+  // layouts/shortcodes/robotVoice.email.html (and .html for the web card). The
+  // two render byte-identical HTML - change both together.
+  //
   // The labels use negative margins to sit on the card's border (the "notch").
   // Apple Mail / web clients honor this; Gmail strips the negative margins and
   // degrades cleanly to a flat label. Outlook's Word engine *does* apply them

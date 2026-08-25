@@ -1,7 +1,8 @@
 import { apiClient } from './api';
-import { validateIssueStats, validateTrendsData } from '@/utils/dataValidation';
+import { validateIssueAnalytics, validateIssueStats, validateTrendsData } from '@/utils/dataValidation';
 import type {
   Issue,
+  IssueAnalytics,
   IssueListItem,
   IssueMetrics,
   TrendsData,
@@ -18,6 +19,28 @@ import type {
 } from '@/types/issues';
 import type { ApiResponse } from '@/types';
 import { calculateCompositeScore } from '@/utils/analyticsCalculations';
+
+/** The enriched analytics report the aggregation pipeline writes over `stats.analytics`. */
+interface ReportEnvelope {
+  eventAnalytics?: IssueAnalytics | null;
+}
+
+/**
+ * Whether `stats.analytics` is the report envelope rather than the raw event
+ * analytics this UI renders.
+ *
+ * Keyed on `currentMetrics`, which is the marker the report builder itself
+ * uses to tell its own output apart from an event-analytics blob — and
+ * deliberately not on `eventAnalytics` being truthy. The envelope carries
+ * `eventAnalytics: null` for any issue that never produced that slice, and
+ * reading that as "not an envelope" hands the whole report object to the page
+ * as if it were `IssueAnalytics`. It has none of that shape, so validation
+ * rejects it, and the issue is discarded over an optional section.
+ */
+const isReportEnvelope = (analytics: unknown): boolean =>
+  !!analytics &&
+  typeof analytics === 'object' &&
+  'currentMetrics' in (analytics as Record<string, unknown>);
 
 /**
  * Service for managing newsletter issues through the API
@@ -62,16 +85,28 @@ class IssuesService {
     const response = await apiClient.get<Issue>(`/issues/${id}`);
 
     if (response.success && response.data?.stats) {
-      // The API may return analytics in an enriched envelope with nested
-      // eventAnalytics, benchmarks, insights, etc.  The frontend only needs
-      // the eventAnalytics slice which matches the IssueAnalytics shape.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const rawAnalytics = response.data.stats.analytics as any;
-      if (rawAnalytics?.eventAnalytics) {
-        response.data.stats.analytics = rawAnalytics.eventAnalytics;
+      const stats = response.data.stats;
+
+      // The API may return analytics in an enriched report envelope that wraps
+      // the raw event analytics alongside benchmarks, health scores and
+      // insight candidates. Only the nested slice matches `IssueAnalytics`.
+      if (isReportEnvelope(stats.analytics)) {
+        // `?? undefined`, not the envelope: an issue whose event analytics were
+        // never built carries `eventAnalytics: null`, and that means "no
+        // analytics", which is what the detail page's processing notice is for.
+        stats.analytics = (stats.analytics as unknown as ReportEnvelope).eventAnalytics ?? undefined;
       }
 
-      if (!validateIssueStats(response.data.stats)) {
+      // Analytics are an optional enrichment, so a slice this build cannot read
+      // costs the analytics panels and nothing else. Dropping it here rather
+      // than failing the request keeps the subject, content, timeline and
+      // counters on screen — those come from a different writer and are still
+      // good, and they are what somebody is on the page to see.
+      if (stats.analytics !== undefined && !validateIssueAnalytics(stats.analytics)) {
+        stats.analytics = undefined;
+      }
+
+      if (!validateIssueStats(stats)) {
         return {
           success: false,
           error: 'Invalid issue stats structure received from server',

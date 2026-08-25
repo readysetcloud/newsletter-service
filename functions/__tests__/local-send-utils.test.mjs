@@ -1,5 +1,6 @@
 import {
   isValidTimeZone,
+  normalizeTimeZone,
   getWallClockInZone,
   zonedWallClockToUtc,
   groupSubscribersByTimeZone,
@@ -12,6 +13,43 @@ import {
   DEFAULT_GROUP,
   CATCH_ALL_GROUP
 } from '../utils/local-send.mjs';
+
+describe('normalizeTimeZone', () => {
+  it('returns real zones unchanged', () => {
+    expect(normalizeTimeZone('America/New_York')).toBe('America/New_York');
+    expect(normalizeTimeZone('Europe/London')).toBe('Europe/London');
+    expect(normalizeTimeZone('UTC')).toBe('UTC');
+  });
+
+  // The reason this exists rather than callers using isValidTimeZone: Intl
+  // accepts all of these, and groupSubscribersByTimeZone keys on the string,
+  // so storing them raw splits one zone into several send groups.
+  it('collapses case variants and legacy aliases onto the canonical name', () => {
+    expect(normalizeTimeZone('america/chicago')).toBe('America/Chicago');
+    expect(normalizeTimeZone('US/Central')).toBe('America/Chicago');
+    expect(normalizeTimeZone('EST5EDT')).toBe('America/New_York');
+    expect(normalizeTimeZone('GMT')).toBe('UTC');
+  });
+
+  it('agrees with groupSubscribersByTimeZone on what one group is', () => {
+    const zones = ['America/Chicago', 'america/chicago', 'US/Central'].map(normalizeTimeZone);
+    const groups = groupSubscribersByTimeZone(
+      zones.map((timeZone, i) => ({ email: `s${i}@example.com`, timeZone }))
+    );
+    expect([...groups.keys()]).toEqual(['America/Chicago']);
+    expect(groups.get('America/Chicago')).toHaveLength(3);
+  });
+
+  it('returns null for anything unusable', () => {
+    expect(normalizeTimeZone('Not/AZone')).toBeNull();
+    expect(normalizeTimeZone('')).toBeNull();
+    expect(normalizeTimeZone('   ')).toBeNull();
+    expect(normalizeTimeZone(null)).toBeNull();
+    expect(normalizeTimeZone(undefined)).toBeNull();
+    expect(normalizeTimeZone(42)).toBeNull();
+    expect(normalizeTimeZone('A'.repeat(500))).toBeNull();
+  });
+});
 
 describe('isValidTimeZone', () => {
   it('accepts real IANA zones', () => {

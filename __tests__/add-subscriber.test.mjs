@@ -10,6 +10,7 @@ let publishSubscriberEvent;
 let EVENT_TYPES;
 let mockGetTenant;
 let mockFormatResponse;
+let mockLookupGeo;
 
 async function loadIsolated() {
   await jest.isolateModulesAsync(async () => {
@@ -103,6 +104,15 @@ async function loadIsolated() {
       createLogger: jest.fn().mockReturnValue({ info: jest.fn(), warn: jest.fn(), error: jest.fn() }),
     }));
 
+    // geolocation — the signup-IP timezone fallback. Defaults to a miss, which
+    // is what the real module returns off-Lambda anyway (no mmdb under /opt),
+    // so the tests that predate the timezone capture behave as they always did.
+    mockLookupGeo = jest.fn().mockResolvedValue(null);
+    jest.unstable_mockModule('../functions/utils/geolocation.mjs', () => ({
+      lookupGeo: mockLookupGeo,
+      lookupCountry: jest.fn().mockResolvedValue(null),
+    }));
+
     // Import AFTER mocks, inside isolation
     ({ handler } = await import('../functions/subscribers/add-subscriber.mjs'));
     ({ UpdateItemCommand, PutItemCommand } = await import('@aws-sdk/client-dynamodb'));
@@ -120,6 +130,7 @@ async function loadIsolated() {
     EVENT_TYPES,
     mockGetTenant,
     mockFormatResponse,
+    mockLookupGeo,
   };
 }
 
@@ -362,4 +373,116 @@ describe('add-subscriber property-based tests', () => {
       { numRuns: 100 }
     );
   });
+
+  describe('timezone capture at signup', () => {
+    const tenant = { id: 't1', list: 'list-1', subscribers: 5 };
+
+    /** The subscriber Item from the transactional write. */
+    const writtenSubscriber = () => {
+      const transactArg = ddbInstance.send.mock.calls[1][0];
+      return transactArg.TransactItems[1].Put.Item;
+    };
+
+    const signUp = (body) => handler({
+      pathParameters: { tenant: 't1' },
+      body: JSON.stringify({ email: 'test@example.com', ...body }),
+    });
+
+    beforeEach(() => {
+      mockGetTenant.mockResolvedValue(tenant);
+      ddbInstance.send.mockResolvedValue({});
+    });
+
+    test('stores the timezone the form submitted, without geolocating', async () => {
+      await signUp({ timeZone: 'America/Chicago' });
+
+      const item = writtenSubscriber();
+      expect(item.timeZone).toBe('America/Chicago');
+      expect(item.timeZoneSource).toBe('signup');
+      expect(item.timeZoneUpdatedAt).toBe(item.addedAt);
+      // The browser's own answer cannot be improved on, so the IP is not read.
+      expect(mockLookupGeo).not.toHaveBeenCalled();
+    });
+
+    // Intl accepts these and would hand them straight through. Stored raw they
+    // split one zone across several local-send groups that each fire on their
+    // own schedule.
+    test.each([
+      ['america/chicago', 'America/Chicago'],
+      ['US/Central', 'America/Chicago'],
+      ['EST5EDT', 'America/New_York'],
+      ['GMT', 'UTC'],
+    ])('canonicalizes %s to %s', async (submitted, expected) => {
+      await signUp({ timeZone: submitted });
+      expect(writtenSubscriber().timeZone).toBe(expected);
+    });
+
+    test('falls back to the signup IP when the form sent nothing', async () => {
+      mockLookupGeo.mockResolvedValue({ countryCode: 'US', countryName: 'United States', timeZone: 'America/Denver' });
+
+      await signUp({});
+
+      expect(mockLookupGeo).toHaveBeenCalledWith('1.2.3.4');
+      const item = writtenSubscriber();
+      expect(item.timeZone).toBe('America/Denver');
+      expect(item.timeZoneSource).toBe('signup');
+    });
+
+    test('falls back to the signup IP when the form sent something unusable', async () => {
+      mockLookupGeo.mockResolvedValue({ countryCode: 'US', countryName: 'United States', timeZone: 'America/Denver' });
+
+      await signUp({ timeZone: 'Not/AZone' });
+
+      expect(mockLookupGeo).toHaveBeenCalled();
+      expect(writtenSubscriber().timeZone).toBe('America/Denver');
+    });
+
+    // Absent, not null: groupSubscribersByTimeZone and the API's coverage count
+    // both read absence as "no confirmed zone".
+    test('omits the field entirely when neither source can supply one', async () => {
+      mockLookupGeo.mockResolvedValue(null);
+
+      await signUp({});
+
+      const item = writtenSubscriber();
+      expect(item).not.toHaveProperty('timeZone');
+      expect(item).not.toHaveProperty('timeZoneSource');
+      expect(item).not.toHaveProperty('timeZoneUpdatedAt');
+    });
+
+    // The country database resolves a country and no zone, which is what a
+    // deployment without the City mmdb looks like.
+    test('omits the field when geolocation resolves a country but no zone', async () => {
+      mockLookupGeo.mockResolvedValue({ countryCode: 'US', countryName: 'United States', timeZone: null });
+
+      await signUp({});
+
+      expect(writtenSubscriber()).not.toHaveProperty('timeZone');
+    });
+
+    // A subscriber is worth more than a timezone: the lookup reads a file off
+    // the layer, and a failure there must not cost the signup.
+    test('still adds the subscriber when geolocation throws', async () => {
+      mockLookupGeo.mockRejectedValue(new Error('mmdb unreadable'));
+
+      const res = await signUp({});
+
+      expect(res.statusCode).toBe(201);
+      const item = writtenSubscriber();
+      expect(item.email).toBe('test@example.com');
+      expect(item).not.toHaveProperty('timeZone');
+    });
+
+    test.each([null, 42, '', '   ', { toString: () => 'America/Chicago' }])(
+      'ignores a non-string timezone (%p) and falls through to the IP',
+      async (submitted) => {
+        mockLookupGeo.mockResolvedValue({ countryCode: 'US', countryName: 'United States', timeZone: 'America/Denver' });
+
+        await signUp({ timeZone: submitted });
+
+        expect(writtenSubscriber().timeZone).toBe('America/Denver');
+      }
+    );
+  });
+
 });

@@ -318,28 +318,32 @@ const formatRobotVoice = (text) => {
   // Apple Mail / web clients honor this; Gmail strips the negative margins and
   // degrades cleanly to a flat label. Outlook's Word engine *does* apply them
   // and would clip the label, so it gets a flat version via an MSO conditional.
-  return `<div style="margin:24px 0;border:1px solid #CFD6DC;border-radius:5px;padding:16px;background:#FFFFFF;font-family:ui-monospace,'SF Mono','Cascadia Code',Consolas,'Courier New',monospace;">
+  // The notch labels set an explicit line-height so the label chip straddles the
+  // border rather than floating above it - the chip position depends on the line
+  // box height, which the robot emoji would otherwise change. The MSO flat labels
+  // sit inside the card, so their chips take the card tint instead of white.
+  return `<div style="margin:24px 0;border:1px solid #C3CCD4;border-left:4px solid #6E7B87;border-radius:5px;padding:16px;background:#F1F4F7;font-family:ui-monospace,'SF Mono','Cascadia Code',Consolas,'Courier New',monospace;">
   <!--[if !mso]><!-->
-  <div style="margin:-27px 0 8px 0;">
-    <span style="background:#FFFFFF;padding:0 8px;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:#8A929A;">robot voice</span>
+  <div style="margin:-27px 0 8px 0;line-height:22px;">
+    <span style="background:#FFFFFF;padding:0 8px;font-size:10px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:#4E5A65;">\u{1F916} robot voice</span>
   </div>
   <!--<![endif]-->
   <!--[if mso]>
   <div style="margin:0 0 8px 0;">
-    <span style="background:#FFFFFF;padding:0 8px;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:#8A929A;">robot voice</span>
+    <span style="background:#F1F4F7;padding:0 8px;font-size:10px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:#4E5A65;">\u{1F916} robot voice</span>
   </div>
   <![endif]-->
-  <div style="font-size:14px;line-height:1.6;color:#54606A;">
+  <div style="font-size:15px;line-height:1.65;color:#37424C;">
     ${formattedText}
   </div>
   <!--[if !mso]><!-->
-  <div style="text-align:right;margin:8px 0 -28px 0;">
-    <span style="background:#FFFFFF;padding:0 8px;font-size:11px;letter-spacing:.03em;color:#9099A1;">404 &middot; personality not found</span>
+  <div style="text-align:right;margin:8px 0 -27px 0;line-height:22px;">
+    <span style="background:#FFFFFF;padding:0 8px;font-size:11px;letter-spacing:.03em;color:#6E7883;">404 &middot; personality not found</span>
   </div>
   <!--<![endif]-->
   <!--[if mso]>
   <div style="text-align:right;margin:8px 0 0 0;">
-    <span style="background:#FFFFFF;padding:0 8px;font-size:11px;letter-spacing:.03em;color:#9099A1;">404 &middot; personality not found</span>
+    <span style="background:#F1F4F7;padding:0 8px;font-size:11px;letter-spacing:.03em;color:#6E7883;">404 &middot; personality not found</span>
   </div>
   <![endif]-->
 </div>`;

@@ -314,34 +314,23 @@ const convertToHtml = (data, removeOuterParagraph = false) => {
 
 const formatRobotVoice = (text) => {
   const formattedText = convertToHtml(text, true);
-  // The labels use negative margins to sit on the card's border (the "notch").
-  // Apple Mail / web clients honor this; Gmail strips the negative margins and
-  // degrades cleanly to a flat label. Outlook's Word engine *does* apply them
-  // and would clip the label, so it gets a flat version via an MSO conditional.
-  return `<div style="margin:24px 0;border:1px solid #CFD6DC;border-radius:5px;padding:16px;background:#FFFFFF;font-family:ui-monospace,'SF Mono','Cascadia Code',Consolas,'Courier New',monospace;">
-  <!--[if !mso]><!-->
-  <div style="margin:-27px 0 8px 0;">
-    <span style="background:#FFFFFF;padding:0 8px;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:#8A929A;">robot voice</span>
-  </div>
-  <!--<![endif]-->
-  <!--[if mso]>
-  <div style="margin:0 0 8px 0;">
-    <span style="background:#FFFFFF;padding:0 8px;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:#8A929A;">robot voice</span>
-  </div>
-  <![endif]-->
-  <div style="font-size:14px;line-height:1.6;color:#54606A;">
+  // Twin of the robotVoice shortcode in the readysetcloud/ready-set-cloud repo:
+  // layouts/shortcodes/robotVoice.html. The two render byte-identical HTML -
+  // change both together.
+  //
+  // The label and the 404 footer sit INSIDE the card. An earlier version hung
+  // them on the border with negative margins ("notch" labels), which forced the
+  // card background to stay white - a tint would show through the label's
+  // masking chip - and needed <!--[if mso]--> fallbacks plus a Gmail
+  // degradation path, since Gmail strips negative margins and Outlook's Word
+  // engine applies them and clips. Keeping the labels inside is what lets the
+  // card carry a fill, and it renders the same everywhere with no conditionals.
+  return `<div style="margin:24px 0;border-radius:6px;overflow:hidden;background:#EEF2F6;font-family:ui-monospace,'SF Mono','Cascadia Code',Consolas,'Courier New',monospace;">
+  <div style="padding:9px 16px;background:#5B6773;font-size:10px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:#FFFFFF;">\u{1F916}\u{00A0} robot voice</div>
+  <div style="padding:16px;font-size:15px;line-height:1.65;color:#37424C;">
     ${formattedText}
   </div>
-  <!--[if !mso]><!-->
-  <div style="text-align:right;margin:8px 0 -28px 0;">
-    <span style="background:#FFFFFF;padding:0 8px;font-size:11px;letter-spacing:.03em;color:#9099A1;">404 &middot; personality not found</span>
-  </div>
-  <!--<![endif]-->
-  <!--[if mso]>
-  <div style="text-align:right;margin:8px 0 0 0;">
-    <span style="background:#FFFFFF;padding:0 8px;font-size:11px;letter-spacing:.03em;color:#9099A1;">404 &middot; personality not found</span>
-  </div>
-  <![endif]-->
+  <div style="padding:0 16px 13px;text-align:right;font-size:11px;letter-spacing:.03em;color:#7A838C;">404 &middot; personality not found</div>
 </div>`;
 };
 

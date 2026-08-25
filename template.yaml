@@ -3923,13 +3923,6 @@ Resources:
               Action:
                 - sns:Publish
               Resource: !Ref EventBridgeCriticalAlertsTopic
-            # Publishing to an encrypted topic needs the key as well as the
-            # topic; sns:Publish alone fails with KMS AccessDenied.
-            - Effect: Allow
-              Action:
-                - kms:GenerateDataKey*
-                - kms:Decrypt
-              Resource: !GetAtt AlertsTopicKey.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
@@ -4195,7 +4188,16 @@ Resources:
       MessageRetentionPeriod: 1209600 # 14 days
       VisibilityTimeout: 300 # 5 minutes
       ReceiveMessageWaitTimeSeconds: 20 # Long polling
-      KmsMasterKeyId: alias/aws/sqs # Server-side encryption
+      # SSE-SQS, not the AWS-managed KMS key. Three EventBridge rules use this
+      # queue as their DeadLetterConfig, and EventBridge cannot deliver to a
+      # queue encrypted with alias/aws/sqs - that key's policy is AWS-owned and
+      # cannot grant events.amazonaws.com, so dead-letters fail on the way in.
+      # The queue would look healthy and simply never receive anything, which
+      # would make removing the draining consumer above pointless. Same reason
+      # EmailPipelineDLQ uses SSE-SQS. Encryption is kept rather than dropped:
+      # unlike the alerts topic, these messages carry Stripe event payloads
+      # with customer email and billing detail.
+      SqsManagedSseEnabled: true
 
   StripeEventDLQAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -4263,59 +4265,25 @@ Resources:
       OKActions:
         - !Ref EventBridgeCriticalAlertsTopic
 
-  # The alerts topic was encrypted with the AWS-managed key (alias/aws/sns),
-  # which silently broke every alarm on it: CloudWatch needs
-  # kms:GenerateDataKey* and kms:Decrypt to publish to an encrypted topic, and
-  # the AWS-managed key's policy cannot be extended to grant a service
-  # principal. Alarm publishes failed with KMS AccessDenied before reaching any
-  # subscriber - invisible, because a failed alarm notification is not itself
-  # alarmed on. A customer-managed key is the only way to keep the topic
-  # encrypted AND let alarms publish to it.
-  AlertsTopicKey:
-    Type: AWS::KMS::Key
-    # The key is what makes the topic readable; losing it on a stack operation
-    # would orphan the topic's history.
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      Description: !Sub "${AWS::StackName} critical alerts topic encryption"
-      EnableKeyRotation: true
-      KeyPolicy:
-        Version: 2012-10-17
-        Statement:
-          # Root delegation - without it the key cannot be administered and IAM
-          # policies cannot grant access to it.
-          - Sid: EnableIAMPolicies
-            Effect: Allow
-            Principal:
-              AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"
-            Action: kms:*
-            Resource: "*"
-          # The grant the AWS-managed key could not carry.
-          - Sid: AllowCloudWatchAlarmsToPublish
-            Effect: Allow
-            Principal:
-              Service: cloudwatch.amazonaws.com
-            Action:
-              - kms:GenerateDataKey*
-              - kms:Decrypt
-            Resource: "*"
-            Condition:
-              StringEquals:
-                aws:SourceAccount: !Ref AWS::AccountId
-
-  AlertsTopicKeyAlias:
-    Type: AWS::KMS::Alias
-    Properties:
-      AliasName: !Sub "alias/${AWS::StackName}-alerts"
-      TargetKeyId: !Ref AlertsTopicKey
-
+  # Deliberately unencrypted. It was previously encrypted with the AWS-managed
+  # key (alias/aws/sns), which silently broke every alarm on it: publishing to
+  # an encrypted topic needs kms:GenerateDataKey* and kms:Decrypt, and that
+  # key's policy is AWS-controlled and cannot be extended to grant
+  # cloudwatch.amazonaws.com. Alarm publishes failed with KMS AccessDenied
+  # before reaching any subscriber - invisible, because a failed alarm
+  # notification is not itself alarmed on.
+  #
+  # Only two configurations actually deliver: a customer-managed key whose
+  # policy grants CloudWatch those actions, or no encryption. This topic
+  # carries alarm names, states, firing reasons and metric names - no PII and
+  # no credentials - so the key is not worth managing for what it protects. Do
+  # NOT "restore" encryption by setting KmsMasterKeyId back to alias/aws/sns;
+  # that returns the topic to silently dropping every alarm.
   EventBridgeCriticalAlertsTopic:
     Type: AWS::SNS::Topic
     Properties:
       TopicName: !Sub "${AWS::StackName}-billing-critical-alerts"
       DisplayName: "Billing System - Critical Alerts"
-      KmsMasterKeyId: !Ref AlertsTopicKey
 
   # Every alarm in this stack targets the topic above, which until now had no
   # subscriptions at all - correct alarms firing into nothing. This is the
@@ -4647,13 +4615,6 @@ Resources:
               Action:
                 - sns:Publish
               Resource: !Ref EventBridgeCriticalAlertsTopic
-            # Publishing to an encrypted topic needs the key as well as the
-            # topic; sns:Publish alone fails with KMS AccessDenied.
-            - Effect: Allow
-              Action:
-                - kms:GenerateDataKey*
-                - kms:Decrypt
-              Resource: !GetAtt AlertsTopicKey.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1

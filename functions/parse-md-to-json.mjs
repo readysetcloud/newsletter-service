@@ -314,42 +314,23 @@ const convertToHtml = (data, removeOuterParagraph = false) => {
 
 const formatRobotVoice = (text) => {
   const formattedText = convertToHtml(text, true);
-  // Twin of the robotVoice shortcodes in the readysetcloud/ready-set-cloud repo:
-  // layouts/shortcodes/robotVoice.email.html (and .html for the web card). The
-  // two render byte-identical HTML - change both together.
+  // Twin of the robotVoice shortcode in the readysetcloud/ready-set-cloud repo:
+  // layouts/shortcodes/robotVoice.html. The two render byte-identical HTML -
+  // change both together.
   //
-  // The labels use negative margins to sit on the card's border (the "notch").
-  // Apple Mail / web clients honor this; Gmail strips the negative margins and
-  // degrades cleanly to a flat label. Outlook's Word engine *does* apply them
-  // and would clip the label, so it gets a flat version via an MSO conditional.
-  // The notch labels set an explicit line-height so the label chip straddles the
-  // border rather than floating above it - the chip position depends on the line
-  // box height, which the robot emoji would otherwise change. The MSO flat labels
-  // sit inside the card, so their chips take the card tint instead of white.
-  return `<div style="margin:24px 0;border:1px solid #C3CCD4;border-left:4px solid #6E7B87;border-radius:5px;padding:16px;background:#F1F4F7;font-family:ui-monospace,'SF Mono','Cascadia Code',Consolas,'Courier New',monospace;">
-  <!--[if !mso]><!-->
-  <div style="margin:-27px 0 8px 0;line-height:22px;">
-    <span style="background:#FFFFFF;padding:0 8px;font-size:10px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:#4E5A65;">\u{1F916} robot voice</span>
-  </div>
-  <!--<![endif]-->
-  <!--[if mso]>
-  <div style="margin:0 0 8px 0;">
-    <span style="background:#F1F4F7;padding:0 8px;font-size:10px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:#4E5A65;">\u{1F916} robot voice</span>
-  </div>
-  <![endif]-->
-  <div style="font-size:15px;line-height:1.65;color:#37424C;">
+  // The label and the 404 footer sit INSIDE the card. An earlier version hung
+  // them on the border with negative margins ("notch" labels), which forced the
+  // card background to stay white - a tint would show through the label's
+  // masking chip - and needed <!--[if mso]--> fallbacks plus a Gmail
+  // degradation path, since Gmail strips negative margins and Outlook's Word
+  // engine applies them and clips. Keeping the labels inside is what lets the
+  // card carry a fill, and it renders the same everywhere with no conditionals.
+  return `<div style="margin:24px 0;border-radius:6px;overflow:hidden;background:#EEF2F6;font-family:ui-monospace,'SF Mono','Cascadia Code',Consolas,'Courier New',monospace;">
+  <div style="padding:9px 16px;background:#5B6773;font-size:10px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:#FFFFFF;">\u{1F916}&nbsp; robot voice</div>
+  <div style="padding:16px;font-size:15px;line-height:1.65;color:#37424C;">
     ${formattedText}
   </div>
-  <!--[if !mso]><!-->
-  <div style="text-align:right;margin:8px 0 -27px 0;line-height:22px;">
-    <span style="background:#FFFFFF;padding:0 8px;font-size:11px;letter-spacing:.03em;color:#6E7883;">404 &middot; personality not found</span>
-  </div>
-  <!--<![endif]-->
-  <!--[if mso]>
-  <div style="text-align:right;margin:8px 0 0 0;">
-    <span style="background:#F1F4F7;padding:0 8px;font-size:11px;letter-spacing:.03em;color:#6E7883;">404 &middot; personality not found</span>
-  </div>
-  <![endif]-->
+  <div style="padding:0 16px 13px;text-align:right;font-size:11px;letter-spacing:.03em;color:#7A838C;">404 &middot; personality not found</div>
 </div>`;
 };
 

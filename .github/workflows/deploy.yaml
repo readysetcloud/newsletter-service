@@ -115,8 +115,14 @@ jobs:
                 ;;
             esac
 
+            # functions/src/** is where the API's Rust actually lives - crates/
+            # holds only the integration-test crate. Matching crates/ and
+            # Cargo.toml alone meant the Rust lint and test jobs skipped on
+            # every change to the API itself, which is most of the Rust in the
+            # repo. Cargo.lock is here too: a dependency bump can break the
+            # build without touching a manifest.
             case "${file}" in
-              crates/*|Cargo.toml)
+              crates/*|functions/src/*|Cargo.toml|Cargo.lock)
                 rust_changed=true
                 ;;
             esac

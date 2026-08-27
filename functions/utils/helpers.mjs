@@ -1,11 +1,7 @@
 import crypto from 'crypto';
-import { getSecret } from '@aws-lambda-powertools/parameters/secrets';
-import { getParameter } from '@aws-lambda-powertools/parameters/ssm';
-import { Octokit } from 'octokit';
 import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 
-let octokit;
 // A Map, not an object: tenant ids are external input, and on a plain object an
 // id like `constructor` or `toString` hits an inherited property and returns a
 // built-in instead of ever reaching DynamoDB.
@@ -15,23 +11,6 @@ const ivLength = 16;
 const algorithm = 'aes-256-gcm';
 const TPS_LIMIT = 5;
 const MAX_RETRIES = 3;
-
-export const getOctokit = async (tenantId) => {
-  if (!octokit) {
-    let secrets;
-    if (tenantId) {
-      const tenant = await getTenant(tenantId);
-      secrets = await getParameter(tenant.apiKeyParameter, { decrypt: true, transform: 'json' });
-    } else {
-      secrets = await getSecret(process.env.SECRET_ID, { transform: 'json' });
-    }
-
-    const auth = secrets.github;
-    octokit = new Octokit({ auth });
-  }
-
-  return octokit;
-};
 
 /**
  * Loads a tenant record, memoized for the life of the execution environment.

@@ -8,9 +8,11 @@
  * entry silently dropped whatever it was carrying — an issue send, a timezone
  * group, an A/B variant, a welcome email, a pricing recalculation.
  *
- * Its own module rather than `helpers.mjs`, which pulls in octokit and the
- * Powertools parameter clients: the send path should not carry those to get a
- * ten-line assertion, and neither should every test that mocks it.
+ * Its own module rather than `helpers.mjs`: the send path should not import a
+ * grab-bag of crypto, tenant caching and response formatting to get a ten-line
+ * assertion, and neither should every test that mocks it. (helpers used to drag
+ * in octokit and the Powertools parameter clients on top of that, which is what
+ * made the split urgent; those are gone now, the reason is not.)
  *
  * @param {{FailedEntryCount?: number, Entries?: Array<{ErrorCode?: string, ErrorMessage?: string}>}} result
  * @param {string} what - what was being published, for the error message

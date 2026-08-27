@@ -7,7 +7,7 @@ as `{{< robotVoice text="..." >}}` render exactly as they do for a live issue,
 then sends **one** `[Preview]` email to an address you choose.
 
 It does **not** write an issue record, schedule jobs, touch the subscriber list,
-or call back to GitHub. It always sends via the preview path (`to.email`, a
+or talk to GitHub at all. It always sends via the preview path (`to.email`, a
 single recipient) and never reads or sends to the subscriber list, so it is safe
 to run in production as well as stage/sandbox.
 
@@ -21,10 +21,10 @@ to run in production as well as stage/sandbox.
 
 1. Open the Lambda console and find the function whose name contains
    `SendTestEmailFunction`.
-2. **Test** tab → create a new test event with one of the payloads below.
+2. **Test** tab → create a new test event with the payload below.
 3. **Test**. The single preview email lands in the inbox you specified.
 
-### Option A — paste raw markdown
+### The payload
 
 The `content` must include the usual frontmatter (`title`, `date`).
 
@@ -37,20 +37,11 @@ The `content` must include the usual frontmatter (`title`, `date`).
 }
 ```
 
-### Option B — pull a file straight from the content repo
-
-Fetches the file from the tenant's configured content repo (e.g.
-`readysetcloud/ready-set-cloud`).
-
-```json
-{
-  "tenantId": "<your-tenant-id>",
-  "email": "you@example.com",
-  "templateId": "<one-of-your-template-ids>",
-  "fileName": "content/newsletter/123.md",
-  "branchName": "main"
-}
-```
+There used to be a second form that took a `fileName` and pulled that path out
+of the tenant's GitHub content repo. It is gone — it was the last thing in the
+service that needed a per-tenant GitHub credential, and issues have reached the
+platform through the API rather than through a repo since the cutover. Paste the
+markdown instead.
 
 ### Required fields
 
@@ -58,9 +49,8 @@ Fetches the file from the tenant's configured content repo (e.g.
 | ------------ | --------------------------------------------------------------------- |
 | `tenantId`   | Tenant whose snippets, sender and templates are used.                 |
 | `email`      | The single recipient of the `[Preview]` email.                        |
+| `content`    | Raw markdown, including frontmatter.                                  |
 | `templateId` | Template to render through. There is no built-in default layout — a preview without one fails rather than rendering something the real send would never use. `GET /templates` lists the tenant's ids. |
-
-Supply exactly one of `content` or `fileName`.
 
 ### Optional fields
 

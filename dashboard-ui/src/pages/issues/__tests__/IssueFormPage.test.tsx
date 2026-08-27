@@ -228,6 +228,52 @@ describe('IssueFormPage authoring modes', () => {
     });
   });
 
+  // A pre-rendered html issue sends verbatim, so the picker is optional here and
+  // the help text has to say so rather than warning that the issue will not
+  // send. The mode toggle offers only markdown and json — html reaches the form
+  // solely by loading an existing pre-rendered issue — so this goes via edit
+  // mode.
+  it('treats a pre-rendered html issue as template-optional', async () => {
+    mockParams = { id: '7' };
+    vi.mocked(issuesService.getIssue).mockResolvedValue({
+      success: true,
+      data: {
+        id: '7',
+        issueNumber: 7,
+        subject: 'Pre-rendered',
+        content: '<p>already rendered</p>',
+        status: 'draft',
+        contentType: 'html',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      } as never,
+    });
+    vi.mocked(issuesService.updateIssue).mockResolvedValue({
+      success: true,
+      data: { id: '7' } as never,
+    });
+
+    render(<IssueFormPage />);
+
+    expect(await screen.findByLabelText(/template \(optional\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/already rendered and sends as-is/i)).toBeInTheDocument();
+    expect(screen.queryByText(/will not send/i)).not.toBeInTheDocument();
+
+    // And it saves with no template selected, which markdown and json cannot.
+    // The submit button only enables once the form is dirty, hence the edit.
+    fireEvent.change(screen.getByPlaceholderText('Enter issue subject'), {
+      target: { value: 'Pre-rendered, renamed' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /update issue/i }));
+
+    await waitFor(() => {
+      expect(issuesService.updateIssue).toHaveBeenCalledWith(
+        '7',
+        expect.objectContaining({ contentType: 'html', templateId: '' })
+      );
+    });
+  });
+
   it('blocks invalid JSON in json mode', async () => {
     render(<IssueFormPage />);
 

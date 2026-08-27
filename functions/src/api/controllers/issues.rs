@@ -3988,6 +3988,42 @@ fn require_template_for_content_type(
     Ok(())
 }
 
+/// The send-time form of the template check: named *and* still there.
+///
+/// `require_template_for_content_type` on its own only proves a templateId was
+/// set, which is enough on create - the create path validates existence in the
+/// same request. It is not enough here. Resend and reschedule both start from a
+/// stored record that nothing has re-validated since it was written, so a
+/// template deleted in between would be accepted, committed to a send, and then
+/// fail inside `publish-issue` hours later - exactly the late failure this is
+/// meant to move earlier.
+///
+/// This costs the create-and-schedule path a second `GetItem` on a template it
+/// validated moments before. That is the price of resend and reschedule getting
+/// the same guarantee without a special case, on a path that runs once per
+/// issue.
+///
+/// The publish-time refusal still stands behind this: it covers deletion after
+/// the send is committed, which nothing checked here can.
+async fn validate_template_for_send(
+    tenant_id: &str,
+    content_type: &str,
+    template_id: Option<&str>,
+) -> Result<(), AppError> {
+    require_template_for_content_type(content_type, template_id)?;
+
+    // Only where it will actually be rendered through. An html issue may carry
+    // a stale templateId harmlessly - its master is sent verbatim - and
+    // refusing the send over an attribute nothing reads would be a false alarm.
+    if content_type != CONTENT_TYPE_HTML {
+        if let Some(template_id) = template_id {
+            validate_template_exists(tenant_id, template_id).await?;
+        }
+    }
+
+    Ok(())
+}
+
 async fn validate_template_exists(tenant_id: &str, template_id: &str) -> Result<(), AppError> {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
@@ -4251,7 +4287,7 @@ async fn start_issue_schedule(input: IssueScheduleInput<'_>) -> Result<(), AppEr
     // update both enforce this, but neither can speak for an issue drafted
     // before the rule existed, or for a template deleted since - and both
     // resend and reschedule start from a stored record.
-    require_template_for_content_type(input.content_type, input.template_id)?;
+    validate_template_for_send(input.tenant_id, input.content_type, input.template_id).await?;
 
     let execution_input = build_execution_input(&input);
 
@@ -4444,7 +4480,7 @@ async fn reschedule_issue_send(
     // update both enforce this, but neither can speak for an issue drafted
     // before the rule existed, or for a template deleted since - and both
     // resend and reschedule start from a stored record.
-    require_template_for_content_type(input.content_type, input.template_id)?;
+    validate_template_for_send(input.tenant_id, input.content_type, input.template_id).await?;
 
     let execution_input = build_execution_input(input);
 

@@ -42,6 +42,18 @@ const NO_TEMPLATE_VALUE = '';
 // nothing for a template to do.
 const requiresTemplate = (contentType: IssueContentType) => contentType !== 'html';
 
+// One line per mode rather than a required/optional split, because the three
+// say genuinely different things: markdown and json both need a template but
+// for different reasons, and html does not use one at all - copy that told an
+// html author their issue "will not send" without a template would contradict
+// both the label above it and what actually happens.
+const TEMPLATE_HELP_TEXT: Record<IssueContentType, string> = {
+  markdown:
+    'Markdown renders through one of your templates. There is no built-in layout to fall back on, so an issue with no template will not send.',
+  json: 'JSON mode renders your data against the selected template.',
+  html: 'This issue is already rendered and sends as-is, so no template is used.',
+};
+
 interface FormData {
   subject: string;
   content: string;
@@ -1102,9 +1114,7 @@ export const IssueFormPage: React.FC = () => {
                 </p>
               )}
               <p className="mt-1 text-xs text-muted-foreground">
-                {formData.contentType === 'json'
-                  ? 'JSON mode renders your data against the selected template.'
-                  : 'Every issue renders through one of your templates. There is no built-in layout to fall back on, so an issue with no template will not send.'}
+                {TEMPLATE_HELP_TEXT[formData.contentType]}
               </p>
             </div>
 

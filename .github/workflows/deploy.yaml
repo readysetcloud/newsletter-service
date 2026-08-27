@@ -174,6 +174,26 @@ jobs:
           aws-region: us-east-1
           aws-access-key-id: ${{ secrets.PROD_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.PROD_SECRET_KEY }}
+      # Last point at which a human can intervene. publish-issue no longer falls
+      # back to a bundled default template, so an issue already committed to a
+      # send without a usable template will fail to publish - and the API and
+      # scheduling guards cannot help, because that send was committed before
+      # they existed. The script is read-only and exits non-zero on anything
+      # scheduled or executing without a resolvable template.
+      #
+      # It stays after this rollout as a cheap check on those guards: it should
+      # always pass, and a failure means one of them has a hole. Remove it if it
+      # ever blocks an unrelated deploy - it can only report, never repair.
+      - name: Check no committed send is missing its template
+        run: |
+          npm install --no-fund --no-audit
+          TABLE_NAME=$(aws cloudformation describe-stack-resource \
+            --stack-name newsletter-service \
+            --logical-resource-id NewsletterTable \
+            --query 'StackResourceDetail.PhysicalResourceId' \
+            --output text)
+          echo "Checking issues in ${TABLE_NAME}"
+          node scripts/check-issues-missing-template.mjs --table "${TABLE_NAME}"
       - name: SAM Build and Deploy
         run: |
           npm install -g esbuild

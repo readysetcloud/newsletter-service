@@ -32,6 +32,7 @@ The `content` must include the usual frontmatter (`title`, `date`).
 {
   "tenantId": "<your-tenant-id>",
   "email": "you@example.com",
+  "templateId": "<one-of-your-template-ids>",
   "content": "---\ntitle: Robot Voice Test\ndate: 2026-06-26\n---\n### A Section\n{{< robotVoice text=\"beep boop, I am a robot\" >}}"
 }
 ```
@@ -45,17 +46,27 @@ Fetches the file from the tenant's configured content repo (e.g.
 {
   "tenantId": "<your-tenant-id>",
   "email": "you@example.com",
+  "templateId": "<one-of-your-template-ids>",
   "fileName": "content/newsletter/123.md",
   "branchName": "main"
 }
 ```
 
+### Required fields
+
+| Field        | Notes                                                                 |
+| ------------ | --------------------------------------------------------------------- |
+| `tenantId`   | Tenant whose snippets, sender and templates are used.                 |
+| `email`      | The single recipient of the `[Preview]` email.                        |
+| `templateId` | Template to render through. There is no built-in default layout — a preview without one fails rather than rendering something the real send would never use. `GET /templates` lists the tenant's ids. |
+
+Supply exactly one of `content` or `fileName`.
+
 ### Optional fields
 
-| Field        | Default | Notes                                                       |
-| ------------ | ------- | ----------------------------------------------------------- |
-| `issueId`    | `999`   | Issue number used for metadata/links.                       |
-| `templateId` | `null`  | Tenant template id; `null` uses the default newsletter template. |
+| Field        | Default | Notes                                 |
+| ------------ | ------- | ------------------------------------- |
+| `issueId`    | `999`   | Issue number used for metadata/links. |
 
 ## Testing robotVoice specifically
 

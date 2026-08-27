@@ -57,11 +57,6 @@ const loadIsolated = async () => {
 
     jest.unstable_mockModule('@aws-sdk/util-dynamodb', () => ({ marshall, unmarshall }));
 
-    // Stub the static default template so default-path rendering is deterministic.
-    jest.unstable_mockModule('../templates/newsletter.hbs', () => ({
-      default: 'DEFAULT-TEMPLATE {{metadata.title}} #{{metadata.number}}'
-    }));
-
     jest.unstable_mockModule('../functions/utils/helpers.mjs', () => ({ getTenant }));
 
     jest.unstable_mockModule('../functions/utils/event-publisher.mjs', () => ({
@@ -78,6 +73,13 @@ const sampleData = {
   content: { sections: [] }
 };
 
+// The blocks below that are about something other than rendering — send config,
+// analytics dating, the subscriber snapshot — publish in html mode. A
+// pre-rendered master is sent verbatim, so those tests reach the code they are
+// about without having to answer a template read on the way, and none of them
+// asserts on the rendered body.
+const preRenderedData = { ...sampleData, __master: '<p>pre-rendered</p>' };
+
 const getSentHtml = () => {
   const call = eventBridgeSend.mock.calls.find(([cmd]) => cmd.__type === 'PutEvents');
   expect(call).toBeDefined();
@@ -92,8 +94,16 @@ describe('publish-issue', () => {
     await loadIsolated();
   });
 
-  describe('default fallback (no templateId)', () => {
-    it('uses the static newsletter template and never reads template/snippets from DynamoDB', async () => {
+  // There used to be a static newsletter template bundled with the Lambda that
+  // rendered whenever no template was selected. It is gone: an issue with no
+  // template is a failed publish, not a send in a layout nobody chose. The API
+  // refuses these on create (require_template_for_content_type in issues.rs);
+  // these two cases are the backstop for a template that disappears between
+  // scheduling and the send instant, which the lead time makes a real window.
+  describe('no template selected', () => {
+    it('fails the publish rather than rendering a default, and sends nothing', async () => {
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
       const result = await handler({
         data: sampleData,
         subject: 'Subject',
@@ -103,14 +113,12 @@ describe('publish-issue', () => {
         sendAtDate: 'now'
       });
 
-      expect(result).toEqual({ success: true });
-      // mocked hbs renders the static (mocked) template -> non-empty HTML produced
-      expect(getSentHtml()).toBeTruthy();
-      // No GetItem/Query for template loading should have occurred
-      const templateReads = ddbSend.mock.calls.filter(
-        ([cmd]) => cmd.__type === 'GetItem' || cmd.__type === 'Query'
-      );
-      expect(templateReads).toHaveLength(0);
+      // `success: false` is what the state machine's 'Publish Success?' choice
+      // routes to 'Record Publish Rejection' — the issue is marked failed.
+      expect(result).toEqual({ success: false });
+      expect(eventBridgeSend).not.toHaveBeenCalled();
+      expect(errorSpy.mock.calls[0][0].message).toContain('no templateId is set');
+      errorSpy.mockRestore();
     });
   });
 
@@ -142,11 +150,19 @@ describe('publish-issue', () => {
       // A json template whose data legitimately includes a __master field must
       // still be rendered through the template — the passthrough is gated on
       // contentType === 'html', not the presence of __master.
+      ddbSend.mockImplementation(async (cmd) => {
+        if (cmd.__type === 'GetItem' && cmd.Key.sk.S === 'template#tmpl-json') {
+          return { Item: marshall({ pk: 'tenant-1', sk: 'template#tmpl-json', content: 'T:{{metadata.title}}' }) };
+        }
+        return {};
+      });
+
       const result = await handler({
         data: { metadata: { number: 42, title: 'Test Issue' }, __master: 'SHOULD NOT BE SENT' },
         contentType: 'json',
         subject: 'Subject',
         tenantId: 'tenant-1',
+        templateId: 'tmpl-json',
         isPreview: true,
         email: 'preview@example.com',
         sendAtDate: 'now'
@@ -287,7 +303,9 @@ describe('publish-issue', () => {
   });
 
   describe('template not found', () => {
-    it('falls back to the default template when the templateId does not exist', async () => {
+    it('fails the publish when the templateId names a template the tenant does not have', async () => {
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
       ddbSend.mockImplementation(async (cmd) => {
         if (cmd.__type === 'GetItem') {
           return {}; // no Item
@@ -305,8 +323,10 @@ describe('publish-issue', () => {
         sendAtDate: 'now'
       });
 
-      expect(result).toEqual({ success: true });
-      expect(getSentHtml()).toBeTruthy();
+      expect(result).toEqual({ success: false });
+      expect(eventBridgeSend).not.toHaveBeenCalled();
+      expect(errorSpy.mock.calls[0][0].message).toContain("template 'does-not-exist' does not exist");
+      errorSpy.mockRestore();
     });
   });
 
@@ -329,7 +349,8 @@ describe('publish-issue', () => {
     };
 
     const publishEvent = {
-      data: sampleData,
+      data: preRenderedData,
+      contentType: 'html',
       subject: 'Subject',
       tenantId: 'tenant-1',
       sendAtDate: 'now'
@@ -601,7 +622,8 @@ describe('publish-issue', () => {
         .find((cmd) => cmd.__type === 'PutItem' && cmd.Item?.sk?.S === 'stats');
 
     const publishEvent = (sendAtDate) => ({
-      data: sampleData,
+      data: preRenderedData,
+      contentType: 'html',
       subject: 'Subject',
       tenantId: 'tenant-1',
       sendAtDate
@@ -720,7 +742,8 @@ describe('publish-issue', () => {
         .find((cmd) => cmd.__type === 'UpdateItem' && cmd.Key?.sk?.S === 'stats');
 
     const publishEvent = () => ({
-      data: sampleData,
+      data: preRenderedData,
+      contentType: 'html',
       subject: 'Subject',
       tenantId: 'tenant-1',
       sendAtDate: 'now'

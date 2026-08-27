@@ -28,8 +28,12 @@ import { getOctokit, getTenant } from './utils/helpers.mjs';
  *     "branchName": "main"
  *   }
  *
- * Optional fields: `issueId` (default 999), `templateId` (default null, which
- * uses the built-in default newsletter template).
+ * `templateId` is required: there is no built-in default layout any more, so a
+ * test email has to render through one of the tenant's templates - which is
+ * also the point, since a test that rendered through something the real send
+ * would never use is not a test of the real send.
+ *
+ * Optional fields: `issueId` (default 999).
  *
  * @param {Object} event
  * @param {string} event.tenantId - Tenant whose snippets/sender/template to use.
@@ -38,14 +42,15 @@ import { getOctokit, getTenant } from './utils/helpers.mjs';
  * @param {string} [event.fileName] - Path to a markdown file in the tenant's content repo.
  * @param {string} [event.branchName] - Optional branch/ref for the content-repo fetch.
  * @param {number} [event.issueId=999] - Issue number used for metadata/links.
- * @param {string|null} [event.templateId=null] - Optional tenant template id.
+ * @param {string} event.templateId - Tenant template id to render through.
  * @returns {Promise<{sent: boolean, to: string, subject: string, issueId: number}>}
  */
 export const handler = async (event) => {
-  const { tenantId, email, content, fileName, branchName, issueId = 999, templateId = null } = event ?? {};
+  const { tenantId, email, content, fileName, branchName, issueId = 999, templateId } = event ?? {};
 
   if (!tenantId) throw new Error('tenantId is required');
   if (!email) throw new Error('email is required');
+  if (!templateId) throw new Error('templateId is required');
   if (!content && !fileName) {
     throw new Error('Provide either "content" (raw markdown) or "fileName" (path in the content repo)');
   }
@@ -57,7 +62,7 @@ export const handler = async (event) => {
   const parsed = await parseMarkdown({ content: markdown, issueId, tenantId });
 
   // isPreview: true => single email to `email`, no list send, no scheduling.
-  await publishIssue({
+  const published = await publishIssue({
     data: parsed.data,
     subject: parsed.subject,
     isPreview: true,
@@ -65,6 +70,14 @@ export const handler = async (event) => {
     tenantId,
     templateId
   });
+
+  // publish-issue reports a render or send failure as `success: false` rather
+  // than throwing (the state machine reads it as a Choice). Without this check
+  // a template that does not exist would log "Sent preview" and return
+  // `sent: true` for an email nobody received.
+  if (!published?.success) {
+    throw new Error(`Failed to publish test email for tenant '${tenantId}' (template '${templateId}') - see the publish-issue logs`);
+  }
 
   console.log(`[TEST EMAIL] Sent preview of "${parsed.subject}" to ${email}`);
   return {

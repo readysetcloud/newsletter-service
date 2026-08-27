@@ -31,8 +31,16 @@ import type { Issue, CreateIssueRequest, UpdateIssueRequest, IssueContentType, A
 import type { TemplateSummary } from '@/types/api';
 import type { TimeZoneCoverage } from '@/types/subscribers';
 
-// Sentinel value used for the "Default template" option (no templateId persisted).
-const DEFAULT_TEMPLATE_VALUE = '';
+// The select's "nothing chosen yet" value. It is not a saveable choice: every
+// mode except `html` now requires a real template, because the publish pipeline
+// no longer has a built-in layout to fall back on. Kept as '' so clearing the
+// selection on an html issue still sends an empty templateId, which the API
+// reads as "clear it".
+const NO_TEMPLATE_VALUE = '';
+
+// Pre-rendered issues carry their own layout, so they are the one mode with
+// nothing for a template to do.
+const requiresTemplate = (contentType: IssueContentType) => contentType !== 'html';
 
 interface FormData {
   subject: string;
@@ -111,7 +119,7 @@ export const IssueFormPage: React.FC = () => {
     content: '',
     issueNumber: '',
     scheduledAt: '',
-    templateId: DEFAULT_TEMPLATE_VALUE,
+    templateId: NO_TEMPLATE_VALUE,
     contentType: 'markdown',
   });
 
@@ -244,7 +252,7 @@ export const IssueFormPage: React.FC = () => {
           content: issue.content,
           issueNumber: issue.issueNumber ? String(issue.issueNumber) : '',
           scheduledAt: issue.scheduledAt ? toDatetimeLocal(issue.scheduledAt) : '',
-          templateId: issue.templateId ?? DEFAULT_TEMPLATE_VALUE,
+          templateId: issue.templateId ?? NO_TEMPLATE_VALUE,
           // Preserve 'html' so editing a pre-rendered issue doesn't silently
           // flip it to markdown on save (which would send the raw master
           // through the markdown pipeline).
@@ -356,7 +364,9 @@ export const IssueFormPage: React.FC = () => {
           setTemplates(response.data.templates);
         }
       } catch (error) {
-        // Non-fatal: the picker simply falls back to the default template.
+        // The picker is left empty, which the required-template validation
+        // then blocks on - better than letting the author save an issue that
+        // has no template and cannot render.
         console.error('Failed to load templates:', error);
       }
     };
@@ -439,9 +449,14 @@ export const IssueFormPage: React.FC = () => {
     newErrors.issueNumber = validateField('issueNumber', formData.issueNumber || '');
     newErrors.scheduledAt = validateField('scheduledAt', formData.scheduledAt || '');
 
-    // JSON mode renders against a template, so a template selection is required.
-    if (formData.contentType === 'json' && !formData.templateId) {
-      newErrors.templateId = 'Select a template to render the JSON data';
+    // Markdown is parsed into structured data and JSON arrives as data; neither
+    // is an email until a template renders it, and there is no default template
+    // behind them any more — the API rejects the issue and the send fails.
+    if (requiresTemplate(formData.contentType) && !formData.templateId) {
+      newErrors.templateId =
+        formData.contentType === 'json'
+          ? 'Select a template to render the JSON data'
+          : 'Select a template to render this issue';
     }
 
     setErrors(newErrors);
@@ -522,9 +537,11 @@ export const IssueFormPage: React.FC = () => {
           updateData.scheduledAt = fromDatetimeLocalInTimeZone(formData.scheduledAt, timeZone);
         }
 
-        // Always send templateId so selecting "Default template" (empty value)
-        // clears a previously-saved template instead of leaving it in place.
-        updateData.templateId = formData.templateId ?? DEFAULT_TEMPLATE_VALUE;
+        // Always send templateId so clearing the selection on a pre-rendered
+        // html issue actually clears the saved template instead of leaving it
+        // in place. For every other mode the validation above has already
+        // guaranteed a real value here.
+        updateData.templateId = formData.templateId ?? NO_TEMPLATE_VALUE;
 
         if (abTest) {
           updateData.abTest = buildAbTestRequest(abTest, timeZone);
@@ -1060,18 +1077,18 @@ export const IssueFormPage: React.FC = () => {
             {/* Template Picker */}
             <div>
               <label htmlFor="templateId" className="block text-sm font-medium text-foreground mb-2">
-                {formData.contentType === 'json' ? 'Template *' : 'Template (Optional)'}
+                {requiresTemplate(formData.contentType) ? 'Template *' : 'Template (Optional)'}
               </label>
               <select
                 id="templateId"
-                value={formData.templateId ?? DEFAULT_TEMPLATE_VALUE}
+                value={formData.templateId ?? NO_TEMPLATE_VALUE}
                 onChange={(e) => handleInputChange('templateId', e.target.value)}
                 disabled={isFormDisabled}
                 aria-invalid={!!errors.templateId}
                 className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <option value={DEFAULT_TEMPLATE_VALUE}>
-                  {formData.contentType === 'json' ? 'Select a template…' : 'Default template'}
+                <option value={NO_TEMPLATE_VALUE}>
+                  {requiresTemplate(formData.contentType) ? 'Select a template…' : 'No template'}
                 </option>
                 {templates.map((template) => (
                   <option key={template.templateId} value={template.templateId}>
@@ -1087,7 +1104,7 @@ export const IssueFormPage: React.FC = () => {
               <p className="mt-1 text-xs text-muted-foreground">
                 {formData.contentType === 'json'
                   ? 'JSON mode renders your data against the selected template.'
-                  : 'Choose a template to render this issue. Leave as “Default template” to use the built-in newsletter layout.'}
+                  : 'Every issue renders through one of your templates. There is no built-in layout to fall back on, so an issue with no template will not send.'}
               </p>
             </div>
 

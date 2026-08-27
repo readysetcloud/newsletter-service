@@ -1,5 +1,3 @@
-import Handlebars from 'handlebars';
-import defaultTemplate from '../templates/newsletter.hbs';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { DynamoDBClient, PutItemCommand, GetItemCommand, QueryCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { getTenant } from './utils/helpers.mjs';
@@ -168,29 +166,40 @@ export const handler = async (state) => {
 };
 
 /**
- * Renders the issue data into HTML.
+ * Renders the issue data into HTML using the tenant's selected template.
  *
- * When a templateId is supplied, the tenant's selected template is loaded from
- * DynamoDB along with the tenant's snippets (registered as Handlebars partials).
- * Any partial referenced by the template that is missing is registered as an
- * empty string so a missing snippet never fails the send.
+ * The template is loaded from DynamoDB along with the tenant's snippets
+ * (registered as Handlebars partials). Any partial referenced by the template
+ * that is missing is registered as an empty string so a missing snippet never
+ * fails the send.
  *
- * When no templateId is supplied, the static default newsletter template is used.
+ * There is deliberately no fallback. This used to render a static default
+ * template bundled with the Lambda whenever the templateId was absent or named
+ * a template that no longer existed - which meant the failure mode of a
+ * mis-typed or deleted template was the whole list receiving a layout nobody
+ * chose, under someone else's branding, with nothing to signal it had happened.
+ * Throwing instead surfaces as `success: false`, which the state machine's
+ * 'Publish Success?' choice routes to 'Record Publish Rejection': the issue is
+ * marked failed and nothing is mailed. The API refuses a non-html issue with no
+ * template up front (`require_template_for_content_type` in issues.rs), so this
+ * is the backstop for the window between scheduling and sending - with a
+ * multi-hour send lead time, a template can be deleted after an issue is
+ * accepted and before it renders.
  *
  * @param {Object} data - Issue data to render against.
- * @param {string} [tenantId] - Tenant identifier (required when templateId is set).
- * @param {string} [templateId] - Optional selected template identifier.
+ * @param {string} tenantId - Tenant identifier.
+ * @param {string} templateId - Selected template identifier.
  * @returns {Promise<string>} Rendered HTML.
+ * @throws {Error} When no templateId is set, or it names a template the tenant does not have.
  */
 const renderTemplate = async (data, tenantId, templateId) => {
   if (!templateId) {
-    return Handlebars.compile(defaultTemplate)(data);
+    throw new Error(`Cannot render issue for tenant '${tenantId}': no templateId is set`);
   }
 
   const templateContent = await getTemplateContent(tenantId, templateId);
   if (!templateContent) {
-    console.warn(`Template '${templateId}' not found for tenant '${tenantId}', falling back to default template`);
-    return Handlebars.compile(defaultTemplate)(data);
+    throw new Error(`Cannot render issue for tenant '${tenantId}': template '${templateId}' does not exist`);
   }
 
   const snippets = await getSnippets(tenantId);

@@ -80,25 +80,37 @@ vi.mock('@/components/issues/MarkdownWysiwygEditor', () => ({
   ),
 }));
 
+// Every non-html issue has to name a template now — there is no built-in layout
+// left to fall back on — so the picker is part of a completable form, and the
+// blocks below that are about something else still have to answer it.
+const templateOptions = {
+  success: true as const,
+  data: {
+    total: 1,
+    templates: [
+      {
+        templateId: 'tmpl-1',
+        name: 'Weekly Template',
+        version: 1,
+        createdAt: '2025-01-01T00:00:00Z',
+        updatedAt: '2025-01-01T00:00:00Z',
+      },
+    ],
+  },
+};
+
+const selectTemplate = async () => {
+  await waitFor(() => {
+    expect(screen.getByRole('option', { name: 'Weekly Template' })).toBeInTheDocument();
+  });
+  fireEvent.change(screen.getByLabelText(/template \*/i), { target: { value: 'tmpl-1' } });
+};
+
 describe('IssueFormPage authoring modes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockParams = {};
-    vi.mocked(templateService.listTemplates).mockResolvedValue({
-      success: true,
-      data: {
-        total: 1,
-        templates: [
-          {
-            templateId: 'tmpl-1',
-            name: 'Weekly Template',
-            version: 1,
-            createdAt: '2025-01-01T00:00:00Z',
-            updatedAt: '2025-01-01T00:00:00Z',
-          },
-        ],
-      },
-    });
+    vi.mocked(templateService.listTemplates).mockResolvedValue(templateOptions);
   });
 
   it('defaults to markdown mode and creates a markdown issue', async () => {
@@ -116,6 +128,11 @@ describe('IssueFormPage authoring modes', () => {
       target: { value: '# My content' },
     });
 
+    await waitFor(() => {
+      expect(screen.getByRole('option', { name: 'Weekly Template' })).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByLabelText(/template \*/i), { target: { value: 'tmpl-1' } });
+
     fireEvent.click(screen.getByRole('button', { name: /create new issue/i }));
 
     await waitFor(() => {
@@ -124,9 +141,32 @@ describe('IssueFormPage authoring modes', () => {
           subject: 'Hello World',
           content: '# My content',
           contentType: 'markdown',
+          templateId: 'tmpl-1',
         })
       );
     });
+  });
+
+  // Markdown used to be sendable with no template, rendering against a static
+  // default bundled with the publish Lambda. That default is gone — the API
+  // returns a 400 and the send fails — so the form has to ask for a template
+  // here rather than let the author find out at send time.
+  it('requires a template in markdown mode', async () => {
+    render(<IssueFormPage />);
+
+    fireEvent.change(screen.getByPlaceholderText('Enter issue subject'), {
+      target: { value: 'Hello World' },
+    });
+    fireEvent.change(screen.getByTestId('wysiwyg'), {
+      target: { value: '# My content' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /create new issue/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/select a template to render this issue/i)).toBeInTheDocument();
+    });
+    expect(issuesService.createIssue).not.toHaveBeenCalled();
   });
 
   it('requires a template when switching to JSON mode', async () => {
@@ -188,6 +228,52 @@ describe('IssueFormPage authoring modes', () => {
     });
   });
 
+  // A pre-rendered html issue sends verbatim, so the picker is optional here and
+  // the help text has to say so rather than warning that the issue will not
+  // send. The mode toggle offers only markdown and json — html reaches the form
+  // solely by loading an existing pre-rendered issue — so this goes via edit
+  // mode.
+  it('treats a pre-rendered html issue as template-optional', async () => {
+    mockParams = { id: '7' };
+    vi.mocked(issuesService.getIssue).mockResolvedValue({
+      success: true,
+      data: {
+        id: '7',
+        issueNumber: 7,
+        subject: 'Pre-rendered',
+        content: '<p>already rendered</p>',
+        status: 'draft',
+        contentType: 'html',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      } as never,
+    });
+    vi.mocked(issuesService.updateIssue).mockResolvedValue({
+      success: true,
+      data: { id: '7' } as never,
+    });
+
+    render(<IssueFormPage />);
+
+    expect(await screen.findByLabelText(/template \(optional\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/already rendered and sends as-is/i)).toBeInTheDocument();
+    expect(screen.queryByText(/will not send/i)).not.toBeInTheDocument();
+
+    // And it saves with no template selected, which markdown and json cannot.
+    // The submit button only enables once the form is dirty, hence the edit.
+    fireEvent.change(screen.getByPlaceholderText('Enter issue subject'), {
+      target: { value: 'Pre-rendered, renamed' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /update issue/i }));
+
+    await waitFor(() => {
+      expect(issuesService.updateIssue).toHaveBeenCalledWith(
+        '7',
+        expect.objectContaining({ contentType: 'html', templateId: '' })
+      );
+    });
+  });
+
   it('blocks invalid JSON in json mode', async () => {
     render(<IssueFormPage />);
 
@@ -217,10 +303,7 @@ describe('IssueFormPage local send', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockParams = {};
-    vi.mocked(templateService.listTemplates).mockResolvedValue({
-      success: true,
-      data: { total: 0, templates: [] },
-    });
+    vi.mocked(templateService.listTemplates).mockResolvedValue(templateOptions);
     vi.mocked(issuesService.createIssue).mockResolvedValue({
       success: true,
       data: { id: '1' } as never,
@@ -231,18 +314,19 @@ describe('IssueFormPage local send', () => {
     });
   });
 
-  const fillRequiredFields = () => {
+  const fillRequiredFields = async () => {
     fireEvent.change(screen.getByPlaceholderText('Enter issue subject'), {
       target: { value: 'Issue with local send' },
     });
     fireEvent.change(screen.getByTestId('wysiwyg'), {
       target: { value: '# Content' },
     });
+    await selectTemplate();
   };
 
   it('omits localSend when the toggle is off', async () => {
     render(<IssueFormPage />);
-    fillRequiredFields();
+    await fillRequiredFields();
 
     fireEvent.click(screen.getByRole('button', { name: /create new issue/i }));
 
@@ -255,7 +339,7 @@ describe('IssueFormPage local send', () => {
 
   it('sends localSend with the chosen default timezone when enabled', async () => {
     render(<IssueFormPage />);
-    fillRequiredFields();
+    await fillRequiredFields();
 
     fireEvent.click(screen.getByRole('checkbox', { name: /local send/i }));
 
@@ -301,7 +385,7 @@ describe('IssueFormPage local send', () => {
 
   it('persists peak-hour mode when the personal best hour option is selected', async () => {
     render(<IssueFormPage />);
-    fillRequiredFields();
+    await fillRequiredFields();
 
     fireEvent.click(screen.getByRole('checkbox', { name: /local send/i }));
     fireEvent.click(screen.getByRole('radio', { name: /personal best hour/i }));
@@ -449,7 +533,7 @@ describe('IssueFormPage local send', () => {
       error: 'boom',
     });
     render(<IssueFormPage />);
-    fillRequiredFields();
+    await fillRequiredFields();
 
     fireEvent.click(screen.getByRole('checkbox', { name: /local send/i }));
 
@@ -469,7 +553,7 @@ describe('IssueFormPage local send', () => {
 
   it('switching back to timezone mode persists mode timezone', async () => {
     render(<IssueFormPage />);
-    fillRequiredFields();
+    await fillRequiredFields();
 
     fireEvent.click(screen.getByRole('checkbox', { name: /local send/i }));
     fireEvent.click(screen.getByRole('radio', { name: /personal best hour/i }));
@@ -496,15 +580,13 @@ describe('IssueFormPage personalized section order (contentAssembly)', () => {
     status: 'draft' as const,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
+    templateId: 'tmpl-1',
   };
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockParams = {};
-    vi.mocked(templateService.listTemplates).mockResolvedValue({
-      success: true,
-      data: { total: 0, templates: [] },
-    });
+    vi.mocked(templateService.listTemplates).mockResolvedValue(templateOptions);
   });
 
   it('creates an issue with contentAssembly when the checkbox is ticked', async () => {
@@ -521,6 +603,7 @@ describe('IssueFormPage personalized section order (contentAssembly)', () => {
     fireEvent.change(screen.getByTestId('wysiwyg'), {
       target: { value: '# Content' },
     });
+    await selectTemplate();
     fireEvent.click(screen.getByRole('checkbox', { name: /personalized section order/i }));
 
     fireEvent.click(screen.getByRole('button', { name: /create new issue/i }));
@@ -551,6 +634,7 @@ describe('IssueFormPage personalized section order (contentAssembly)', () => {
     fireEvent.change(screen.getByTestId('wysiwyg'), {
       target: { value: '# Content' },
     });
+    await selectTemplate();
 
     fireEvent.click(screen.getByRole('button', { name: /create new issue/i }));
 
@@ -686,10 +770,7 @@ describe('IssueFormPage tenant timezone', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockParams = { id: '5' };
-    vi.mocked(templateService.listTemplates).mockResolvedValue({
-      success: true,
-      data: { total: 0, templates: [] },
-    });
+    vi.mocked(templateService.listTemplates).mockResolvedValue(templateOptions);
     vi.mocked(issuesService.getIssue).mockResolvedValue({
       success: true,
       data: scheduledIssue as never,

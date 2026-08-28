@@ -404,8 +404,8 @@ const getAuthor = async (metadataAuthor) => {
 /**
  * Loads all snippets for a tenant via GSI1 (mirrors the read in publish-issue).
  * Returns an empty list when no tenant is supplied so the body bridge falls back
- * to hardcoded blocks only — keeping older invocations and the default template
- * path working unchanged.
+ * to hardcoded blocks only — keeping invocations that carry no tenant working
+ * unchanged.
  * @param {string} [tenantId] - Tenant identifier.
  * @returns {Promise<Array<{name?: string, content?: string, parameters?: Array}>>}
  */

@@ -1949,9 +1949,10 @@ async fn handle_create_issue(event: Request) -> Result<Response<Body>, AppError>
     let mut body: CreateIssueRequest = serde_json::from_slice(event.body())
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
 
-    // Treat an empty/whitespace templateId as "no template selected" so the
-    // default template is used and nothing is persisted (or threaded to the
-    // state machine).
+    // Collapse an empty/whitespace templateId to "no template selected", so
+    // one shape reaches validation and nothing empty is persisted (or threaded
+    // to the state machine). For every mode but `html` the validation below
+    // then rejects it.
     if body
         .template_id
         .as_deref()
@@ -2299,6 +2300,27 @@ async fn handle_update_issue(
         }
     } else {
         check_update_allowed(&existing)?;
+    }
+
+    // Checked against what the record will look like *after* the write, not
+    // against the request alone: clearing the template and switching a
+    // pre-rendered html issue to markdown both arrive at "no template" from
+    // different directions. Scoped to requests that actually touch one of the
+    // two, so a status transition or a content edit still works on an issue
+    // created before a template was required - `start_issue_schedule` refuses
+    // those before they can mail.
+    if body.template_id.is_some() || body.content_type.is_some() {
+        let effective_content_type = normalize_content_type(
+            body.content_type
+                .as_deref()
+                .or(existing.content_type.as_deref()),
+        );
+        let effective_template_id = match body.template_id.as_deref() {
+            Some(template_id) if template_id.trim().is_empty() => None,
+            Some(template_id) => Some(template_id),
+            None => existing.template_id.as_deref(),
+        };
+        require_template_for_content_type(&effective_content_type, effective_template_id)?;
     }
 
     let is_publishing = body.status.as_deref() == Some("published");
@@ -2975,14 +2997,11 @@ fn validate_create_request(body: &CreateIssueRequest) -> Result<(), AppError> {
         return Err(AppError::BadRequest("Content is required".to_string()));
     }
 
-    if normalize_content_type(body.content_type.as_deref()) == CONTENT_TYPE_JSON {
+    let content_type = normalize_content_type(body.content_type.as_deref());
+    if content_type == CONTENT_TYPE_JSON {
         validate_json_content(&body.content)?;
-        if body.template_id.is_none() {
-            return Err(AppError::BadRequest(
-                "A templateId is required when contentType is \"json\"".to_string(),
-            ));
-        }
     }
+    require_template_for_content_type(&content_type, body.template_id.as_deref())?;
 
     if let Some(ttl_seconds) = body.ttl_seconds {
         if ttl_seconds < 1 {
@@ -3937,6 +3956,74 @@ async fn get_issue_status(tenant_id: &str, issue_number: i32) -> Result<Option<S
     }))
 }
 
+/// Rejects an issue that would have to render without a template.
+///
+/// `markdown` is parsed into structured data and `json` arrives as data; in
+/// neither case is there an email until a tenant template turns it into one.
+/// Only `html` is exempt, because those issues arrive pre-rendered and bring
+/// their own layout.
+///
+/// This was a `json`-only rule until the publish pipeline stopped falling back
+/// to a static default template bundled with the Lambda. That fallback quietly
+/// mailed a layout nobody chose - to the whole list - whenever a markdown issue
+/// had no template, so it is gone, and a template that is absent at send time
+/// now fails the publish. The requirement therefore has to be a 400 here, at
+/// the boundary where the author can still fix it, rather than a failed send
+/// hours later.
+fn require_template_for_content_type(
+    content_type: &str,
+    template_id: Option<&str>,
+) -> Result<(), AppError> {
+    if content_type == CONTENT_TYPE_HTML {
+        return Ok(());
+    }
+
+    if template_id.map(|t| t.trim().is_empty()).unwrap_or(true) {
+        return Err(AppError::BadRequest(format!(
+            "A templateId is required when contentType is \"{}\"",
+            content_type
+        )));
+    }
+
+    Ok(())
+}
+
+/// The send-time form of the template check: named *and* still there.
+///
+/// `require_template_for_content_type` on its own only proves a templateId was
+/// set, which is enough on create - the create path validates existence in the
+/// same request. It is not enough here. Resend and reschedule both start from a
+/// stored record that nothing has re-validated since it was written, so a
+/// template deleted in between would be accepted, committed to a send, and then
+/// fail inside `publish-issue` hours later - exactly the late failure this is
+/// meant to move earlier.
+///
+/// This costs the create-and-schedule path a second `GetItem` on a template it
+/// validated moments before. That is the price of resend and reschedule getting
+/// the same guarantee without a special case, on a path that runs once per
+/// issue.
+///
+/// The publish-time refusal still stands behind this: it covers deletion after
+/// the send is committed, which nothing checked here can.
+async fn validate_template_for_send(
+    tenant_id: &str,
+    content_type: &str,
+    template_id: Option<&str>,
+) -> Result<(), AppError> {
+    require_template_for_content_type(content_type, template_id)?;
+
+    // Only where it will actually be rendered through. An html issue may carry
+    // a stale templateId harmlessly - its master is sent verbatim - and
+    // refusing the send over an attribute nothing reads would be a false alarm.
+    if content_type != CONTENT_TYPE_HTML {
+        if let Some(template_id) = template_id {
+            validate_template_exists(tenant_id, template_id).await?;
+        }
+    }
+
+    Ok(())
+}
+
 async fn validate_template_exists(tenant_id: &str, template_id: &str) -> Result<(), AppError> {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
@@ -4196,6 +4283,12 @@ fn build_execution_input(input: &IssueScheduleInput<'_>) -> serde_json::Value {
 /// lead time. The rollback that remains is `ISSUE_SEND_LEAD_TIME_MINUTES: 0`,
 /// which restores an execution that starts at the send instant.
 async fn start_issue_schedule(input: IssueScheduleInput<'_>) -> Result<(), AppError> {
+    // The last refusal before an issue is committed to a send. Create and
+    // update both enforce this, but neither can speak for an issue drafted
+    // before the rule existed, or for a template deleted since - and both
+    // resend and reschedule start from a stored record.
+    validate_template_for_send(input.tenant_id, input.content_type, input.template_id).await?;
+
     let execution_input = build_execution_input(&input);
 
     match input.scheduled_at {
@@ -4383,6 +4476,12 @@ async fn reschedule_issue_send(
     input: &IssueScheduleInput<'_>,
     scheduled_at: &str,
 ) -> Result<(), AppError> {
+    // The last refusal before an issue is committed to a send. Create and
+    // update both enforce this, but neither can speak for an issue drafted
+    // before the rule existed, or for a template deleted since - and both
+    // resend and reschedule start from a stored record.
+    validate_template_for_send(input.tenant_id, input.content_type, input.template_id).await?;
+
     let execution_input = build_execution_input(input);
 
     let send_instant = chrono::DateTime::parse_from_rfc3339(scheduled_at)
@@ -5163,7 +5262,9 @@ async fn update_issue_record(
 
     if let Some(template_id) = &body.template_id {
         if template_id.trim().is_empty() {
-            // Empty value clears the selection, reverting to the default template.
+            // Empty value clears the selection. Only html issues can survive
+            // that - `handle_update_issue` rejects it for every other mode,
+            // since there is no default template to fall back to any more.
             remove_expression_parts.push("templateId".to_string());
         } else {
             update_expression_parts.push("templateId = :template_id".to_string());
@@ -6077,12 +6178,66 @@ Thanks!"#;
 
     #[test]
     fn test_validate_create_markdown_ignores_json_rules() {
-        // Markdown content need not be JSON and needs no template.
-        let body = create_request("# Hello", None, None);
+        // Markdown content need not be JSON — but, like json, it has to name a
+        // template, since markdown is parsed into data and is not an email
+        // until a template renders it.
+        let body = create_request("# Hello", None, Some("tmpl-1"));
         assert!(validate_create_request(&body).is_ok());
 
-        let body = create_request("# Hello", Some("markdown"), None);
+        let body = create_request("# Hello", Some("markdown"), Some("tmpl-1"));
         assert!(validate_create_request(&body).is_ok());
+    }
+
+    /// The regression this pins: markdown with no template used to be accepted
+    /// and then rendered against a static default bundled with the publish
+    /// Lambda, so a mis-typed or unset template mailed the whole list a layout
+    /// the tenant never chose. The default is gone, so this is a 400.
+    #[test]
+    fn test_validate_create_markdown_requires_template() {
+        for content_type in [None, Some("markdown"), Some("")] {
+            let body = create_request("# Hello", content_type, None);
+            let err = validate_create_request(&body).unwrap_err();
+            assert!(matches!(err, AppError::BadRequest(_)), "{content_type:?}");
+        }
+    }
+
+    /// A whitespace-only templateId is the same request as no templateId. The
+    /// create handler normalizes it to `None` before validating, so this pins
+    /// the helper the handler and the send-time guards share.
+    #[test]
+    fn test_require_template_rejects_blank_template_id() {
+        assert!(require_template_for_content_type(CONTENT_TYPE_MARKDOWN, Some("   ")).is_err());
+        assert!(require_template_for_content_type(CONTENT_TYPE_MARKDOWN, None).is_err());
+        assert!(require_template_for_content_type(CONTENT_TYPE_JSON, Some("")).is_err());
+    }
+
+    /// html issues arrive pre-rendered and are sent verbatim, so they are the
+    /// one mode with nothing for a template to do.
+    #[test]
+    fn test_require_template_exempts_html() {
+        assert!(require_template_for_content_type(CONTENT_TYPE_HTML, None).is_ok());
+        assert!(require_template_for_content_type(CONTENT_TYPE_HTML, Some("")).is_ok());
+        assert!(require_template_for_content_type(CONTENT_TYPE_HTML, Some("tmpl-1")).is_ok());
+    }
+
+    #[test]
+    fn test_require_template_accepts_a_named_template() {
+        assert!(require_template_for_content_type(CONTENT_TYPE_MARKDOWN, Some("tmpl-1")).is_ok());
+        assert!(require_template_for_content_type(CONTENT_TYPE_JSON, Some("tmpl-1")).is_ok());
+    }
+
+    /// The message names the mode the caller actually sent, so a markdown issue
+    /// does not get told it failed a rule about json.
+    #[test]
+    fn test_require_template_error_names_the_content_type() {
+        let err = require_template_for_content_type(CONTENT_TYPE_MARKDOWN, None).unwrap_err();
+        match err {
+            AppError::BadRequest(message) => assert!(
+                message.contains("markdown"),
+                "expected the markdown mode in the message, got: {message}"
+            ),
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
     }
 
     #[test]
@@ -6985,7 +7140,7 @@ Thanks!"#;
             scheduled_at: None,
             action: None,
             metadata: None,
-            template_id: None,
+            template_id: Some("tmpl-1".to_string()),
             content_type: None,
             ttl_seconds: None,
         };
@@ -7034,7 +7189,7 @@ Thanks!"#;
 
     #[test]
     fn test_validate_create_request_ttl_seconds_valid() {
-        let mut request = create_request("# Test Content", None, None);
+        let mut request = create_request("# Test Content", None, Some("tmpl-1"));
         request.ttl_seconds = Some(3600);
 
         assert!(validate_create_request(&request).is_ok());

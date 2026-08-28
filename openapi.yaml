@@ -3832,11 +3832,15 @@ components:
             selected template.
         contentType:
           type: string
-          enum: [markdown, json]
+          enum: [markdown, json, html]
           default: markdown
           description: >-
-            How content should be interpreted. "json" requires a templateId and
-            the content must be a JSON object.
+            How content should be interpreted. "markdown" is converted to
+            structured data and rendered against the issue's template. "json" is
+            the same, with the content supplied as a JSON object directly.
+            "html" is a pre-rendered master that is sent verbatim, so it is the
+            one mode that needs no template. Both "markdown" and "json" require
+            a templateId.
         scheduledAt:
           type: string
           description: >-
@@ -3860,7 +3864,12 @@ components:
           description: Optional metadata for the issue
         templateId:
           type: string
-          description: Optional identifier of the template to render this issue with. When omitted, the default template is used. Required when contentType is "json".
+          description: >-
+            Identifier of the template to render this issue with. Required for
+            every contentType except "html" — there is no built-in default
+            layout, and an issue with no template is rejected rather than sent
+            in a layout the tenant did not choose. Optional (and unused) for
+            "html", which arrives pre-rendered.
         ttlSeconds:
           type: integer
           minimum: 1
@@ -3908,10 +3917,10 @@ components:
             the publish workflow starts at the send time.
         content:
           type: string
-          description: Issue content (markdown or JSON depending on contentType)
+          description: Issue content (markdown, JSON or pre-rendered HTML depending on contentType)
         contentType:
           type: string
-          enum: [markdown, json]
+          enum: [markdown, json, html]
           description: How the issue content is interpreted
         createdAt:
           type: string
@@ -3970,10 +3979,10 @@ components:
           description: Optional metadata for the issue
         templateId:
           type: string
-          description: Identifier of the template used to render this issue (omitted when the default template is used)
+          description: Identifier of the template this issue renders through (omitted only for pre-rendered "html" issues)
         contentType:
           type: string
-          enum: [markdown, json]
+          enum: [markdown, json, html]
           description: How the issue content is interpreted
         stats:
           $ref: "#/components/schemas/IssueStats"
@@ -4197,13 +4206,15 @@ components:
           description: Issue subject
         content:
           type: string
-          description: Issue content (markdown or JSON depending on contentType)
+          description: Issue content (markdown, JSON or pre-rendered HTML depending on contentType)
         contentType:
           type: string
-          enum: [markdown, json]
+          enum: [markdown, json, html]
           description: >-
             How content should be interpreted. When set to "json" any supplied
-            content must be a JSON object.
+            content must be a JSON object. Switching an issue to "markdown" or
+            "json" requires it to have a template, either already saved or set
+            in the same request.
         scheduledAt:
           type: string
           description: >-
@@ -4217,7 +4228,11 @@ components:
           description: Optional metadata for the issue
         templateId:
           type: string
-          description: Optional identifier of the template to render this issue with. When omitted, the default template is used.
+          description: >-
+            Identifier of the template to render this issue with. Omit to leave
+            the saved selection alone; send an empty string to clear it, which
+            is only accepted for pre-rendered "html" issues since every other
+            mode needs a template to render at all.
         status:
           type: string
           enum:

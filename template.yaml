@@ -2473,6 +2473,10 @@ Resources:
       Runtime: nodejs24.x
       CodeUri: functions
       Handler: send-test-email.handler
+      # The GitHub read this used to do is gone (it took a markdown file path
+      # and fetched it from the tenant's content repo), and with it the SSM
+      # parameter and Secrets Manager grants that fetched the credential. What
+      # is left is the same access the real publish path has.
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -2488,16 +2492,9 @@ Resources:
             - Effect: Allow
               Action: dynamodb:Query
               Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NewsletterTable}/index/GSI1
-            - Effect: Allow
-              Action: ssm:GetParameter
-              Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/rsc/*
-            - Effect: Allow
-              Action: secretsmanager:GetSecretValue
-              Resource: "{{resolve:ssm:/readysetcloud/secrets}}"
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
-          SECRET_ID: "{{resolve:ssm:/readysetcloud/secrets}}"
 
   ParseJsonIssueFunction:
     Type: AWS::Serverless::Function

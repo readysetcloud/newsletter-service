@@ -1,15 +1,36 @@
 import { DynamoDBClient, QueryCommand, PutItemCommand, DeleteItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
-import { getOctokit } from "./utils/helpers.mjs";
+import { getSecret } from '@aws-lambda-powertools/parameters/secrets';
+import { Octokit } from 'octokit';
 
 const ddb = new DynamoDBClient();
 let octokit;
 
+/**
+ * The one place left in the service that talks to GitHub.
+ *
+ * This used to come from a shared `getOctokit` in `utils/helpers.mjs`, which
+ * every Lambda importing helpers dragged the octokit SDK and the Powertools
+ * parameter clients in for. Worse, that helper had a tenant-aware branch behind
+ * a module-level singleton: the first tenant to warm a container installed its
+ * own GitHub credential for every tenant after it. Nothing needs a per-tenant
+ * credential any more - issues arrive through the API - so the branch is gone
+ * and the client lives here, with the single shared credential it actually uses.
+ *
+ * Read-only by construction: the only request below is a `GET` of a data file.
+ */
+const getOctokit = async () => {
+  if (!octokit) {
+    const secrets = await getSecret(process.env.SECRET_ID, { transform: 'json' });
+    octokit = new Octokit({ auth: secrets.github });
+  }
+
+  return octokit;
+};
+
 export const handler = async (event) => {
   try {
-    if (!octokit) {
-      octokit = await getOctokit();
-    }
+    await getOctokit();
 
     const dataTypes = getDataTypes();
     await Promise.all(dataTypes.map(async dt => await syncFile(dt)));

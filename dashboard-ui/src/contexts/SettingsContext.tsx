@@ -107,26 +107,42 @@ export function SettingsProvider({ children }: SettingsProviderProps) {
     setResponse(result.data);
   }, []);
 
-  const value = useMemo<SettingsContextValue>(() => {
-    const configured = response?.configured ?? [];
-    const settings = response?.settings ?? FALLBACK_SETTINGS;
-    const isTimeZoneInferred = !configured.includes('timezone');
+  const configured = useMemo(() => response?.configured ?? [], [response]);
+  const isTimeZoneInferred = !configured.includes('timezone');
 
-    return {
-      // Substituting the browser zone only changes how instants are *rendered*
-      // — the instant itself is whatever the API returned. Once the tenant
-      // saves a zone, their choice wins everywhere.
-      settings: isTimeZoneInferred ? { ...settings, timezone: getBrowserTimeZone() } : settings,
-      defaults: response?.defaults ?? FALLBACK_SETTINGS,
-      configured,
-      isTimeZoneInferred,
-      updatedAt: response?.updatedAt,
-      isLoading,
-      error,
-      refresh: load,
-      save
-    };
-  }, [response, isLoading, error, load, save]);
+  /**
+   * Derived from `response` alone, deliberately.
+   *
+   * Consumers treat a change of this object's identity as "the tenant's
+   * settings changed" — SettingsPage resets its whole form on it. Building it
+   * inside the context-value memo made it a new object every time `isLoading`
+   * or `error` moved, so merely starting a refresh re-seeded an open form and
+   * discarded the edits and validation errors in it. Only a new `response` is
+   * a real change.
+   *
+   * Substituting the browser zone only changes how instants are *rendered* —
+   * the instant itself is whatever the API returned. Once the tenant saves a
+   * zone, their choice wins everywhere.
+   */
+  const settings = useMemo(
+    () => {
+      const base = response?.settings ?? FALLBACK_SETTINGS;
+      return isTimeZoneInferred ? { ...base, timezone: getBrowserTimeZone() } : base;
+    },
+    [response, isTimeZoneInferred]
+  );
+
+  const value = useMemo<SettingsContextValue>(() => ({
+    settings,
+    defaults: response?.defaults ?? FALLBACK_SETTINGS,
+    configured,
+    isTimeZoneInferred,
+    updatedAt: response?.updatedAt,
+    isLoading,
+    error,
+    refresh: load,
+    save
+  }), [settings, response, configured, isTimeZoneInferred, isLoading, error, load, save]);
 
   return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>;
 }

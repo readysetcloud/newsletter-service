@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ClockIcon, EnvelopeIcon, GlobeAltIcon, LinkIcon } from '@heroicons/react/24/outline';
 import { Button } from '@/components/ui/Button';
 import { cn } from '@/utils/cn';
@@ -56,17 +56,28 @@ export function SettingsPage() {
   const [errors, setErrors] = useState<Partial<Record<keyof TenantSettingsFormData, string>>>({});
   const [isSaving, setIsSaving] = useState(false);
 
-  // Adopt whatever the provider settles on (initial load, or a refresh). The
-  // provider already substitutes the browser zone when the tenant has never
-  // picked one, so an unconfigured newsletter opens on a sensible suggestion
-  // that one Save turns into a real setting.
-  useEffect(() => {
+  /**
+   * Adopt whatever the provider settles on (initial load, or a refresh). The
+   * provider already substitutes the browser zone when the tenant has never
+   * picked one, so an unconfigured newsletter opens on a sensible suggestion
+   * that one Save turns into a real setting.
+   *
+   * Done during render rather than in an effect. An effect runs *after* the
+   * commit, so the load resolving published one render of a fully interactive
+   * form still holding the pre-load values, with the re-seed queued behind it.
+   * Anything typed into that render — or any validation error raised from it —
+   * was silently thrown away a tick later, and the Save button flipped back to
+   * disabled because the form no longer looked dirty. Adjusting state during
+   * render lets React re-run this component before anyone sees the DOM, so
+   * there is no such window. This is React's documented pattern for deriving
+   * state from changing props.
+   */
+  const [syncedSettings, setSyncedSettings] = useState(settings);
+  if (settings !== syncedSettings) {
+    setSyncedSettings(settings);
     setForm(toForm(settings));
     setErrors({});
-    // toForm is a pure projection of `settings`; re-running on its identity
-    // would loop.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings]);
+  }
 
   /**
    * A `<select>` whose value isn't among its options silently displays the

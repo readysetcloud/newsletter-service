@@ -245,15 +245,20 @@ const consolidateOpensData = (opensRecords, sentDate) => {
 };
 
 const updateStatsWithConsolidatedData = async (issueId, consolidatedData) => {
-  const updateExpression = [
-    'SET uniqueOpens = :uniqueOpens',
+  // Clause and value are added together, never separately. DynamoDB rejects
+  // the whole request when a supplied value is not referenced by the
+  // expression, so the optional attribute below used to fail every call: the
+  // value was attached whenever click geography existed, which is always,
+  // while the expression was a fixed string that never mentioned it.
+  const setClauses = [
+    'uniqueOpens = :uniqueOpens',
     'avgTimeToOpen = :avgTimeToOpen',
     'engagementVelocity = :velocity',
     'timeToOpenBuckets = :timeToOpenBuckets',
     'deviceBreakdown = :deviceBreakdown',
     'clientBreakdown = :clientBreakdown',
     'consolidatedAt = :timestamp'
-  ].join(', ');
+  ];
 
   const expressionAttributeValues = {
     ':uniqueOpens': consolidatedData.uniqueOpens,
@@ -266,8 +271,11 @@ const updateStatsWithConsolidatedData = async (issueId, consolidatedData) => {
   };
 
   if (consolidatedData.clickGeography) {
+    setClauses.push('clickGeography = :clickGeography');
     expressionAttributeValues[':clickGeography'] = consolidatedData.clickGeography;
   }
+
+  const updateExpression = `SET ${setClauses.join(', ')}`;
 
   await ddb.send(new UpdateItemCommand({
     TableName: process.env.TABLE_NAME,
@@ -1234,6 +1242,9 @@ export const handler = async (state) => {
 
     const bounceRate = pct(bounces, sends);
 
+    // Reading and computing the analytics is what the report needs. If that
+    // cannot be done the report still has to go out, so it degrades to the
+    // headline numbers rather than failing.
     try {
       const opensRecords = await queryOpensRecords(state.issue);
       consolidatedData = consolidateOpensData(opensRecords, normalizedSentDate);
@@ -1241,8 +1252,6 @@ export const handler = async (state) => {
       const clickRecords = await queryLinkClickRecords(state.issue);
       const clickGeography = aggregateClickGeography(clickRecords);
       consolidatedData.clickGeography = clickGeography;
-
-      await updateStatsWithConsolidatedData(state.issue, consolidatedData);
     } catch (consolidationError) {
       console.error('Consolidation failed, using fallback:', consolidationError);
       consolidatedData = {
@@ -1253,6 +1262,19 @@ export const handler = async (state) => {
         deviceBreakdown: {},
         clientBreakdown: {}
       };
+    }
+
+    // Writing it back is a separate concern, and a lesser one: it caches the
+    // result on the stats record for the dashboard. It used to share the block
+    // above, so a rejected write discarded analytics that had already been
+    // computed correctly and replaced them with zeros. A malformed update
+    // expression then meant every report for months reported no opens, no
+    // engagement velocity and no devices, while the only symptom was one
+    // swallowed log line.
+    try {
+      await updateStatsWithConsolidatedData(state.issue, consolidatedData);
+    } catch (persistError) {
+      console.error('Could not cache consolidated stats; the report still uses them:', persistError);
     }
 
     previousIssueAnalytics = await queryPreviousIssueAnalytics(state.issue, normalizedSentDate);

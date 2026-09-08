@@ -188,7 +188,7 @@
       "Parameters": {
         "FunctionName": "${GenerateInsights}",
         "Payload": {
-          "issueId.$": "$$.Execution.Input.issueId",
+          "issueId.$": "States.Format('{}', $$.Execution.Input.issueId)",
           "tenantId.$": "$$.Execution.Input.tenant.id",
           "insightData.$": "$.reportData.Payload.insightData",
           "subjectLine.$": "$.Items[0].subject.S"

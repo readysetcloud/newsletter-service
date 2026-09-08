@@ -4,6 +4,7 @@ import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { getTenant, sendWithRetry, throttle } from "../utils/helpers.mjs";
 import { getMostRecentPublishedIssue, incrementIssueCounter } from "../utils/issue-attribution.mjs";
 import { removeSubscriberAndDecrement } from "../utils/subscriber.mjs";
+import { countSubscriberRows, reconcileSubscriberCount } from "../utils/subscriber-count.mjs";
 
 const ddb = new DynamoDBClient();
 const eventBridge = new EventBridgeClient();
@@ -105,10 +106,13 @@ export const handler = async (event) => {
 
     console.log(`Successfully removed ${successfulRemovals}/${persistentFailures.length} addresses`);
 
-    // Read for the notification email only — the count itself was already
-    // maintained by each removal above. Consistent so the operator's mail
-    // quotes the number the removals actually produced.
-    const subscriberCount = await readSubscriberCount(tenantId.id);
+    // The count itself was already maintained by each removal above; this
+    // read is consistent so the operator's mail quotes the number the removals
+    // actually produced. It is also the one moment in the system where the
+    // counter and the rows are both in hand, so a disagreement is checked here
+    // — and corrected with a conditional write, not the absolute overwrite this
+    // job used to do.
+    const subscriberCount = await checkSubscriberCount(tenantId.id);
 
     // Send notification email to tenant if any subscribers were removed
     if (successfulRemovals > 0) {
@@ -167,6 +171,27 @@ const readSubscriberCount = async (tenantId) => {
     // it. The email says "unknown" rather than a wrong number.
     console.error('Error reading subscriber count for notification:', error);
     return null;
+  }
+};
+
+/**
+ * Read the counter, count the rows, and reconcile the two.
+ *
+ * Returns the number the operator's email should quote: the row count when it
+ * is known, since that is what the next send will actually reach, otherwise
+ * the counter. A failure in the row count or the correction only costs the
+ * drift check — the cleanup itself already succeeded and must not fail here.
+ */
+const checkSubscriberCount = async (tenantId) => {
+  const stored = await readSubscriberCount(tenantId);
+
+  try {
+    const actual = await countSubscriberRows(tenantId);
+    await reconcileSubscriberCount(tenantId, { stored, actual });
+    return actual;
+  } catch (error) {
+    console.error('Error checking subscriber count for drift:', error);
+    return stored;
   }
 };
 

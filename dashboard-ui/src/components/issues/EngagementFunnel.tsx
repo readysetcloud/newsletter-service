@@ -5,6 +5,13 @@ import { InfoTooltip } from '../ui/InfoTooltip';
 import { formatNumber, formatPercentageValue } from '../../utils/issueDetailUtils';
 
 export interface EngagementFunnelProps {
+  /**
+   * Number of emails SES accepted for this issue. This is the top of the
+   * funnel and the denominator of every rate below it. When absent or zero
+   * (issues that predate the counter), the funnel falls back to delivered
+   * plus bounced — every message we have a verdict for.
+   */
+  sent?: number;
   /** Number of emails successfully delivered to recipients. */
   delivered: number;
   /** Number of emails that bounced (could not be delivered). */
@@ -43,6 +50,7 @@ const STAGE_BAR_CLASSES = [
 const clampPercent = (value: number) => Math.min(100, Math.max(0, value));
 
 export const EngagementFunnel: React.FC<EngagementFunnelProps> = React.memo(({
+  sent: sentProp,
   delivered,
   bounced,
   opens,
@@ -52,12 +60,18 @@ export const EngagementFunnel: React.FC<EngagementFunnelProps> = React.memo(({
   const safeBounced = Math.max(0, bounced || 0);
   const safeOpens = Math.max(0, opens || 0);
   const safeClicks = Math.max(0, clicks || 0);
-  const sent = safeDelivered + safeBounced;
+  const safeSent = Math.max(0, sentProp || 0);
+  // A message SES accepted is sent whether or not a verdict has arrived yet,
+  // so the accepted count is the honest top of the funnel. The old definition
+  // (delivered + bounced) made the top bar a tautology: it could only ever
+  // read 100%, and it silently disagreed with the send count everywhere else.
+  const sent = safeSent > 0 ? safeSent : safeDelivered + safeBounced;
 
   const stages = useMemo<FunnelStage[]>(() => {
     if (sent === 0) return [];
 
     const deliveryRate = (safeDelivered / sent) * 100;
+    const pending = Math.max(0, sent - safeDelivered - safeBounced);
     const openRate = safeDelivered > 0 ? (safeOpens / safeDelivered) * 100 : 0;
     const clickToOpenRate = safeOpens > 0 ? (safeClicks / safeOpens) * 100 : 0;
 
@@ -77,9 +91,11 @@ export const EngagementFunnel: React.FC<EngagementFunnelProps> = React.memo(({
         value: safeDelivered,
         percentOfSent: clampPercent(deliveryRate),
         barClass: STAGE_BAR_CLASSES[1],
-        transition: safeBounced > 0
-          ? `${formatPercentageValue(deliveryRate, 1)} delivered — ${formatNumber(safeBounced)} bounced`
-          : `${formatPercentageValue(deliveryRate, 1)} delivered`,
+        transition: [
+          `${formatPercentageValue(deliveryRate, 1)} delivered`,
+          safeBounced > 0 && `${formatNumber(safeBounced)} bounced`,
+          pending > 0 && `${formatNumber(pending)} awaiting a verdict`,
+        ].filter(Boolean).join(' — '),
       },
       {
         key: 'opened',
@@ -112,7 +128,7 @@ export const EngagementFunnel: React.FC<EngagementFunnelProps> = React.memo(({
           </CardTitle>
           <InfoTooltip
             label="Engagement Funnel"
-            description="How your audience moved through this issue — from every email sent, to those delivered, opened, and clicked. Each bar is sized against the total sent, and the connectors show the conversion between stages."
+            description="How your audience moved through this issue — from every email handed to the mail provider, to those delivered, opened, and clicked. Each bar is sized against the total sent, and the connectors show the conversion between stages."
           />
         </div>
       </CardHeader>

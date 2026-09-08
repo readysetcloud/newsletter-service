@@ -273,26 +273,17 @@ describe('SettingsPage', () => {
 
   describe('issue URL', () => {
     /**
-     * Every keystroke here re-renders the whole page, and that includes the
-     * timezone `<select>` with one option per IANA zone — several hundred
-     * nodes rebuilt in jsdom for a change to an unrelated field. It takes
-     * ~110ms on an idle machine, comfortably inside the 1s default, but this
-     * suite runs 105 files in parallel on a shared runner and the margin is
-     * not as large as it looks: this assertion timed out in CI while passing
-     * on every developer machine.
+     * Every keystroke here re-renders the whole page, including the timezone
+     * `<select>` with one option per IANA zone — several hundred nodes
+     * rebuilt in jsdom for a change to an unrelated field. That is ~110ms on
+     * an idle machine and far more on a runner sharing its cores with a
+     * hundred other suites, which is why these assertions used to time out in
+     * CI while passing on every developer machine.
      *
-     * The wait is longer rather than the assertion weaker — the preview still
-     * has to appear with exactly the right URL, it is just given room to.
+     * The query and test budgets that used to be declared here by hand now
+     * come from `vitest.config.ts` and `src/test/setup.ts`, so every suite
+     * gets the same headroom instead of each one rediscovering the problem.
      */
-    // Query budget, deliberately under TEST_TIMEOUT below. These tests await
-    // several queries in sequence, so a per-query budget equal to the test's
-    // own budget guarantees a timeout the moment one query actually uses it -
-    // which is how this file kept failing on loaded runners even after the
-    // query timeouts were raised.
-    const RENDER_TIMEOUT = { timeout: 5000 };
-    // Vitest defaults to 5000ms per test. Three sequential queries at up to
-    // 5000ms each cannot fit that, so the test needs headroom over their sum.
-    const TEST_TIMEOUT = 20000;
 
     it('previews the URL a specific issue would get', async () => {
       renderPage();
@@ -303,9 +294,9 @@ describe('SettingsPage', () => {
       });
 
       expect(
-        await screen.findByText('https://example.com/newsletter/128', undefined, RENDER_TIMEOUT)
+        await screen.findByText('https://example.com/newsletter/128')
       ).toBeInTheDocument();
-    }, TEST_TIMEOUT);
+    });
 
     it('requires an absolute URL containing the issue number', async () => {
       renderPage();
@@ -315,17 +306,17 @@ describe('SettingsPage', () => {
       fireEvent.change(field, { target: { value: '/newsletter/{{number}}' } });
       fireEvent.click(screen.getByRole('button', { name: /save settings/i }));
       expect(
-        await screen.findByText(/full URL starting with https/i, undefined, RENDER_TIMEOUT)
+        await screen.findByText(/full URL starting with https/i)
       ).toBeInTheDocument();
 
       fireEvent.change(field, { target: { value: 'https://example.com/newsletter' } });
       fireEvent.click(screen.getByRole('button', { name: /save settings/i }));
       expect(
-        await screen.findByText(/Include \{\{number\}\}/, undefined, RENDER_TIMEOUT)
+        await screen.findByText(/Include \{\{number\}\}/)
       ).toBeInTheDocument();
 
       expect(mockedService.updateSettings).not.toHaveBeenCalled();
-    }, TEST_TIMEOUT);
+    });
   });
 
   describe('unconfigured timezone', () => {

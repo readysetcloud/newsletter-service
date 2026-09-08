@@ -1811,9 +1811,14 @@ Resources:
               Action:
                 # The removal is a TransactWriteItems pairing this Delete with
                 # the tenant-count Update above, so the count can no longer
-                # drift from the rows. Query is gone with the partition recount
-                # it served, which raced with live signups and unsubscribes.
+                # drift from the rows in normal operation.
                 - dynamodb:DeleteItem
+                # Query pages the partition to count real subscriber rows for
+                # the drift guard (utils/subscriber-count.mjs). Unlike the
+                # recount it replaces, the result is applied with a write
+                # conditioned on the counter value it was compared against, so
+                # a signup or unsubscribe landing mid-count is never erased.
+                - dynamodb:Query
               Resource: !GetAtt SubscribersTable.Arn
       Environment:
         Variables:

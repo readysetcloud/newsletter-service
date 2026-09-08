@@ -20,6 +20,12 @@ function getClient() {
  * The rows come back projecting only `email` and `isSubscriberRecord` decides,
  * the same predicate every send path uses.
  *
+ * This query must be strongly consistent. The tenant counter is read strongly
+ * before this scan, and an eventually consistent row read could temporarily
+ * miss a signup that the counter already contains, making reconciliation lower
+ * an otherwise-correct counter. Any write after that counter read still changes
+ * the counter and is protected by the conditional correction below.
+ *
  * @param {string} tenantId
  * @returns {Promise<number>}
  */
@@ -33,6 +39,7 @@ export const countSubscriberRows = async (tenantId) => {
       KeyConditionExpression: 'tenantId = :tenantId',
       ExpressionAttributeValues: marshall({ ':tenantId': tenantId }),
       ProjectionExpression: 'email',
+      ConsistentRead: true,
       ...(lastKey && { ExclusiveStartKey: lastKey })
     }));
 

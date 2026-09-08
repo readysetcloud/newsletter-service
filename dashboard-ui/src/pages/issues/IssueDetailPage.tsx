@@ -1040,12 +1040,13 @@ export const IssueDetailPage: React.FC = () => {
         )}
 
         {/* EngagementFunnel - How the audience moved from sent through delivered, opened, and clicked */}
-        {isPublished && issue.stats && (issue.stats.deliveries + issue.stats.bounces) > 0 && (
+        {isPublished && issue.stats && (issue.stats.sends > 0 || (issue.stats.deliveries + issue.stats.bounces) > 0) && (
           <div className="mb-4 sm:mb-6">
             <Suspense fallback={<ChartSkeleton />}>
               <FadeIn variant="slideUp" speed="normal" delay={50}>
                 <AsyncErrorBoundary onRetry={loadIssue}>
                   <EngagementFunnel
+                    sent={issue.stats.sends}
                     delivered={issue.stats.deliveries}
                     bounced={issue.stats.bounces}
                     opens={issue.stats.opens}

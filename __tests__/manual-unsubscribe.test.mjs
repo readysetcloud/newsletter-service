@@ -7,6 +7,7 @@ let readSubscriberToken;
 let getMostRecentPublishedIssue;
 let incrementIssueCounter;
 let getUnsubscribePage;
+let eventBridgeSend;
 
 async function loadIsolated() {
   await jest.isolateModulesAsync(async () => {
@@ -16,6 +17,17 @@ async function loadIsolated() {
     getMostRecentPublishedIssue = jest.fn();
     incrementIssueCounter = jest.fn();
     getUnsubscribePage = jest.fn(async (tenantId, wasSuccessful) => `<html>result:${wasSuccessful}</html>`);
+    eventBridgeSend = jest.fn().mockResolvedValue({ FailedEntryCount: 0 });
+
+    // The handler alerts the tenant admin when an unsubscribe fails, and it
+    // does that by publishing to EventBridge. Left unmocked, that call was
+    // real: a suite run on a machine with credentials published live
+    // `Send Email v2` events for this file's fixture tenant onto the
+    // production bus, where they failed, retried and tripped the error alarm.
+    jest.unstable_mockModule('@aws-sdk/client-eventbridge', () => ({
+      EventBridgeClient: jest.fn(() => ({ send: eventBridgeSend })),
+      PutEventsCommand: jest.fn((params) => ({ __type: 'PutEvents', ...params })),
+    }));
 
     jest.unstable_mockModule('../functions/utils/subscriber.mjs', () => ({
       unsubscribeUser,
@@ -43,7 +55,7 @@ async function loadIsolated() {
     ({ handler } = await import('../functions/subscribers/manual-unsubscribe.mjs'));
   });
 
-  return { handler, unsubscribeUser, getTenant, getMostRecentPublishedIssue, incrementIssueCounter };
+  return { handler, unsubscribeUser, getTenant, getMostRecentPublishedIssue, incrementIssueCounter, eventBridgeSend };
 }
 
 describe('manual-unsubscribe handler', () => {
@@ -212,6 +224,34 @@ describe('manual-unsubscribe handler', () => {
         userAgent: 'Mozilla/5.0'
       })
     );
+  });
+
+  // The alert is the only thing standing between a failed unsubscribe and
+  // nobody finding out, so it is asserted rather than assumed. This is also
+  // the call that used to reach the real event bus from a developer's laptop.
+  test('a failed unsubscribe alerts the tenant admin', async () => {
+    unsubscribeUser.mockResolvedValue({ success: false, actuallyRemoved: false });
+
+    const event = {
+      pathParameters: { tenant: 'test-tenant' },
+      body: JSON.stringify({ email: 'test@example.com' }),
+      requestContext: { identity: { sourceIp: '192.168.1.1' } },
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    };
+
+    await handler(event);
+
+    expect(eventBridgeSend).toHaveBeenCalledTimes(1);
+    const entry = eventBridgeSend.mock.calls[0][0].Entries[0];
+    expect(entry.Source).toBe('newsletter-service');
+    expect(entry.DetailType).toBe('Send Email v2');
+
+    const detail = JSON.parse(entry.Detail);
+    expect(detail.tenantId).toBe('test-tenant');
+    // The tenant's own admin, never the person unsubscribing.
+    expect(detail.to.email).toBe('admin@example.com');
+    expect(detail.subject).toBe('[Alert] Unsubscribe Request Failed - Test Brand');
+    expect(detail.html).toContain('test@example.com');
   });
 
   test('empty body returns error JSON', async () => {

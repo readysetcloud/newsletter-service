@@ -239,6 +239,129 @@ describe('build-report-data', () => {
     });
   });
 
+  /**
+   * The weekly report ran for months with every engagement figure at zero.
+   * The consolidating write attached a `:clickGeography` value while the
+   * update expression never mentioned it, DynamoDB rejected the whole call,
+   * and the single catch around the block threw away the analytics that had
+   * already been computed correctly and substituted zeros. Nothing failed
+   * loudly; the report just stopped meaning anything.
+   */
+  describe('Consolidated stats write', () => {
+    // Five queries the handler makes around consolidation, in order. Records
+    // are supplied so the computed analytics are non-zero and therefore
+    // distinguishable from the fallback.
+    const primeQueries = ({ opens = [], clicks = [] } = {}) => {
+      ddbSend.mockResolvedValueOnce({ Items: opens });
+      ddbSend.mockResolvedValueOnce({ Items: clicks });
+      ddbSend.mockResolvedValueOnce({});
+      ddbSend.mockResolvedValueOnce({ Items: [] });
+      ddbSend.mockResolvedValueOnce({ Items: [] });
+    };
+
+    const state = {
+      issue: 'tenant123#231',
+      subscribers: 1000,
+      priorSubscribers: 975,
+      sentDate: '2025-01-21T10:00:00.000Z',
+      subjectLine: 'Test Newsletter',
+      links: [],
+      stats: {
+        M: {
+          deliveries: { N: '500' },
+          opens: { N: '150' },
+          reopens: { N: '20' },
+          bounces: { N: '5' },
+          unsubscribes: { N: '3' },
+          sends: { N: '505' },
+          cleaned: { N: '1' }
+        }
+      }
+    };
+
+    const consolidationUpdate = () =>
+      ddbSend.mock.calls
+        .map(call => call[0])
+        .find(cmd => cmd.__type === 'UpdateItem'
+          && cmd.UpdateExpression
+          && cmd.UpdateExpression.includes('uniqueOpens'));
+
+    it('references every value it supplies', async () => {
+      primeQueries();
+
+      await handler(state);
+
+      const update = consolidationUpdate();
+      expect(update).toBeDefined();
+
+      // The invariant DynamoDB actually enforces, checked directly rather than
+      // by asserting on one attribute name: a supplied value that the
+      // expression does not mention fails the whole request.
+      for (const placeholder of Object.keys(update.ExpressionAttributeValues)) {
+        expect(update.UpdateExpression).toContain(placeholder);
+      }
+    });
+
+    it('assigns click geography rather than only supplying it', async () => {
+      primeQueries();
+
+      await handler(state);
+
+      const update = consolidationUpdate();
+      // Click geography is always computed - the aggregator returns an object
+      // even for no clicks - so this clause is always required.
+      expect(update.UpdateExpression).toContain('clickGeography = :clickGeography');
+      expect(update.ExpressionAttributeValues[':clickGeography']).toBeDefined();
+    });
+
+    it('starts the expression with a single SET', async () => {
+      primeQueries();
+
+      await handler(state);
+
+      expect(consolidationUpdate().UpdateExpression).toMatch(/^SET [^S]/);
+    });
+
+    it('still reports the analytics it computed when the write is rejected', async () => {
+      // Flat attribute values: the unmarshall stub in this file collapses a
+      // nested map to an empty object, which would strip the timestamp the
+      // consolidation filters on.
+      ddbSend.mockResolvedValueOnce({
+        Items: [
+          { createdAt: { S: '2025-01-21T10:30:00.000Z' }, userAgent: { S: 'Mozilla/5.0' } }
+        ]
+      });
+      ddbSend.mockResolvedValueOnce({ Items: [] });
+      // The consolidating write fails the way a malformed expression does.
+      ddbSend.mockRejectedValueOnce(Object.assign(new Error('unused in expressions'), {
+        name: 'ValidationException'
+      }));
+      ddbSend.mockResolvedValueOnce({ Items: [] });
+      ddbSend.mockResolvedValueOnce({ Items: [] });
+
+      const result = await handler(state);
+
+      // Caching the result is not what the report is for. A rejected write
+      // must not zero out figures that were computed before it. The device
+      // breakdown is the clearest tell: computed from the one open record it
+      // is populated, while the fallback leaves it empty.
+      expect(result.insightData.engagement.deviceBreakdown).not.toEqual({});
+      expect(result.insightData.clickGeography).toBeDefined();
+    });
+
+    it('does not fail the report when the write is rejected', async () => {
+      ddbSend.mockResolvedValueOnce({ Items: [] });
+      ddbSend.mockResolvedValueOnce({ Items: [] });
+      ddbSend.mockRejectedValueOnce(Object.assign(new Error('unused in expressions'), {
+        name: 'ValidationException'
+      }));
+      ddbSend.mockResolvedValueOnce({ Items: [] });
+      ddbSend.mockResolvedValueOnce({ Items: [] });
+
+      await expect(handler(state)).resolves.toBeDefined();
+    });
+  });
+
   describe('Error handling', () => {
     it('should throw error if required state data is missing', async () => {
       const state = {

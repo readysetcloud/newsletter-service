@@ -29,7 +29,16 @@
           "BackoffRate": 2
         }
       ],
-      "Next": "Has Issues?"
+      "Next": "Has Issues?",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "Mark Report Failed"
+        }
+      ]
     },
     "Has Issues?": {
       "Type": "Choice",
@@ -38,6 +47,11 @@
           "Variable": "$.hasIssues",
           "BooleanEquals": true,
           "Next": "Generate Insights"
+        },
+        {
+          "Variable": "$.reportType",
+          "StringEquals": "adhoc",
+          "Next": "Record Empty Range"
         }
       ],
       "Default": "No Issues This Month"
@@ -71,7 +85,16 @@
         }
       ],
       "ResultPath": "$.insights",
-      "Next": "Compile And Send Report"
+      "Next": "Compile And Send Report",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "Mark Report Failed"
+        }
+      ]
     },
     "Compile And Send Report": {
       "Type": "Task",
@@ -86,7 +109,50 @@
           "periodStart.$": "$.periodStart",
           "periodEnd.$": "$.periodEnd",
           "reportData.$": "$.reportData",
-          "insights.$": "$.insights.Payload.insights"
+          "insights.$": "$.insights.Payload.insights",
+          "reportId.$": "$.reportId",
+          "reportType.$": "$.reportType",
+          "deliverEmail.$": "$.deliverEmail",
+          "periodLabel.$": "$.periodLabel"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "End": true,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "Mark Report Failed"
+        }
+      ]
+    },
+    "Record Empty Range": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "Parameters": {
+        "FunctionName": "${FinalizeReport}",
+        "Payload": {
+          "tenant.$": "$.tenant",
+          "reportId.$": "$.reportId",
+          "reportType.$": "$.reportType",
+          "periodStart.$": "$.periodStart",
+          "periodEnd.$": "$.periodEnd",
+          "periodLabel.$": "$.periodLabel",
+          "outcome": "empty"
         }
       },
       "Retry": [
@@ -103,6 +169,42 @@
         }
       ],
       "End": true
+    },
+    "Mark Report Failed": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "Parameters": {
+        "FunctionName": "${FinalizeReport}",
+        "Payload": {
+          "tenant.$": "$.tenant",
+          "reportId.$": "$.reportId",
+          "reportType.$": "$.reportType",
+          "periodStart.$": "$.periodStart",
+          "periodEnd.$": "$.periodEnd",
+          "periodLabel.$": "$.periodLabel",
+          "outcome": "failed",
+          "error.$": "$.error"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Report Failed"
+    },
+    "Report Failed": {
+      "Type": "Fail",
+      "Error": "ReportGenerationFailed",
+      "Cause": "The report could not be generated; the stored report records why."
     }
   }
 }

@@ -65,6 +65,8 @@ describe('report-stats definition', () => {
       'OutputPath',
       'ResultPath',
       'ItemsPath',
+      // A Choice rule compares a bare path too.
+      'Variable',
     ]);
 
     const walk = (node, where) => {

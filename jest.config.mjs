@@ -4,15 +4,14 @@ export default {
   // file for why this exists.
   setupFiles: ['<rootDir>/jest.setup.aws-guard.mjs'],
   transform: {
-    '^.+\\.[tj]sx?$': 'babel-jest'
+    '^.+\\.[tj]sx?$': 'babel-jest',
+    // Templates are imported as source strings, the way esbuild bundles them.
+    '^.+\\.hbs$': '<rootDir>/__mocks__/hbsTransform.cjs'
   },
   transformIgnorePatterns: [
     "/node_modules/(?!(@octokit|@aws-sdk))",
     "/dashboard-ui/"
   ],
-  moduleNameMapper: {
-    '\\.hbs$': '<rootDir>/__mocks__/hbsMock.mjs'
-  },
   testMatch: [
     '**/__tests__/**/*.[j]s?(x)',
     '**/?(*.)+(spec|test).[j]s?(x)',

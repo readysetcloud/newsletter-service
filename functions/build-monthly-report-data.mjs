@@ -171,12 +171,28 @@ const queryIssueLinks = async (issueId) => {
  * issue published within the reporting window, aggregating their stats, the top
  * links clicked across all of them, and subscriber growth across the month.
  *
- * Input: { tenant: { id, email }, month, monthLabel, periodStart, periodEnd }
+ * Input: { tenant: { id, email }, reportId, reportType, deliverEmail,
+ *          month, monthLabel, periodLabel, periodStart, periodEnd }
  * Output: the input echoed plus `hasIssues` and (when issues exist) `reportData`.
  */
 export const handler = async (state) => {
   const { tenant, month, monthLabel, periodStart, periodEnd } = state;
   const tenantId = tenant.id;
+
+  // Echoed rather than merged by the state machine: this task sets
+  // `OutputPath: $.Payload`, so whatever it returns *replaces* the execution's
+  // data. Anything the later states read has to come back out of here.
+  const passthrough = {
+    tenant,
+    month,
+    monthLabel,
+    periodStart,
+    periodEnd,
+    reportId: state.reportId,
+    reportType: state.reportType,
+    deliverEmail: state.deliverEmail,
+    periodLabel: state.periodLabel ?? monthLabel
+  };
 
   const allIssues = await queryTenantIssues(tenantId);
 
@@ -190,7 +206,7 @@ export const handler = async (state) => {
     .sort((a, b) => (a.publishedAt < b.publishedAt ? -1 : 1));
 
   if (monthIssues.length === 0) {
-    return { tenant, month, monthLabel, periodStart, periodEnd, hasIssues: false };
+    return { ...passthrough, hasIssues: false };
   }
 
   const linkTotals = new Map(); // url -> { url, clicks, issues:Set }
@@ -343,13 +359,5 @@ export const handler = async (state) => {
     reportData.atRiskSummary = atRiskSummary;
   }
 
-  return {
-    tenant,
-    month,
-    monthLabel,
-    periodStart,
-    periodEnd,
-    hasIssues: true,
-    reportData
-  };
+  return { ...passthrough, hasIssues: true, reportData };
 };

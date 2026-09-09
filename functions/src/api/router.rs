@@ -139,6 +139,7 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
 
         // Reports endpoints
         (&Method::GET, "/reports") => reports::list_reports(event).await,
+        (&Method::POST, "/reports") => reports::create_report(event).await,
         (&Method::GET, path) if path.starts_with("/reports/") => {
             let id = extract_path_param(path, "/reports/");
             reports::get_report(event, id).await

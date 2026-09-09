@@ -1296,7 +1296,11 @@ Resources:
             - Effect: Allow
               Action:
                 - states:StartExecution
-              Resource: !Ref StageIssueStateMachine
+              Resource:
+                - !Ref StageIssueStateMachine
+                # A report someone asked for over a range they picked runs the
+                # same workflow the monthly job does.
+                - !Ref MonthlyReportStateMachine
             # Reports where a scheduled issue's publish workflow actually is,
             # for issues that have not reached local-send fan-out yet.
             - Effect: Allow
@@ -1366,6 +1370,7 @@ Resources:
           USER_POOL_ID: !Ref NewsletterUserPool
           HOSTING_BUCKET_NAME: !Ref HostingBucket
           STATE_MACHINE_ARN: !Ref StageIssueStateMachine
+          REPORT_STATE_MACHINE_ARN: !Ref MonthlyReportStateMachine
           SEGMENT_EXPORT_FUNCTION_NAME: !Ref SegmentExportFunction
           BUCKET: !Ref NewsletterBucket
           ORIGIN: !If

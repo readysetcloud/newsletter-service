@@ -93,19 +93,23 @@ export const reportPartitionKey = (tenantId) => `${tenantId}#report`;
 export const reportRangeLockKey = (periodStart, periodEnd) => `lock#${periodStart}#${periodEnd}`;
 
 /**
- * Frees the range a finished report was holding.
+ * Frees the range a finished report was holding, if it still holds it.
  *
- * Best effort, and deliberately silent: the report itself is already written
- * by the time this runs, and failing to tidy up must not turn a finished
- * report into a failed one. The lock's TTL clears it either way; this just
- * means somebody can ask about the same range again straight away instead of
- * waiting for that.
+ * The ownership check is not decoration. A reservation can be taken over once
+ * its window passes, and nothing caps how long a run may take — so a run that
+ * overran its lease and then finished would otherwise delete a reservation
+ * belonging to a later report, letting a third request start over the same
+ * range while both were still going.
+ *
+ * Best effort, and deliberately quiet: the report itself is already written by
+ * the time this runs, and failing to tidy up must not turn a finished report
+ * into a failed one. Losing the condition is the check working, not a problem.
  *
  * @param {import('@aws-sdk/client-dynamodb').DynamoDBClient} ddb
- * @param {{ tenantId: string, periodStart: string, periodEnd: string }} range
+ * @param {{ tenantId: string, reportId: string, periodStart: string, periodEnd: string }} held
  */
-export const releaseReportRangeLock = async (ddb, { tenantId, periodStart, periodEnd }) => {
-  if (!periodStart || !periodEnd) return;
+export const releaseReportRangeLock = async (ddb, { tenantId, reportId, periodStart, periodEnd }) => {
+  if (!periodStart || !periodEnd || !reportId) return;
 
   try {
     const { DeleteItemCommand } = await import('@aws-sdk/client-dynamodb');
@@ -116,9 +120,15 @@ export const releaseReportRangeLock = async (ddb, { tenantId, periodStart, perio
       Key: marshall({
         pk: reportPartitionKey(tenantId),
         sk: reportRangeLockKey(periodStart, periodEnd)
-      })
+      }),
+      ConditionExpression: 'attribute_not_exists(pk) OR reportId = :owner',
+      ExpressionAttributeValues: marshall({ ':owner': reportId })
     }));
   } catch (error) {
-    console.warn('[REPORT] Could not release the range lock; it expires on its own', error);
+    if (error?.name === 'ConditionalCheckFailedException') {
+      console.log('[REPORT] Range reservation belongs to a later report; leaving it alone');
+      return;
+    }
+    console.warn('[REPORT] Could not release the range reservation; it expires on its own', error);
   }
 };

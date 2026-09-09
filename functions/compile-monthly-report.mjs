@@ -109,7 +109,7 @@ export const handler = async (event) => {
 
   // 2. The range is no longer being worked on, so let go of it.
   if (!isMonthly) {
-    await releaseReportRangeLock(ddb, { tenantId, periodStart, periodEnd });
+    await releaseReportRangeLock(ddb, { tenantId, reportId, periodStart, periodEnd });
   }
 
   // 3. Send the report email to the tenant owner — scheduled reports only.

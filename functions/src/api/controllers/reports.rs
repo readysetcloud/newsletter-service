@@ -1,5 +1,7 @@
-use aws_sdk_dynamodb::operation::put_item::PutItemError;
-use aws_sdk_dynamodb::types::{AttributeValue, ReturnValuesOnConditionCheckFailure};
+use aws_sdk_dynamodb::operation::transact_write_items::TransactWriteItemsError;
+use aws_sdk_dynamodb::types::{
+    AttributeValue, Put, ReturnValuesOnConditionCheckFailure, TransactWriteItem,
+};
 use base64::Engine;
 use chrono::{Duration, NaiveDate, TimeZone, Utc};
 use lambda_http::{Body, Error, Request, RequestExt, Response};
@@ -52,6 +54,11 @@ const RESERVE_ATTEMPTS: usize = 3;
 /// Free, or held by a run that has outlived its window. Named so the rule and
 /// the test that describes it cannot drift apart.
 const RESERVE_CONDITION: &str = "attribute_not_exists(pk) OR #ttl < :now";
+
+/// Gone already, or still ours. Mirrored in
+/// `functions/utils/report-record.mjs`, which releases the same reservations
+/// from the other end of the workflow.
+const RELEASE_CONDITION: &str = "attribute_not_exists(pk) OR reportId = :owner";
 
 /// Sort key of the row that reserves a range while a report over it runs.
 ///
@@ -295,54 +302,49 @@ async fn handle_create_report(event: Request) -> Result<Response<Body>, AppError
     let report_id = ulid::Ulid::new().to_string();
     let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
 
-    // Reserved before anything is counted, deliberately. Whoever creates the
-    // reservation owns the range; a second request for the same range loses
-    // the condition and is handed the report already running.
-    //
-    // Doing this first is what makes the answer to a double-click the same
-    // whether or not the tenant happens to be at their limit. Counting first
-    // meant somebody with three reports running got a 409 when they clicked
-    // twice on one of those three — refused for asking again about work they
-    // had already started.
-    if let Some(existing_id) =
-        reserve_range(&tenant_id, &report_id, &period_start, &period_end).await?
-    {
-        return response::format_response(
+    // 200 rather than 202: nothing was started, the caller is being handed
+    // the report that already covers these dates.
+    let already_running = |id: String| {
+        response::format_response(
             200,
             CreateReportResponse {
-                id: existing_id,
+                id,
                 status: STATUS_PENDING.to_string(),
                 report_type: "adhoc".to_string(),
-                period_start,
-                period_end,
-                period_label,
+                period_start: period_start.clone(),
+                period_end: period_end.clone(),
+                period_label: period_label.clone(),
             },
-        );
-    }
+        )
+    };
 
-    // From here the range is held, so every path out has to give it back.
+    // Counted before anything is written, so a refusal never has to undo a
+    // claim. Rolling one back was how a second request could be handed an id
+    // that then stopped existing.
     //
-    // The count is advisory and stays that way: it reads an eventually
-    // consistent index, so a burst can slip one past it. It exists to stop
-    // somebody queueing fifty reports, not to be a ledger — and now that
-    // duplicates are settled above, it only ever refuses a genuinely new
-    // range.
-    match count_reports_in_flight(&tenant_id).await {
-        Ok(in_flight) if in_flight >= MAX_PENDING => {
-            release_range(&tenant_id, &period_start, &period_end).await;
-            return Err(AppError::Conflict(format!(
-                "{} reports are already being generated. Wait for one to finish and try again.",
-                in_flight
-            )));
+    // The count stays advisory: it reads an eventually consistent index, so a
+    // burst can slip one past it. It bounds queueing rather than acting as a
+    // ledger.
+    let in_flight = count_reports_in_flight(&tenant_id).await?;
+    if in_flight >= MAX_PENDING {
+        // Still answer a repeat of something already running. Read-only, so
+        // being at the limit changes what this request is told and never what
+        // is stored.
+        if let Some(holder) = current_range_holder(&tenant_id, &period_start, &period_end).await? {
+            return already_running(holder);
         }
-        Ok(_) => {}
-        Err(error) => {
-            release_range(&tenant_id, &period_start, &period_end).await;
-            return Err(error);
-        }
+
+        return Err(AppError::Conflict(format!(
+            "{} reports are already being generated. Wait for one to finish and try again.",
+            in_flight
+        )));
     }
 
-    if let Err(error) = write_pending_report(
+    // The reservation and the report row are written together or not at all.
+    // Two separate writes left a window where the range was held by a report
+    // that did not exist yet: a second request losing the claim was handed
+    // that id, and if the first then failed it had an id naming nothing.
+    if let Some(existing_id) = claim_range_for_new_report(
         &tenant_id,
         &report_id,
         &created_at,
@@ -351,19 +353,16 @@ async fn handle_create_report(event: Request) -> Result<Response<Body>, AppError
         &period_label,
         &user_context.user_id,
     )
-    .await
+    .await?
     {
-        // Without this the range stays held by a report that was never
-        // written, and the next request for those dates is handed an id
-        // pointing at nothing.
-        abandon_report(&tenant_id, &report_id, &period_start, &period_end).await;
-        return Err(error);
+        return already_running(existing_id);
     }
 
     // A `pending` row with no workflow behind it is one nothing can ever
-    // resolve, counting against the limit forever. Both the row and the
-    // reservation go back before the error surfaces, so the tenant can simply
-    // try again.
+    // resolve. It is marked failed rather than deleted: another request may
+    // already have been handed this id, and an id that resolves to a report
+    // saying it could not be generated is a far better answer than one that
+    // resolves to nothing at all. The range is given back either way.
     if let Err(error) = start_report_execution(
         &tenant_id,
         &report_id,
@@ -373,7 +372,7 @@ async fn handle_create_report(event: Request) -> Result<Response<Body>, AppError
     )
     .await
     {
-        abandon_report(&tenant_id, &report_id, &period_start, &period_end).await;
+        abandon_report(&tenant_id, &report_id, &period_start, &period_end, &error).await;
         return Err(error);
     }
 
@@ -697,44 +696,53 @@ async fn count_reports_in_flight(tenant_id: &str) -> Result<usize, AppError> {
     Ok(result.items().len())
 }
 
-/// Claims a range for one report.
+/// Claims a range and creates the report in one commit.
 ///
 /// Returns `None` when the claim succeeded, and `Some(report_id)` when another
-/// request already holds it — that report is the answer to this request too.
+/// request already holds the range — that report is the answer to this request
+/// too.
 ///
-/// Two things here are less obvious than they look.
+/// Three things here are less obvious than they look.
+///
+/// The reservation and the report row are written together. Apart, there was a
+/// window where the range was held by a report that did not exist yet: a
+/// second request losing the claim was handed that id, and if the first then
+/// failed, the id named nothing. A transaction means a holder always has a
+/// row.
 ///
 /// The condition takes over an expired reservation rather than waiting for it
 /// to disappear. DynamoDB deletes an expired item whenever it gets round to
 /// it, which can be days, and until then `attribute_not_exists` is false — so
 /// a TTL alone would not free anything, it would only promise to.
 ///
-/// And the holder comes back from the failed write itself, not from a read
+/// And the holder comes back from the rejected write itself, not from a read
 /// afterwards. The winner can finish and release the range in the gap between
 /// the two, and a read landing there finds nothing — which would look exactly
-/// like having won. Asking the failure who holds it removes the gap. If the
-/// item somehow comes back without an owner, the claim is simply tried again
-/// rather than assumed either way.
-async fn reserve_range(
+/// like having won.
+#[allow(clippy::too_many_arguments)]
+async fn claim_range_for_new_report(
     tenant_id: &str,
     report_id: &str,
+    created_at: &str,
     period_start: &str,
     period_end: &str,
+    period_label: &str,
+    requested_by: &str,
 ) -> Result<Option<String>, AppError> {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
         .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
 
-    let key = range_lock_key(period_start, period_end);
+    let partition = report_partition_key(tenant_id);
+    let lock_key = range_lock_key(period_start, period_end);
 
     for _ in 0..RESERVE_ATTEMPTS {
         let now = Utc::now().timestamp();
 
-        let claim = ddb_client
-            .put_item()
+        let reservation = Put::builder()
             .table_name(&table_name)
-            .item("pk", AttributeValue::S(report_partition_key(tenant_id)))
-            .item("sk", AttributeValue::S(key.clone()))
+            .item("pk", AttributeValue::S(partition.clone()))
+            .item("sk", AttributeValue::S(lock_key.clone()))
             .item("reportId", AttributeValue::S(report_id.to_string()))
             .item(
                 "ttl",
@@ -744,26 +752,60 @@ async fn reserve_range(
             .expression_attribute_names("#ttl", "ttl")
             .expression_attribute_values(":now", AttributeValue::N(now.to_string()))
             .return_values_on_condition_check_failure(ReturnValuesOnConditionCheckFailure::AllOld)
+            .build()
+            .map_err(|e| AppError::InternalError(format!("Could not build reservation: {}", e)))?;
+
+        // `createdAt` is the ordering key, set once here and left alone by
+        // everything downstream.
+        let report_row = Put::builder()
+            .table_name(&table_name)
+            .item("pk", AttributeValue::S(partition.clone()))
+            .item("sk", AttributeValue::S(report_sort_key(report_id)))
+            .item("GSI1PK", AttributeValue::S(partition.clone()))
+            .item("GSI1SK", AttributeValue::S(created_at.to_string()))
+            .item("createdAt", AttributeValue::S(created_at.to_string()))
+            .item("status", AttributeValue::S(STATUS_PENDING.to_string()))
+            .item("reportType", AttributeValue::S("adhoc".to_string()))
+            .item("periodStart", AttributeValue::S(period_start.to_string()))
+            .item("periodEnd", AttributeValue::S(period_end.to_string()))
+            .item("periodLabel", AttributeValue::S(period_label.to_string()))
+            .item("requestedBy", AttributeValue::S(requested_by.to_string()))
+            .build()
+            .map_err(|e| AppError::InternalError(format!("Could not build report row: {}", e)))?;
+
+        let committed = ddb_client
+            .transact_write_items()
+            .transact_items(TransactWriteItem::builder().put(reservation).build())
+            .transact_items(TransactWriteItem::builder().put(report_row).build())
             .send()
             .await;
 
-        match claim {
+        match committed {
             Ok(_) => return Ok(None),
             Err(error) => {
-                let Some(PutItemError::ConditionalCheckFailedException(rejected)) =
+                let Some(TransactWriteItemsError::TransactionCanceledException(cancelled)) =
                     error.as_service_error()
                 else {
-                    return Err(AppError::from(error));
+                    return Err(AppError::AwsError(format!(
+                        "Could not reserve the range: {}",
+                        error
+                    )));
                 };
 
-                if let Some(holder) = rejected
-                    .item()
-                    .and_then(|item| read_optional_string(item, "reportId"))
-                {
+                // The reservation is the first item, so its reason is the one
+                // carrying whoever holds the range.
+                let holder = cancelled
+                    .cancellation_reasons()
+                    .first()
+                    .and_then(|reason| reason.item())
+                    .and_then(|item| read_optional_string(item, "reportId"));
+
+                if let Some(holder) = holder {
                     return Ok(Some(holder));
                 }
 
-                // Held, but by nobody nameable. Try to claim it outright.
+                // Held, but by nobody nameable — the holder released it as we
+                // looked. Try to claim it outright.
             }
         }
     }
@@ -773,11 +815,98 @@ async fn reserve_range(
     ))
 }
 
-/// Gives a range back without touching any report row.
+/// Who holds a range right now, if anybody, without touching it.
 ///
-/// Best effort: the caller is already on its way out with an error, and
+/// Strongly consistent, and ignores a reservation whose window has passed —
+/// the same rule the claim applies, so the two cannot disagree about whether a
+/// range is free.
+async fn current_range_holder(
+    tenant_id: &str,
+    period_start: &str,
+    period_end: &str,
+) -> Result<Option<String>, AppError> {
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+    let table_name = std::env::var("TABLE_NAME")
+        .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
+
+    let held = ddb_client
+        .get_item()
+        .table_name(&table_name)
+        .key("pk", AttributeValue::S(report_partition_key(tenant_id)))
+        .key(
+            "sk",
+            AttributeValue::S(range_lock_key(period_start, period_end)),
+        )
+        .consistent_read(true)
+        .send()
+        .await?;
+
+    let Some(item) = held.item() else {
+        return Ok(None);
+    };
+
+    let expired = item
+        .get("ttl")
+        .and_then(|v| v.as_n().ok())
+        .and_then(|n| n.parse::<i64>().ok())
+        .is_some_and(|expires_at| expires_at < Utc::now().timestamp());
+
+    if expired {
+        return Ok(None);
+    }
+
+    Ok(read_optional_string(item, "reportId"))
+}
+
+/// Marks a report failed and gives its range back, for a report that was
+/// created but never started.
+///
+/// The row is kept rather than deleted. Another request may already have been
+/// handed this id, and an id resolving to a report that says it could not be
+/// generated beats one resolving to nothing.
+///
+/// Best effort throughout: the caller is already returning an error, and
 /// failing to tidy up must not replace that error with a less useful one.
-async fn release_range(tenant_id: &str, period_start: &str, period_end: &str) {
+async fn abandon_report(
+    tenant_id: &str,
+    report_id: &str,
+    period_start: &str,
+    period_end: &str,
+    cause: &AppError,
+) {
+    let Ok(table_name) = std::env::var("TABLE_NAME") else {
+        return;
+    };
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+
+    if let Err(error) = ddb_client
+        .update_item()
+        .table_name(&table_name)
+        .key("pk", AttributeValue::S(report_partition_key(tenant_id)))
+        .key("sk", AttributeValue::S(report_sort_key(report_id)))
+        .update_expression("SET #status = :failed, failureReason = :reason")
+        .expression_attribute_names("#status", "status")
+        .expression_attribute_values(":failed", AttributeValue::S("failed".to_string()))
+        .expression_attribute_values(
+            ":reason",
+            AttributeValue::S(format!("Could not start the report: {}", cause)),
+        )
+        .send()
+        .await
+    {
+        tracing::warn!(report_id, error = %error, "could not mark an unstarted report failed");
+    }
+
+    release_range(tenant_id, report_id, period_start, period_end).await;
+}
+
+/// Gives a range back, but only if this report still holds it.
+///
+/// The ownership check is not decoration. A reservation can be taken over once
+/// its window passes, so a run that overran its lease and then finished would
+/// otherwise delete a reservation belonging to somebody else, and a third
+/// request could start over the same range while both were still going.
+async fn release_range(tenant_id: &str, report_id: &str, period_start: &str, period_end: &str) {
     let Ok(table_name) = std::env::var("TABLE_NAME") else {
         return;
     };
@@ -791,83 +920,19 @@ async fn release_range(tenant_id: &str, period_start: &str, period_end: &str) {
             "sk",
             AttributeValue::S(range_lock_key(period_start, period_end)),
         )
+        .condition_expression(RELEASE_CONDITION)
+        .expression_attribute_values(":owner", AttributeValue::S(report_id.to_string()))
         .send()
         .await
     {
-        tracing::warn!(
+        // Losing the condition means somebody else owns it now, which is the
+        // check doing its job rather than a problem.
+        tracing::debug!(
+            report_id,
             error = %error,
-            "could not release a range reservation; the next request takes it over once it expires"
+            "range reservation not released; it is held by a later report or already gone"
         );
     }
-}
-
-/// Undoes a report that was written but never started.
-///
-/// Best effort on purpose: the caller is already returning an error, and
-/// failing to clean up must not replace that error with a less useful one. The
-/// reservation's TTL is the backstop.
-async fn abandon_report(tenant_id: &str, report_id: &str, period_start: &str, period_end: &str) {
-    let Ok(table_name) = std::env::var("TABLE_NAME") else {
-        return;
-    };
-    let ddb_client = aws_clients::get_dynamodb_client().await;
-
-    for sort_key in [
-        report_sort_key(report_id),
-        range_lock_key(period_start, period_end),
-    ] {
-        if let Err(error) = ddb_client
-            .delete_item()
-            .table_name(&table_name)
-            .key("pk", AttributeValue::S(report_partition_key(tenant_id)))
-            .key("sk", AttributeValue::S(sort_key.clone()))
-            .send()
-            .await
-        {
-            tracing::warn!(
-                report_id,
-                sort_key,
-                error = %error,
-                "could not clean up a report that never started; its lock expires on its own"
-            );
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn write_pending_report(
-    tenant_id: &str,
-    report_id: &str,
-    created_at: &str,
-    period_start: &str,
-    period_end: &str,
-    period_label: &str,
-    requested_by: &str,
-) -> Result<(), AppError> {
-    let ddb_client = aws_clients::get_dynamodb_client().await;
-    let table_name = std::env::var("TABLE_NAME")
-        .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
-
-    ddb_client
-        .put_item()
-        .table_name(&table_name)
-        .item("pk", AttributeValue::S(report_partition_key(tenant_id)))
-        .item("sk", AttributeValue::S(report_sort_key(report_id)))
-        // `createdAt` is the ordering key, so it is set once here and left
-        // alone by everything downstream.
-        .item("GSI1PK", AttributeValue::S(report_partition_key(tenant_id)))
-        .item("GSI1SK", AttributeValue::S(created_at.to_string()))
-        .item("createdAt", AttributeValue::S(created_at.to_string()))
-        .item("status", AttributeValue::S(STATUS_PENDING.to_string()))
-        .item("reportType", AttributeValue::S("adhoc".to_string()))
-        .item("periodStart", AttributeValue::S(period_start.to_string()))
-        .item("periodEnd", AttributeValue::S(period_end.to_string()))
-        .item("periodLabel", AttributeValue::S(period_label.to_string()))
-        .item("requestedBy", AttributeValue::S(requested_by.to_string()))
-        .send()
-        .await?;
-
-    Ok(())
 }
 
 async fn start_report_execution(
@@ -1070,6 +1135,14 @@ mod tests {
             // range to whoever asked most recently.
             assert!(!RESERVE_CONDITION.contains("#ttl >"));
             assert!(!RESERVE_CONDITION.contains("attribute_exists"));
+        }
+
+        #[test]
+        fn releasing_checks_who_owns_it() {
+            // A run that overran its lease can finish after a later report
+            // took the range over. Releasing unconditionally would delete the
+            // newer reservation and let a third request start concurrently.
+            assert!(RELEASE_CONDITION.contains("reportId = :owner"));
         }
 
         #[test]

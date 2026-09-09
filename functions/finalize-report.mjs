@@ -104,7 +104,7 @@ export const handler = async (event) => {
   // Whatever the ending, the range is free again — especially after a
   // failure, when somebody will want to try the same dates immediately.
   if (!isMonthly) {
-    await releaseReportRangeLock(ddb, { tenantId, periodStart, periodEnd });
+    await releaseReportRangeLock(ddb, { tenantId, reportId, periodStart, periodEnd });
   }
 
   console.log(`[REPORT] ${reportId} for ${tenantId} finished as ${values[':status']}`);

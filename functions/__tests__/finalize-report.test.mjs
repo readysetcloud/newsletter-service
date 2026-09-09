@@ -151,6 +151,31 @@ describe('finalize-report', () => {
       expect(deletes()).toHaveLength(0);
     });
 
+    it('only frees a range this report still owns', async () => {
+      // Nothing caps how long a run may take, so one that overran its lease
+      // can finish after a later report took the range over. Deleting it
+      // unconditionally would let a third request start the same range while
+      // both were still going.
+      await handler({ ...base, outcome: 'empty' });
+
+      const [released] = deletes();
+      expect(released.ConditionExpression).toBe('attribute_not_exists(pk) OR reportId = :owner');
+      expect(unmarshall(released.ExpressionAttributeValues)[':owner']).toBe(base.reportId);
+    });
+
+    it('says nothing alarming when the range belongs to a later report', async () => {
+      ddbSend
+        .mockResolvedValueOnce({})
+        .mockRejectedValueOnce(
+          Object.assign(new Error('nope'), { name: 'ConditionalCheckFailedException' })
+        );
+
+      // Losing that condition is the check working.
+      await expect(handler({ ...base, outcome: 'empty' })).resolves.toMatchObject({
+        success: true
+      });
+    });
+
     it('does not fail the report when the range cannot be freed', async () => {
       // The report is already written by then, and the lock expires anyway.
       ddbSend

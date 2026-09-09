@@ -1,4 +1,5 @@
-use aws_sdk_dynamodb::types::AttributeValue;
+use aws_sdk_dynamodb::operation::put_item::PutItemError;
+use aws_sdk_dynamodb::types::{AttributeValue, ReturnValuesOnConditionCheckFailure};
 use base64::Engine;
 use chrono::{Duration, NaiveDate, TimeZone, Utc};
 use lambda_http::{Body, Error, Request, RequestExt, Response};
@@ -33,10 +34,24 @@ const PENDING_SCAN_LIMIT: i32 = 25;
 
 const STATUS_PENDING: &str = "pending";
 
-/// How long a range stays reserved if nothing ever releases it. Longer than
-/// any report takes, short enough that a run which vanished does not hold a
-/// range hostage.
+/// How long a reservation stays valid if nothing ever releases it. Longer
+/// than any report takes, short enough that a run which vanished does not hold
+/// a range for long.
+///
+/// This is enforced by the claim condition, not by DynamoDB's own TTL: an
+/// expired item sticks around until the background sweep reaches it, which can
+/// be days. The `ttl` attribute is still set so the row is eventually tidied
+/// away, but nothing waits on that.
 const RANGE_LOCK_TTL_SECONDS: i64 = 60 * 60;
+
+/// How many times to race for a reservation whose holder keeps vanishing
+/// mid-claim. Two requests cannot starve each other indefinitely; this only
+/// bounds the pathological case.
+const RESERVE_ATTEMPTS: usize = 3;
+
+/// Free, or held by a run that has outlived its window. Named so the rule and
+/// the test that describes it cannot drift apart.
+const RESERVE_CONDITION: &str = "attribute_not_exists(pk) OR #ttl < :now";
 
 /// Sort key of the row that reserves a range while a report over it runs.
 ///
@@ -277,24 +292,18 @@ async fn handle_create_report(event: Request) -> Result<Response<Body>, AppError
     let period_end = start_of_day(end_date, zone)?;
     let period_label = format_period_label(start_date, end_date);
 
-    // Advisory, and deliberately so: it reads an eventually consistent index,
-    // so a burst can slip one past it. It exists to stop somebody queueing
-    // fifty reports, not to be a ledger. Correctness for the duplicate case
-    // lives in the reservation below, which is a conditional write.
-    let in_flight = count_reports_in_flight(&tenant_id).await?;
-    if in_flight >= MAX_PENDING {
-        return Err(AppError::Conflict(format!(
-            "{} reports are already being generated. Wait for one to finish and try again.",
-            in_flight
-        )));
-    }
-
     let report_id = ulid::Ulid::new().to_string();
     let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
 
-    // Whoever creates the reservation owns the range. A second request for the
-    // same range loses the condition and is handed the report already running,
-    // so a double-click makes one report however the two interleave.
+    // Reserved before anything is counted, deliberately. Whoever creates the
+    // reservation owns the range; a second request for the same range loses
+    // the condition and is handed the report already running.
+    //
+    // Doing this first is what makes the answer to a double-click the same
+    // whether or not the tenant happens to be at their limit. Counting first
+    // meant somebody with three reports running got a 409 when they clicked
+    // twice on one of those three — refused for asking again about work they
+    // had already started.
     if let Some(existing_id) =
         reserve_range(&tenant_id, &report_id, &period_start, &period_end).await?
     {
@@ -311,7 +320,29 @@ async fn handle_create_report(event: Request) -> Result<Response<Body>, AppError
         );
     }
 
-    write_pending_report(
+    // From here the range is held, so every path out has to give it back.
+    //
+    // The count is advisory and stays that way: it reads an eventually
+    // consistent index, so a burst can slip one past it. It exists to stop
+    // somebody queueing fifty reports, not to be a ledger — and now that
+    // duplicates are settled above, it only ever refuses a genuinely new
+    // range.
+    match count_reports_in_flight(&tenant_id).await {
+        Ok(in_flight) if in_flight >= MAX_PENDING => {
+            release_range(&tenant_id, &period_start, &period_end).await;
+            return Err(AppError::Conflict(format!(
+                "{} reports are already being generated. Wait for one to finish and try again.",
+                in_flight
+            )));
+        }
+        Ok(_) => {}
+        Err(error) => {
+            release_range(&tenant_id, &period_start, &period_end).await;
+            return Err(error);
+        }
+    }
+
+    if let Err(error) = write_pending_report(
         &tenant_id,
         &report_id,
         &created_at,
@@ -320,12 +351,19 @@ async fn handle_create_report(event: Request) -> Result<Response<Body>, AppError
         &period_label,
         &user_context.user_id,
     )
-    .await?;
+    .await
+    {
+        // Without this the range stays held by a report that was never
+        // written, and the next request for those dates is handed an id
+        // pointing at nothing.
+        abandon_report(&tenant_id, &report_id, &period_start, &period_end).await;
+        return Err(error);
+    }
 
-    // Anything from here that fails leaves a `pending` row nothing can ever
-    // resolve, counting against the limit above forever. So the row and the
-    // reservation are both taken back before the error surfaces, and the
-    // tenant can simply try again.
+    // A `pending` row with no workflow behind it is one nothing can ever
+    // resolve, counting against the limit forever. Both the row and the
+    // reservation go back before the error surfaces, so the tenant can simply
+    // try again.
     if let Err(error) = start_report_execution(
         &tenant_id,
         &report_id,
@@ -663,6 +701,20 @@ async fn count_reports_in_flight(tenant_id: &str) -> Result<usize, AppError> {
 ///
 /// Returns `None` when the claim succeeded, and `Some(report_id)` when another
 /// request already holds it — that report is the answer to this request too.
+///
+/// Two things here are less obvious than they look.
+///
+/// The condition takes over an expired reservation rather than waiting for it
+/// to disappear. DynamoDB deletes an expired item whenever it gets round to
+/// it, which can be days, and until then `attribute_not_exists` is false — so
+/// a TTL alone would not free anything, it would only promise to.
+///
+/// And the holder comes back from the failed write itself, not from a read
+/// afterwards. The winner can finish and release the range in the gap between
+/// the two, and a read landing there finds nothing — which would look exactly
+/// like having won. Asking the failure who holds it removes the gap. If the
+/// item somehow comes back without an owner, the claim is simply tried again
+/// rather than assumed either way.
 async fn reserve_range(
     tenant_id: &str,
     report_id: &str,
@@ -674,45 +726,78 @@ async fn reserve_range(
         .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
 
     let key = range_lock_key(period_start, period_end);
-    let expires_at = Utc::now().timestamp() + RANGE_LOCK_TTL_SECONDS;
 
-    let claim = ddb_client
-        .put_item()
-        .table_name(&table_name)
-        .item("pk", AttributeValue::S(report_partition_key(tenant_id)))
-        .item("sk", AttributeValue::S(key.clone()))
-        .item("reportId", AttributeValue::S(report_id.to_string()))
-        .item("ttl", AttributeValue::N(expires_at.to_string()))
-        .condition_expression("attribute_not_exists(pk)")
-        .send()
-        .await;
+    for _ in 0..RESERVE_ATTEMPTS {
+        let now = Utc::now().timestamp();
 
-    match claim {
-        Ok(_) => Ok(None),
-        Err(error) => {
-            let already_held = error
-                .as_service_error()
-                .is_some_and(|e| e.is_conditional_check_failed_exception());
+        let claim = ddb_client
+            .put_item()
+            .table_name(&table_name)
+            .item("pk", AttributeValue::S(report_partition_key(tenant_id)))
+            .item("sk", AttributeValue::S(key.clone()))
+            .item("reportId", AttributeValue::S(report_id.to_string()))
+            .item(
+                "ttl",
+                AttributeValue::N((now + RANGE_LOCK_TTL_SECONDS).to_string()),
+            )
+            .condition_expression(RESERVE_CONDITION)
+            .expression_attribute_names("#ttl", "ttl")
+            .expression_attribute_values(":now", AttributeValue::N(now.to_string()))
+            .return_values_on_condition_check_failure(ReturnValuesOnConditionCheckFailure::AllOld)
+            .send()
+            .await;
 
-            if !already_held {
-                return Err(AppError::from(error));
+        match claim {
+            Ok(_) => return Ok(None),
+            Err(error) => {
+                let Some(PutItemError::ConditionalCheckFailedException(rejected)) =
+                    error.as_service_error()
+                else {
+                    return Err(AppError::from(error));
+                };
+
+                if let Some(holder) = rejected
+                    .item()
+                    .and_then(|item| read_optional_string(item, "reportId"))
+                {
+                    return Ok(Some(holder));
+                }
+
+                // Held, but by nobody nameable. Try to claim it outright.
             }
-
-            // Strongly consistent: the write that beat us happened, so the
-            // read that follows it has to see it.
-            let held = ddb_client
-                .get_item()
-                .table_name(&table_name)
-                .key("pk", AttributeValue::S(report_partition_key(tenant_id)))
-                .key("sk", AttributeValue::S(key))
-                .consistent_read(true)
-                .send()
-                .await?;
-
-            Ok(held
-                .item()
-                .and_then(|item| read_optional_string(item, "reportId")))
         }
+    }
+
+    Err(AppError::Conflict(
+        "Another report over these dates is starting. Try again in a moment.".to_string(),
+    ))
+}
+
+/// Gives a range back without touching any report row.
+///
+/// Best effort: the caller is already on its way out with an error, and
+/// failing to tidy up must not replace that error with a less useful one.
+async fn release_range(tenant_id: &str, period_start: &str, period_end: &str) {
+    let Ok(table_name) = std::env::var("TABLE_NAME") else {
+        return;
+    };
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+
+    if let Err(error) = ddb_client
+        .delete_item()
+        .table_name(&table_name)
+        .key("pk", AttributeValue::S(report_partition_key(tenant_id)))
+        .key(
+            "sk",
+            AttributeValue::S(range_lock_key(period_start, period_end)),
+        )
+        .send()
+        .await
+    {
+        tracing::warn!(
+            error = %error,
+            "could not release a range reservation; the next request takes it over once it expires"
+        );
     }
 }
 
@@ -967,6 +1052,24 @@ mod tests {
             let july = range_lock_key("2026-07-01T00:00:00.000Z", "2026-07-15T00:00:00.000Z");
 
             assert_ne!(june, july);
+        }
+
+        #[test]
+        fn an_expired_reservation_can_be_taken_over() {
+            // DynamoDB removes an expired item whenever it gets round to it,
+            // which can be days. If the claim waited for that, a range whose
+            // run vanished would stay locked long past the hour it advertises.
+            // The condition has to say so itself.
+            assert!(RESERVE_CONDITION.contains("attribute_not_exists(pk)"));
+            assert!(RESERVE_CONDITION.contains("#ttl < :now"));
+        }
+
+        #[test]
+        fn a_live_reservation_still_blocks() {
+            // The takeover is on expiry alone. Anything else would hand the
+            // range to whoever asked most recently.
+            assert!(!RESERVE_CONDITION.contains("#ttl >"));
+            assert!(!RESERVE_CONDITION.contains("attribute_exists"));
         }
 
         #[test]

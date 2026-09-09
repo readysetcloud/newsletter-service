@@ -2060,7 +2060,10 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
         "409":
-          description: Too many reports are already being generated
+          description: >
+            Too many reports are already being generated, or another request
+            for these same dates is mid-flight and had not finished claiming
+            them yet. Both clear on their own; retrying works.
           content:
             application/json:
               schema:

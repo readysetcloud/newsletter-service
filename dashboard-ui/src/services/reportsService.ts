@@ -1,5 +1,7 @@
 import { apiClient } from './api';
 import type {
+  CreateReportRequest,
+  CreateReportResponse,
   MonthlyReport,
   ListReportsParams,
   ListReportsResponse,
@@ -40,6 +42,18 @@ class ReportsService {
    */
   async getReport(id: string): Promise<ApiResponse<MonthlyReport>> {
     return apiClient.get<MonthlyReport>(`/reports/${id}`);
+  }
+
+  /**
+   * Starts a report over a range, and returns as soon as it has an id rather
+   * than waiting for it to finish. The report is listed straight away as
+   * pending; poll {@link getReport} or reload the list to follow it.
+   *
+   * @param range - First day covered and the exclusive end, both `YYYY-MM-DD`,
+   *   read as days in the newsletter's own timezone
+   */
+  async createReport(range: CreateReportRequest): Promise<ApiResponse<CreateReportResponse>> {
+    return apiClient.post<CreateReportResponse>('/reports', range);
   }
 }
 

@@ -115,6 +115,54 @@ describe('finalize-report', () => {
     });
   });
 
+  describe('releasing the range', () => {
+    const deletes = () =>
+      ddbSend.mock.calls
+        .map(call => call[0].input)
+        .filter(input => input.Key && !input.UpdateExpression);
+
+    it('frees the range after a failure, so the same dates can be retried at once', async () => {
+      await handler({ ...base, outcome: 'failed', error: { Error: 'Boom' } });
+
+      const [released] = deletes();
+      expect(unmarshall(released.Key)).toEqual({
+        pk: 'tenant123#report',
+        sk: 'lock#2026-06-01T00:00:00.000Z#2026-06-15T00:00:00.000Z'
+      });
+    });
+
+    it('frees the range after an empty one too', async () => {
+      await handler({ ...base, outcome: 'empty' });
+
+      expect(deletes()).toHaveLength(1);
+    });
+
+    it('leaves scheduled runs alone, which never reserved anything', async () => {
+      await handler({
+        ...base,
+        reportId: '2026-05',
+        reportType: 'monthly',
+        month: '2026-05',
+        monthLabel: 'May 2026',
+        outcome: 'failed',
+        error: { Error: 'Boom' }
+      });
+
+      expect(deletes()).toHaveLength(0);
+    });
+
+    it('does not fail the report when the range cannot be freed', async () => {
+      // The report is already written by then, and the lock expires anyway.
+      ddbSend
+        .mockResolvedValueOnce({})
+        .mockRejectedValueOnce(new Error('AccessDenied'));
+
+      await expect(handler({ ...base, outcome: 'empty' })).resolves.toMatchObject({
+        success: true
+      });
+    });
+  });
+
   describe('keys', () => {
     it('writes an on-demand report under its id', async () => {
       await handler({ ...base, outcome: 'empty' });

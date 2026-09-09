@@ -127,7 +127,10 @@ describe('GenerateReportForm', () => {
   });
 
   it('stays open when starting the report fails, so the range is not lost', async () => {
-    onGenerate.mockRejectedValue(new Error('nope'));
+    // The page throws on a refusal precisely so this happens: the shared API
+    // client resolves failures as `{ success: false }`, so a handler that
+    // merely returned would read as success here and close the form.
+    onGenerate.mockRejectedValue(new Error('Too many reports are already being generated'));
     setup();
     openForm();
     setRange('2026-06-01', '2026-06-14');

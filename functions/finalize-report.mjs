@@ -3,6 +3,7 @@ import { marshall } from '@aws-sdk/util-dynamodb';
 import {
   REPORT_STATUS,
   REPORT_TYPE,
+  releaseReportRangeLock,
   reportPartitionKey,
   reportSortKey
 } from './utils/report-record.mjs';
@@ -99,6 +100,12 @@ export const handler = async (event) => {
     ExpressionAttributeNames: names,
     ExpressionAttributeValues: marshall(values, { removeUndefinedValues: true })
   }));
+
+  // Whatever the ending, the range is free again — especially after a
+  // failure, when somebody will want to try the same dates immediately.
+  if (!isMonthly) {
+    await releaseReportRangeLock(ddb, { tenantId, periodStart, periodEnd });
+  }
 
   console.log(`[REPORT] ${reportId} for ${tenantId} finished as ${values[':status']}`);
 

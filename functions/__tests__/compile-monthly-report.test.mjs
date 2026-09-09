@@ -155,7 +155,30 @@ describe('compile-monthly-report', () => {
     it('still persists an on-demand report before returning', async () => {
       await handler(adhocInput);
 
-      expect(ddbSend).toHaveBeenCalledTimes(1);
+      expect(ddbSend.mock.calls[0][0].input.UpdateExpression).toBeDefined();
+    });
+
+    it('frees the range it was holding once the report is written', async () => {
+      await handler(adhocInput);
+
+      // The reservation exists to stop a second report over the same dates
+      // while this one runs. It is done running.
+      const released = ddbSend.mock.calls
+        .map(call => call[0].input)
+        .find(input => input.Key && !input.UpdateExpression);
+      expect(unmarshall(released.Key).sk).toBe(
+        'lock#2026-06-01T00:00:00.000Z#2026-06-15T00:00:00.000Z'
+      );
+    });
+
+    it('does not try to free anything for a scheduled report', async () => {
+      await handler(monthlyInput);
+
+      // The monthly job never reserved a range; there is nothing to release.
+      const releases = ddbSend.mock.calls
+        .map(call => call[0].input)
+        .filter(input => input.Key && !input.UpdateExpression);
+      expect(releases).toHaveLength(0);
     });
 
     it('persists a scheduled report even with no owner address', async () => {

@@ -108,6 +108,52 @@ describe('monthly-report definition', () => {
     expect(problems).toEqual([]);
   });
 
+  it('forwards everything the later states read into the first task', () => {
+    /*
+     * `Build Report Data` sets `OutputPath: $.Payload`, so its return value
+     * *replaces* the execution state. A field it is never handed cannot be
+     * echoed back, and every later `$.x` then resolves against nothing.
+     *
+     * This is not hypothetical: the four fields carrying an on-demand report's
+     * identity were read by the compile step and by the empty-range choice
+     * while the first task was still being handed only the original five.
+     * Every execution would have failed. The existing checks all passed,
+     * because each looked at one state at a time.
+     */
+    const first = states['Build Report Data'];
+    const forwarded = new Set(
+      Object.keys(first.Parameters.Payload)
+        .filter(key => key.endsWith('.$'))
+        .map(key => key.slice(0, -2))
+    );
+
+    // Produced during the execution rather than carried into it.
+    const PRODUCED = new Set(['hasIssues', 'reportData', 'insights', 'error']);
+
+    const readLater = new Set();
+    const collect = (node) => {
+      if (Array.isArray(node)) return node.forEach(collect);
+      if (!node || typeof node !== 'object') return;
+      for (const [key, value] of Object.entries(node)) {
+        const path = key.endsWith('.$') || key === 'Variable' ? value : null;
+        if (typeof path === 'string' && path.startsWith('$.')) {
+          readLater.add(path.slice(2).split('.')[0]);
+        } else {
+          collect(value);
+        }
+      }
+    };
+    for (const [name, state] of Object.entries(states)) {
+      if (name !== 'Build Report Data') collect(state);
+    }
+
+    const unreachable = [...readLater].filter(
+      field => !forwarded.has(field) && !PRODUCED.has(field)
+    );
+
+    expect(unreachable).toEqual([]);
+  });
+
   it('reads only fields both callers actually send', () => {
     // The scheduled job and the on-demand endpoint each build the execution
     // input by hand. A path either of them omits is a runtime failure, so the

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { ReportsListPage } from '../ReportsListPage';
 import { reportsService } from '@/services/reportsService';
@@ -194,6 +194,51 @@ describe('ReportsListPage', () => {
       // Nothing pending, so nothing to poll for.
       expect(mocked.listReports).toHaveBeenCalledTimes(1);
       vi.useRealTimers();
+    });
+  });
+
+  describe('starting one', () => {
+    const openAndSubmit = async () => {
+      await screen.findByText('May 2026');
+      fireEvent.click(screen.getByRole('button', { name: /new report/i }));
+      fireEvent.change(screen.getByLabelText('From'), { target: { value: '2026-06-01' } });
+      fireEvent.change(screen.getByLabelText('To'), { target: { value: '2026-06-14' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
+    };
+
+    it('closes the picker once the report is accepted', async () => {
+      mocked.createReport.mockResolvedValue({
+        success: true,
+        data: {
+          id: '01JBQ',
+          status: 'pending',
+          reportType: 'adhoc',
+          periodStart: '2026-06-01T00:00:00.000Z',
+          periodEnd: '2026-06-15T00:00:00.000Z',
+          periodLabel: '1–14 Jun 2026'
+        }
+      });
+
+      renderPage();
+      await openAndSubmit();
+
+      await waitFor(() => expect(screen.queryByLabelText('From')).not.toBeInTheDocument());
+    });
+
+    it('keeps the picker open when the API refuses', async () => {
+      // The refusal shape that actually happens. The client resolves failures
+      // rather than rejecting, so a handler that returned quietly here would
+      // read as success and close the form, losing the dates.
+      mocked.createReport.mockResolvedValue({
+        success: false,
+        error: 'Three reports are already being generated.'
+      });
+
+      renderPage();
+      await openAndSubmit();
+
+      await waitFor(() => expect(mocked.createReport).toHaveBeenCalled());
+      expect(screen.getByLabelText('From')).toBeInTheDocument();
     });
   });
 

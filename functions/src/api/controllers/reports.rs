@@ -33,6 +33,26 @@ const PENDING_SCAN_LIMIT: i32 = 25;
 
 const STATUS_PENDING: &str = "pending";
 
+/// How long a range stays reserved if nothing ever releases it. Longer than
+/// any report takes, short enough that a run which vanished does not hold a
+/// range hostage.
+const RANGE_LOCK_TTL_SECONDS: i64 = 60 * 60;
+
+/// Sort key of the row that reserves a range while a report over it runs.
+///
+/// A conditional put on this key is what actually makes "one report per
+/// double-click" true. Reading recent rows and looking for a match is a check
+/// followed by a write: both requests can read before either writes, and the
+/// read goes to an index that is only eventually consistent, so the second can
+/// miss the first outright.
+///
+/// It carries no `GSI1PK`, so it never shows up in the report list — that
+/// query runs on a sparse index. The same key is built in
+/// `functions/utils/report-record.mjs`, which releases it.
+fn range_lock_key(period_start: &str, period_end: &str) -> String {
+    format!("lock#{}#{}", period_start, period_end)
+}
+
 /// Whether an API-facing report id names a scheduled monthly report.
 ///
 /// The two id shapes are told apart without a delimiter: `YYYY-MM` is a month,
@@ -257,19 +277,31 @@ async fn handle_create_report(event: Request) -> Result<Response<Body>, AppError
     let period_end = start_of_day(end_date, zone)?;
     let period_label = format_period_label(start_date, end_date);
 
-    // One read serves both guards below: the same handful of recent rows says
-    // how many are in flight and whether this exact range is already running.
-    let pending = recent_pending_reports(&tenant_id).await?;
+    // Advisory, and deliberately so: it reads an eventually consistent index,
+    // so a burst can slip one past it. It exists to stop somebody queueing
+    // fifty reports, not to be a ledger. Correctness for the duplicate case
+    // lives in the reservation below, which is a conditional write.
+    let in_flight = count_reports_in_flight(&tenant_id).await?;
+    if in_flight >= MAX_PENDING {
+        return Err(AppError::Conflict(format!(
+            "{} reports are already being generated. Wait for one to finish and try again.",
+            in_flight
+        )));
+    }
 
-    if let Some(existing) = pending
-        .iter()
-        .find(|r| r.period_start == period_start && r.period_end == period_end)
+    let report_id = ulid::Ulid::new().to_string();
+    let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+
+    // Whoever creates the reservation owns the range. A second request for the
+    // same range loses the condition and is handed the report already running,
+    // so a double-click makes one report however the two interleave.
+    if let Some(existing_id) =
+        reserve_range(&tenant_id, &report_id, &period_start, &period_end).await?
     {
-        // A double-click makes one report, not two.
         return response::format_response(
             200,
             CreateReportResponse {
-                id: existing.id.clone(),
+                id: existing_id,
                 status: STATUS_PENDING.to_string(),
                 report_type: "adhoc".to_string(),
                 period_start,
@@ -278,16 +310,6 @@ async fn handle_create_report(event: Request) -> Result<Response<Body>, AppError
             },
         );
     }
-
-    if pending.len() >= MAX_PENDING {
-        return Err(AppError::Conflict(format!(
-            "{} reports are already being generated. Wait for one to finish and try again.",
-            pending.len()
-        )));
-    }
-
-    let report_id = ulid::Ulid::new().to_string();
-    let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
 
     write_pending_report(
         &tenant_id,
@@ -300,14 +322,22 @@ async fn handle_create_report(event: Request) -> Result<Response<Body>, AppError
     )
     .await?;
 
-    start_report_execution(
+    // Anything from here that fails leaves a `pending` row nothing can ever
+    // resolve, counting against the limit above forever. So the row and the
+    // reservation are both taken back before the error surfaces, and the
+    // tenant can simply try again.
+    if let Err(error) = start_report_execution(
         &tenant_id,
         &report_id,
         &period_start,
         &period_end,
         &period_label,
     )
-    .await?;
+    .await
+    {
+        abandon_report(&tenant_id, &report_id, &period_start, &period_end).await;
+        return Err(error);
+    }
 
     response::format_response(
         202,
@@ -328,8 +358,7 @@ async fn handle_create_report(event: Request) -> Result<Response<Body>, AppError
 /// accepting shapes the documented contract does not name makes the contract
 /// mean less than it says.
 fn parse_day(value: &str, field: &str) -> Result<NaiveDate, AppError> {
-    let malformed =
-        || AppError::BadRequest(format!("{} must be a date in YYYY-MM-DD form", field));
+    let malformed = || AppError::BadRequest(format!("{} must be a date in YYYY-MM-DD form", field));
 
     if value.len() != 10 {
         return Err(malformed());
@@ -355,11 +384,7 @@ fn start_of_day(date: NaiveDate, zone: chrono_tz::Tz) -> Result<String, AppError
         })
 }
 
-fn validate_range(
-    start: NaiveDate,
-    end: NaiveDate,
-    zone: chrono_tz::Tz,
-) -> Result<(), AppError> {
+fn validate_range(start: NaiveDate, end: NaiveDate, zone: chrono_tz::Tz) -> Result<(), AppError> {
     let span = (end - start).num_days();
 
     if span < MIN_SPAN_DAYS {
@@ -467,10 +492,7 @@ async fn query_reports_by_tenant(
         .table_name(&table_name)
         .index_name("GSI1")
         .key_condition_expression("GSI1PK = :pk")
-        .expression_attribute_values(
-            ":pk",
-            AttributeValue::S(report_partition_key(tenant_id)),
-        )
+        .expression_attribute_values(":pk", AttributeValue::S(report_partition_key(tenant_id)))
         .scan_index_forward(false)
         .limit(query.limit);
 
@@ -498,10 +520,7 @@ async fn query_reports_by_tenant(
     })
 }
 
-async fn get_report_by_id(
-    tenant_id: &str,
-    report_id: &str,
-) -> Result<GetReportResponse, AppError> {
+async fn get_report_by_id(tenant_id: &str, report_id: &str) -> Result<GetReportResponse, AppError> {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
         .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
@@ -509,10 +528,7 @@ async fn get_report_by_id(
     let result = ddb_client
         .get_item()
         .table_name(&table_name)
-        .key(
-            "pk",
-            AttributeValue::S(report_partition_key(tenant_id)),
-        )
+        .key("pk", AttributeValue::S(report_partition_key(tenant_id)))
         .key("sk", AttributeValue::S(report_sort_key(report_id)))
         .send()
         .await?;
@@ -617,14 +633,11 @@ fn read_created_at(item: &HashMap<String, AttributeValue>) -> String {
         .unwrap_or_default()
 }
 
-/// The unfinished reports in a tenant's most recent page.
-struct PendingReport {
-    id: String,
-    period_start: String,
-    period_end: String,
-}
-
-async fn recent_pending_reports(tenant_id: &str) -> Result<Vec<PendingReport>, AppError> {
+/// How many of a tenant's recent reports have not finished.
+///
+/// Only a count: telling a duplicate range from a new one used to happen here
+/// too, and now happens through a conditional write that cannot be raced.
+async fn count_reports_in_flight(tenant_id: &str) -> Result<usize, AppError> {
     let ddb_client = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
         .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
@@ -636,27 +649,104 @@ async fn recent_pending_reports(tenant_id: &str) -> Result<Vec<PendingReport>, A
         .key_condition_expression("GSI1PK = :pk")
         .filter_expression("#status = :pending")
         .expression_attribute_names("#status", "status")
-        .expression_attribute_values(
-            ":pk",
-            AttributeValue::S(report_partition_key(tenant_id)),
-        )
+        .expression_attribute_values(":pk", AttributeValue::S(report_partition_key(tenant_id)))
         .expression_attribute_values(":pending", AttributeValue::S(STATUS_PENDING.to_string()))
         .scan_index_forward(false)
         .limit(PENDING_SCAN_LIMIT)
         .send()
         .await?;
 
-    Ok(result
-        .items()
-        .iter()
-        .filter_map(|item| {
-            Some(PendingReport {
-                id: report_id_from_sort_key(&read_optional_string(item, "sk")?),
-                period_start: read_optional_string(item, "periodStart")?,
-                period_end: read_optional_string(item, "periodEnd")?,
-            })
-        })
-        .collect())
+    Ok(result.items().len())
+}
+
+/// Claims a range for one report.
+///
+/// Returns `None` when the claim succeeded, and `Some(report_id)` when another
+/// request already holds it — that report is the answer to this request too.
+async fn reserve_range(
+    tenant_id: &str,
+    report_id: &str,
+    period_start: &str,
+    period_end: &str,
+) -> Result<Option<String>, AppError> {
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+    let table_name = std::env::var("TABLE_NAME")
+        .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
+
+    let key = range_lock_key(period_start, period_end);
+    let expires_at = Utc::now().timestamp() + RANGE_LOCK_TTL_SECONDS;
+
+    let claim = ddb_client
+        .put_item()
+        .table_name(&table_name)
+        .item("pk", AttributeValue::S(report_partition_key(tenant_id)))
+        .item("sk", AttributeValue::S(key.clone()))
+        .item("reportId", AttributeValue::S(report_id.to_string()))
+        .item("ttl", AttributeValue::N(expires_at.to_string()))
+        .condition_expression("attribute_not_exists(pk)")
+        .send()
+        .await;
+
+    match claim {
+        Ok(_) => Ok(None),
+        Err(error) => {
+            let already_held = error
+                .as_service_error()
+                .is_some_and(|e| e.is_conditional_check_failed_exception());
+
+            if !already_held {
+                return Err(AppError::from(error));
+            }
+
+            // Strongly consistent: the write that beat us happened, so the
+            // read that follows it has to see it.
+            let held = ddb_client
+                .get_item()
+                .table_name(&table_name)
+                .key("pk", AttributeValue::S(report_partition_key(tenant_id)))
+                .key("sk", AttributeValue::S(key))
+                .consistent_read(true)
+                .send()
+                .await?;
+
+            Ok(held
+                .item()
+                .and_then(|item| read_optional_string(item, "reportId")))
+        }
+    }
+}
+
+/// Undoes a report that was written but never started.
+///
+/// Best effort on purpose: the caller is already returning an error, and
+/// failing to clean up must not replace that error with a less useful one. The
+/// reservation's TTL is the backstop.
+async fn abandon_report(tenant_id: &str, report_id: &str, period_start: &str, period_end: &str) {
+    let Ok(table_name) = std::env::var("TABLE_NAME") else {
+        return;
+    };
+    let ddb_client = aws_clients::get_dynamodb_client().await;
+
+    for sort_key in [
+        report_sort_key(report_id),
+        range_lock_key(period_start, period_end),
+    ] {
+        if let Err(error) = ddb_client
+            .delete_item()
+            .table_name(&table_name)
+            .key("pk", AttributeValue::S(report_partition_key(tenant_id)))
+            .key("sk", AttributeValue::S(sort_key.clone()))
+            .send()
+            .await
+        {
+            tracing::warn!(
+                report_id,
+                sort_key,
+                error = %error,
+                "could not clean up a report that never started; its lock expires on its own"
+            );
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -724,6 +814,10 @@ async fn start_report_execution(
     sfn_client
         .start_execution()
         .state_machine_arn(state_machine_arn)
+        // Named after the report, so a retry of the same request joins the
+        // execution already running rather than starting a second one over
+        // the same range.
+        .name(report_id)
         .input(input.to_string())
         .send()
         .await
@@ -854,6 +948,39 @@ mod tests {
         }
     }
 
+    mod range_reservation {
+        use super::*;
+
+        #[test]
+        fn the_key_is_the_range_itself() {
+            // Two requests for the same range build the same key, which is the
+            // whole mechanism: the second one loses the conditional put.
+            let a = range_lock_key("2026-06-01T00:00:00.000Z", "2026-06-15T00:00:00.000Z");
+            let b = range_lock_key("2026-06-01T00:00:00.000Z", "2026-06-15T00:00:00.000Z");
+
+            assert_eq!(a, b);
+        }
+
+        #[test]
+        fn a_different_range_is_a_different_key() {
+            let june = range_lock_key("2026-06-01T00:00:00.000Z", "2026-06-15T00:00:00.000Z");
+            let july = range_lock_key("2026-07-01T00:00:00.000Z", "2026-07-15T00:00:00.000Z");
+
+            assert_ne!(june, july);
+        }
+
+        #[test]
+        fn it_cannot_collide_with_a_report() {
+            // Both live in the same partition, so the prefixes have to stay
+            // distinct or a lock would shadow a report.
+            let lock = range_lock_key("2026-06-01T00:00:00.000Z", "2026-06-15T00:00:00.000Z");
+
+            assert!(lock.starts_with("lock#"));
+            assert!(!lock.starts_with(MONTHLY_PREFIX));
+            assert!(!lock.starts_with(ADHOC_PREFIX));
+        }
+    }
+
     mod range_validation {
         use super::*;
 
@@ -917,7 +1044,10 @@ mod tests {
         // Every label names the last day *covered*, not the exclusive end.
         #[test]
         fn a_single_day() {
-            assert_eq!(format_period_label(day("2026-06-03"), day("2026-06-04")), "3 Jun 2026");
+            assert_eq!(
+                format_period_label(day("2026-06-03"), day("2026-06-04")),
+                "3 Jun 2026"
+            );
         }
 
         #[test]
@@ -958,7 +1088,12 @@ mod tests {
 
         #[test]
         fn rejects_anything_that_is_not_a_plain_date() {
-            for bad in ["2026-6-1", "06/01/2026", "2026-06-01T00:00:00Z", "yesterday"] {
+            for bad in [
+                "2026-6-1",
+                "06/01/2026",
+                "2026-06-01T00:00:00Z",
+                "yesterday",
+            ] {
                 assert!(parse_day(bad, "periodStart").is_err(), "accepted {}", bad);
             }
         }

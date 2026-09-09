@@ -140,7 +140,11 @@ export const ReportsListPage: React.FC = () => {
           message: response.error || 'Please try again.',
           type: 'error',
         });
-        return;
+        // Thrown, not returned. The API client resolves a refusal as
+        // `{ success: false }` rather than rejecting, so returning here would
+        // look like success to the form, which would close and take the dates
+        // someone chose with it.
+        throw new Error(response.error || 'Could not start the report');
       }
 
       addToast({

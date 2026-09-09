@@ -5,6 +5,7 @@ import { marshall } from '@aws-sdk/util-dynamodb';
 import {
   REPORT_STATUS,
   REPORT_TYPE,
+  releaseReportRangeLock,
   reportPartitionKey,
   reportSortKey
 } from './utils/report-record.mjs';
@@ -106,7 +107,12 @@ export const handler = async (event) => {
     }, { removeUndefinedValues: true })
   }));
 
-  // 2. Send the report email to the tenant owner — scheduled reports only.
+  // 2. The range is no longer being worked on, so let go of it.
+  if (!isMonthly) {
+    await releaseReportRangeLock(ddb, { tenantId, periodStart, periodEnd });
+  }
+
+  // 3. Send the report email to the tenant owner — scheduled reports only.
   //
   // An on-demand report is something a person asked for and is already
   // looking at; mailing it back to them is noise. The return is here, before

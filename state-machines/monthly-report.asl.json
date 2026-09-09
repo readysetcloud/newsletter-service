@@ -13,7 +13,11 @@
           "month.$": "$.month",
           "monthLabel.$": "$.monthLabel",
           "periodStart.$": "$.periodStart",
-          "periodEnd.$": "$.periodEnd"
+          "periodEnd.$": "$.periodEnd",
+          "reportId.$": "$.reportId",
+          "reportType.$": "$.reportType",
+          "deliverEmail.$": "$.deliverEmail",
+          "periodLabel.$": "$.periodLabel"
         }
       },
       "Retry": [

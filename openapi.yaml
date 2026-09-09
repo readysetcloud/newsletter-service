@@ -2020,6 +2020,56 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "500":
           $ref: "#/components/responses/UnknownError"
+    post:
+      summary: Generate a report over a date range
+      description: >
+        Starts a report covering any range the tenant chooses and returns
+        immediately with its id. The report exists straight away with status
+        "pending" and appears in the list like any other; it is filled in when
+        the workflow finishes. On-demand reports are never emailed.
+
+
+        Dates are read as days in the newsletter's configured timezone,
+        falling back to UTC when none is set, so the boundaries do not depend
+        on the machine that asked. `periodEnd` is exclusive.
+      tags:
+        - Reports
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReportRequest"
+      responses:
+        "202":
+          description: Generation started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateReportResponse"
+        "200":
+          description: >
+            An identical range is already being generated. The report already
+            in flight is returned rather than starting a second one.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateReportResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: >
+            Too many reports are already being generated, or another request
+            for these same dates is mid-flight and had not finished claiming
+            them yet. Both clear on their own; retrying works.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/UnknownError"
 
   /reports/{id}:
     parameters:
@@ -2028,7 +2078,10 @@ paths:
         required: true
         schema:
           type: string
-        description: The report month in YYYY-MM format (e.g. "2026-05")
+        description: >
+          The report identifier: a month in YYYY-MM form for a scheduled
+          report, or the id returned by POST /reports for one covering a range
+          the tenant picked.
     get:
       summary: Get a single monthly report
       description: Retrieves a specific monthly report including the full report blob
@@ -3683,6 +3736,56 @@ components:
           format: date-time
           description: When the issue is scheduled to be published (only for scheduled issues)
 
+    CreateReportRequest:
+      type: object
+      required:
+        - periodStart
+        - periodEnd
+      properties:
+        periodStart:
+          type: string
+          format: date
+          description: First day covered, YYYY-MM-DD, read in the newsletter's timezone
+          example: "2026-06-01"
+        periodEnd:
+          type: string
+          format: date
+          description: >
+            Exclusive end, YYYY-MM-DD. A range must cover between 1 and 366
+            days and cannot extend past today.
+          example: "2026-07-01"
+
+    CreateReportResponse:
+      type: object
+      required:
+        - id
+        - status
+        - reportType
+        - periodStart
+        - periodEnd
+        - periodLabel
+      properties:
+        id:
+          type: string
+          description: Identifier to poll with GET /reports/{id}
+        status:
+          type: string
+          enum: [pending]
+        reportType:
+          type: string
+          enum: [adhoc]
+        periodStart:
+          type: string
+          format: date-time
+          description: The resolved instant the range starts at
+        periodEnd:
+          type: string
+          format: date-time
+        periodLabel:
+          type: string
+          description: How the range reads to a person, naming the last day covered
+          example: "1–30 Jun 2026"
+
     ListReportsResponse:
       type: object
       required:
@@ -3701,22 +3804,28 @@ components:
       type: object
       required:
         - id
-        - month
-        - monthLabel
+        - periodLabel
         - periodStart
         - periodEnd
-        - generatedAt
+        - createdAt
         - reportType
+        - status
       properties:
         id:
           type: string
-          description: Report identifier (the month in YYYY-MM format)
+          description: Report identifier — a month in YYYY-MM form, or a generated id
         month:
           type: string
-          description: The report month in YYYY-MM format
+          description: >
+            The report month in YYYY-MM format. Absent on a report covering a
+            range the tenant picked, which belongs to no single month.
         monthLabel:
           type: string
-          description: Human-readable month label (e.g. "May 2026")
+          description: Human-readable month label (e.g. "May 2026"). Absent for the same reason.
+        periodLabel:
+          type: string
+          description: How the covered range reads to a person. Present on every report.
+          example: "1–30 Jun 2026"
         periodStart:
           type: string
           format: date-time
@@ -3725,13 +3834,24 @@ components:
           type: string
           format: date-time
           description: ISO8601 end of the reporting period
+        createdAt:
+          type: string
+          format: date-time
+          description: When the report was started. Reports are listed newest first by this.
         generatedAt:
           type: string
           format: date-time
-          description: ISO8601 timestamp when the report was generated
+          description: When the report finished. Absent while it is still pending.
         reportType:
           type: string
-          description: The report type (always "monthly")
+          enum: [monthly, adhoc]
+          description: Whether the report was scheduled or asked for
+        status:
+          type: string
+          enum: [pending, complete, failed]
+        failureReason:
+          type: string
+          description: Why generation failed. Only present when status is "failed".
         summary:
           type: object
           additionalProperties: true
@@ -3745,23 +3865,39 @@ components:
       type: object
       required:
         - id
-        - month
-        - monthLabel
+        - periodLabel
         - periodStart
         - periodEnd
-        - generatedAt
+        - createdAt
         - reportType
+        - status
         - report
       properties:
         id:
           type: string
-          description: Report identifier (the month in YYYY-MM format)
+          description: Report identifier — a month in YYYY-MM form, or a generated id
         month:
           type: string
-          description: The report month in YYYY-MM format
+          description: >
+            The report month in YYYY-MM format. Absent on a report covering a
+            range the tenant picked.
         monthLabel:
           type: string
-          description: Human-readable month label (e.g. "May 2026")
+          description: Human-readable month label (e.g. "May 2026"). Absent for the same reason.
+        periodLabel:
+          type: string
+          description: How the covered range reads to a person. Present on every report.
+          example: "1–30 Jun 2026"
+        createdAt:
+          type: string
+          format: date-time
+          description: When the report was started
+        status:
+          type: string
+          enum: [pending, complete, failed]
+        failureReason:
+          type: string
+          description: Why generation failed. Only present when status is "failed".
         periodStart:
           type: string
           format: date-time
@@ -3773,14 +3909,18 @@ components:
         generatedAt:
           type: string
           format: date-time
-          description: ISO8601 timestamp when the report was generated
+          description: When the report finished. Absent while it is still pending.
         reportType:
           type: string
-          description: The report type (always "monthly")
+          enum: [monthly, adhoc]
+          description: Whether the report was scheduled or asked for
         report:
           type: object
+          nullable: true
           additionalProperties: true
-          description: The full, opaque report blob produced by the monthly report job
+          description: >
+            The full report. Null while the report is pending or failed, and
+            carries `hasIssues: false` for a range that contained no issues.
           properties:
             summary:
               type: object

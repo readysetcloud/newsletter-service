@@ -1296,7 +1296,11 @@ Resources:
             - Effect: Allow
               Action:
                 - states:StartExecution
-              Resource: !Ref StageIssueStateMachine
+              Resource:
+                - !Ref StageIssueStateMachine
+                # A report someone asked for over a range they picked runs the
+                # same workflow the monthly job does.
+                - !Ref MonthlyReportStateMachine
             # Reports where a scheduled issue's publish workflow actually is,
             # for issues that have not reached local-send fan-out yet.
             - Effect: Allow
@@ -1366,6 +1370,7 @@ Resources:
           USER_POOL_ID: !Ref NewsletterUserPool
           HOSTING_BUCKET_NAME: !Ref HostingBucket
           STATE_MACHINE_ARN: !Ref StageIssueStateMachine
+          REPORT_STATE_MACHINE_ARN: !Ref MonthlyReportStateMachine
           SEGMENT_EXPORT_FUNCTION_NAME: !Ref SegmentExportFunction
           BUCKET: !Ref NewsletterBucket
           ORIGIN: !If
@@ -2142,7 +2147,9 @@ Resources:
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: dynamodb:PutItem
+              # An update, not a put: an on-demand report already exists as a
+              # pending row and overwriting it would drop who asked for it.
+              Action: dynamodb:UpdateItem
               Resource: !GetAtt NewsletterTable.Arn
             - Effect: Allow
               Action: events:PutEvents
@@ -2668,6 +2675,33 @@ Resources:
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
 
+  # Writes the two endings the compile step cannot: a range with no issues in
+  # it, and a run that failed. Both are upserts, which is what gives a failed
+  # scheduled report a row where before it left nothing behind.
+  FinalizeReportFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - finalize-report.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: finalize-report.handler
+      Timeout: 30
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+
   MonthlyReportStateMachine:
     Type: AWS::Serverless::StateMachine
     Properties:
@@ -2678,6 +2712,7 @@ Resources:
         BuildMonthlyReportData: !GetAtt BuildMonthlyReportDataFunction.Arn
         GenerateMonthlyInsights: !GetAtt GenerateMonthlyInsightsFunction.Arn
         CompileMonthlyReport: !GetAtt CompileMonthlyReportFunction.Arn
+        FinalizeReport: !GetAtt FinalizeReportFunction.Arn
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -2687,6 +2722,7 @@ Resources:
                 - !GetAtt BuildMonthlyReportDataFunction.Arn
                 - !GetAtt GenerateMonthlyInsightsFunction.Arn
                 - !GetAtt CompileMonthlyReportFunction.Arn
+                - !GetAtt FinalizeReportFunction.Arn
 
   MonthlyReportJobFunction:
     Type: AWS::Serverless::Function

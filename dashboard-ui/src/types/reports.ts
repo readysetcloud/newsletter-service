@@ -7,7 +7,14 @@
  * re-exported through `types/index.ts` to avoid name collisions.
  */
 
-export type ReportType = 'monthly';
+export type ReportType = 'monthly' | 'adhoc';
+
+/**
+ * Where a report is in its life. A report someone asks for exists as soon as
+ * they ask, before it has any content, so the dashboard reads this rather
+ * than inferring anything from a missing body.
+ */
+export type ReportStatus = 'pending' | 'complete' | 'failed';
 
 export type ReportInsightSeverity = 'info' | 'watch' | 'action';
 
@@ -57,14 +64,41 @@ export interface ReportSubscriberGrowthDetail extends ReportSubscriberGrowth {
  */
 export interface ReportSummaryItem {
   id: string;
-  month: string;
-  monthLabel: string;
+  /** Absent on a report covering a range someone picked. */
+  month?: string;
+  monthLabel?: string;
+  /** How the covered range reads. Present on every report. */
+  periodLabel: string;
   periodStart: string;
   periodEnd: string;
-  generatedAt: string;
+  /** When it was started. Reports are listed newest first by this. */
+  createdAt: string;
+  /** When it finished. Absent while pending. */
+  generatedAt?: string;
   reportType: ReportType;
-  summary: ReportSummaryMetrics;
-  subscriberGrowth: ReportSubscriberGrowth;
+  status: ReportStatus;
+  /** Only when `status` is `failed`. */
+  failureReason?: string;
+  /** Absent until the report finishes, and on a range with no issues in it. */
+  summary?: ReportSummaryMetrics;
+  subscriberGrowth?: ReportSubscriberGrowth;
+}
+
+/** The range to report on. Days, read in the newsletter's timezone. */
+export interface CreateReportRequest {
+  /** First day covered, `YYYY-MM-DD`. */
+  periodStart: string;
+  /** Exclusive end, `YYYY-MM-DD`. */
+  periodEnd: string;
+}
+
+export interface CreateReportResponse {
+  id: string;
+  status: ReportStatus;
+  reportType: ReportType;
+  periodStart: string;
+  periodEnd: string;
+  periodLabel: string;
 }
 
 /**
@@ -135,13 +169,35 @@ export interface MonthlyReportBody {
  */
 export interface MonthlyReport {
   id: string;
-  month: string;
-  monthLabel: string;
+  month?: string;
+  monthLabel?: string;
+  periodLabel: string;
   periodStart: string;
   periodEnd: string;
-  generatedAt: string;
+  createdAt: string;
+  generatedAt?: string;
   reportType: ReportType;
-  report: MonthlyReportBody;
+  status: ReportStatus;
+  failureReason?: string;
+  /**
+   * Null while the report is pending or after it failed, and the empty shape
+   * when the range simply contained no issues — a real answer rather than a
+   * missing one.
+   */
+  report: MonthlyReportBody | EmptyReportBody | null;
+}
+
+/** A completed report over a range that contained no issues. */
+export interface EmptyReportBody {
+  hasIssues: false;
+  insights: ReportInsight[];
+}
+
+/** Whether a report has figures in it to render. */
+export function hasReportBody(
+  report: MonthlyReportBody | EmptyReportBody | null
+): report is MonthlyReportBody {
+  return report != null && (report as EmptyReportBody).hasIssues !== false;
 }
 
 export interface ListReportsParams {

@@ -1,9 +1,12 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { RefreshCw, BarChart3, ArrowUpRight, ArrowDownRight, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/Toast';
 import { Card, CardContent } from '@/components/ui/Card';
+import { GenerateReportForm } from '@/components/reports/GenerateReportForm';
+import { ReportKindChip } from '@/components/reports/ReportKindChip';
+import { ReportCardState, ReportCardSubtitle } from '@/components/reports/ReportCardState';
 import { reportsService } from '@/services/reportsService';
 import type { ReportSummaryItem } from '@/types/reports';
 
@@ -13,6 +16,20 @@ const formatNumber = (value: number): string => value.toLocaleString('en-US');
 
 const formatSignedNumber = (value: number): string =>
   `${value > 0 ? '+' : ''}${value.toLocaleString('en-US')}`;
+
+/**
+ * How often to re-read the list while something is still being generated.
+ *
+ * Reports are ordered by when they were started, so anything just requested is
+ * the first row and polling the list is enough to follow it. Once in-app
+ * notifications exist this goes away.
+ */
+const POLL_INTERVAL_MS = 5000;
+
+/** Reports are listed newest-first, so a new one is always on the first page. */
+const PAGE_SIZE = 20;
+
+const isPending = (report: ReportSummaryItem) => report.status === 'pending';
 
 export const ReportsListPage: React.FC = () => {
   const navigate = useNavigate();
@@ -25,8 +42,10 @@ export const ReportsListPage: React.FC = () => {
   const [nextToken, setNextToken] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
 
-  const nextTokenRef = React.useRef<string | null>(null);
+  const nextTokenRef = useRef<string | null>(null);
   nextTokenRef.current = nextToken;
+
+  const generating = reports.filter(isPending).length;
 
   const loadReports = useCallback(async (reset = false) => {
     try {
@@ -38,7 +57,7 @@ export const ReportsListPage: React.FC = () => {
       }
 
       const params = {
-        limit: 20,
+        limit: PAGE_SIZE,
         ...(reset ? {} : { nextToken: nextTokenRef.current || undefined }),
       };
 
@@ -88,6 +107,56 @@ export const ReportsListPage: React.FC = () => {
   useEffect(() => {
     loadReports(true);
   }, [loadReports]);
+
+  // Re-read the first page while anything is unfinished, and stop as soon as
+  // nothing is. Silent: a background refresh must not raise a toast or blank
+  // the list someone is reading.
+  const refreshQuietly = useCallback(async () => {
+    const response = await reportsService.listReports({ limit: PAGE_SIZE });
+    if (response.success && response.data) {
+      setReports(response.data.reports);
+      setNextToken(response.data.nextToken || null);
+      setHasMore(!!response.data.nextToken);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (generating === 0) return undefined;
+
+    const timer = window.setInterval(() => {
+      void refreshQuietly();
+    }, POLL_INTERVAL_MS);
+
+    return () => window.clearInterval(timer);
+  }, [generating, refreshQuietly]);
+
+  const handleGenerate = useCallback(
+    async (range: { periodStart: string; periodEnd: string }) => {
+      const response = await reportsService.createReport(range);
+
+      if (!response.success || !response.data) {
+        addToast({
+          title: 'Could not start the report',
+          message: response.error || 'Please try again.',
+          type: 'error',
+        });
+        // Thrown, not returned. The API client resolves a refusal as
+        // `{ success: false }` rather than rejecting, so returning here would
+        // look like success to the form, which would close and take the dates
+        // someone chose with it.
+        throw new Error(response.error || 'Could not start the report');
+      }
+
+      addToast({
+        title: 'Generating report',
+        message: `${response.data.periodLabel} will appear in the list when it is ready.`,
+        type: 'success',
+      });
+
+      await refreshQuietly();
+    },
+    [addToast, refreshQuietly]
+  );
 
   const handleLoadMore = useCallback(() => {
     if (!loadingMore && hasMore) {
@@ -161,9 +230,18 @@ export const ReportsListPage: React.FC = () => {
             <div className="min-w-0">
               <h1 className="text-2xl sm:text-3xl font-bold text-foreground">Reports</h1>
               <p className="text-sm sm:text-base text-muted-foreground mt-1">
-                Monthly newsletter performance reports
+                Monthly reports, and any range you ask about
               </p>
             </div>
+            <GenerateReportForm
+              onGenerate={handleGenerate}
+              disabled={generating >= 3}
+              disabledReason={
+                generating >= 3
+                  ? 'Three reports are already being generated. Wait for one to finish.'
+                  : undefined
+              }
+            />
           </div>
         </div>
 
@@ -175,7 +253,8 @@ export const ReportsListPage: React.FC = () => {
                   <BarChart3 className="mx-auto h-12 w-12 text-muted-foreground mb-4" aria-hidden="true" />
                   <h3 className="text-lg font-medium text-foreground mb-2">No reports yet</h3>
                   <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                    No reports yet — your first monthly report is generated on the 1st of the month.
+                    Your first monthly report is generated on the 1st. You do not have to wait
+                    for it — pick a range and generate one now.
                   </p>
                 </div>
               </CardContent>
@@ -185,36 +264,50 @@ export const ReportsListPage: React.FC = () => {
           <>
             <div className="grid gap-4" role="list" aria-label="Monthly reports">
               {reports.map((report) => {
-                const netChange = report.subscriberGrowth.netChange;
+                const readable = report.status === 'complete' && !!report.summary;
+                const netChange = report.subscriberGrowth?.netChange ?? 0;
                 const isPositive = netChange >= 0;
+                const open = () => navigate(`/reports/${report.id}`);
 
                 return (
                   <Card
                     key={report.id}
-                    interactive
+                    interactive={readable}
                     role="listitem"
-                    onClick={() => navigate(`/reports/${report.id}`)}
+                    onClick={readable ? open : undefined}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
+                      if (readable && (e.key === 'Enter' || e.key === ' ')) {
                         e.preventDefault();
-                        navigate(`/reports/${report.id}`);
+                        open();
                       }
                     }}
-                    tabIndex={0}
-                    aria-label={`View report for ${report.monthLabel}`}
+                    tabIndex={readable ? 0 : -1}
+                    aria-label={
+                      readable
+                        ? `View report for ${report.periodLabel}`
+                        : `Report for ${report.periodLabel}, ${report.status}`
+                    }
                     className="focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2"
                   >
                     <CardContent className="p-6">
-                      <div className="flex items-center justify-between mb-5">
-                        <div>
-                          <h2 className="text-lg font-semibold text-foreground">{report.monthLabel}</h2>
+                      <div className="flex items-start justify-between gap-3 mb-5">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h2 className="text-lg font-semibold text-foreground">{report.periodLabel}</h2>
+                            <ReportKindChip reportType={report.reportType} />
+                          </div>
                           <p className="text-xs text-muted-foreground mt-0.5">
-                            {report.summary.issuesSent} {report.summary.issuesSent === 1 ? 'issue' : 'issues'} sent
+                            <ReportCardSubtitle report={report} />
                           </p>
                         </div>
-                        <ChevronRight className="w-5 h-5 text-muted-foreground" aria-hidden="true" />
+                        {readable && (
+                          <ChevronRight className="w-5 h-5 text-muted-foreground shrink-0" aria-hidden="true" />
+                        )}
                       </div>
 
+                      {!readable && <ReportCardState report={report} />}
+
+                      {readable && report.summary && (
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                         <div>
                           <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
@@ -260,6 +353,7 @@ export const ReportsListPage: React.FC = () => {
                           </div>
                         </div>
                       </div>
+                      )}
                     </CardContent>
                   </Card>
                 );

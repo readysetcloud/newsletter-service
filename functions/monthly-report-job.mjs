@@ -200,10 +200,17 @@ export const handler = async () => {
       await sfn.send(new StartExecutionCommand({
         stateMachineArn: STATE_MACHINE_ARN,
         name: buildExecutionName(tenant.id, window.month),
+        // Every field the state machine reads is sent by both callers - here
+        // and the on-demand endpoint - because a `.$` path to a key that is
+        // absent is a States.Runtime error, not a null.
         input: JSON.stringify({
           tenant: { id: tenant.id, email },
+          reportId: window.month,
+          reportType: 'monthly',
+          deliverEmail: true,
           month: window.month,
           monthLabel: window.monthLabel,
+          periodLabel: window.monthLabel,
           periodStart: window.periodStart,
           periodEnd: filterEnd
         })

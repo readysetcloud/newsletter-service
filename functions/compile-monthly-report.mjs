@@ -1,7 +1,14 @@
 import Handlebars from 'handlebars';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
-import { DynamoDBClient, PutItemCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
+import {
+  REPORT_STATUS,
+  REPORT_TYPE,
+  releaseReportRangeLock,
+  reportPartitionKey,
+  reportSortKey
+} from './utils/report-record.mjs';
 import monthlyReportTemplate from '../templates/monthly-report.hbs';
 
 const eventbridge = new EventBridgeClient();
@@ -23,37 +30,98 @@ const severityColor = (severity) => {
 const rankBadge = (index) => (index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `#${index + 1}`);
 
 /**
- * Persists the finished monthly report so the dashboard can retrieve it later,
- * then renders the report email and publishes a Send Email v2 event.
+ * Persists the finished report so the dashboard can retrieve it later, then —
+ * for a scheduled report only — renders the email and publishes a Send Email
+ * v2 event.
  *
- * Input: { tenant: { id, email }, month, monthLabel, periodStart, periodEnd, reportData, insights }
+ * Input: { tenant: { id, email }, reportId, reportType, deliverEmail,
+ *          month, monthLabel, periodLabel, periodStart, periodEnd,
+ *          reportData, insights }
  */
 export const handler = async (event) => {
-  const { tenant, month, monthLabel, periodStart, periodEnd, reportData, insights } = event;
+  const {
+    tenant,
+    month,
+    monthLabel,
+    periodStart,
+    periodEnd,
+    reportData,
+    insights
+  } = event;
   const tenantId = tenant.id;
   const generatedAt = new Date().toISOString();
 
+  const reportType = event.reportType ?? REPORT_TYPE.MONTHLY;
+  const isMonthly = reportType === REPORT_TYPE.MONTHLY;
+  // A scheduled run identifies its report by the month it covers; an
+  // on-demand one was given a id when it was requested.
+  const reportId = event.reportId ?? month;
+  const periodLabel = event.periodLabel ?? monthLabel;
+  // Only the monthly job mails anything. An on-demand report is read in the
+  // dashboard by the person who asked for it.
+  const deliverEmail = event.deliverEmail ?? isMonthly;
+
   const report = { ...reportData, insights: Array.isArray(insights) ? insights : [] };
 
-  // 1. Persist the report for the dashboard (pk = `${tenantId}#report`, sk = `monthly#${month}`).
-  await ddb.send(new PutItemCommand({
+  // 1. Persist the report for the dashboard.
+  //
+  // An update rather than a put, for two reasons. An on-demand report already
+  // exists as a `pending` row written when it was requested, and overwriting
+  // it would drop who asked and when. And `createdAt` doubles as the ordering
+  // key on GSI1, so it has to survive a rewrite: `if_not_exists` keeps the
+  // original for a report that has one and stamps now for a scheduled report,
+  // which has no earlier row.
+  await ddb.send(new UpdateItemCommand({
     TableName: process.env.TABLE_NAME,
-    Item: marshall({
-      pk: `${tenantId}#report`,
-      sk: `monthly#${month}`,
-      GSI1PK: `${tenantId}#report`,
-      GSI1SK: `monthly#${month}`,
-      reportType: 'monthly',
-      month,
-      monthLabel,
-      periodStart,
-      periodEnd,
-      generatedAt,
-      report
+    Key: marshall({ pk: reportPartitionKey(tenantId), sk: reportSortKey(reportId) }),
+    UpdateExpression: [
+      'SET #status = :status',
+      'reportType = :reportType',
+      'periodStart = :periodStart',
+      'periodEnd = :periodEnd',
+      'periodLabel = :periodLabel',
+      'generatedAt = :generatedAt',
+      'createdAt = if_not_exists(createdAt, :generatedAt)',
+      'GSI1PK = :gsi1pk',
+      'GSI1SK = if_not_exists(GSI1SK, :generatedAt)',
+      '#report = :report',
+      ...(isMonthly ? ['#month = :month', 'monthLabel = :monthLabel'] : [])
+    ].join(', ')
+      // A reason left by an earlier failed attempt must not outlive it.
+      + ' REMOVE failureReason',
+    ExpressionAttributeNames: {
+      '#status': 'status',
+      '#report': 'report',
+      ...(isMonthly ? { '#month': 'month' } : {})
+    },
+    ExpressionAttributeValues: marshall({
+      ':status': REPORT_STATUS.COMPLETE,
+      ':reportType': reportType,
+      ':periodStart': periodStart,
+      ':periodEnd': periodEnd,
+      ':periodLabel': periodLabel,
+      ':generatedAt': generatedAt,
+      ':gsi1pk': reportPartitionKey(tenantId),
+      ':report': report,
+      ...(isMonthly ? { ':month': month, ':monthLabel': monthLabel } : {})
     }, { removeUndefinedValues: true })
   }));
 
-  // 2. Render the email.
+  // 2. The range is no longer being worked on, so let go of it.
+  if (!isMonthly) {
+    await releaseReportRangeLock(ddb, { tenantId, reportId, periodStart, periodEnd });
+  }
+
+  // 3. Send the report email to the tenant owner — scheduled reports only.
+  //
+  // An on-demand report is something a person asked for and is already
+  // looking at; mailing it back to them is noise. The return is here, before
+  // anything is rendered, because the template is the email and because a
+  // report over a range with no issues in it has no figures to render at all.
+  if (!deliverEmail) {
+    return { success: true, reportId, reportType, emailed: false };
+  }
+
   const dashboardBaseUrl = process.env.DASHBOARD_BASE_URL || process.env.ORIGIN || '';
   const normalizedBase = dashboardBaseUrl ? dashboardBaseUrl.replace(/\/+$/, '') : '';
   const reportUrl = normalizedBase ? `${normalizedBase}/reports/${month}` : null;
@@ -139,7 +207,6 @@ export const handler = async (event) => {
 
   const html = template(templateData);
 
-  // 3. Send the report email to the tenant owner (if we have an address).
   const recipient = tenant.email;
   if (recipient) {
     await eventbridge.send(new PutEventsCommand({
@@ -158,5 +225,5 @@ export const handler = async (event) => {
     console.warn(`[MONTHLY-REPORT] No recipient email for tenant ${tenantId}; report persisted but email skipped`);
   }
 
-  return { success: true, month, emailed: Boolean(recipient) };
+  return { success: true, reportId, reportType, emailed: Boolean(recipient) };
 };

@@ -20,7 +20,10 @@ import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/Toast';
 import { cn } from '@/utils/cn';
 import { reportsService } from '@/services/reportsService';
+import { hasReportBody } from '@/types/reports';
 import type { MonthlyReport, ReportInsightSeverity } from '@/types/reports';
+import { ReportPendingPage } from '@/components/reports/ReportPendingPage';
+import { ReportKindChip } from '@/components/reports/ReportKindChip';
 import { useTenantDateFormat } from '@/contexts/SettingsContext';
 import { formatCalendarDate, formatInTimeZone } from '@/utils/dateFormatting';
 
@@ -243,6 +246,20 @@ export const ReportDetailPage: React.FC = () => {
     );
   }
 
+  // A report is a row before it is a report: it exists from the moment it is
+  // requested, and can end with no figures either because it failed or
+  // because nothing went out in the range. Each of those is its own answer,
+  // and none of them can be rendered by the sections below.
+  if (!hasReportBody(report.report)) {
+    return (
+      <ReportPendingPage
+        report={report}
+        onBack={handleBack}
+        onRefresh={loadReport}
+      />
+    );
+  }
+
   const { summary, subscriberGrowth, topLinks, issues, bestIssue, insights } = report.report;
   const growthPositive = subscriberGrowth.netChange >= 0;
 
@@ -268,12 +285,15 @@ export const ReportDetailPage: React.FC = () => {
 
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-2xl sm:text-3xl font-bold text-foreground">
-            {report.monthLabel} Report
-          </h1>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h1 className="text-2xl sm:text-3xl font-bold text-foreground">
+              {report.periodLabel}
+            </h1>
+            <ReportKindChip reportType={report.reportType} />
+          </div>
           <p className="text-sm text-muted-foreground mt-1">
-            {formatPeriodDate(report.periodStart)} – {formatPeriodDate(report.periodEnd)} · Generated{' '}
-            {formatDate(report.generatedAt, timeZone)}
+            {formatPeriodDate(report.periodStart)} – {formatPeriodDate(report.periodEnd)}
+            {report.generatedAt ? ` · Generated ${formatDate(report.generatedAt, timeZone)}` : ''}
           </p>
         </div>
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, FolderOpen, AlertCircle, RefreshCw, X, ArrowUp, ArrowDown, Bot } from 'lucide-react';
+import { Users, FolderOpen, X, ArrowUp, ArrowDown, Bot } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/Toast';
@@ -8,6 +8,7 @@ import { DataList } from '@/components/ui/DataList';
 import { VirtualTable } from '@/components/ui/VirtualTable';
 import type { VirtualTableColumn } from '@/components/ui/VirtualTable';
 import { LoadingSkeleton } from '@/components/ui/Loading';
+import { SectionError } from '@/components/ui/SectionError';
 import { EmptyState } from '@readysetcloud/ui';
 import type { DataListColumn } from '@/components/ui/DataList';
 import { SubscriberGrowthChart } from '@/components/SubscriberGrowthChart';
@@ -109,18 +110,6 @@ const SegmentListSkeleton: React.FC = () => (
     </div>
     <LoadingSkeleton lines={5} className="mt-2" />
   </Card>
-);
-
-/** Inline error with Retry button for a failed section */
-const SectionError: React.FC<{ message: string; onRetry: () => void }> = ({ message, onRetry }) => (
-  <div className="flex items-center gap-3 p-4 rounded-lg bg-error-50 border border-error-200 text-error-700" role="alert">
-    <AlertCircle className="w-5 h-5 flex-shrink-0" aria-hidden="true" />
-    <p className="text-sm flex-1">{message}</p>
-    <Button variant="outline" size="sm" onClick={onRetry}>
-      <RefreshCw className="w-4 h-4 mr-1" aria-hidden="true" />
-      Retry
-    </Button>
-  </div>
 );
 
 export const SubscribersPage: React.FC = () => {

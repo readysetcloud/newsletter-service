@@ -1,0 +1,13 @@
+# Treat JavaScript sources as text when diffing, whatever bytes they contain.
+#
+# Git guesses binary-vs-text by sniffing for a NUL in the first few KB, so one
+# control character in a string literal is enough to turn a source file into
+# "Binary files differ" in every diff and pull request — and to hide it from
+# `git grep`. That happened to scripts/check-issues-missing-template.mjs, a
+# deploy gate, which is exactly the kind of file that most needs reviewing.
+#
+# `diff` only overrides that guess. It is deliberately not `text`, which would
+# also turn on end-of-line normalisation and rewrite every file on checkout.
+*.mjs diff
+*.js  diff
+*.cjs diff

@@ -184,6 +184,11 @@ jobs:
       # It stays after this rollout as a cheap check on those guards: it should
       # always pass, and a failure means one of them has a hole. Remove it if it
       # ever blocks an unrelated deploy - it can only report, never repair.
+      #
+      # The state machine ARN is what lets it tell a send that is really running
+      # from a record that merely still says "in progress". Without it every
+      # such record blocks, which is how nine dead rows held every release from
+      # 2026-08-27 to 2026-09-11.
       - name: Check no committed send is missing its template
         run: |
           npm install --no-fund --no-audit
@@ -192,8 +197,15 @@ jobs:
             --logical-resource-id NewsletterTable \
             --query 'StackResourceDetail.PhysicalResourceId' \
             --output text)
-          echo "Checking issues in ${TABLE_NAME}"
-          node scripts/check-issues-missing-template.mjs --table "${TABLE_NAME}"
+          STATE_MACHINE_ARN=$(aws cloudformation describe-stack-resource \
+            --stack-name newsletter-service \
+            --logical-resource-id StageIssueStateMachine \
+            --query 'StackResourceDetail.PhysicalResourceId' \
+            --output text)
+          echo "Checking issues in ${TABLE_NAME} against ${STATE_MACHINE_ARN}"
+          node scripts/check-issues-missing-template.mjs \
+            --table "${TABLE_NAME}" \
+            --state-machine "${STATE_MACHINE_ARN}"
       - name: SAM Build and Deploy
         run: |
           npm install -g esbuild

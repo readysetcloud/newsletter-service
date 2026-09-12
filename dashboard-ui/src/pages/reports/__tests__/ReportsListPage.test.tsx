@@ -160,8 +160,10 @@ describe('ReportsListPage', () => {
       renderPage();
 
       await screen.findByText(/generating/i);
-      // Opening it would land on a page with nothing on it.
-      expect(screen.getByRole('listitem')).toHaveAttribute('tabIndex', '-1');
+      // Opening it would land on a page with nothing on it, so the row is not
+      // reachable by tab and carries no destination.
+      const row = screen.getByRole('row', { name: /May 2026, pending/i });
+      expect(row).toHaveAttribute('tabIndex', '-1');
     });
   });
 

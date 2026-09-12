@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2, Eye, RefreshCw, ArrowUpDown, ArrowUp, ArrowDown, Filter } from 'lucide-react';
+import { Plus, Trash2, Eye, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/Toast';
-import { Card, CardContent } from '@/components/ui/Card';
+import { Card } from '@/components/ui/Card';
+import { LoadingSkeleton } from '@/components/ui/Loading';
+import { SectionError } from '@/components/ui/SectionError';
 import {
   IssueCard,
   IssueStatusBadge,
@@ -11,8 +13,29 @@ import {
   IssuesEmptyState
 } from '@/components/issues';
 import { issuesService } from '@/services/issuesService';
+import { useMediaQuery } from '@/hooks/useMediaQuery';
 import type { IssueListItem, IssueStatus, Issue } from '@/types/issues';
 import { useTenantDateFormat } from '@/contexts/SettingsContext';
+
+type SortField = 'subject' | 'status' | 'issueNumber' | 'date';
+
+const STATUS_FILTERS: { value: IssueStatus | 'all'; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'draft', label: 'Draft' },
+  { value: 'scheduled', label: 'Scheduled' },
+  { value: 'in progress', label: 'In Progress' },
+  { value: 'sending', label: 'Sending' },
+  { value: 'published', label: 'Published' },
+  { value: 'failed', label: 'Failed' }
+];
+
+/** The indicator on a sortable column header: direction when active, a hint on hover. */
+const SortIcon: React.FC<{ active: boolean; direction: 'asc' | 'desc' }> = ({ active, direction }) => {
+  if (!active) {
+    return <ArrowUpDown className="w-3 h-3 opacity-0 group-hover:opacity-50 transition-opacity" />;
+  }
+  return direction === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />;
+};
 
 export const IssuesListPage: React.FC = () => {
   const navigate = useNavigate();
@@ -26,9 +49,12 @@ export const IssuesListPage: React.FC = () => {
   const [nextToken, setNextToken] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [issueToDelete, setIssueToDelete] = useState<Issue | null>(null);
-  const [sortField, setSortField] = useState<'subject' | 'status' | 'issueNumber' | 'date'>('date');
+  const [sortField, setSortField] = useState<SortField>('date');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
-  const [showStatusFilter, setShowStatusFilter] = useState(false);
+
+  // Rendered one way or the other, never both — the table's five columns do not
+  // fit a phone, and two copies of the list would be two copies to a reader.
+  const isNarrow = useMediaQuery('(max-width: 767px)');
 
   const nextTokenRef = React.useRef<string | null>(null);
   nextTokenRef.current = nextToken;
@@ -189,7 +215,7 @@ export const IssuesListPage: React.FC = () => {
     setNextToken(null);
   }, []);
 
-  const handleSort = useCallback((field: 'subject' | 'status' | 'issueNumber' | 'date') => {
+  const handleSort = useCallback((field: SortField) => {
     if (sortField === field) {
       setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
     } else {
@@ -198,11 +224,10 @@ export const IssuesListPage: React.FC = () => {
     }
   }, [sortField]);
 
-  const filteredIssues = useMemo(() => {
-    const filtered = [...issues];
+  const sortedIssues = useMemo(() => {
+    const sorted = [...issues];
 
-    // Sort
-    filtered.sort((a, b) => {
+    sorted.sort((a, b) => {
       let comparison = 0;
 
       switch (sortField) {
@@ -229,410 +254,202 @@ export const IssuesListPage: React.FC = () => {
       return sortDirection === 'asc' ? comparison : -comparison;
     });
 
-    return filtered;
+    return sorted;
   }, [issues, sortField, sortDirection]);
 
   // Dates read in the newsletter's timezone (see SettingsPage), so the list
   // agrees with the schedule that produced it.
   const { formatDate } = useTenantDateFormat();
 
-  const statusOptions = useMemo(() => [
-    { value: 'all', label: 'All Issues' },
-    { value: 'draft', label: 'Draft' },
-    { value: 'scheduled', label: 'Scheduled' },
-    { value: 'in progress', label: 'In Progress' },
-    { value: 'sending', label: 'Sending' },
-    { value: 'published', label: 'Published' },
-    { value: 'failed', label: 'Failed' }
-  ], []);
+  /** A sortable column heading. */
+  const sortableHeader = (field: SortField, label: string, className: string) => (
+    <th scope="col" className={className}>
+      <button
+        onClick={() => handleSort(field)}
+        className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors group"
+        aria-label={`Sort by ${label.toLowerCase()}`}
+      >
+        {label}
+        <SortIcon active={sortField === field} direction={sortDirection} />
+      </button>
+    </th>
+  );
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-background">
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <div role="status" aria-live="polite" aria-label="Loading issues">
-            <span className="sr-only">Loading issues...</span>
-          {/* Header Skeleton */}
-          <div className="mb-8">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-              <div>
-                <div className="h-8 w-48 bg-muted rounded animate-pulse mb-2" />
-                <div className="h-4 w-64 bg-muted rounded animate-pulse" />
-              </div>
-              <div className="h-10 w-32 bg-muted rounded animate-pulse" />
-            </div>
-          </div>
+  const loadMore = hasMore ? (
+    <div className="mt-4 flex justify-center">
+      <Button
+        variant="outline"
+        onClick={handleLoadMore}
+        isLoading={loadingMore}
+        disabled={loadingMore}
+        aria-label="Load more issues"
+      >
+        {loadingMore ? 'Loading...' : 'Load More'}
+      </Button>
+    </div>
+  ) : null;
 
-          {/* Filter Skeleton */}
-          <div className="mb-6">
-            <div className="h-10 w-64 bg-muted rounded animate-pulse" />
-          </div>
+  const renderList = () => {
+    if (loading) {
+      return (
+        <div role="status" aria-live="polite" aria-label="Loading issues">
+          <span className="sr-only">Loading issues...</span>
+          <LoadingSkeleton lines={5} />
+        </div>
+      );
+    }
 
-          {/* Desktop Table Skeleton */}
-          <div className="hidden md:block">
-            <Card>
-              <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-border">
-                  <thead className="bg-muted">
-                    <tr>
-                      <th className="w-[40%] px-6 py-3 text-left">
-                        <div className="h-4 w-16 bg-muted-foreground/20 rounded animate-pulse" />
-                      </th>
-                      <th className="w-[15%] px-6 py-3 text-left">
-                        <div className="h-4 w-16 bg-muted-foreground/20 rounded animate-pulse" />
-                      </th>
-                      <th className="w-[10%] px-6 py-3 text-left">
-                        <div className="h-4 w-16 bg-muted-foreground/20 rounded animate-pulse" />
-                      </th>
-                      <th className="w-[20%] px-6 py-3 text-left">
-                        <div className="h-4 w-16 bg-muted-foreground/20 rounded animate-pulse" />
-                      </th>
-                      <th className="w-[15%] px-6 py-3 text-right">
-                        <div className="h-4 w-16 bg-muted-foreground/20 rounded animate-pulse ml-auto" />
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="bg-surface divide-y divide-border">
-                    {[1, 2, 3, 4, 5].map(i => (
-                      <tr key={i}>
-                        <td className="px-6 py-4">
-                          <div className="space-y-2">
-                            <div className="h-4 w-48 bg-muted rounded animate-pulse" />
-                            <div className="h-3 w-32 bg-muted rounded animate-pulse" />
-                          </div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="h-6 w-20 bg-muted rounded-full animate-pulse" />
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="h-4 w-12 bg-muted rounded animate-pulse" />
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="space-y-1">
-                            <div className="h-3 w-20 bg-muted rounded animate-pulse" />
-                            <div className="h-3 w-24 bg-muted rounded animate-pulse" />
-                          </div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="flex items-center justify-end gap-2">
-                            <div className="h-8 w-8 bg-muted rounded animate-pulse" />
-                            <div className="h-8 w-8 bg-muted rounded animate-pulse" />
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          </div>
+    if (error && issues.length === 0) {
+      return <SectionError message={error} onRetry={handleRetry} retryLabel="Retry loading issues" />;
+    }
 
-          {/* Mobile Card Skeleton */}
-          <div className="md:hidden space-y-4">
-            {[1, 2, 3].map(i => (
-              <Card key={i}>
-                <CardContent className="p-4">
-                  <div className="space-y-3">
-                    <div className="flex items-start justify-between">
-                      <div className="h-5 w-48 bg-muted rounded animate-pulse" />
-                      <div className="h-6 w-20 bg-muted rounded-full animate-pulse" />
-                    </div>
-                    <div className="h-3 w-32 bg-muted rounded animate-pulse" />
-                    <div className="flex items-center justify-between">
-                      <div className="h-3 w-24 bg-muted rounded animate-pulse" />
-                      <div className="flex gap-2">
-                        <div className="h-8 w-8 bg-muted rounded animate-pulse" />
-                        <div className="h-8 w-8 bg-muted rounded animate-pulse" />
-                      </div>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
+    if (sortedIssues.length === 0) {
+      return (
+        <div role="status" aria-live="polite">
+          <IssuesEmptyState
+            hasFilters={statusFilter !== 'all'}
+            onClearFilters={handleClearFilters}
+          />
+        </div>
+      );
+    }
+
+    if (isNarrow) {
+      return (
+        <>
+          <div className="grid gap-4" role="list" aria-label="Issues list">
+            {sortedIssues.map((issue) => (
+              <IssueCard key={issue.id} issue={issue} />
             ))}
           </div>
-          </div>
-        </main>
-      </div>
-    );
-  }
+          {loadMore}
+        </>
+      );
+    }
 
-  if (error && issues.length === 0) {
     return (
-      <div className="min-h-screen bg-background">
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <div role="alert" aria-live="assertive" className="text-center py-12">
-            <h3 className="text-lg font-medium text-foreground mb-2">Failed to load issues</h3>
-            <p className="text-sm text-muted-foreground mb-6">{error}</p>
-            <Button onClick={handleRetry} aria-label="Retry loading issues">
-              <RefreshCw className="w-4 h-4 mr-2" />
-              Try Again
-            </Button>
-          </div>
-        </main>
-      </div>
+      <>
+        <div className="overflow-x-auto">
+          <table className="w-full" aria-label="Issues list">
+            <thead>
+              <tr className="bg-muted">
+                {sortableHeader('subject', 'Subject', 'w-[45%] px-4 py-3 text-left')}
+                {sortableHeader('status', 'Status', 'w-[15%] px-4 py-3 text-left')}
+                {sortableHeader('issueNumber', 'Issue #', 'w-[10%] px-4 py-3 text-left')}
+                {sortableHeader('date', 'Date', 'w-[20%] px-4 py-3 text-left')}
+                <th scope="col" className="w-[10%] px-4 py-3 text-right text-sm font-medium text-muted-foreground">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedIssues.map((issue) => {
+                const displayDate = issue.publishedAt || issue.scheduledAt || issue.createdAt;
+                const dateLabel = issue.publishedAt
+                  ? 'Published'
+                  : issue.scheduledAt ? 'Scheduled' : 'Created';
+
+                return (
+                  <tr
+                    key={issue.id}
+                    className="border-t border-border hover:bg-muted/50 transition-colors group"
+                  >
+                    <td className="px-4 py-3">
+                      <button
+                        onClick={() => navigate(`/issues/${issue.id}`)}
+                        className="text-left hover:text-primary-600 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring rounded w-full"
+                        aria-label={`View issue: ${issue.subject}`}
+                      >
+                        <div className="text-sm font-medium text-foreground group-hover:text-primary-600 transition-colors">
+                          {issue.subject}
+                        </div>
+                      </button>
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <IssueStatusBadge status={issue.status} />
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap text-sm text-muted-foreground font-mono">
+                      #{issue.issueNumber}
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap text-sm text-muted-foreground">
+                      <div className="font-medium">{dateLabel}</div>
+                      <div className="text-xs">{formatDate(displayDate)}</div>
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => navigate(`/issues/${issue.id}`)}
+                          aria-label={`View issue: ${issue.subject}`}
+                          className="hover:bg-primary-50 dark:hover:bg-primary-900/20"
+                        >
+                          <Eye className="w-4 h-4" />
+                        </Button>
+                        {issue.status === 'draft' && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDeleteClick(issue)}
+                            aria-label={`Delete issue: ${issue.subject}`}
+                            className="hover:bg-error-50 dark:hover:bg-error-900/20"
+                          >
+                            <Trash2 className="w-4 h-4 text-error-600 dark:text-error-400" />
+                          </Button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {loadMore}
+      </>
     );
-  }
+  };
 
   return (
-    <div className="min-h-screen bg-background">
-
-      <main id="main-content" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-6">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <div className="min-w-0">
-              <h1 className="text-2xl sm:text-3xl font-bold text-foreground">Issues</h1>
-              <p className="text-sm sm:text-base text-muted-foreground mt-1">
-                Manage your newsletter issues
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
-              <Button
-                onClick={() => navigate('/issues/new')}
-                aria-label="Create new issue"
-              >
-                <Plus className="w-4 h-4 mr-2" />
-                Create Issue
-              </Button>
-            </div>
-          </div>
+    <div className="flex flex-col gap-6">
+      <Card padding="md">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <h3 className="text-lg font-semibold text-foreground">Issues</h3>
+          <Button onClick={() => navigate('/issues/new')} aria-label="Create new issue">
+            <Plus className="w-4 h-4 mr-2" />
+            Create Issue
+          </Button>
         </div>
 
-        {filteredIssues.length === 0 ? (
-          <div role="status" aria-live="polite">
-            <IssuesEmptyState
-              hasFilters={statusFilter !== 'all'}
-              onClearFilters={handleClearFilters}
-            />
-          </div>
-        ) : (
-          <>
-            <div className="hidden md:block" role="region" aria-label="Issues table">
-              <Card className="overflow-visible relative">
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-border" role="table" aria-label="Issues list">
-                    <thead className="bg-muted">
-                      <tr>
-                        <th scope="col" className="w-[40%] px-6 py-3 text-left">
-                          <button
-                            onClick={() => handleSort('subject')}
-                            className="flex items-center gap-2 text-xs font-medium text-muted-foreground uppercase tracking-wider hover:text-foreground transition-colors group"
-                          >
-                            Subject
-                            {sortField === 'subject' ? (
-                              sortDirection === 'asc' ? (
-                                <ArrowUp className="w-3 h-3" />
-                              ) : (
-                                <ArrowDown className="w-3 h-3" />
-                              )
-                            ) : (
-                              <ArrowUpDown className="w-3 h-3 opacity-0 group-hover:opacity-50 transition-opacity" />
-                            )}
-                          </button>
-                        </th>
-                        <th scope="col" className="w-[15%] px-6 py-3 text-left">
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={() => handleSort('status')}
-                              className="flex items-center gap-2 text-xs font-medium text-muted-foreground uppercase tracking-wider hover:text-foreground transition-colors group"
-                            >
-                              Status
-                              {sortField === 'status' ? (
-                                sortDirection === 'asc' ? (
-                                  <ArrowUp className="w-3 h-3" />
-                                ) : (
-                                  <ArrowDown className="w-3 h-3" />
-                                )
-                              ) : (
-                                <ArrowUpDown className="w-3 h-3 opacity-0 group-hover:opacity-50 transition-opacity" />
-                              )}
-                            </button>
-                            <button
-                              id="status-filter-button"
-                              onClick={() => setShowStatusFilter(!showStatusFilter)}
-                              className="p-1 hover:bg-muted-foreground/10 rounded transition-colors"
-                              aria-label="Filter by status"
-                            >
-                              <Filter className={`w-3 h-3 ${statusFilter !== 'all' ? 'text-primary-600' : 'text-muted-foreground'}`} />
-                            </button>
-                          </div>
-                        </th>
-                        <th scope="col" className="w-[10%] px-6 py-3 text-left">
-                          <button
-                            onClick={() => handleSort('issueNumber')}
-                            className="flex items-center gap-2 text-xs font-medium text-muted-foreground uppercase tracking-wider hover:text-foreground transition-colors group"
-                          >
-                            Issue #
-                            {sortField === 'issueNumber' ? (
-                              sortDirection === 'asc' ? (
-                                <ArrowUp className="w-3 h-3" />
-                              ) : (
-                                <ArrowDown className="w-3 h-3" />
-                              )
-                            ) : (
-                              <ArrowUpDown className="w-3 h-3 opacity-0 group-hover:opacity-50 transition-opacity" />
-                            )}
-                          </button>
-                        </th>
-                        <th scope="col" className="w-[20%] px-6 py-3 text-left">
-                          <button
-                            onClick={() => handleSort('date')}
-                            className="flex items-center gap-2 text-xs font-medium text-muted-foreground uppercase tracking-wider hover:text-foreground transition-colors group"
-                          >
-                            Date
-                            {sortField === 'date' ? (
-                              sortDirection === 'asc' ? (
-                                <ArrowUp className="w-3 h-3" />
-                              ) : (
-                                <ArrowDown className="w-3 h-3" />
-                              )
-                            ) : (
-                              <ArrowUpDown className="w-3 h-3 opacity-0 group-hover:opacity-50 transition-opacity" />
-                            )}
-                          </button>
-                        </th>
-                        <th scope="col" className="w-[15%] px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                          Actions
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-surface divide-y divide-border">
-                      {filteredIssues.map((issue) => {
-                        const displayDate = issue.publishedAt || issue.scheduledAt || issue.createdAt;
-                        const dateLabel = issue.publishedAt ? 'Published' : issue.scheduledAt ? 'Scheduled' : 'Created';
+        {/* Status as chips rather than a menu: with seven of them, which one is
+            active and what else is on offer are both worth showing at once. */}
+        <div className="flex flex-wrap gap-2 mb-4" role="group" aria-label="Filter issues by status">
+          {STATUS_FILTERS.map(option => {
+            const active = statusFilter === option.value;
 
-                        return (
-                          <tr key={issue.id} className="hover:bg-muted/50 transition-colors group">
-                            <td className="px-6 py-4">
-                              <button
-                                onClick={() => navigate(`/issues/${issue.id}`)}
-                                className="text-left hover:text-primary-600 transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 rounded w-full"
-                                aria-label={`View issue: ${issue.subject}`}
-                              >
-                                <div className="text-sm font-medium text-foreground group-hover:text-primary-600 transition-colors">
-                                  {issue.subject}
-                                </div>
-                                <div className="text-xs text-muted-foreground font-mono mt-1">
-                                  Issue #{issue.issueNumber}
-                                </div>
-                              </button>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <IssueStatusBadge status={issue.status} />
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-muted-foreground">
-                              #{issue.issueNumber}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="text-sm text-muted-foreground">
-                                <div className="font-medium">{dateLabel}</div>
-                                <div className="text-xs">{formatDate(displayDate)}</div>
-                              </div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                              <div className="flex items-center justify-end gap-2">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => navigate(`/issues/${issue.id}`)}
-                                  aria-label={`View issue: ${issue.subject}`}
-                                  className="hover:bg-primary-50 dark:hover:bg-primary-900/20"
-                                >
-                                  <Eye className="w-4 h-4" />
-                                </Button>
-                                {issue.status === 'draft' && (
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => handleDeleteClick(issue)}
-                                    aria-label={`Delete issue: ${issue.subject}`}
-                                    className="hover:bg-error-50 dark:hover:bg-error-900/20"
-                                  >
-                                    <Trash2 className="w-4 h-4 text-error-600 dark:text-error-400" />
-                                  </Button>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </Card>
-            </div>
-
-            <div className="md:hidden grid gap-4" role="list" aria-label="Issues list">
-              {filteredIssues.map((issue) => (
-                <IssueCard key={issue.id} issue={issue} />
-              ))}
-            </div>
-
-            {hasMore && (
-              <div className="mt-6 flex justify-center">
-                <Button
-                  variant="outline"
-                  onClick={handleLoadMore}
-                  isLoading={loadingMore}
-                  disabled={loadingMore}
-                  aria-label="Load more issues"
-                >
-                  {loadingMore ? 'Loading...' : 'Load More'}
-                </Button>
-              </div>
-            )}
-          </>
-        )}
-      </main>
-
-      {/* Status Filter Dropdown - Rendered outside table to avoid overflow issues */}
-      {showStatusFilter && (
-        <>
-          <div
-            className="fixed inset-0 z-40"
-            onClick={() => setShowStatusFilter(false)}
-            onKeyDown={(e) => e.key === 'Escape' && setShowStatusFilter(false)}
-            role="button"
-            tabIndex={0}
-            aria-label="Close filter menu"
-          />
-          <div
-            className="fixed z-50 bg-surface border border-border rounded-lg shadow-lg py-1 min-w-[140px]"
-            style={{
-              top: (() => {
-                const button = document.getElementById('status-filter-button');
-                if (button) {
-                  const rect = button.getBoundingClientRect();
-                  return `${rect.bottom + 4}px`;
-                }
-                return '0px';
-              })(),
-              left: (() => {
-                const button = document.getElementById('status-filter-button');
-                if (button) {
-                  const rect = button.getBoundingClientRect();
-                  return `${rect.left}px`;
-                }
-                return '0px';
-              })()
-            }}
-          >
-            {statusOptions.map(option => (
+            return (
               <button
                 key={option.value}
+                type="button"
                 onClick={() => {
-                  setStatusFilter(option.value as IssueStatus | 'all');
-                  setShowStatusFilter(false);
+                  setStatusFilter(option.value);
+                  setNextToken(null);
                 }}
-                className={`w-full px-3 py-2 text-left text-sm hover:bg-muted transition-colors ${
-                  statusFilter === option.value ? 'bg-muted font-medium text-primary-600' : ''
+                aria-pressed={active}
+                className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors focus:outline-none focus:ring-2 focus:ring-ring ${
+                  active
+                    ? 'bg-primary-100 text-primary-800 border-primary-300 dark:bg-primary-900/30 dark:text-primary-300 dark:border-primary-800'
+                    : 'bg-transparent text-muted-foreground border-border hover:bg-muted'
                 }`}
               >
                 {option.label}
               </button>
-            ))}
-          </div>
-        </>
-      )}
+            );
+          })}
+        </div>
+
+        {renderList()}
+      </Card>
 
       <DeleteIssueDialog
         isOpen={!!issueToDelete}

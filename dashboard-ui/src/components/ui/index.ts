@@ -55,6 +55,9 @@ export {
 } from './Loading';
 export type { LoadingProps, LoadingSkeletonProps } from './Loading';
 
+export { SectionError } from './SectionError';
+export type { SectionErrorProps } from './SectionError';
+
 export {
   ToastProvider,
   useToast

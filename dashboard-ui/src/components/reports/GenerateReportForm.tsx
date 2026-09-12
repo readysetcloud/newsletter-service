@@ -1,7 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { CalendarRange } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
-import { Card, CardContent } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 
 export interface GenerateReportFormProps {
@@ -76,24 +75,31 @@ export const GenerateReportForm: React.FC<GenerateReportFormProps> = ({
     }
   };
 
-  if (!open) {
-    return (
-      <Button
-        variant="outline"
-        onClick={() => setOpen(true)}
-        disabled={disabled}
-        title={disabled ? disabledReason : undefined}
-      >
-        <CalendarRange className="w-4 h-4 mr-2" aria-hidden="true" />
-        New report
-      </Button>
-    );
-  }
-
   return (
-    <Card>
-      <CardContent className="p-4 sm:p-5">
-        <form onSubmit={submit} className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-lg font-semibold text-foreground">Generate a report</h3>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            {disabledReason
+              ?? 'Monthly reports run on the 1st. Pick any range to run one now.'}
+          </p>
+        </div>
+        {!open && (
+          <Button
+            variant="primary"
+            onClick={() => setOpen(true)}
+            disabled={disabled}
+            title={disabled ? disabledReason : undefined}
+          >
+            <CalendarRange className="w-4 h-4 mr-2" aria-hidden="true" />
+            New report
+          </Button>
+        )}
+      </div>
+
+      {open && (
+        <form onSubmit={submit} className="flex flex-col gap-3 pt-4 border-t border-border">
           <div className="flex flex-col sm:flex-row sm:items-end gap-3">
             <Input
               type="date"
@@ -127,8 +133,8 @@ export const GenerateReportForm: React.FC<GenerateReportFormProps> = ({
               ?? 'Both dates are included. Reports run in the background and appear in the list below.'}
           </p>
         </form>
-      </CardContent>
-    </Card>
+      )}
+    </div>
   );
 };
 

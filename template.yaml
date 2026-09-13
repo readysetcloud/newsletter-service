@@ -1203,6 +1203,63 @@ Resources:
               detail-type:
                 - Subscriber Added
 
+  # Turns the things that happen in the background into something a person can
+  # see when they next open the dashboard. One consumer for every source, so
+  # the wording of a notification lives in one file rather than in each
+  # producer; adding a source is a publish plus a branch in renderNotification.
+  #
+  # `User Notification` is the odd one out: the billing handlers have been
+  # publishing it since they were written, and until this function existed
+  # nothing subscribed to it at all.
+  CreateNotificationFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - create-notification.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: create-notification.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            # PutItem only. This function writes notifications and reads
+            # nothing; marking them read belongs to the API.
+            - Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          TABLE_NAME: !Ref NewsletterTable
+      Events:
+        # Separate rules rather than one with every detail-type, so a pattern
+        # can be narrowed per source without disturbing the others — the
+        # billing events come from a different source entirely.
+        NewsletterEvents:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - newsletter-service
+              detail-type:
+                - Report Completed
+                - ISSUE_PUBLISHED
+                - Issue Send Failed
+                - Sender Verification Completed
+        BillingEvents:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - newsletter.billing
+              detail-type:
+                - User Notification
+
   LambdaAuthorizerFunction:
     Type: AWS::Serverless::Function
     Metadata:

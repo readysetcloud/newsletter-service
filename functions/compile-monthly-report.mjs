@@ -2,6 +2,7 @@ import Handlebars from 'handlebars';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { DynamoDBClient, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
+import { publishEvent } from './utils/event-publisher.mjs';
 import {
   REPORT_STATUS,
   REPORT_TYPE,
@@ -112,7 +113,29 @@ export const handler = async (event) => {
     await releaseReportRangeLock(ddb, { tenantId, reportId, periodStart, periodEnd });
   }
 
-  // 3. Send the report email to the tenant owner — scheduled reports only.
+  // 3. Tell the dashboard it is ready.
+  //
+  // Here rather than at either return below, because there are two of them —
+  // an on-demand report stops before the email is built — and both endings are
+  // a report somebody can now read.
+  try {
+    await publishEvent('newsletter-service', 'Report Completed', {
+      tenantId,
+      reportId,
+      reportType,
+      periodLabel,
+      outcome: 'ready'
+    });
+  } catch (error) {
+    // The report is written. Failing the workflow now would mark a report that
+    // exists and is readable as failed.
+    console.error('[MONTHLY-REPORT] could not announce completion', {
+      reportId,
+      error: error.message
+    });
+  }
+
+  // 4. Send the report email to the tenant owner — scheduled reports only.
   //
   // An on-demand report is something a person asked for and is already
   // looking at; mailing it back to them is noise. The return is here, before

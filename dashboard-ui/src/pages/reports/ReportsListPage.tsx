@@ -24,8 +24,15 @@ const formatSignedNumber = (value: number): string =>
  * How often to re-read the list while something is still being generated.
  *
  * Reports are ordered by when they were started, so anything just requested is
- * the first row and polling the list is enough to follow it. Once in-app
- * notifications exist this goes away.
+ * the first row and polling the list is enough to follow it.
+ *
+ * This used to say it would go away once in-app notifications existed. They do
+ * now, and it does not: a notification tells someone who is looking elsewhere,
+ * but somebody sitting on this page watching a report they just asked for
+ * still needs the row itself to change. Without push there is nothing else to
+ * make that happen, and stopping the poll would leave the page saying
+ * "Generating" until a reload. It already stops on its own the moment nothing
+ * is pending, which is the part that matters.
  */
 const POLL_INTERVAL_MS = 5000;
 

@@ -244,6 +244,76 @@ async fn update_sender_verification_status(
     Ok(now)
 }
 
+/// Tells the dashboard that a sender's verification finished, one way or the
+/// other.
+///
+/// Only terminal outcomes are worth interrupting anyone for. `Pending` is the
+/// normal state between asking and answering and says nothing new, so it raises
+/// no event at all.
+///
+/// Failure to publish is logged and swallowed. The record has already been
+/// updated and the schedule already advanced; failing this handler over a
+/// notification would re-run a check that has nothing left to do.
+async fn announce_verification_outcome(
+    tenant_id: &str,
+    sender: &SenderRecord,
+    status: &VerificationStatus,
+) {
+    let outcome = match status {
+        VerificationStatus::Verified => "verified",
+        VerificationStatus::Failed | VerificationStatus::VerificationTimedOut => "failed",
+        VerificationStatus::Pending => return,
+    };
+
+    let detail = serde_json::json!({
+        "tenantId": tenant_id,
+        "senderId": sender.sender_id,
+        "email": sender.email,
+        "outcome": outcome,
+    });
+
+    let detail_str = match serde_json::to_string(&detail) {
+        Ok(value) => value,
+        Err(e) => {
+            tracing::error!("Could not serialize sender verification event: {}", e);
+            return;
+        }
+    };
+
+    let client = aws_clients::get_eventbridge_client().await;
+
+    let result = client
+        .put_events()
+        .entries(
+            aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
+                .source("newsletter-service")
+                .detail_type("Sender Verification Completed")
+                .detail(detail_str)
+                .build(),
+        )
+        .send()
+        .await;
+
+    match result {
+        Ok(output) => {
+            for entry in output.entries() {
+                if let Some(code) = entry.error_code() {
+                    tracing::error!(
+                        "Sender verification event rejected: sender={} code={}",
+                        sender.sender_id,
+                        code
+                    );
+                }
+            }
+        }
+        Err(e) => tracing::error!(
+            "Could not announce sender verification for {}: {}",
+            sender.sender_id,
+            e
+        ),
+    }
+}
+
 async fn cleanup_expired_identity(
     ses_client: &SesClient,
     email: &str,
@@ -415,6 +485,7 @@ async fn function_handler(event: LambdaEvent<Value>) -> Result<SchedulerCheckRes
                 }
 
                 status_changed = true;
+                announce_verification_outcome(&tenant_id, &updated_sender, &new_status).await;
             }
         }
 
@@ -438,6 +509,12 @@ async fn function_handler(event: LambdaEvent<Value>) -> Result<SchedulerCheckRes
             updated_sender.verification_status = VerificationStatus::VerificationTimedOut;
             updated_sender.updated_at = updated_at;
             status_changed = true;
+            announce_verification_outcome(
+                &tenant_id,
+                &updated_sender,
+                &VerificationStatus::VerificationTimedOut,
+            )
+            .await;
 
             // Clean up the expired SES identity
             cleanup_expired_identity(&ses_client, &sender.email, &tenant_id).await?;

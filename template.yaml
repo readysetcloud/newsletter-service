@@ -2755,6 +2755,14 @@ Resources:
             - Effect: Allow
               Action: dynamodb:UpdateItem
               Resource: !GetAtt NewsletterTable.Arn
+            # Announces `Report Completed` for the two endings the compile step
+            # cannot produce. Without this the publish fails with AccessDenied,
+            # which that function deliberately swallows so a notification
+            # cannot fail a finished report — meaning every empty or failed
+            # report would go unannounced and nothing would say why.
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
@@ -4843,6 +4851,12 @@ Resources:
               Action:
                 - iam:PassRole
               Resource: !GetAtt SchedulerExecutionRole.Arn
+            # Announces `Sender Verification Completed` once verification
+            # reaches a terminal answer, which create-notification.mjs turns
+            # into something the dashboard shows.
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1

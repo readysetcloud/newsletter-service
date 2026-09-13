@@ -153,6 +153,32 @@ describe('issues', () => {
     expect(rendered.message).not.toContain('0 subscribers');
   });
 
+  it('ignores an analytics rebuild, which is not an issue going out', () => {
+    // `POST /issues/{id}/analytics/rebuild` republishes ISSUE_PUBLISHED purely
+    // to re-trigger aggregation. Announcing it would tell someone their
+    // newsletter had been sent again every time they rebuilt a chart — and
+    // with a fresh event time, so every rebuild would be a new notification.
+    const rendered = renderNotification(issueEvent('ISSUE_PUBLISHED', {
+      issueNumber: 232,
+      publishedAt: '2026-09-01T00:00:00.000Z',
+      title: 'Picks of the Week #232',
+      reason: 'analytics-rebuild'
+    }));
+
+    expect(rendered).toBeNull();
+  });
+
+  it('reads `title` when the producer used that instead of `subject`', () => {
+    // The two publishers of this event disagree on the field name. Reading
+    // only one of them renders a notification about "Issue undefined".
+    const rendered = renderNotification(issueEvent('ISSUE_PUBLISHED', {
+      issueNumber: 232,
+      title: 'Picks of the Week #232'
+    }));
+
+    expect(rendered.message).toContain('Picks of the Week #232');
+  });
+
   it('reports a failed send as an error worth acting on', () => {
     const rendered = renderNotification(event('Issue Send Failed', {
       tenantId: 'readysetcloud',
@@ -237,16 +263,51 @@ describe('billing, which has been publishing into the void until now', () => {
     expect(rendered.message).toContain('49.00');
   });
 
-  it('warns harder when a failure will not be retried', () => {
-    const rendered = billing('PAYMENT_FAILED_FINAL', { invoiceId: 'in_2', willRetry: false });
+  it('prefers the sentence the producer already wrote for the customer', () => {
+    // The handlers know which attempt this was and what happens next. That
+    // beats anything this can infer.
+    const rendered = billing('PAYMENT_FINAL_FAILURE', {
+      invoiceId: 'in_2',
+      isFinalFailure: true,
+      message: 'Your subscription will be cancelled due to repeated payment failures.'
+    });
 
-    expect(rendered.type).toBe(NOTIFICATION_TYPES.BILLING_PAYMENT_FAILED);
+    expect(rendered.message).toBe(
+      'Your subscription will be cancelled due to repeated payment failures.'
+    );
+  });
+
+  it('does not promise a retry on a failure the producer called final', () => {
+    // The producer signals finality with the type and `isFinalFailure`; there
+    // is no `willRetry` field. Reading one told a customer whose subscription
+    // was about to be cancelled to sit tight.
+    const rendered = billing('PAYMENT_FINAL_FAILURE', {
+      invoiceId: 'in_2',
+      isFinalFailure: true
+    });
+
+    expect(rendered.title).toBe('Subscription at risk');
+    expect(rendered.message).toMatch(/will not be retried/i);
+    expect(rendered.message).not.toMatch(/we will retry/i);
+  });
+
+  it('treats isFinalFailure as final even under another type', () => {
+    const rendered = billing('PAYMENT_RETRY_FAILED', {
+      invoiceId: 'in_2',
+      isFinalFailure: true
+    });
+
     expect(rendered.message).toMatch(/will not be retried/i);
   });
 
-  it('is gentler about a failure that will be retried', () => {
-    const rendered = billing('PAYMENT_FAILED', { invoiceId: 'in_2', willRetry: true });
+  it('is gentler about an early failure that will be retried', () => {
+    const rendered = billing('PAYMENT_FAILED', {
+      invoiceId: 'in_2',
+      isFirstFailure: true,
+      isFinalFailure: false
+    });
 
+    expect(rendered.title).toBe('Payment problem');
     expect(rendered.message).toMatch(/we will retry/i);
   });
 });

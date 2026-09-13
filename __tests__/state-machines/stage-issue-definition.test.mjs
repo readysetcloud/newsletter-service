@@ -73,14 +73,14 @@ const STATE_MACHINE_RESOURCE = 'StageIssueStateMachine';
 // types actually present, so a reintroduced `Wait` shows up here as an
 // unexpected key.
 const EXPECTED_STATE_COUNTS = {
-  topLevel: 20,
-  total: 24,
+  topLevel: 21,
+  total: 25,
   Choice: 4,
   Fail: 1,
   Parallel: 1,
   Pass: 4,
   Succeed: 2,
-  Task: 12
+  Task: 13
 };
 
 // States that no transition can reach, per scope. MUST BE EMPTY and must stay
@@ -130,6 +130,10 @@ const PREVIEW_STATES = [
 // that really did send. What is left here runs before the send, or is the
 // failure write itself.
 const TASKS_WITHOUT_RETRY = [
+  // `Announce Send Failure` and `Notify of Success` are both courtesy
+  // notifications with a Catch that carries on regardless. Retrying them would
+  // hold an execution open over a message nobody is waiting on.
+  'Announce Send Failure',
   'Get Existing Issue',
   'Mark Issue In Progress',
   'Notify of Success',
@@ -175,6 +179,9 @@ const EXPECTED_CATCH_ROUTES = {
   'Parse Issue': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   'Publish': ['States.ALL -> Update Issue Record - Failure ($.error)'],
   'Schedule Tasks and Update': ['States.ALL -> Update Issue Record - Failure ($.error)'],
+  // The issue is already recorded as failed by the time this runs, so losing
+  // the announcement must not change where the execution ends up.
+  'Announce Send Failure': ['States.ALL -> Fail (error discarded)'],
   // The failure writer cannot catch to itself, and there is nothing left to
   // record once recording is what failed.
   'Update Issue Record - Failure': [

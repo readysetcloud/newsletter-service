@@ -5533,6 +5533,16 @@ async fn publish_event<T: Serialize>(
     }
 }
 
+/// Why an `ISSUE_PUBLISHED` event was raised.
+///
+/// The rebuild endpoint republishes this event to re-trigger analytics
+/// aggregation, which is the only consumer that existed when it was written.
+/// It is not a claim that an issue was sent — nothing was — so anything that
+/// tells a person something has to be able to tell the two apart. In-app
+/// notifications do exactly that, and without this marker a rebuild announced
+/// a send that never happened.
+const REBUILD_REASON: &str = "analytics-rebuild";
+
 async fn publish_issue_published_event(
     tenant_id: &str,
     user_id: &str,
@@ -5549,7 +5559,10 @@ async fn publish_issue_published_event(
         "data": {
             "issueNumber": issue_number,
             "publishedAt": published_at,
-            "title": subject
+            "title": subject,
+            // The only caller of this is the rebuild endpoint. A genuine send
+            // publishes from publish-issue.mjs and carries no reason.
+            "reason": REBUILD_REASON
         }
     });
 

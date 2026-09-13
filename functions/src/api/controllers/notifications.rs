@@ -15,7 +15,7 @@ const MAX_LIMIT: i32 = 50;
 /// partition on every dashboard load, so the count stops here and the API says
 /// it stopped by returning `unreadCountCapped`. The dashboard renders that as
 /// `50+`.
-const UNREAD_SCAN_LIMIT: i32 = 50;
+const UNREAD_SCAN_LIMIT: usize = 50;
 
 /// How many notifications one "mark all read" call will touch.
 ///
@@ -23,7 +23,21 @@ const UNREAD_SCAN_LIMIT: i32 = 50;
 /// months should not turn one click into an unbounded write. Anything past this
 /// stays unread and the next call takes the next batch — which is why the
 /// response says how many it actually marked.
-const MARK_ALL_LIMIT: i32 = 200;
+const MARK_ALL_LIMIT: usize = 200;
+
+/// Rows read per query while hunting for unread ones.
+///
+/// DynamoDB applies `Limit` to items *evaluated*, before `FilterExpression`
+/// runs. A page of read notifications therefore comes back empty while still
+/// spending the whole limit, so asking for "the next 50 unread" is not a thing
+/// one query can do — see `unread_keys`.
+const UNREAD_PAGE_SIZE: i32 = 100;
+
+/// How many such pages to walk before giving up and saying there may be more.
+///
+/// Without this, a tenant with ten thousand read notifications and one unread
+/// at the bottom would read the entire partition on every dashboard load.
+const MAX_UNREAD_PAGES: usize = 5;
 
 /// Every listable row carries this; the partition holds nothing else today, but
 /// the query says so explicitly rather than trusting that to stay true.
@@ -183,7 +197,8 @@ async fn handle_list_notifications(event: Request) -> Result<Response<Body>, App
         .collect();
 
     let next_token = result.last_evaluated_key().map(encode_pagination_token);
-    let (unread_count, unread_count_capped) = count_unread(&tenant_id).await?;
+    let (unread, unread_count_capped) = unread_keys(&tenant_id, UNREAD_SCAN_LIMIT).await?;
+    let unread_count = unread.len();
 
     response::format_response(
         200,
@@ -196,40 +211,72 @@ async fn handle_list_notifications(event: Request) -> Result<Response<Body>, App
     )
 }
 
-/// Unread within the newest `UNREAD_SCAN_LIMIT`, and whether that cap was hit.
+/// Sort keys of unread notifications, newest first, up to `want` of them.
 ///
-/// Deliberately a second query rather than a count over the page just returned:
-/// the page can be one notification long, or filtered to unread already, and
-/// neither says anything about how many unread there are overall.
-async fn count_unread(tenant_id: &str) -> Result<(usize, bool), AppError> {
+/// Returns the keys and whether the hunt stopped early — because it found
+/// `want`, or because it ran out of pages — which is not the same as knowing
+/// more unread exist, only that this cannot say they do not.
+///
+/// This pages rather than issuing one big query because of how `Limit` and
+/// `FilterExpression` interact: the limit is spent on rows *read*, and the
+/// filter is applied after. One query with `limit(200)` over a partition whose
+/// newest 200 rows are all read returns nothing at all, while older unread rows
+/// sit just past the cursor. That is the difference between a badge that says 0
+/// and a badge that is right.
+async fn unread_keys(tenant_id: &str, want: usize) -> Result<(Vec<String>, bool), AppError> {
     let ddb = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
         .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
 
-    let result = ddb
-        .query()
-        .table_name(&table_name)
-        .key_condition_expression("pk = :pk AND begins_with(sk, :prefix)")
-        .expression_attribute_values(
-            ":pk",
-            AttributeValue::S(notification_partition_key(tenant_id)),
-        )
-        .expression_attribute_values(":prefix", AttributeValue::S(SK_PREFIX.to_string()))
-        .filter_expression("attribute_not_exists(readAt)")
-        .projection_expression("sk")
-        .scan_index_forward(false)
-        .limit(UNREAD_SCAN_LIMIT)
-        .send()
-        .await
-        .map_err(|e| AppError::InternalError(format!("Failed to count unread: {}", e)))?;
+    let mut keys: Vec<String> = Vec::new();
+    let mut start_key: Option<HashMap<String, AttributeValue>> = None;
 
-    let count = result.items().len();
+    for _ in 0..MAX_UNREAD_PAGES {
+        let mut builder = ddb
+            .query()
+            .table_name(&table_name)
+            .key_condition_expression("pk = :pk AND begins_with(sk, :prefix)")
+            .expression_attribute_values(
+                ":pk",
+                AttributeValue::S(notification_partition_key(tenant_id)),
+            )
+            .expression_attribute_values(":prefix", AttributeValue::S(SK_PREFIX.to_string()))
+            .filter_expression("attribute_not_exists(readAt)")
+            .projection_expression("sk")
+            .scan_index_forward(false)
+            .limit(UNREAD_PAGE_SIZE);
 
-    // Two ways there may be more: the read stopped on the limit, or DynamoDB
-    // stopped it early and left a cursor behind.
-    let capped = count >= UNREAD_SCAN_LIMIT as usize || result.last_evaluated_key().is_some();
+        if let Some(key) = start_key.take() {
+            for (k, v) in key {
+                builder = builder.exclusive_start_key(k, v);
+            }
+        }
 
-    Ok((count, capped))
+        let result = builder
+            .send()
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to read notifications: {}", e)))?;
+
+        for item in result.items() {
+            if let Some(AttributeValue::S(sort_key)) = item.get("sk") {
+                keys.push(sort_key.clone());
+
+                if keys.len() >= want {
+                    // Stopped on the caller's bound, not on the data.
+                    return Ok((keys, true));
+                }
+            }
+        }
+
+        match result.last_evaluated_key() {
+            // The partition is exhausted: what was found is all there is.
+            None => return Ok((keys, false)),
+            Some(key) => start_key = Some(key.clone()),
+        }
+    }
+
+    // Ran out of pages with the cursor still live.
+    Ok((keys, true))
 }
 
 async fn handle_mark_notification_read(
@@ -297,35 +344,15 @@ async fn handle_mark_all_read(event: Request) -> Result<Response<Body>, AppError
     let table_name = std::env::var("TABLE_NAME")
         .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
 
-    let unread = ddb
-        .query()
-        .table_name(&table_name)
-        .key_condition_expression("pk = :pk AND begins_with(sk, :prefix)")
-        .expression_attribute_values(
-            ":pk",
-            AttributeValue::S(notification_partition_key(&tenant_id)),
-        )
-        .expression_attribute_values(":prefix", AttributeValue::S(SK_PREFIX.to_string()))
-        .filter_expression("attribute_not_exists(readAt)")
-        .projection_expression("sk")
-        .scan_index_forward(false)
-        .limit(MARK_ALL_LIMIT)
-        .send()
-        .await
-        .map_err(|e| AppError::InternalError(format!("Failed to read notifications: {}", e)))?;
+    let (unread, more_remaining) = unread_keys(&tenant_id, MARK_ALL_LIMIT).await?;
 
-    let more_remaining = unread.last_evaluated_key().is_some();
     let now = chrono::Utc::now().to_rfc3339();
     let mut marked = 0usize;
 
     // One update each rather than a transaction. These are independent rows and
     // the operation is idempotent, so a partial pass is not a broken state — it
     // is simply fewer marked, which the response already reports.
-    for item in unread.items() {
-        let Some(AttributeValue::S(sort_key)) = item.get("sk") else {
-            continue;
-        };
-
+    for sort_key in &unread {
         let updated = ddb
             .update_item()
             .table_name(&table_name)

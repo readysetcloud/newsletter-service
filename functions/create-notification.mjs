@@ -99,10 +99,22 @@ export const renderNotification = (event) => {
     }
 
     case 'ISSUE_PUBLISHED': {
+      // Two different things publish this. A send does, and so does
+      // `POST /issues/{id}/analytics/rebuild`, which reuses the event purely to
+      // re-trigger aggregation. Only one of them is an issue going out, and
+      // announcing the other would tell someone their newsletter had been sent
+      // again every time they rebuilt a chart.
+      if (detail.reason === 'analytics-rebuild') return null;
+
       // `issueId` on this event is the composite key (`<tenant>#<number>`),
       // not what the dashboard routes on — that is the bare issue number, as
       // `IssueListItem.id`. Linking with the composite would 404.
-      const { issueNumber, subject, subscriberCount } = detail;
+      //
+      // `subject` from the send path, `title` from the rebuild path: the two
+      // producers disagree, and reading only one of them renders a notification
+      // about "Issue undefined".
+      const { issueNumber, subscriberCount } = detail;
+      const subject = detail.subject ?? detail.title;
       const who = subscriberCount == null
         ? 'your subscribers'
         : `${count(subscriberCount)} subscriber${Number(subscriberCount) === 1 ? '' : 's'}`;
@@ -174,15 +186,27 @@ export const renderNotification = (event) => {
 
       // Every other billing notification the handlers raise is a failure of
       // some grade, and all of them want the same thing: go fix the card.
+      //
+      // How final it is comes from the producer, which grades its own failures:
+      // `PAYMENT_FINAL_FAILURE` with `isFinalFailure` once Stripe has given up,
+      // `PAYMENT_RETRY_FAILED` in between, `PAYMENT_FAILED` first time. There
+      // is no `willRetry` field — reading one meant a customer whose
+      // subscription was about to be cancelled was told to sit tight.
+      const isFinal = type === 'PAYMENT_FINAL_FAILURE' || data.isFinalFailure === true;
+
       return {
         ...base,
         dedupeKey: `billing:${data.invoiceId ?? data.subscriptionId ?? type}:${type}`,
         type: NOTIFICATION_TYPES.BILLING_PAYMENT_FAILED,
         severity: NOTIFICATION_SEVERITY.ERROR,
-        title: 'Payment problem',
-        message: data.willRetry === false
+        title: isFinal ? 'Subscription at risk' : 'Payment problem',
+        // The handlers already write a sentence aimed at the customer, and it
+        // knows things this does not — which attempt this was, what happens
+        // next. Prefer it, and keep a generic line for the events that carry
+        // none.
+        message: trim(data.message) ?? (isFinal
           ? 'A payment failed and will not be retried. Update your payment method to keep sending.'
-          : 'A payment failed. We will retry, but updating your payment method now avoids interruption.',
+          : 'A payment failed. We will retry, but updating your payment method now avoids interruption.'),
         link: '/billing'
       };
     }

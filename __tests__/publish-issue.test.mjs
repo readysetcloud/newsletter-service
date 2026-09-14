@@ -749,7 +749,11 @@ describe('publish-issue', () => {
       sendAtDate: 'now'
     });
 
-    it('fills in the list size, guarded so it can only ever fill a hole', async () => {
+    it('fills in every field the seed would have written, not just the list size', async () => {
+      // The refused seed takes `subject` and `publishedAt` with it, and those
+      // matter more than the snapshot: reports pick their issues by reading
+      // `publishedAt` off this record and silently drop anything without one,
+      // so an issue that loses this race is missing from every report ever run.
       const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
       rejectSeedWithConditionFailure();
 
@@ -758,11 +762,28 @@ describe('publish-issue', () => {
       const update = backfillWrite();
       expect(update).toBeDefined();
       expect(update.Key.pk.S).toBe('tenant-1#42');
-      expect(update.UpdateExpression).toBe('SET subscribers = :subscribers');
-      expect(update.ConditionExpression).toBe(
-        'attribute_exists(pk) AND attribute_not_exists(subscribers)'
-      );
+      expect(Object.keys(update.ExpressionAttributeValues).sort())
+        .toEqual([':publishedAt', ':subject', ':subscribers']);
+      expect(update.ExpressionAttributeValues[':subject']).toEqual({ S: 'Subject' });
       expect(update.ExpressionAttributeValues[':subscribers']).toEqual({ N: '100' });
+      logSpy.mockRestore();
+    });
+
+    it('can only ever fill a hole, never overwrite', async () => {
+      // Guarded per field rather than per item, so a record missing only
+      // `publishedAt` is still repaired — and a resend keeps every value it
+      // was published with.
+      const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+      rejectSeedWithConditionFailure();
+
+      await handler(publishEvent());
+
+      const update = backfillWrite();
+      for (const field of ['subject', 'publishedAt', 'subscribers']) {
+        expect(update.UpdateExpression)
+          .toContain(`#${field} = if_not_exists(#${field}, :${field})`);
+      }
+      expect(update.ConditionExpression).toBe('attribute_exists(pk)');
       logSpy.mockRestore();
     });
 

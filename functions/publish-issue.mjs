@@ -554,7 +554,7 @@ const setupIssueStats = async (tenant, issueNumber, subject, publishedAt, subscr
         tenantId: tenant.pk,
         issueNumber
       });
-      await backfillSubscriberSnapshot(tenant, issueNumber, subscriberCount);
+      await backfillSeededFields(tenant, issueNumber, { subject, publishedAt, subscriberCount });
       return;
     }
     throw err;
@@ -562,7 +562,7 @@ const setupIssueStats = async (tenant, issueNumber, subject, publishedAt, subscr
 };
 
 /**
- * Write the list-size snapshot onto a stats record the seed did not create.
+ * Write the seeded fields onto a stats record the seed did not create.
  *
  * The seed is the only writer of `subscribers`, and it only runs when it also
  * creates the record. But it is not the only writer that can *create* it:
@@ -574,37 +574,63 @@ const setupIssueStats = async (tenant, issueNumber, subject, publishedAt, subscr
  * the seed then declines to touch it. The dashboard reads that hole as a list
  * that fell to zero.
  *
- * Guarded on the attribute rather than the item so it can only ever fill a
- * hole: an issue that already has its snapshot (every resend, every re-stage)
- * fails the condition and keeps the number it was published with.
+ * `subscribers` was the first field noticed missing and for a while the only one
+ * repaired here, but the refused seed takes `subject` and `publishedAt` with it
+ * — and those are worse. Reports choose which issues fall in their window by
+ * reading `publishedAt` off this record and drop anything without one, with no
+ * error and no gap in the output. An issue that loses this race is absent from
+ * every report anyone ever runs, and the only symptom is a count being smaller
+ * than it should be. Thirty-one records in production were in that state, going
+ * back a year.
+ *
+ * Each field is written through `if_not_exists` so this can only ever fill a
+ * hole: an issue that already has a value (every resend, every re-stage) keeps
+ * the one it was published with. Per field rather than per item, so a record
+ * missing only `publishedAt` is still repaired.
  */
-const backfillSubscriberSnapshot = async (tenant, issueNumber, subscriberCount) => {
-  if (typeof subscriberCount !== 'number') {
+const backfillSeededFields = async (tenant, issueNumber, { subject, publishedAt, subscriberCount }) => {
+  const fields = {
+    ...(subject && { subject }),
+    ...(publishedAt && { publishedAt }),
+    ...(typeof subscriberCount === 'number' && { subscribers: subscriberCount })
+  };
+
+  if (Object.keys(fields).length === 0) {
     return;
+  }
+
+  const names = {};
+  const values = {};
+  const clauses = [];
+
+  for (const [field, value] of Object.entries(fields)) {
+    names[`#${field}`] = field;
+    values[`:${field}`] = value;
+    clauses.push(`#${field} = if_not_exists(#${field}, :${field})`);
   }
 
   try {
     await ddb.send(new UpdateItemCommand({
       TableName: process.env.TABLE_NAME,
       Key: marshall({ pk: `${tenant.pk}#${issueNumber}`, sk: 'stats' }),
-      UpdateExpression: 'SET subscribers = :subscribers',
-      ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(subscribers)',
-      ExpressionAttributeValues: marshall({ ':subscribers': subscriberCount })
+      UpdateExpression: `SET ${clauses.join(', ')}`,
+      ConditionExpression: 'attribute_exists(pk)',
+      ExpressionAttributeNames: names,
+      ExpressionAttributeValues: marshall(values)
     }));
 
-    console.log('[PUBLISH] Backfilled the subscriber snapshot on an existing stats record', {
+    console.log('[PUBLISH] Backfilled seeded fields on an existing stats record', {
       tenantId: tenant.pk,
       issueNumber,
-      subscribers: subscriberCount
+      fields: Object.keys(fields)
     });
   } catch (err) {
     if (err.name === 'ConditionalCheckFailedException') {
       return;
     }
-    // Never fail a publish over the snapshot. The issue still sends; the
-    // dashboard shows the issue without a list size, which is what it now
-    // renders for any issue that has none.
-    console.error('[PUBLISH] Could not backfill the subscriber snapshot', {
+    // Never fail a publish over this. The issue still sends; the report falls
+    // back to the issue record for anything left missing.
+    console.error('[PUBLISH] Could not backfill the seeded fields', {
       tenantId: tenant.pk,
       issueNumber,
       error: err.message

@@ -1,4 +1,4 @@
-import { DynamoDBClient, QueryCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, GetItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { summarizeAtRisk } from './utils/churn-risk.mjs';
 
@@ -102,6 +102,73 @@ const queryTenantIssues = async (tenantId) => {
 };
 
 /**
+ * Fills in what a stats record should have carried but does not.
+ *
+ * A report decides which issues fall in its window by reading `publishedAt` off
+ * the stats record, where `setupIssueStats` seeds it alongside `subject`. When
+ * that seed never lands the record still exists — the SES event counters create
+ * it on their own — but with neither field, and the window filter drops
+ * anything without a date. Silently: no error, no gap, just a smaller number.
+ * Three consecutive issues went missing from every report that way before
+ * anyone noticed the count was wrong.
+ *
+ * The issue record always has both, so it is read for the few stats records
+ * that are short. One GetItem each, only for the broken ones, so a healthy
+ * tenant pays nothing.
+ *
+ * The stats copy still wins where it exists. It is the send instant — see
+ * `resolvePublishedAt` in publish-issue.mjs — while the issue record holds the
+ * moment the workflow handed the issue over, which can be a lead time earlier.
+ * This is a repair for missing data, not a change of source.
+ */
+const backfillFromIssueRecords = async (statsRecords) => {
+  const incomplete = statsRecords.filter((r) => !r.publishedAt || !r.subject);
+
+  if (incomplete.length === 0) {
+    return statsRecords;
+  }
+
+  console.warn('[MONTHLY-REPORT] Stats records missing seeded fields; reading issue records', {
+    count: incomplete.length,
+    keys: incomplete.map((r) => r.pk)
+  });
+
+  const repaired = new Map();
+
+  for (const record of incomplete) {
+    try {
+      const { Item } = await ddb.send(new GetItemCommand({
+        TableName: process.env.TABLE_NAME,
+        Key: marshall({ pk: record.pk, sk: 'newsletter' }),
+        ProjectionExpression: 'publishedAt, subject'
+      }));
+
+      if (Item) {
+        repaired.set(record.pk, unmarshall(Item));
+      }
+    } catch (error) {
+      // One unreadable issue record must not cost the whole report. This issue
+      // stays as it was, which is the behaviour before this function existed.
+      console.error('[MONTHLY-REPORT] Could not read issue record', {
+        pk: record.pk,
+        error: error.message
+      });
+    }
+  }
+
+  return statsRecords.map((record) => {
+    const fallback = repaired.get(record.pk);
+    if (!fallback) return record;
+
+    return {
+      ...record,
+      publishedAt: record.publishedAt ?? fallback.publishedAt,
+      subject: record.subject ?? fallback.subject
+    };
+  });
+};
+
+/**
  * Query every real subscriber record for a tenant from the subscribers table.
  * SEGMENT* rows (segment infrastructure sharing the tenant partition) are
  * filtered out. Returns [] when SUBSCRIBERS_TABLE_NAME is unset.
@@ -194,7 +261,7 @@ export const handler = async (state) => {
     periodLabel: state.periodLabel ?? monthLabel
   };
 
-  const allIssues = await queryTenantIssues(tenantId);
+  const allIssues = await backfillFromIssueRecords(await queryTenantIssues(tenantId));
 
   // Keep only issues actually sent within the reporting window. publishedAt is an
   // ISO8601 (Z) timestamp so lexical comparison against the window is safe.

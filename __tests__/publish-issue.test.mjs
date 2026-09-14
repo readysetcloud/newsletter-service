@@ -61,7 +61,7 @@ const loadIsolated = async () => {
 
     jest.unstable_mockModule('../functions/utils/event-publisher.mjs', () => ({
       publishIssueEvent,
-      EVENT_TYPES: { ISSUE_HANDED_OFF: 'ISSUE_PUBLISHED' }
+      EVENT_TYPES: { ISSUE_HANDED_OFF: 'Issue Handed Off' }
     }));
 
     ({ handler } = await import('../functions/publish-issue.mjs'));
@@ -642,7 +642,7 @@ describe('publish-issue', () => {
       expect(publishIssueEvent).toHaveBeenCalledWith(
         'tenant-1',
         expect.anything(),
-        'ISSUE_PUBLISHED',
+        'Issue Handed Off',
         expect.objectContaining({ publishedAt: sendAt })
       );
     });

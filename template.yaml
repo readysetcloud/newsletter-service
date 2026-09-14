@@ -1293,6 +1293,12 @@ Resources:
 
   ApiFunction:
     Type: AWS::Serverless::Function
+    # Updated after the aggregation rule, so this can never emit
+    # `Issue Handed Off` at a rule that has not learned it yet. CloudFormation
+    # orders updates by dependency; without this the two are independent and
+    # either may land first, and an issue published in that window would lose
+    # its analytics scheduling silently.
+    DependsOn: ScheduleAggregationFunctionIssuePublishedEvent
     Metadata:
       BuildMethod: rust-cargolambda
       BuildProperties:
@@ -2282,6 +2288,12 @@ Resources:
 
   PublishIssueFunction:
     Type: AWS::Serverless::Function
+    # Updated after the aggregation rule, so this can never emit
+    # `Issue Handed Off` at a rule that has not learned it yet. CloudFormation
+    # orders updates by dependency; without this the two are independent and
+    # either may land first, and an issue published in that window would lose
+    # its analytics scheduling silently.
+    DependsOn: ScheduleAggregationFunctionIssuePublishedEvent
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
@@ -5125,25 +5137,26 @@ Resources:
           AGGREGATION_FUNCTION_ARN: !GetAtt AggregateIssueAnalyticsFunction.Arn
           SCHEDULER_ROLE_ARN: !GetAtt AggregationSchedulerRole.Arn
       Events:
-        IssueHandedOffEvent:
+        # The key stays `IssuePublishedEvent` even though the event no longer
+        # is. It names the generated resource
+        # (`ScheduleAggregationFunctionIssuePublishedEvent`), and renaming it
+        # would make CloudFormation create a second rule and delete this one —
+        # a stretch with both live, both matching, both invoking aggregation for
+        # the same event. Updating the pattern in place has no such window.
+        # Renaming the key is safe once `ISSUE_PUBLISHED` leaves the list below.
+        IssuePublishedEvent:
           Type: EventBridgeRule
           Properties:
             Pattern:
               source:
                 - newsletter-service
               detail-type:
-                # Step one of a two-deploy rename. This rule learns the new
-                # name now while every publisher still emits the old one, so
-                # there is no window in which an event has no matching rule.
-                # Doing both at once would not be safe: CloudFormation gives no
-                # ordering guarantee between a rule and a function, and a
-                # publisher that landed first would emit into nothing and skip
-                # an issue's analytics silently.
-                #
-                # Step two flips the publishers (one line in
-                # `EVENT_TYPES.ISSUE_HANDED_OFF`); `ISSUE_PUBLISHED` can be
-                # dropped from this list in a third change, once nothing has
-                # emitted it for a while.
+                # Both names, because a deploy cannot change a rule and a
+                # publisher at the same instant. Every publisher carries a
+                # DependsOn back to this rule so it updates first, and the old
+                # name stays matched so anything already in flight still lands.
+                # `ISSUE_PUBLISHED` can be dropped once nothing has emitted it
+                # for a while.
                 - Issue Handed Off
                 - ISSUE_PUBLISHED
 

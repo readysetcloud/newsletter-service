@@ -125,6 +125,60 @@ describe('a report with no measurable subscriber growth', () => {
   });
 });
 
+describe('a report where no issue carried a subscriber count', () => {
+  // The deeper half of the same bug. `build-monthly-report-data.mjs` keeps
+  // `subscribers` as a snapshot and passes a missing one through as null, so
+  // `byIssue` can hold nulls even when the aggregates are present — and here,
+  // where nothing was measured, everything is null at once.
+  const unmeasured = {
+    ...unmeasuredGrowthReport,
+    report: {
+      ...unmeasuredGrowthReport.report,
+      subscriberGrowth: {
+        startCount: null,
+        endCount: null,
+        netChange: null,
+        growthRate: null,
+        measuredIssues: 0,
+        byIssue: [{ issue: 231, date: '2026-09-01T15:13:37.380Z', subscribers: null }]
+      }
+    }
+  };
+
+  beforeEach(() => {
+    mocked.getReport.mockResolvedValue({ success: true, data: unmeasured as never });
+  });
+
+  it('renders rather than crashing on formatNumber(null)', async () => {
+    renderDetail();
+
+    expect(await screen.findByText('Subscriber Growth')).toBeInTheDocument();
+  });
+
+  it('still lists the issue it could not measure', async () => {
+    renderDetail();
+
+    await screen.findByText('Subscriber Growth');
+    expect(screen.getByText('#231')).toBeInTheDocument();
+  });
+
+  it('shows no count rather than a zero for that issue', async () => {
+    // A 0 here would repeat the exact claim the API refuses to make: an
+    // unmeasured issue reading as an issue that went to nobody.
+    renderDetail();
+
+    await screen.findByText('Subscriber Growth');
+    expect(screen.queryByText('0')).not.toBeInTheDocument();
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+  });
+
+  it('says it measured none of them', async () => {
+    renderDetail();
+
+    expect(await screen.findByText(/this one has 0/i)).toBeInTheDocument();
+  });
+});
+
 describe('a report that did measure growth', () => {
   it('still renders the figure and its direction', async () => {
     mocked.getReport.mockResolvedValue({

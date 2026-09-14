@@ -41,7 +41,16 @@ export interface ReportSummaryMetrics {
 export interface SubscriberGrowthByIssue {
   issue: number;
   date: string;
-  subscribers: number;
+  /**
+   * The list size when this issue went out, or null if it was never measured.
+   *
+   * Null for the same reason the aggregate figures are:
+   * `build-monthly-report-data.mjs` keeps `subscribers` as a snapshot rather
+   * than a counter, and an issue published before the field was recorded has no
+   * measurement. Its comment is blunt about what coercing that to zero did —
+   * "list of 4,000" became "list of nobody".
+   */
+  subscribers: number | null;
 }
 
 /**

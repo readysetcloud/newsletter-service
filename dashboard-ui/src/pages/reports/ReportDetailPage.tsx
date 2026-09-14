@@ -284,8 +284,11 @@ export const ReportDetailPage: React.FC = () => {
   const netChange = subscriberGrowth.netChange;
   const growthDirection = netChange == null ? 'unknown' : netChange >= 0 ? 'up' : 'down';
 
+  // Unmeasured points are skipped rather than folded in. `Math.max(n, null)`
+  // reads null as 0, which is the same "list of nobody" claim the API goes out
+  // of its way not to make.
   const maxSubscribers = subscriberGrowth.byIssue.reduce(
-    (max, point) => Math.max(max, point.subscribers),
+    (max, point) => (point.subscribers == null ? max : Math.max(max, point.subscribers)),
     0
   );
 
@@ -378,20 +381,38 @@ export const ReportDetailPage: React.FC = () => {
               <h4 className="text-sm font-medium text-foreground mb-3">Subscribers by issue</h4>
               <div className="space-y-2">
                 {subscriberGrowth.byIssue.map((point) => {
-                  const pct = maxSubscribers > 0 ? (point.subscribers / maxSubscribers) * 100 : 0;
+                  const measured = point.subscribers != null;
+                  // No bar at all for an unmeasured issue. A zero-width one is
+                  // indistinguishable from an issue that went to nobody.
+                  // The null check is inline rather than via `measured` so the
+                  // compiler narrows the type here too.
+                  const pct = point.subscribers != null && maxSubscribers > 0
+                    ? (point.subscribers / maxSubscribers) * 100
+                    : 0;
+
                   return (
                     <div key={`${point.issue}-${point.date}`} className="flex items-center gap-3">
                       <div className="w-16 shrink-0 text-xs text-muted-foreground">
                         #{point.issue}
                       </div>
-                      <div className="flex-1 h-6 rounded bg-muted overflow-hidden">
-                        <div
-                          className="h-full bg-primary-500 dark:bg-primary-600 rounded"
-                          style={{ width: `${pct}%` }}
-                        />
+                      <div
+                        className="flex-1 h-6 rounded bg-muted overflow-hidden"
+                        title={measured ? undefined : 'No subscriber count recorded for this issue'}
+                      >
+                        {measured && (
+                          <div
+                            className="h-full bg-primary-500 dark:bg-primary-600 rounded"
+                            style={{ width: `${pct}%` }}
+                          />
+                        )}
                       </div>
-                      <div className="w-20 shrink-0 text-right text-sm font-medium text-foreground tabular-nums">
-                        {formatNumber(point.subscribers)}
+                      <div
+                        className={cn(
+                          'w-20 shrink-0 text-right text-sm font-medium tabular-nums',
+                          measured ? 'text-foreground' : 'text-muted-foreground'
+                        )}
+                      >
+                        {formatOptionalNumber(point.subscribers)}
                       </div>
                     </div>
                   );

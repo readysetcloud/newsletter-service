@@ -135,20 +135,55 @@ describe('compile-monthly-report', () => {
   });
 
   describe('delivery', () => {
+    /**
+     * Events this handler put on the bus, by detail-type.
+     *
+     * Selected rather than indexed because two different things leave here now
+     * — the completion announcement that feeds in-app notifications, and the
+     * report email — and asserting on `calls[0]` would make either one's
+     * ordering load-bearing.
+     */
+    const eventsOfType = (detailType) => eventSend.mock.calls
+      .flatMap(call => call[0].input.Entries)
+      .filter(entry => entry.DetailType === detailType)
+      .map(entry => JSON.parse(entry.Detail));
+
+    const emails = () => eventSend.mock.calls
+      .flatMap(call => call[0].input.Entries)
+      .filter(entry => entry.DetailType !== 'Report Completed')
+      .map(entry => JSON.parse(entry.Detail));
+
     it('emails a scheduled report to the tenant owner', async () => {
       await handler(monthlyInput);
 
-      expect(eventSend).toHaveBeenCalledTimes(1);
-      const detail = JSON.parse(eventSend.mock.calls[0][0].input.Entries[0].Detail);
-      expect(detail.to.email).toBe('owner@example.com');
-      expect(detail.subject).toContain('May 2026');
+      const [email] = emails();
+      expect(email.to.email).toBe('owner@example.com');
+      expect(email.subject).toContain('May 2026');
+    });
+
+    it('announces that the report is ready, whoever asked for it', async () => {
+      // What in-app notifications are built on. It has to fire for both kinds,
+      // including the on-demand report that is never emailed.
+      await handler(monthlyInput);
+
+      const [announced] = eventsOfType('Report Completed');
+      expect(announced.outcome).toBe('ready');
+      expect(announced.tenantId).toBe('tenant123');
+      expect(announced.reportId).toBe('2026-05');
+    });
+
+    it('announces an on-demand report too, though it sends no email', async () => {
+      await handler(adhocInput);
+
+      expect(eventsOfType('Report Completed')).toHaveLength(1);
+      expect(emails()).toHaveLength(0);
     });
 
     it('never emails an on-demand report', async () => {
       const result = await handler(adhocInput);
 
       // Somebody asked for this and is already looking at it.
-      expect(eventSend).not.toHaveBeenCalled();
+      expect(emails()).toHaveLength(0);
       expect(result.emailed).toBe(false);
     });
 
@@ -185,8 +220,15 @@ describe('compile-monthly-report', () => {
       const result = await handler({ ...monthlyInput, tenant: { id: 'tenant123' } });
 
       expect(ddbSend).toHaveBeenCalledTimes(1);
-      expect(eventSend).not.toHaveBeenCalled();
+      expect(emails()).toHaveLength(0);
       expect(result.emailed).toBe(false);
+    });
+
+    it('still announces a report it could not email', async () => {
+      // No address to send to is not a reason to leave the dashboard silent.
+      await handler({ ...monthlyInput, tenant: { id: 'tenant123' } });
+
+      expect(eventsOfType('Report Completed')).toHaveLength(1);
     });
   });
 });

@@ -4,6 +4,7 @@ pub mod churn;
 pub mod domain;
 pub mod issue_timeline;
 pub mod issues;
+pub mod notifications;
 pub mod pricing;
 pub mod profile;
 pub mod reports;

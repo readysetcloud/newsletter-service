@@ -751,7 +751,57 @@
         }
       ],
       "ResultPath": null,
-      "Next": "Fail"
+      "Next": "Send Already Handed Off?"
+    },
+    "Send Already Handed Off?": {
+      "Comment": "Whether anything was actually sent, which decides if the tenant hears about this at all. Six states catch to 'Update Issue Record - Failure' and only four of them are failures to send: 'Schedule Tasks and Update' and 'Update Issue Record - Success' both run after Publish has already handed the issue to the send path, so a failure there is bookkeeping falling over behind a send that went out. Telling somebody that issue failed invites them to send it twice. $.publishResult is the discriminator and needs no new state: Publish writes it on success, the two post-handoff catchers preserve $ (ResultPath null), and 'Record Publish Rejection' is a Pass with Parameters, so a publish that reported success:false replaces $ outright and the field is gone - which is right, because nothing was sent.",
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.publishResult.Payload.success",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.publishResult.Payload.success",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "Fail"
+        }
+      ],
+      "Default": "Announce Send Failure"
+    },
+    "Announce Send Failure": {
+      "Comment": "Tells the dashboard an issue did not send, via create-notification.mjs. Gated by 'Send Already Handed Off?' so it only speaks for failures that happened before the send left, and reached only from the successful update above - the Catch branches go straight to Fail, because one of them is the conditional refusal that leaves a local send owning the record, where the issue is not failed at all. Carries no subject: the execution input is identifiers only, and the record's subject is assigned into a variable by 'Mark Issue In Progress', which a failure before that state never reached - referencing it would raise States.Runtime inside the failure handler. The renderer falls back to the issue number.",
+      "Type": "Task",
+      "Resource": "${EventBridgePutEvents}",
+      "Parameters": {
+        "Entries": [
+          {
+            "Detail": {
+              "tenantId.$": "$$.Execution.Input.tenant.id",
+              "issueNumber.$": "$$.Execution.Input.issueId",
+              "error.$": "States.JsonToString($.error)"
+            },
+            "DetailType": "Issue Send Failed",
+            "Source": "newsletter-service"
+          }
+        ]
+      },
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Comment": "The issue has already been recorded as failed, which is the part that matters. Losing the notification must not change where this ends up.",
+          "Next": "Fail",
+          "ResultPath": null
+        }
+      ],
+      "Next": "Fail",
+      "ResultPath": null
     },
     "Fail": {
       "Type": "Fail"

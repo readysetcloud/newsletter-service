@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { usePageMeta } from '@/hooks/usePageMeta';
 import { ChevronRightIcon } from '@heroicons/react/24/outline';
+import { NotificationBell } from '@/components/notifications/NotificationBell';
 
 /**
  * Page title / breadcrumb bar shown directly beneath {@link AppNavBar}.
@@ -14,7 +15,7 @@ export function PageHeaderBar() {
 
   return (
     <div className="border-b border-border bg-surface">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center gap-4">
         {breadcrumb ? (
           <nav aria-label="Breadcrumb" className="min-w-0">
             <ol className="flex items-center gap-1.5 text-sm min-w-0">
@@ -51,6 +52,13 @@ export function PageHeaderBar() {
         ) : (
           <h1 className="text-lg font-semibold text-foreground truncate">{title}</h1>
         )}
+
+        {/* Pushed to the far end, and outside the title/breadcrumb branch so it
+            is there on every page rather than only the ones with a plain
+            title. */}
+        <div className="ml-auto flex items-center">
+          <NotificationBell />
+        </div>
       </div>
     </div>
   );

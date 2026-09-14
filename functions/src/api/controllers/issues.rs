@@ -662,7 +662,7 @@ async fn handle_rebuild_issue_analytics(
         .clone()
         .unwrap_or_else(|| issue.updated_at.clone());
 
-    publish_issue_published_event(
+    publish_issue_handed_off_event(
         &tenant_id,
         &user_context.user_id,
         issue.issue_number,
@@ -2358,7 +2358,7 @@ async fn handle_update_issue(
 
     if is_publishing {
         let published_at = chrono::Utc::now().to_rfc3339();
-        let _ = publish_issue_published_event(
+        let _ = publish_issue_handed_off_event(
             &tenant_id,
             &user_context.user_id,
             existing.issue_number,
@@ -5533,7 +5533,7 @@ async fn publish_event<T: Serialize>(
     }
 }
 
-async fn publish_issue_published_event(
+async fn publish_issue_handed_off_event(
     tenant_id: &str,
     user_id: &str,
     issue_number: i32,
@@ -5545,7 +5545,7 @@ async fn publish_issue_published_event(
     let detail = serde_json::json!({
         "tenantId": tenant_id,
         "userId": user_id,
-        "type": "ISSUE_PUBLISHED",
+        "type": "ISSUE_HANDED_OFF",
         "data": {
             "issueNumber": issue_number,
             "publishedAt": published_at,
@@ -5561,7 +5561,7 @@ async fn publish_issue_published_event(
         .entries(
             aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
                 .source("newsletter-service")
-                .detail_type("ISSUE_PUBLISHED")
+                .detail_type("Issue Handed Off")
                 .detail(detail_str)
                 .build(),
         )
@@ -5574,7 +5574,7 @@ async fn publish_issue_published_event(
                 if let Some(error_code) = entry.error_code() {
                     tracing::error!(
                         tenant_id = %tenant_id,
-                        event_type = "ISSUE_PUBLISHED",
+                        event_type = "Issue Handed Off",
                         error_code = %error_code,
                         error_message = ?entry.error_message(),
                         "Failed to publish analytics rebuild event"
@@ -5586,7 +5586,7 @@ async fn publish_issue_published_event(
         Err(e) => {
             tracing::error!(
                 tenant_id = %tenant_id,
-                event_type = "ISSUE_PUBLISHED",
+                event_type = "Issue Handed Off",
                 error = %e,
                 "Failed to send analytics rebuild event to EventBridge"
             );

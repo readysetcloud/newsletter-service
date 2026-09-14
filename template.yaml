@@ -1203,6 +1203,66 @@ Resources:
               detail-type:
                 - Subscriber Added
 
+  # Turns the things that happen in the background into something a person can
+  # see when they next open the dashboard. One consumer for every source, so
+  # the wording of a notification lives in one file rather than in each
+  # producer; adding a source is a publish plus a branch in renderNotification.
+  #
+  # `User Notification` is the odd one out: the billing handlers have been
+  # publishing it since they were written, and until this function existed
+  # nothing subscribed to it at all.
+  CreateNotificationFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - create-notification.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: create-notification.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            # PutItem only. This function writes notifications and reads
+            # nothing; marking them read belongs to the API.
+            - Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt NewsletterTable.Arn
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          TABLE_NAME: !Ref NewsletterTable
+      Events:
+        # Separate rules rather than one with every detail-type, so a pattern
+        # can be narrowed per source without disturbing the others — the
+        # billing events come from a different source entirely.
+        NewsletterEvents:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - newsletter-service
+              detail-type:
+                - Report Completed
+                # Deliberately not `Issue Handed Off`: that fires when an issue
+                # reaches the send path, which can be a day before any mail
+                # moves. `Issue Send Completed` is the send actually finishing.
+                - Issue Send Completed
+                - Issue Send Failed
+                - Sender Verification Completed
+        BillingEvents:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - newsletter.billing
+              detail-type:
+                - User Notification
+
   LambdaAuthorizerFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -1233,6 +1293,12 @@ Resources:
 
   ApiFunction:
     Type: AWS::Serverless::Function
+    # Updated after the aggregation rule, so this can never emit
+    # `Issue Handed Off` at a rule that has not learned it yet. CloudFormation
+    # orders updates by dependency; without this the two are independent and
+    # either may land first, and an issue published in that window would lose
+    # its analytics scheduling silently.
+    DependsOn: ScheduleAggregationFunctionIssuePublishedEvent
     Metadata:
       BuildMethod: rust-cargolambda
       BuildProperties:
@@ -2222,6 +2288,12 @@ Resources:
 
   PublishIssueFunction:
     Type: AWS::Serverless::Function
+    # Updated after the aggregation rule, so this can never emit
+    # `Issue Handed Off` at a rule that has not learned it yet. CloudFormation
+    # orders updates by dependency; without this the two are independent and
+    # either may land first, and an issue published in that window would lose
+    # its analytics scheduling silently.
+    DependsOn: ScheduleAggregationFunctionIssuePublishedEvent
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
@@ -2698,6 +2770,14 @@ Resources:
             - Effect: Allow
               Action: dynamodb:UpdateItem
               Resource: !GetAtt NewsletterTable.Arn
+            # Announces `Report Completed` for the two endings the compile step
+            # cannot produce. Without this the publish fails with AccessDenied,
+            # which that function deliberately swallows so a notification
+            # cannot fail a finished report — meaning every empty or failed
+            # report would go unannounced and nothing would say why.
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
@@ -4786,6 +4866,12 @@ Resources:
               Action:
                 - iam:PassRole
               Resource: !GetAtt SchedulerExecutionRole.Arn
+            # Announces `Sender Verification Completed` once verification
+            # reaches a terminal answer, which create-notification.mjs turns
+            # into something the dashboard shows.
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
@@ -5051,6 +5137,13 @@ Resources:
           AGGREGATION_FUNCTION_ARN: !GetAtt AggregateIssueAnalyticsFunction.Arn
           SCHEDULER_ROLE_ARN: !GetAtt AggregationSchedulerRole.Arn
       Events:
+        # The key stays `IssuePublishedEvent` even though the event no longer
+        # is. It names the generated resource
+        # (`ScheduleAggregationFunctionIssuePublishedEvent`), and renaming it
+        # would make CloudFormation create a second rule and delete this one —
+        # a stretch with both live, both matching, both invoking aggregation for
+        # the same event. Updating the pattern in place has no such window.
+        # Renaming the key is safe once `ISSUE_PUBLISHED` leaves the list below.
         IssuePublishedEvent:
           Type: EventBridgeRule
           Properties:
@@ -5058,6 +5151,13 @@ Resources:
               source:
                 - newsletter-service
               detail-type:
+                # Both names, because a deploy cannot change a rule and a
+                # publisher at the same instant. Every publisher carries a
+                # DependsOn back to this rule so it updates first, and the old
+                # name stays matched so anything already in flight still lands.
+                # `ISSUE_PUBLISHED` can be dropped once nothing has emitted it
+                # for a while.
+                - Issue Handed Off
                 - ISSUE_PUBLISHED
 
   DeleteExpiredDraftFunction:

@@ -2,8 +2,8 @@ use lambda_http::{http::Method, Body, Error, Request, Response};
 use serde_json::json;
 
 use crate::controllers::{
-    api_keys, brand, churn, domain, issues, pricing, profile, reports, segments, senders, settings,
-    snippets, sponsors, subscribers, templates,
+    api_keys, brand, churn, domain, issues, notifications, pricing, profile, reports, segments,
+    senders, settings, snippets, sponsors, subscribers, templates,
 };
 
 pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
@@ -143,6 +143,17 @@ pub async fn route_request(event: Request) -> Result<Response<Body>, Error> {
         (&Method::GET, path) if path.starts_with("/reports/") => {
             let id = extract_path_param(path, "/reports/");
             reports::get_report(event, id).await
+        }
+
+        // Notification endpoints
+        (&Method::GET, "/notifications") => notifications::list_notifications(event).await,
+        (&Method::POST, "/notifications/read-all") => {
+            notifications::mark_all_notifications_read(event).await
+        }
+        // After the literal above, so `read-all` is never read as an id.
+        (&Method::PUT, path) if is_notification_read_path(path) => {
+            let id = extract_notification_id(path);
+            notifications::mark_notification_read(event, id).await
         }
 
         // Pricing endpoints
@@ -424,6 +435,10 @@ fn is_valid_api_path(path: &str) -> bool {
         // Reports paths
         || path == "/reports"
         || path.starts_with("/reports/")
+        // Notification paths
+        || path == "/notifications"
+        || path == "/notifications/read-all"
+        || is_notification_read_path(path)
         // Pricing paths
         || path == "/pricing"
         || path == "/pricing/history"
@@ -456,6 +471,23 @@ fn extract_path_param(path: &str, prefix: &str) -> Option<String> {
     path.strip_prefix(prefix)
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
+}
+
+/// Whether a path is `/notifications/{id}/read`.
+///
+/// Guarded on the suffix rather than on the prefix alone, so that
+/// `/notifications/read-all` — which is a literal route, not an id — cannot be
+/// captured here no matter which order the match arms end up in.
+fn is_notification_read_path(path: &str) -> bool {
+    extract_notification_id(path).is_some()
+}
+
+/// The id in `/notifications/{id}/read`, if that is what this path is.
+fn extract_notification_id(path: &str) -> Option<String> {
+    path.strip_prefix("/notifications/")
+        .and_then(|rest| rest.strip_suffix("/read"))
+        .filter(|id| !id.is_empty() && !id.contains('/'))
+        .map(|id| id.to_string())
 }
 
 fn extract_sender_id(path: &str) -> Option<String> {
@@ -695,6 +727,49 @@ mod tests {
         assert!(!is_valid_api_path(""));
         assert!(!is_valid_api_path("/admin"));
         assert!(!is_valid_api_path("/admin/unknown"));
+    }
+
+    // Notification route tests
+    #[test]
+    fn test_notification_paths_are_valid() {
+        assert!(is_valid_api_path("/notifications"));
+        assert!(is_valid_api_path("/notifications/read-all"));
+        assert!(is_valid_api_path(
+            "/notifications/1789295400000-report:2026-08:ready/read"
+        ));
+    }
+
+    #[test]
+    fn test_notification_read_all_is_not_an_id() {
+        // `/notifications/read-all` is a literal route. If the id guard matched
+        // it, marking everything read would instead try to mark one
+        // notification called "read-all" and 404.
+        assert!(!is_notification_read_path("/notifications/read-all"));
+        assert_eq!(extract_notification_id("/notifications/read-all"), None);
+    }
+
+    #[test]
+    fn test_notification_id_needs_the_read_suffix() {
+        // The bare collection and a bare id are not the mark-read route, so
+        // neither may be captured by it.
+        assert_eq!(extract_notification_id("/notifications"), None);
+        assert_eq!(extract_notification_id("/notifications/abc"), None);
+        assert_eq!(extract_notification_id("/notifications/abc/"), None);
+    }
+
+    #[test]
+    fn test_notification_id_is_extracted() {
+        assert_eq!(
+            extract_notification_id("/notifications/1789295400000-report:2026-08:ready/read"),
+            Some("1789295400000-report:2026-08:ready".to_string())
+        );
+    }
+
+    #[test]
+    fn test_notification_id_rejects_extra_segments() {
+        // An id never contains a slash, so anything deeper is not this route.
+        assert_eq!(extract_notification_id("/notifications/a/b/read"), None);
+        assert_eq!(extract_notification_id("/notifications//read"), None);
     }
 
     // Route matching tests

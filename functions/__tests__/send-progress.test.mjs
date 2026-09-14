@@ -1,5 +1,6 @@
 import { jest } from '@jest/globals';
 import { DynamoDBClient, UpdateItemCommand, PutItemCommand } from '@aws-sdk/client-dynamodb';
+import { EventBridgeClient } from '@aws-sdk/client-eventbridge';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 
 process.env.TABLE_NAME = 'test-newsletter-table';
@@ -9,6 +10,7 @@ let isComplete;
 let issueIdFromReference;
 let startProgress;
 let markGroupSent;
+let eventSend;
 let SEND_PROGRESS_SK;
 
 // Two items live in this store: the issue record (sk `newsletter`) and the
@@ -177,6 +179,8 @@ const buildFixture = () => buildInitialProgress({
 beforeEach(async () => {
   items = new Map();
   DynamoDBClient.prototype.send = jest.fn(async (command) => handleCommand(command));
+  eventSend = jest.fn(async () => ({}));
+  EventBridgeClient.prototype.send = eventSend;
 
   const module = await import('../utils/send-progress.mjs');
   ({
@@ -193,6 +197,98 @@ beforeEach(async () => {
 
 afterEach(() => {
   jest.restoreAllMocks();
+});
+
+describe('announcing a completed send', () => {
+  /** Events this put on the bus, by detail-type. */
+  const announcements = () => eventSend.mock.calls
+    .flatMap(call => call[0].input.Entries)
+    .filter(entry => entry.DetailType === 'Issue Send Completed')
+    .map(entry => JSON.parse(entry.Detail));
+
+  // The completion path only runs once the issue's own status write succeeds,
+  // and that write is conditional on the record being mid-flight — so the
+  // record has to exist, exactly as the markGroupSent suite sets it up.
+  const finishEveryGroup = async (counts) => {
+    items.set(issueKey(), { pk: ISSUE_ID, sk: 'newsletter', status: 'in progress' });
+    await startProgress(ISSUE_ID, buildFixture());
+    for (const [label, recipients] of Object.entries(counts)) {
+      await markGroupSent(ISSUE_ID, label, { recipients });
+    }
+  };
+
+  test('says nothing until the last group has reported', async () => {
+    items.set(issueKey(), { pk: ISSUE_ID, sk: 'newsletter', status: 'in progress' });
+    await startProgress(ISSUE_ID, buildFixture());
+    await markGroupSent(ISSUE_ID, 'America/Chicago', { recipients: 38 });
+
+    // A local send is still going out for hours after the first group. This is
+    // the whole reason the notification does not ride on ISSUE_PUBLISHED.
+    expect(announcements()).toHaveLength(0);
+  });
+
+  test('announces once every group is in', async () => {
+    await finishEveryGroup({
+      'America/Chicago': 38,
+      'America/Los_Angeles': 12,
+      __default__: 100,
+      __catch_all__: 2
+    });
+
+    expect(announcements()).toHaveLength(1);
+  });
+
+  test('counts the subscribers actually reached, not the planned total', async () => {
+    // The fixture plans for 152. Groups routinely deliver to fewer — somebody
+    // unsubscribed between planning and sending — and the notification should
+    // say what happened, not what was intended.
+    await finishEveryGroup({
+      'America/Chicago': 30,
+      'America/Los_Angeles': 10,
+      __default__: 90,
+      __catch_all__: 2
+    });
+
+    expect(announcements()[0].recipients).toBe(132);
+  });
+
+  test('names the tenant and issue separately, as the dashboard needs them', async () => {
+    await finishEveryGroup({
+      'America/Chicago': 1,
+      'America/Los_Angeles': 1,
+      __default__: 1,
+      __catch_all__: 0
+    });
+
+    expect(announcements()[0]).toMatchObject({ tenantId: 'tenant-1', issueNumber: '42' });
+  });
+
+  test('announces exactly once when the final group is delivered twice', async () => {
+    // EventBridge redelivery is ordinary. The completion stamp is what makes
+    // this exactly-once, and the announcement sits behind it.
+    await finishEveryGroup({
+      'America/Chicago': 38,
+      'America/Los_Angeles': 12,
+      __default__: 100,
+      __catch_all__: 2
+    });
+    await markGroupSent(ISSUE_ID, '__catch_all__', { recipients: 2 });
+
+    expect(announcements()).toHaveLength(1);
+  });
+
+  test('does not fail the send when the bus is unavailable', async () => {
+    // Delivery is done and recorded. A lost notification must not turn that
+    // into a redelivery of the final group.
+    eventSend.mockRejectedValue(new Error('Bus unavailable'));
+
+    await expect(finishEveryGroup({
+      'America/Chicago': 1,
+      'America/Los_Angeles': 1,
+      __default__: 1,
+      __catch_all__: 1
+    })).resolves.not.toThrow();
+  });
 });
 
 describe('issueIdFromReference', () => {

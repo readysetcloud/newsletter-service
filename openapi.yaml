@@ -2101,6 +2101,109 @@ paths:
         "500":
           $ref: "#/components/responses/UnknownError"
 
+  /notifications:
+    get:
+      summary: List notifications
+      description: >
+        The tenant's notifications, newest first. Read state is shared across
+        everyone on the tenant: one inbox per newsletter, not per person.
+
+
+        `unreadCount` counts only within the most recent notifications rather
+        than the whole history, so it is a badge figure and not an accounting
+        one. When `unreadCountCapped` is true there may be more unread than the
+        count says, and the dashboard renders it as "50+".
+      tags:
+        - Notifications
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+          description: Maximum number of notifications to return
+        - name: nextToken
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Pagination token from a previous response
+        - name: unreadOnly
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Return only notifications that have not been read
+      responses:
+        "200":
+          description: The tenant's notifications
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListNotificationsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /notifications/{id}/read:
+    put:
+      summary: Mark one notification read
+      description: >
+        Idempotent: marking an already-read notification leaves its original
+        readAt alone rather than moving it forward. Read state is shared, so
+        this marks it read for everyone on the tenant.
+      tags:
+        - Notifications
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Notification id, as returned by GET /notifications
+      responses:
+        "200":
+          description: Marked read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarkReadResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
+  /notifications/read-all:
+    post:
+      summary: Mark every notification read
+      description: >
+        Marks up to 200 unread notifications in one call, so an inbox nobody
+        has opened in months cannot turn one click into an unbounded write.
+        `marked` says how many this call actually changed and `moreRemaining`
+        says whether another call would take more.
+      tags:
+        - Notifications
+      responses:
+        "200":
+          description: Marked read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarkReadResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/UnknownError"
+
   /pricing:
     get:
       summary: Get current pricing
@@ -3786,6 +3889,79 @@ components:
           description: How the range reads to a person, naming the last day covered
           example: "1–30 Jun 2026"
 
+    Notification:
+      type: object
+      required: [id, type, severity, title, message, createdAt]
+      properties:
+        id:
+          type: string
+          description: >
+            Opaque, and stable for the event that produced it — a repeated
+            delivery of the same event reuses the same id rather than adding a
+            second notification.
+          example: "1789295400000-report:2026-08:ready"
+        type:
+          type: string
+          description: What happened. The dashboard picks an icon from this.
+          enum:
+            - report.ready
+            - report.empty
+            - report.failed
+            - issue.published
+            - issue.failed
+            - sender.verified
+            - sender.failed
+            - billing.payment_succeeded
+            - billing.payment_failed
+        severity:
+          type: string
+          enum: [info, success, warning, error]
+        title:
+          type: string
+          example: Report ready
+        message:
+          type: string
+          example: August 2026 is ready to read.
+        link:
+          type: string
+          description: Where in the dashboard this is about. Absent when nowhere in particular.
+          example: /reports/2026-08
+        createdAt:
+          type: string
+          format: date-time
+        readAt:
+          type: string
+          format: date-time
+          description: Absent while unread. Shared across the tenant.
+    ListNotificationsResponse:
+      type: object
+      required: [notifications, unreadCount, unreadCountCapped]
+      properties:
+        notifications:
+          type: array
+          items:
+            $ref: "#/components/schemas/Notification"
+        nextToken:
+          type: string
+          description: Present when there are older notifications to fetch.
+        unreadCount:
+          type: integer
+          description: Unread within the most recent notifications, not over all history.
+          example: 3
+        unreadCountCapped:
+          type: boolean
+          description: True when there may be more unread than unreadCount reports.
+    MarkReadResponse:
+      type: object
+      required: [marked, moreRemaining]
+      properties:
+        marked:
+          type: integer
+          description: How many notifications this call actually marked read.
+          example: 12
+        moreRemaining:
+          type: boolean
+          description: True when unread notifications were left for a further call.
     ListReportsResponse:
       type: object
       required:

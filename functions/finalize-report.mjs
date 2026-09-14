@@ -1,5 +1,6 @@
 import { DynamoDBClient, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
+import { publishEvent } from './utils/event-publisher.mjs';
 import {
   REPORT_STATUS,
   REPORT_TYPE,
@@ -109,7 +110,39 @@ export const handler = async (event) => {
 
   console.log(`[REPORT] ${reportId} for ${tenantId} finished as ${values[':status']}`);
 
+  // Tell whoever asked for this. Deliberately after the write and deliberately
+  // not awaited into the result: the report's own record is the source of
+  // truth, and a notification that never got raised must not turn a finished
+  // report back into a failed one.
+  await announce({
+    tenantId,
+    reportId,
+    reportType,
+    periodLabel: periodLabel ?? monthLabel,
+    outcome: failed ? 'failed' : 'empty',
+    error: failed ? values[':failureReason'] : undefined
+  });
+
   return { success: true, reportId, status: values[':status'] };
+};
+
+/**
+ * Raises `Report Completed`, which `create-notification.mjs` turns into
+ * something the dashboard can show.
+ *
+ * Swallows its own failures on purpose. This runs at the end of a workflow that
+ * has already done the thing it was asked to do; throwing here would fail a
+ * report that is sitting complete in the table.
+ */
+const announce = async (detail) => {
+  try {
+    await publishEvent('newsletter-service', 'Report Completed', detail);
+  } catch (error) {
+    console.error('[REPORT] could not announce completion', {
+      reportId: detail.reportId,
+      error: error.message
+    });
+  }
 };
 
 /**

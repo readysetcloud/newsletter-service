@@ -28,6 +28,7 @@
 import { DynamoDBClient, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { recordIssueEvent, ISSUE_EVENTS } from './issue-timeline.mjs';
+import { publishEvent } from './event-publisher.mjs';
 
 let ddb;
 function getClient() {
@@ -341,11 +342,69 @@ export const markGroupSent = async (issueId, label, { recipients, skipped = 0 })
   // `issueId` is `<tenantId>#<issueNumber>` — the timeline writer takes the two
   // separately because every other caller has them that way.
   const separator = issueId.lastIndexOf('#');
+  const tenantId = issueId.slice(0, separator);
+  const issueNumber = issueId.slice(separator + 1);
+
   await recordIssueEvent({
-    tenantId: issueId.slice(0, separator),
-    issueNumber: issueId.slice(separator + 1),
+    tenantId,
+    issueNumber,
     type: ISSUE_EVENTS.SEND_COMPLETED
   });
+
+  await announceSendCompleted(tenantId, issueNumber, updated);
+};
+
+/**
+ * Raises `Issue Send Completed`, which becomes the tenant's "Issue sent"
+ * notification.
+ *
+ * Here, and deliberately not from `ISSUE_PUBLISHED`. That event fires when the
+ * rendered issue is *handed off* to the send path, which for a scheduled issue
+ * is up to `IssueSendLeadTimeMinutes` — currently 1,560, so twenty-six hours —
+ * before a single email is sent, and for a local send is before the last
+ * timezone group has gone anywhere near a mailbox. Telling someone their issue
+ * "went out to 1,450 subscribers" a day before it does is worse than telling
+ * them nothing. `publish-issue.mjs` already makes exactly this distinction in
+ * the timeline and says why: the hand-off and the send are not the same event.
+ *
+ * This spot is the send genuinely finishing, and it is already exactly-once —
+ * everything above is gated on the `attribute_not_exists(completedAt)` stamp
+ * that only one delivery of the final group can take.
+ *
+ * Never throws. Delivery is done and recorded; a lost notification must not
+ * turn that into a redelivery of the final group.
+ */
+const announceSendCompleted = async (tenantId, issueNumber, progress) => {
+  try {
+    await publishEvent('newsletter-service', 'Issue Send Completed', {
+      tenantId,
+      issueNumber,
+      recipients: countRecipients(progress)
+    });
+  } catch (error) {
+    console.error('[PROGRESS] Could not announce completed send', {
+      tenantId,
+      issueNumber,
+      error: error.message
+    });
+  }
+};
+
+/**
+ * How many subscribers actually received the issue, summed across groups.
+ *
+ * `totalSubscribers` is the plan, not the outcome: a group can report fewer
+ * than its planned size, and the catch-all's size is unknown until it runs.
+ * Returns null rather than a wrong number when no group reported a count, so
+ * the notification can say "your subscribers" instead of "0 subscribers".
+ */
+const countRecipients = (progress) => {
+  const groups = Object.values(progress?.groups ?? {});
+  const counted = groups.filter((group) => Number.isFinite(group?.recipients));
+
+  if (counted.length === 0) return null;
+
+  return counted.reduce((total, group) => total + group.recipients, 0);
 };
 
 /**

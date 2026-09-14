@@ -163,3 +163,170 @@ describe('build-monthly-report-data', () => {
     expect(result.reportData).toBeUndefined();
   });
 });
+
+/**
+ * Issues that went missing from every report.
+ *
+ * A report picks its issues by reading `publishedAt` off the stats record, and
+ * the window filter drops anything falsy — silently, with no error and no gap,
+ * just a smaller number. In production three consecutive issues had stats
+ * records carrying neither `publishedAt` nor `subject`: the two fields
+ * `setupIssueStats` seeds, on records that only existed because the SES event
+ * counters had created them. A month that sent five issues reported one.
+ */
+describe('build-monthly-report-data: stats records missing their seeded fields', () => {
+  let mockSend;
+  let originalEnv;
+  let getItemKeys;
+
+  /** The real shape: counters present, seeded fields absent. */
+  const unseeded = (pk, over = {}) => ({
+    pk,
+    sk: 'stats',
+    deliveries: 1000,
+    sends: 1010,
+    opens: 500,
+    bounces: 6,
+    unsubscribes: 3,
+    subscribers: 1000,
+    clicks_total: 120,
+    ...over
+  });
+
+  const setup = ({ stats, issueRecords }) => {
+    getItemKeys = [];
+    mockSend = jest.fn(async (command) => {
+      const input = command.input;
+
+      if (input.IndexName === 'GSI1') {
+        return { Items: stats.map((i) => marshall(i)) };
+      }
+
+      // The issue-record read the repair path makes.
+      if (input.Key) {
+        const pk = input.Key.pk.S;
+        getItemKeys.push(pk);
+        const record = issueRecords[pk];
+        return record ? { Item: marshall(record) } : {};
+      }
+
+      return { Items: [] };
+    });
+    DynamoDBClient.prototype.send = mockSend;
+  };
+
+  beforeEach(() => {
+    originalEnv = process.env.TABLE_NAME;
+    process.env.TABLE_NAME = 'test-table';
+  });
+
+  afterEach(() => {
+    process.env.TABLE_NAME = originalEnv;
+  });
+
+  test('an issue whose stats lost their date still lands in the report', async () => {
+    setup({
+      stats: [unseeded('tenant123#42')],
+      issueRecords: {
+        'tenant123#42': { publishedAt: '2026-05-06T10:00:00.000Z', subject: 'Recovered issue' }
+      }
+    });
+
+    const result = await handler(baseInput);
+
+    expect(result.hasIssues).toBe(true);
+    expect(result.reportData.summary.issuesSent).toBe(1);
+  });
+
+  test('and carries the subject the stats record never got', async () => {
+    setup({
+      stats: [unseeded('tenant123#42')],
+      issueRecords: {
+        'tenant123#42': { publishedAt: '2026-05-06T10:00:00.000Z', subject: 'Recovered issue' }
+      }
+    });
+
+    const { reportData } = await handler(baseInput);
+
+    expect(reportData.issues[0].subject).toBe('Recovered issue');
+  });
+
+  test('the window still applies to the recovered date', async () => {
+    // Falling back must not drag in issues from outside the range.
+    setup({
+      stats: [unseeded('tenant123#41'), unseeded('tenant123#42')],
+      issueRecords: {
+        'tenant123#41': { publishedAt: '2026-04-15T10:00:00.000Z', subject: 'April' },
+        'tenant123#42': { publishedAt: '2026-05-06T10:00:00.000Z', subject: 'May' }
+      }
+    });
+
+    const { reportData } = await handler(baseInput);
+
+    expect(reportData.issues.map((i) => i.issueNumber)).toEqual([42]);
+  });
+
+  test('the stats date wins wherever it exists', async () => {
+    // It is the send instant; the issue record holds the earlier hand-off. This
+    // is a repair for missing data, not a change of source.
+    setup({
+      stats: [unseeded('tenant123#42', {
+        publishedAt: '2026-05-20T10:00:00.000Z',
+        subject: 'From stats'
+      })],
+      issueRecords: {
+        'tenant123#42': { publishedAt: '2026-05-06T10:00:00.000Z', subject: 'From issue record' }
+      }
+    });
+
+    const { reportData } = await handler(baseInput);
+
+    expect(reportData.issues[0].subject).toBe('From stats');
+    expect(reportData.issues[0].publishedAt).toBe('2026-05-20T10:00:00.000Z');
+  });
+
+  test('reads nothing extra when every stats record is complete', async () => {
+    setup({
+      stats: [unseeded('tenant123#42', {
+        publishedAt: '2026-05-06T10:00:00.000Z',
+        subject: 'Complete'
+      })],
+      issueRecords: {}
+    });
+
+    await handler(baseInput);
+
+    expect(getItemKeys).toEqual([]);
+  });
+
+  test('an issue record that cannot be found leaves the issue as it was', async () => {
+    // Undated and therefore still outside every window — but the report is
+    // built rather than failed.
+    setup({ stats: [unseeded('tenant123#42')], issueRecords: {} });
+
+    const result = await handler(baseInput);
+
+    expect(result.hasIssues).toBe(false);
+  });
+
+  test('one unreadable issue record does not cost the rest of the report', async () => {
+    setup({
+      stats: [unseeded('tenant123#42'), unseeded('tenant123#43')],
+      issueRecords: {
+        'tenant123#43': { publishedAt: '2026-05-20T10:00:00.000Z', subject: 'Fine' }
+      }
+    });
+    const good = mockSend;
+    mockSend = jest.fn(async (command) => {
+      if (command.input.Key?.pk?.S === 'tenant123#42') {
+        throw new Error('Throughput exceeded');
+      }
+      return good(command);
+    });
+    DynamoDBClient.prototype.send = mockSend;
+
+    const { reportData } = await handler(baseInput);
+
+    expect(reportData.issues.map((i) => i.issueNumber)).toEqual([43]);
+  });
+});

@@ -1248,8 +1248,8 @@ Resources:
                 - newsletter-service
               detail-type:
                 - Report Completed
-                # Deliberately not ISSUE_PUBLISHED: that fires when an issue is
-                # handed to the send path, which can be a day before any mail
+                # Deliberately not `Issue Handed Off`: that fires when an issue
+                # reaches the send path, which can be a day before any mail
                 # moves. `Issue Send Completed` is the send actually finishing.
                 - Issue Send Completed
                 - Issue Send Failed
@@ -5125,13 +5125,20 @@ Resources:
           AGGREGATION_FUNCTION_ARN: !GetAtt AggregateIssueAnalyticsFunction.Arn
           SCHEDULER_ROLE_ARN: !GetAtt AggregationSchedulerRole.Arn
       Events:
-        IssuePublishedEvent:
+        IssueHandedOffEvent:
           Type: EventBridgeRule
           Properties:
             Pattern:
               source:
                 - newsletter-service
               detail-type:
+                # Both names on purpose, for the length of one deploy. The
+                # publishers and this rule update in the same stack change but
+                # not at the same instant, and an event raised in that window
+                # would otherwise reach nothing and silently skip an issue's
+                # analytics. `ISSUE_PUBLISHED` can go in a later change, once
+                # nothing is emitting it.
+                - Issue Handed Off
                 - ISSUE_PUBLISHED
 
   DeleteExpiredDraftFunction:

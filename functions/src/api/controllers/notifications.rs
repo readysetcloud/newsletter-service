@@ -227,9 +227,14 @@ async fn handle_list_notifications(event: Request) -> Result<Response<Body>, App
 
 /// Sort keys of unread notifications, newest first, up to `want` of them.
 ///
-/// Returns the keys and whether the hunt stopped early — because it found
-/// `want`, or because it ran out of pages — which is not the same as knowing
-/// more unread exist, only that this cannot say they do not.
+/// Returns the keys and whether there may be more beyond them.
+///
+/// "May be more" is deliberately narrow. Collecting exactly `want` keys is not
+/// itself evidence of anything: if the last one came off the last page, `want`
+/// is the exact answer, and reporting a cap there would render `50+` over a
+/// count of precisely 50. The flag is true only when something is genuinely
+/// left — more keys than were asked for, a live cursor, or pages this gave up
+/// on.
 ///
 /// This pages rather than issuing one big query because of how `Limit` and
 /// `FilterExpression` interact: the limit is spent on rows *read*, and the
@@ -275,21 +280,32 @@ async fn unread_keys(
             .await
             .map_err(|e| AppError::InternalError(format!("Failed to read notifications: {}", e)))?;
 
+        // The whole page is taken before deciding, so that overshooting `want`
+        // is distinguishable from landing on it exactly.
         for item in result.items() {
             if let Some(AttributeValue::S(sort_key)) = item.get("sk") {
                 keys.push(sort_key.clone());
-
-                if keys.len() >= want {
-                    // Stopped on the caller's bound, not on the data.
-                    return Ok((keys, true));
-                }
             }
         }
 
-        match result.last_evaluated_key() {
+        let cursor = result.last_evaluated_key().cloned();
+
+        if keys.len() > want {
+            // More unread than were asked for, in hand. No doubt about it.
+            keys.truncate(want);
+            return Ok((keys, true));
+        }
+
+        if keys.len() == want {
+            // Exactly the bound. Whether anything is left depends only on
+            // whether the scan still had somewhere to look.
+            return Ok((keys, cursor.is_some()));
+        }
+
+        match cursor {
             // The partition is exhausted: what was found is all there is.
             None => return Ok((keys, false)),
-            Some(key) => start_key = Some(key.clone()),
+            Some(key) => start_key = Some(key),
         }
     }
 
@@ -378,6 +394,13 @@ async fn handle_mark_all_read(event: Request) -> Result<Response<Body>, AppError
     let now = chrono::Utc::now().to_rfc3339();
     let mut marked = 0usize;
 
+    // A write that failed leaves its row unread, and the scan that ran before
+    // these writes cannot know that. Without this, one throttled update in a
+    // batch that otherwise exhausted the partition would be reported as
+    // "nothing left" — and the dashboard, having already zeroed its badge,
+    // would believe it until the next poll.
+    let mut write_failed = false;
+
     // One update each rather than a transaction. These are independent rows and
     // the operation is idempotent, so a partial pass is not a broken state — it
     // is simply fewer marked, which the response already reports.
@@ -404,6 +427,7 @@ async fn handle_mark_all_read(event: Request) -> Result<Response<Body>, AppError
                 // Not a failure: it is gone, which is at least as read as read.
                 if !service_error.is_conditional_check_failed_exception() {
                     tracing::warn!("Failed to mark {} read: {}", sort_key, service_error);
+                    write_failed = true;
                 }
             }
         }
@@ -413,7 +437,7 @@ async fn handle_mark_all_read(event: Request) -> Result<Response<Body>, AppError
         200,
         MarkReadResponse {
             marked,
-            more_remaining,
+            more_remaining: more_remaining || write_failed,
         },
     )
 }

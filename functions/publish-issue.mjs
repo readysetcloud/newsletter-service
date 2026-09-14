@@ -146,7 +146,7 @@ export const handler = async (state) => {
       await publishIssueEvent(
         state.tenantId,
         state.tenant?.id || 'system',
-        EVENT_TYPES.ISSUE_PUBLISHED,
+        EVENT_TYPES.ISSUE_HANDED_OFF,
         {
           issueId: `${state.tenantId}#${state.data.metadata.number}`,
           issueNumber: state.data.metadata.number,

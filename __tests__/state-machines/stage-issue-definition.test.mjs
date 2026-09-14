@@ -73,9 +73,9 @@ const STATE_MACHINE_RESOURCE = 'StageIssueStateMachine';
 // types actually present, so a reintroduced `Wait` shows up here as an
 // unexpected key.
 const EXPECTED_STATE_COUNTS = {
-  topLevel: 21,
-  total: 25,
-  Choice: 4,
+  topLevel: 22,
+  total: 26,
+  Choice: 5,
   Fail: 1,
   Parallel: 1,
   Pass: 4,
@@ -1298,6 +1298,67 @@ describe('stage-issue definition: graph', () => {
     // is obliged to send. Matched over the raw text so keys count too, not just
     // string values.
     expect(readFileSync(definitionPath, 'utf8')).not.toMatch(/isPreview/i);
+  });
+});
+
+describe('stage-issue definition: who hears about a failed send', () => {
+  const gate = () => definition.States['Send Already Handed Off?'];
+
+  it('stands between the failure write and the announcement', () => {
+    // Six states catch to the failure writer and only four of them are
+    // failures to send. Announcing the other two would tell somebody an issue
+    // failed that had already gone out, and invite them to send it twice.
+    expect(definition.States['Update Issue Record - Failure'].Next)
+      .toBe('Send Already Handed Off?');
+    expect(gate().Default).toBe('Announce Send Failure');
+  });
+
+  it('stays silent once publish has reported success', () => {
+    const [choice] = gate().Choices;
+
+    expect(choice.Next).toBe('Fail');
+    expect(choice.And).toEqual([
+      { Variable: '$.publishResult.Payload.success', IsPresent: true },
+      { Variable: '$.publishResult.Payload.success', BooleanEquals: true }
+    ]);
+  });
+
+  it('guards on IsPresent before reading the field', () => {
+    // A failure before Publish never sets publishResult, and an unguarded
+    // BooleanEquals against a missing path raises States.Runtime — inside the
+    // failure handler, which is the worst place to throw.
+    const [first] = gate().Choices[0].And;
+
+    expect(first.IsPresent).toBe(true);
+  });
+
+  it('announces for every state that can fail before the send leaves', () => {
+    const preHandoff = ['Get Existing Issue', 'Mark Issue In Progress', 'Parse Issue', 'Publish'];
+
+    for (const name of preHandoff) {
+      const catchers = definition.States[name].Catch ?? [];
+      expect(catchers.some((c) => c.Next === 'Update Issue Record - Failure')).toBe(true);
+    }
+  });
+
+  it('still routes post-handoff failures through the same writer', () => {
+    // They must keep recording the failure; they just must not announce it.
+    for (const name of ['Schedule Tasks and Update', 'Update Issue Record - Success']) {
+      const catchers = definition.States[name].Catch ?? [];
+      expect(catchers.some((c) => c.Next === 'Update Issue Record - Failure')).toBe(true);
+    }
+  });
+
+  it('treats a publish that reported success:false as nothing sent', () => {
+    // Record Publish Rejection is a Pass with Parameters, so it replaces $
+    // outright and publishResult is gone by the time the gate reads it — which
+    // is correct, because that issue never went out.
+    const rejection = definition.States['Record Publish Rejection'];
+
+    expect(rejection.Type).toBe('Pass');
+    expect(rejection.Parameters).toBeDefined();
+    expect(rejection.ResultPath).toBeUndefined();
+    expect(rejection.Next).toBe('Update Issue Record - Failure');
   });
 });
 

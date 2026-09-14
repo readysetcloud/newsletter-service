@@ -662,7 +662,7 @@ async fn handle_rebuild_issue_analytics(
         .clone()
         .unwrap_or_else(|| issue.updated_at.clone());
 
-    publish_issue_published_event(
+    publish_issue_handed_off_event(
         &tenant_id,
         &user_context.user_id,
         issue.issue_number,
@@ -2358,7 +2358,7 @@ async fn handle_update_issue(
 
     if is_publishing {
         let published_at = chrono::Utc::now().to_rfc3339();
-        let _ = publish_issue_published_event(
+        let _ = publish_issue_handed_off_event(
             &tenant_id,
             &user_context.user_id,
             existing.issue_number,
@@ -5533,17 +5533,7 @@ async fn publish_event<T: Serialize>(
     }
 }
 
-/// Why an `ISSUE_PUBLISHED` event was raised.
-///
-/// The rebuild endpoint republishes this event to re-trigger analytics
-/// aggregation, which is the only consumer that existed when it was written.
-/// It is not a claim that an issue was sent — nothing was — so anything that
-/// tells a person something has to be able to tell the two apart. In-app
-/// notifications do exactly that, and without this marker a rebuild announced
-/// a send that never happened.
-const REBUILD_REASON: &str = "analytics-rebuild";
-
-async fn publish_issue_published_event(
+async fn publish_issue_handed_off_event(
     tenant_id: &str,
     user_id: &str,
     issue_number: i32,
@@ -5555,14 +5545,11 @@ async fn publish_issue_published_event(
     let detail = serde_json::json!({
         "tenantId": tenant_id,
         "userId": user_id,
-        "type": "ISSUE_PUBLISHED",
+        "type": "ISSUE_HANDED_OFF",
         "data": {
             "issueNumber": issue_number,
             "publishedAt": published_at,
-            "title": subject,
-            // The only caller of this is the rebuild endpoint. A genuine send
-            // publishes from publish-issue.mjs and carries no reason.
-            "reason": REBUILD_REASON
+            "title": subject
         }
     });
 
@@ -5574,7 +5561,7 @@ async fn publish_issue_published_event(
         .entries(
             aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
                 .source("newsletter-service")
-                .detail_type("ISSUE_PUBLISHED")
+                .detail_type("Issue Handed Off")
                 .detail(detail_str)
                 .build(),
         )
@@ -5587,7 +5574,7 @@ async fn publish_issue_published_event(
                 if let Some(error_code) = entry.error_code() {
                     tracing::error!(
                         tenant_id = %tenant_id,
-                        event_type = "ISSUE_PUBLISHED",
+                        event_type = "Issue Handed Off",
                         error_code = %error_code,
                         error_message = ?entry.error_message(),
                         "Failed to publish analytics rebuild event"
@@ -5599,7 +5586,7 @@ async fn publish_issue_published_event(
         Err(e) => {
             tracing::error!(
                 tenant_id = %tenant_id,
-                event_type = "ISSUE_PUBLISHED",
+                event_type = "Issue Handed Off",
                 error = %e,
                 "Failed to send analytics rebuild event to EventBridge"
             );

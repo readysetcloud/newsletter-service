@@ -6,7 +6,19 @@ const eventBridge = new EventBridgeClient();
 
 // Event types for different newsletter operations
 export const EVENT_TYPES = {
-  ISSUE_PUBLISHED: 'ISSUE_PUBLISHED',
+  /**
+   * The rendered issue has been handed to the send path — NOT that anybody has
+   * received it.
+   *
+   * For a scheduled issue the workflow runs up to `IssueSendLeadTimeMinutes`
+   * (currently 1,560 — twenty-six hours) before the send instant, and a local
+   * send goes out timezone by timezone for hours after that. The name used to
+   * be `ISSUE_PUBLISHED`, which read like a completed send and was taken for
+   * one: in-app notifications shipped a draft that told tenants their issue had
+   * gone out a day early. `Issue Send Completed`, raised by send-progress.mjs,
+   * is the event that means delivery finished.
+   */
+  ISSUE_HANDED_OFF: 'Issue Handed Off',
   ISSUE_DRAFT_SAVED: 'ISSUE_DRAFT_SAVED',
   ISSUE_AB_COMPLETED: 'ISSUE_AB_COMPLETED',
   SUBSCRIBER_ADDED: 'Subscriber Added',
@@ -96,7 +108,7 @@ export const publishIssueEvent = async (tenantId, userId, eventType, data, corre
   await publishEvent('newsletter-service', eventType, {
     tenantId,
     userId,
-    type: eventType.replace(' ', '_').toUpperCase(),
+    type: eventType.replace(/ /g, '_').toUpperCase(),
     data
   }, correlationId);
 };

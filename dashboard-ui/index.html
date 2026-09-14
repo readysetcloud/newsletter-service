@@ -3,9 +3,17 @@
   <head>
     <meta charset="UTF-8" />
 
-    <!-- Favicon and app icons -->
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <!-- Favicon and app icons.
+         The unconditional icon comes first and is the light logo rather than
+         Vite's scaffold `/vite.svg`, which was never in public/ and 403'd on
+         every page load. It is not redundant with the two below it: a browser
+         that ignores `media` on a link[rel=icon] uses this one, so it has to be
+         a real file.
+         No apple-touch-icon: that needs a raster image and there is no PNG in
+         the repo. The line that was here pointed at one that did not exist,
+         which iOS resolved the same way it resolves an absent line, only with a
+         403 on the way. -->
+    <link rel="icon" type="image/svg+xml" href="/logo.svg" />
     <link rel="icon" type="image/svg+xml" href="/logo.svg" media="(prefers-color-scheme: light)">
     <link rel="icon" type="image/svg+xml" href="/logo-dark.svg" media="(prefers-color-scheme: dark)">
 

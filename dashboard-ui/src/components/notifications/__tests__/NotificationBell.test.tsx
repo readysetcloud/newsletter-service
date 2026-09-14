@@ -191,6 +191,34 @@ describe('opening a notification', () => {
     );
   });
 
+  it('re-reads when the server refuses the mark-read', async () => {
+    // The optimistic drop is what hid a server-side 404 on every mark-read.
+    // A refusal has to pull the truth back rather than leave the badge lying.
+    mocked.listNotifications.mockResolvedValue(listOf([notification()], 1));
+    mocked.markRead.mockResolvedValue({ success: false, error: 'Notification not found' });
+
+    renderBell();
+    await openPanel();
+    const before = mocked.listNotifications.mock.calls.length;
+    fireEvent.click(screen.getByText('Report ready'));
+
+    await waitFor(() =>
+      expect(mocked.listNotifications.mock.calls.length).toBeGreaterThan(before)
+    );
+  });
+
+  it('does not re-read when the mark-read succeeds', async () => {
+    mocked.listNotifications.mockResolvedValue(listOf([notification()], 1));
+
+    renderBell();
+    await openPanel();
+    const before = mocked.listNotifications.mock.calls.length;
+    fireEvent.click(screen.getByText('Report ready'));
+
+    await waitFor(() => expect(mocked.markRead).toHaveBeenCalled());
+    expect(mocked.listNotifications.mock.calls.length).toBe(before);
+  });
+
   it('still closes the panel for one with nowhere to go', async () => {
     mocked.listNotifications.mockResolvedValue(listOf([notification({ link: undefined })], 1));
 

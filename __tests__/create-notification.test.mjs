@@ -100,83 +100,63 @@ describe('reports', () => {
 });
 
 describe('issues', () => {
-  it('reads the payload through the `data` envelope publishIssueEvent uses', () => {
-    const rendered = renderNotification(issueEvent('ISSUE_PUBLISHED', {
-      issueId: 'readysetcloud#232',
+  const sent = (over = {}) =>
+    renderNotification(event('Issue Send Completed', {
+      tenantId: 'readysetcloud',
       issueNumber: 232,
       subject: 'Picks of the Week #232',
-      subscriberCount: 1450
+      ...over
     }));
 
+  it('announces a send only once delivery has actually finished', () => {
+    // Deliberately not ISSUE_PUBLISHED. That fires at hand-off, which for a
+    // scheduled issue is up to twenty-six hours before any mail moves — see
+    // IssueSendLeadTimeMinutes. Saying "went out to 1,450 subscribers" a day
+    // early is worse than saying nothing.
+    const rendered = sent({ recipients: 1450 });
+
+    expect(rendered.type).toBe(NOTIFICATION_TYPES.ISSUE_PUBLISHED);
     expect(rendered.title).toBe('Issue sent');
     expect(rendered.message).toContain('Picks of the Week #232');
   });
 
-  it('links on the issue number, not the composite key the event carries', () => {
-    // `/issues/readysetcloud#232` is not a route; `/issues/232` is.
-    const rendered = renderNotification(issueEvent('ISSUE_PUBLISHED', {
+  it('ignores the hand-off event entirely', () => {
+    // ISSUE_PUBLISHED means "handed to the send path", and is also republished
+    // by the analytics rebuild endpoint, which sends nothing at all. Neither is
+    // an issue arriving in anyone's inbox.
+    expect(renderNotification(issueEvent('ISSUE_PUBLISHED', {
       issueId: 'readysetcloud#232',
       issueNumber: 232,
-      subject: 'Anything'
-    }));
+      subject: 'Picks of the Week #232',
+      subscriberCount: 1450
+    }))).toBeNull();
+  });
 
-    expect(rendered.link).toBe('/issues/232');
+  it('links on the issue number, which is what the dashboard routes on', () => {
+    expect(sent().link).toBe('/issues/232');
   });
 
   it('formats the audience with a thousands separator', () => {
-    const rendered = renderNotification(issueEvent('ISSUE_PUBLISHED', {
-      issueNumber: 9,
-      subject: 'S',
-      subscriberCount: 12345
-    }));
-
-    expect(rendered.message).toContain('12,345 subscribers');
+    expect(sent({ recipients: 12345 }).message).toContain('12,345 subscribers');
   });
 
   it('says "1 subscriber", not "1 subscribers"', () => {
-    const rendered = renderNotification(issueEvent('ISSUE_PUBLISHED', {
-      issueNumber: 9,
-      subject: 'S',
-      subscriberCount: 1
-    }));
-
-    expect(rendered.message).toContain('1 subscriber.');
+    expect(sent({ recipients: 1 }).message).toContain('1 subscriber.');
   });
 
-  it('avoids inventing a number when the count is missing', () => {
-    const rendered = renderNotification(issueEvent('ISSUE_PUBLISHED', {
-      issueNumber: 9,
-      subject: 'S'
-    }));
+  it('avoids inventing a number when no group reported a count', () => {
+    // `countRecipients` returns null rather than 0 precisely so this can say
+    // something true instead of "0 subscribers".
+    const rendered = sent({ recipients: null });
 
     expect(rendered.message).toContain('your subscribers');
     expect(rendered.message).not.toContain('0 subscribers');
   });
 
-  it('ignores an analytics rebuild, which is not an issue going out', () => {
-    // `POST /issues/{id}/analytics/rebuild` republishes ISSUE_PUBLISHED purely
-    // to re-trigger aggregation. Announcing it would tell someone their
-    // newsletter had been sent again every time they rebuilt a chart — and
-    // with a fresh event time, so every rebuild would be a new notification.
-    const rendered = renderNotification(issueEvent('ISSUE_PUBLISHED', {
-      issueNumber: 232,
-      publishedAt: '2026-09-01T00:00:00.000Z',
-      title: 'Picks of the Week #232',
-      reason: 'analytics-rebuild'
-    }));
+  it('falls back to the issue number when the event carries no subject', () => {
+    const rendered = sent({ subject: undefined, recipients: 10 });
 
-    expect(rendered).toBeNull();
-  });
-
-  it('reads `title` when the producer used that instead of `subject`', () => {
-    // The two publishers of this event disagree on the field name. Reading
-    // only one of them renders a notification about "Issue undefined".
-    const rendered = renderNotification(issueEvent('ISSUE_PUBLISHED', {
-      issueNumber: 232,
-      title: 'Picks of the Week #232'
-    }));
-
-    expect(rendered.message).toContain('Picks of the Week #232');
+    expect(rendered.message).toContain('Issue 232');
   });
 
   it('reports a failed send as an error worth acting on', () => {
@@ -447,11 +427,22 @@ describe('the handler', () => {
     await expect(handler(readyEvent)).resolves.toBeUndefined();
   });
 
-  it('does not throw when the write fails for a real reason', async () => {
-    // Publishing an issue succeeded whether or not anyone was told about it.
-    // Throwing here only buys a retry that cannot do better.
+  it('hands a transient failure back to EventBridge rather than losing it', async () => {
+    // This is a separate Lambda invoked long after the report finished, so
+    // throwing cannot fail anything upstream — all it does is buy the retry.
+    // The put is conditional on a key derived from the event, so that retry
+    // either writes the row or finds it already there.
     const { send, handler } = await load();
     send.mockRejectedValue(new Error('Throughput exceeded'));
+
+    await expect(handler(readyEvent)).rejects.toThrow('Throughput exceeded');
+  });
+
+  it('does not throw on a duplicate, which is not a failure', async () => {
+    const { send, handler } = await load();
+    send.mockRejectedValue(Object.assign(new Error('exists'), {
+      name: 'ConditionalCheckFailedException'
+    }));
 
     await expect(handler(readyEvent)).resolves.toBeUndefined();
   });

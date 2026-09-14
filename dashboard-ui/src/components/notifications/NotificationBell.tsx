@@ -166,12 +166,19 @@ export const NotificationBell: React.FC = () => {
         );
         setUnreadCount((current) => Math.max(0, current - 1));
 
-        void notificationsService.markRead(notification.id);
+        // Optimistic, but not blind. Ignoring the result entirely is what hid
+        // a server-side bug that 404'd every mark-read: the badge dropped, the
+        // next poll put it back, and nothing ever said why. Re-reading on
+        // failure makes the UI agree with the server instead of quietly
+        // disagreeing with it.
+        void notificationsService.markRead(notification.id).then((response) => {
+          if (!response.success) void load();
+        });
       }
 
       if (notification.link) navigate(notification.link);
     },
-    [navigate]
+    [navigate, load]
   );
 
   const markAllRead = useCallback(async () => {

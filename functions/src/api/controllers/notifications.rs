@@ -2,6 +2,7 @@ use aws_sdk_dynamodb::types::AttributeValue;
 use base64::Engine;
 use lambda_http::{Body, Error, Request, RequestExt, Response};
 use newsletter::admin::{auth, aws_clients, error::AppError, response};
+use percent_encoding::percent_decode_str;
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -33,11 +34,23 @@ const MARK_ALL_LIMIT: usize = 200;
 /// one query can do — see `unread_keys`.
 const UNREAD_PAGE_SIZE: i32 = 100;
 
-/// How many such pages to walk before giving up and saying there may be more.
+/// How many pages the badge will walk before giving up and saying there may be
+/// more.
 ///
 /// Without this, a tenant with ten thousand read notifications and one unread
-/// at the bottom would read the entire partition on every dashboard load.
-const MAX_UNREAD_PAGES: usize = 5;
+/// at the bottom would read the entire partition on every dashboard load. The
+/// badge can afford to be approximate; it says so with `unreadCountCapped`.
+const BADGE_MAX_PAGES: usize = 5;
+
+/// How many pages "mark all read" will walk.
+///
+/// Much higher than the badge's budget, because this one cannot afford to be
+/// approximate. Stopping early here does not just under-count — it marks
+/// nothing at all, reports no unread, and hides the button that would have
+/// tried again, stranding older unread notifications with no way to clear them
+/// from the UI. It runs once per click rather than once per page load, so the
+/// reads are affordable.
+const MARK_ALL_MAX_PAGES: usize = 100;
 
 /// Every listable row carries this; the partition holds nothing else today, but
 /// the query says so explicitly rather than trusting that to stay true.
@@ -197,7 +210,8 @@ async fn handle_list_notifications(event: Request) -> Result<Response<Body>, App
         .collect();
 
     let next_token = result.last_evaluated_key().map(encode_pagination_token);
-    let (unread, unread_count_capped) = unread_keys(&tenant_id, UNREAD_SCAN_LIMIT).await?;
+    let (unread, unread_count_capped) =
+        unread_keys(&tenant_id, UNREAD_SCAN_LIMIT, BADGE_MAX_PAGES).await?;
     let unread_count = unread.len();
 
     response::format_response(
@@ -223,7 +237,11 @@ async fn handle_list_notifications(event: Request) -> Result<Response<Body>, App
 /// newest 200 rows are all read returns nothing at all, while older unread rows
 /// sit just past the cursor. That is the difference between a badge that says 0
 /// and a badge that is right.
-async fn unread_keys(tenant_id: &str, want: usize) -> Result<(Vec<String>, bool), AppError> {
+async fn unread_keys(
+    tenant_id: &str,
+    want: usize,
+    max_pages: usize,
+) -> Result<(Vec<String>, bool), AppError> {
     let ddb = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
         .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
@@ -231,7 +249,7 @@ async fn unread_keys(tenant_id: &str, want: usize) -> Result<(Vec<String>, bool)
     let mut keys: Vec<String> = Vec::new();
     let mut start_key: Option<HashMap<String, AttributeValue>> = None;
 
-    for _ in 0..MAX_UNREAD_PAGES {
+    for _ in 0..max_pages {
         let mut builder = ddb
             .query()
             .table_name(&table_name)
@@ -286,6 +304,16 @@ async fn handle_mark_notification_read(
     let tenant_id = tenant_of(&event)?;
     let notification_id = notification_id
         .ok_or_else(|| AppError::BadRequest("Notification ID is required".to_string()))?;
+
+    // The router hands back the raw path segment. Every id contains colons
+    // (`<millis>-report:2026-08:ready`), and a client that correctly escapes
+    // them for a URL sends `%3A` — which would be looked up literally and miss
+    // every row. Decoded here for the same reason `subscribers.rs` decodes an
+    // email out of its path.
+    let notification_id = percent_decode_str(&notification_id)
+        .decode_utf8()
+        .map_err(|e| AppError::BadRequest(format!("Invalid notification id encoding: {}", e)))?
+        .to_string();
 
     let ddb = aws_clients::get_dynamodb_client().await;
     let table_name = std::env::var("TABLE_NAME")
@@ -344,7 +372,8 @@ async fn handle_mark_all_read(event: Request) -> Result<Response<Body>, AppError
     let table_name = std::env::var("TABLE_NAME")
         .map_err(|_| AppError::InternalError("TABLE_NAME not set".to_string()))?;
 
-    let (unread, more_remaining) = unread_keys(&tenant_id, MARK_ALL_LIMIT).await?;
+    let (unread, more_remaining) =
+        unread_keys(&tenant_id, MARK_ALL_LIMIT, MARK_ALL_MAX_PAGES).await?;
 
     let now = chrono::Utc::now().to_rfc3339();
     let mut marked = 0usize;

@@ -98,34 +98,24 @@ export const renderNotification = (event) => {
       };
     }
 
-    case 'ISSUE_PUBLISHED': {
-      // Two different things publish this. A send does, and so does
-      // `POST /issues/{id}/analytics/rebuild`, which reuses the event purely to
-      // re-trigger aggregation. Only one of them is an issue going out, and
-      // announcing the other would tell someone their newsletter had been sent
-      // again every time they rebuilt a chart.
-      if (detail.reason === 'analytics-rebuild') return null;
-
-      // `issueId` on this event is the composite key (`<tenant>#<number>`),
-      // not what the dashboard routes on — that is the bare issue number, as
-      // `IssueListItem.id`. Linking with the composite would 404.
-      //
-      // `subject` from the send path, `title` from the rebuild path: the two
-      // producers disagree, and reading only one of them renders a notification
-      // about "Issue undefined".
-      const { issueNumber, subscriberCount } = detail;
-      const subject = detail.subject ?? detail.title;
-      const who = subscriberCount == null
+    case 'Issue Send Completed': {
+      // Raised by send-progress.mjs when the last group reports, not by
+      // `ISSUE_PUBLISHED` — that one fires at hand-off, which for a scheduled
+      // issue is up to twenty-six hours before any mail moves. See
+      // `announceSendCompleted`.
+      const { issueNumber, subject, recipients } = detail;
+      const who = recipients == null
         ? 'your subscribers'
-        : `${count(subscriberCount)} subscriber${Number(subscriberCount) === 1 ? '' : 's'}`;
+        : `${count(recipients)} subscriber${Number(recipients) === 1 ? '' : 's'}`;
 
       return {
         ...base,
-        dedupeKey: `issue:${issueNumber}:published`,
+        dedupeKey: `issue:${issueNumber}:sent`,
         type: NOTIFICATION_TYPES.ISSUE_PUBLISHED,
         severity: NOTIFICATION_SEVERITY.SUCCESS,
         title: 'Issue sent',
         message: `"${subject ?? `Issue ${issueNumber}`}" went out to ${who}.`,
+        // The dashboard routes on the bare issue number, as `IssueListItem.id`.
         link: `/issues/${issueNumber}`
       };
     }
@@ -223,9 +213,13 @@ export const renderNotification = (event) => {
  * delivery lands on the row it already wrote and stops. That is the whole
  * idempotency story — see `notificationId`.
  *
- * A failure here must not fail the thing that happened. Publishing an issue
- * succeeded whether or not anyone was told about it, and throwing would send
- * the event back for a retry that cannot do better.
+ * Anything other than that condition is thrown, which is the opposite of what
+ * this used to do. The reasoning for swallowing was that a notification must
+ * not fail the thing it describes — true, but it was already true: this is a
+ * separate Lambda that EventBridge invokes long after the issue went out or
+ * the report finished. Nothing here can fail those. What throwing does buy is
+ * the retry, and because the write is idempotent the retry is free. Swallowing
+ * turned every throttle into a notification nobody would ever see.
  */
 export const handler = async (event) => {
   const rendered = renderNotification(event);
@@ -259,6 +253,10 @@ export const handler = async (event) => {
       type: item.type,
       error: error.message
     });
+
+    // Hand it back to EventBridge. The put is conditional on a key derived from
+    // the event, so a retry either writes the row or finds it already there.
+    throw error;
   }
 };
 

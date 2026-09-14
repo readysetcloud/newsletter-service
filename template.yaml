@@ -1248,7 +1248,10 @@ Resources:
                 - newsletter-service
               detail-type:
                 - Report Completed
-                - ISSUE_PUBLISHED
+                # Deliberately not ISSUE_PUBLISHED: that fires when an issue is
+                # handed to the send path, which can be a day before any mail
+                # moves. `Issue Send Completed` is the send actually finishing.
+                - Issue Send Completed
                 - Issue Send Failed
                 - Sender Verification Completed
         BillingEvents:

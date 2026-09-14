@@ -41,18 +41,44 @@ export interface ReportSummaryMetrics {
 export interface SubscriberGrowthByIssue {
   issue: number;
   date: string;
-  subscribers: number;
+  /**
+   * The list size when this issue went out, or null if it was never measured.
+   *
+   * Null for the same reason the aggregate figures are:
+   * `build-monthly-report-data.mjs` keeps `subscribers` as a snapshot rather
+   * than a counter, and an issue published before the field was recorded has no
+   * measurement. Its comment is blunt about what coercing that to zero did —
+   * "list of 4,000" became "list of nobody".
+   */
+  subscribers: number | null;
 }
 
 /**
  * Subscriber growth summary for a reporting period.
- * `growthRate` is a decimal (e.g. 0.052 = 5.2%).
+ *
+ * Every field is nullable, and that is the API being careful rather than
+ * incomplete. Growth is derived from per-issue subscriber snapshots, and
+ * `build-monthly-report-data.mjs` refuses to invent it: with fewer than two
+ * measured issues there is no growth to report, so `netChange` and
+ * `growthRate` are null. With none at all, so are the counts. Coercing those
+ * to zero is exactly the bug that comment warns about — an unmeasured first
+ * issue reads as the whole list having just joined, an unmeasured last one as
+ * the whole list having left.
+ *
+ * These were typed as plain numbers, which is why nothing caught
+ * `null.toLocaleString()` crashing the report detail page on any range
+ * containing a single issue.
  */
 export interface ReportSubscriberGrowth {
-  startCount: number;
-  endCount: number;
-  netChange: number;
-  growthRate: number;
+  startCount: number | null;
+  endCount: number | null;
+  netChange: number | null;
+  growthRate: number | null;
+  /**
+   * How many issues in the range carried a snapshot, so a reader can tell a
+   * flat period from an unmeasured one.
+   */
+  measuredIssues?: number;
 }
 
 export interface ReportSubscriberGrowthDetail extends ReportSubscriberGrowth {

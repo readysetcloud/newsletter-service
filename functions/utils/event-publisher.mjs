@@ -18,7 +18,19 @@ export const EVENT_TYPES = {
    * gone out a day early. `Issue Send Completed`, raised by send-progress.mjs,
    * is the event that means delivery finished.
    */
-  ISSUE_HANDED_OFF: 'Issue Handed Off',
+  //
+  // The value is still the old wire name, and stays that way until the widened
+  // rule is actually deployed. Expanding `ScheduleAggregationFunction` to match
+  // both names and switching this in one stack update only looks safe:
+  // CloudFormation gives no ordering guarantee between the rule and the Lambda,
+  // so if the Lambda lands first it emits `Issue Handed Off` at a rule that
+  // still matches `ISSUE_PUBLISHED` alone, and that event is gone — with it,
+  // that issue's analytics scheduling, silently.
+  //
+  // So this is step one of two: the name in the code is honest now, the name on
+  // the bus changes in a follow-up once the widened rule is live, which is a
+  // one-line change to this value.
+  ISSUE_HANDED_OFF: 'ISSUE_PUBLISHED',
   ISSUE_DRAFT_SAVED: 'ISSUE_DRAFT_SAVED',
   ISSUE_AB_COMPLETED: 'ISSUE_AB_COMPLETED',
   SUBSCRIBER_ADDED: 'Subscriber Added',

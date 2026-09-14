@@ -253,6 +253,36 @@ describe('mark all read', () => {
     await waitFor(() => expect(mocked.markAllRead).toHaveBeenCalled());
   });
 
+  it('re-reads when the whole request fails, not just when it is partial', async () => {
+    // The badge was already zeroed optimistically. A failed request used to
+    // skip the reconcile entirely and leave it claiming zero until the poll.
+    mocked.listNotifications.mockResolvedValue(listOf([notification()], 1));
+    mocked.markAllRead.mockResolvedValue({ success: false, error: 'Network down' });
+
+    renderBell();
+    await openPanel();
+    const before = mocked.listNotifications.mock.calls.length;
+
+    fireEvent.click(screen.getByRole('button', { name: /mark all read/i }));
+
+    await waitFor(() =>
+      expect(mocked.listNotifications.mock.calls.length).toBeGreaterThan(before)
+    );
+  });
+
+  it('does not re-read when everything was marked', async () => {
+    mocked.listNotifications.mockResolvedValue(listOf([notification()], 1));
+
+    renderBell();
+    await openPanel();
+    const before = mocked.listNotifications.mock.calls.length;
+
+    fireEvent.click(screen.getByRole('button', { name: /mark all read/i }));
+
+    await waitFor(() => expect(mocked.markAllRead).toHaveBeenCalled());
+    expect(mocked.listNotifications.mock.calls.length).toBe(before);
+  });
+
   it('re-reads when the server says it could not mark them all', async () => {
     // Mark-all is bounded server-side, so claiming zero unread would be a lie
     // for an inbox deeper than that bound.

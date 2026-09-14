@@ -5132,12 +5132,18 @@ Resources:
               source:
                 - newsletter-service
               detail-type:
-                # Both names on purpose, for the length of one deploy. The
-                # publishers and this rule update in the same stack change but
-                # not at the same instant, and an event raised in that window
-                # would otherwise reach nothing and silently skip an issue's
-                # analytics. `ISSUE_PUBLISHED` can go in a later change, once
-                # nothing is emitting it.
+                # Step one of a two-deploy rename. This rule learns the new
+                # name now while every publisher still emits the old one, so
+                # there is no window in which an event has no matching rule.
+                # Doing both at once would not be safe: CloudFormation gives no
+                # ordering guarantee between a rule and a function, and a
+                # publisher that landed first would emit into nothing and skip
+                # an issue's analytics silently.
+                #
+                # Step two flips the publishers (one line in
+                # `EVENT_TYPES.ISSUE_HANDED_OFF`); `ISSUE_PUBLISHED` can be
+                # dropped from this list in a third change, once nothing has
+                # emitted it for a while.
                 - Issue Handed Off
                 - ISSUE_PUBLISHED
 

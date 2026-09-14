@@ -229,12 +229,14 @@ async fn handle_list_notifications(event: Request) -> Result<Response<Body>, App
 ///
 /// Returns the keys and whether there may be more beyond them.
 ///
-/// "May be more" is deliberately narrow. Collecting exactly `want` keys is not
-/// itself evidence of anything: if the last one came off the last page, `want`
-/// is the exact answer, and reporting a cap there would render `50+` over a
-/// count of precisely 50. The flag is true only when something is genuinely
-/// left — more keys than were asked for, a live cursor, or pages this gave up
-/// on.
+/// "May be more" is deliberately narrow, and a live cursor does not qualify.
+/// `Limit` is spent on rows read and the filter runs after, so the cursor left
+/// behind once `want` unread keys are in hand may point at nothing but older
+/// *read* rows — treating it as evidence would render `50+` over a count of
+/// precisely 50. The only proof of more is another unread key, so this keeps
+/// paging until it sees one. The flag is therefore true only when unread key
+/// `want + 1` was found, or when the page budget ran out before the question
+/// could be settled.
 ///
 /// This pages rather than issuing one big query because of how `Limit` and
 /// `FilterExpression` interact: the limit is spent on rows *read*, and the
@@ -296,12 +298,10 @@ async fn unread_keys(
             return Ok((keys, true));
         }
 
-        if keys.len() == want {
-            // Exactly the bound. Whether anything is left depends only on
-            // whether the scan still had somewhere to look.
-            return Ok((keys, cursor.is_some()));
-        }
-
+        // Deliberately no early return on `keys.len() == want`. Landing on the
+        // bound settles nothing: the next unread key might be on the next page,
+        // or there might not be one at all. Paging on until either shows up is
+        // the only way to tell those apart.
         match cursor {
             // The partition is exhausted: what was found is all there is.
             None => return Ok((keys, false)),

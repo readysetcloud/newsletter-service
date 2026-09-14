@@ -191,9 +191,13 @@ export const NotificationBell: React.FC = () => {
 
     const response = await notificationsService.markAllRead();
 
-    // The server bounds how many one call touches, so an inbox deeper than
-    // that still has unread ones behind these. Re-read rather than claim zero.
-    if (response.success && response.data?.moreRemaining) {
+    // Two reasons to go back to the server, and the badge has already been
+    // zeroed optimistically either way. The request failing outright is the
+    // one that used to slip through: it skipped this branch entirely and left
+    // the badge claiming nothing was unread until the next poll. The other is
+    // the server bounding how many one call touches, which leaves unread ones
+    // behind these.
+    if (!response.success || response.data?.moreRemaining) {
       void load();
     }
   }, [load]);

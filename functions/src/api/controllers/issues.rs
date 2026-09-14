@@ -5545,7 +5545,7 @@ async fn publish_issue_handed_off_event(
     let detail = serde_json::json!({
         "tenantId": tenant_id,
         "userId": user_id,
-        "type": "ISSUE_HANDED_OFF",
+        "type": "ISSUE_PUBLISHED",
         "data": {
             "issueNumber": issue_number,
             "publishedAt": published_at,
@@ -5561,7 +5561,7 @@ async fn publish_issue_handed_off_event(
         .entries(
             aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
                 .source("newsletter-service")
-                .detail_type("Issue Handed Off")
+                .detail_type("ISSUE_PUBLISHED")
                 .detail(detail_str)
                 .build(),
         )
@@ -5574,7 +5574,7 @@ async fn publish_issue_handed_off_event(
                 if let Some(error_code) = entry.error_code() {
                     tracing::error!(
                         tenant_id = %tenant_id,
-                        event_type = "Issue Handed Off",
+                        event_type = "ISSUE_PUBLISHED",
                         error_code = %error_code,
                         error_message = ?entry.error_message(),
                         "Failed to publish analytics rebuild event"
@@ -5586,7 +5586,7 @@ async fn publish_issue_handed_off_event(
         Err(e) => {
             tracing::error!(
                 tenant_id = %tenant_id,
-                event_type = "Issue Handed Off",
+                event_type = "ISSUE_PUBLISHED",
                 error = %e,
                 "Failed to send analytics rebuild event to EventBridge"
             );

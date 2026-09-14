@@ -48,8 +48,24 @@ const isPending = (report: ReportSummaryItem) => report.status === 'pending';
 const isReadable = (report: ReportSummaryItem) =>
   report.status === 'complete' && !!report.summary;
 
-/** Net subscriber change, coloured and signed. */
-const NetChange: React.FC<{ value: number }> = ({ value }) => {
+/**
+ * Net subscriber change, coloured and signed — or an em dash when the report
+ * has no figure to give.
+ *
+ * Growth comes from per-issue subscriber snapshots and the API declines to
+ * invent it from fewer than two measured issues, which any range holding a
+ * single issue hits. This used to render that as a green "+0", which is a
+ * different claim entirely: nobody joined or left, rather than nobody counted.
+ */
+const NetChange: React.FC<{ value: number | null | undefined }> = ({ value }) => {
+  if (value == null) {
+    return (
+      <span className="text-muted-foreground" title="Needs at least two issues with a subscriber count">
+        —
+      </span>
+    );
+  }
+
   const positive = value >= 0;
   const Arrow = positive ? ArrowUpRight : ArrowDownRight;
 
@@ -343,7 +359,7 @@ export const ReportsListPage: React.FC = () => {
                       <div>
                         <dt className="text-xs text-muted-foreground">Net Subscribers</dt>
                         <dd className="text-sm">
-                          <NetChange value={report.subscriberGrowth?.netChange ?? 0} />
+                          <NetChange value={report.subscriberGrowth?.netChange} />
                         </dd>
                       </div>
                     </dl>
@@ -418,7 +434,7 @@ export const ReportsListPage: React.FC = () => {
                           {formatNumber(report.summary.totalDelivered)}
                         </td>
                         <td className="px-4 py-3 text-sm text-right tabular-nums">
-                          <NetChange value={report.subscriberGrowth?.netChange ?? 0} />
+                          <NetChange value={report.subscriberGrowth?.netChange} />
                         </td>
                         <td className="px-4 py-3 text-right">
                           <ChevronRight className="w-4 h-4 text-muted-foreground inline" aria-hidden="true" />

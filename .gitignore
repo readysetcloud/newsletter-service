@@ -135,7 +135,17 @@ dist
 # Rust
 **/target/
 **/*.rs.bk
-**/Cargo.lock
+# Cargo.lock is committed, not ignored.
+#
+# It is ignored for libraries, whose dependents do their own resolution. This
+# repo builds Lambda binaries, and for those the lockfile is the only thing
+# making a build reproducible. Without it CI resolved dependencies fresh on
+# every deploy and inherited whatever had been published that morning: on
+# 2026-09-15 that was aws-smithy-types 1.7.0, which changed Document::Object to
+# take DocumentObject while aws-smithy-json 0.63.0 still passed a HashMap. The
+# backend deploy failed on a compile error inside two crates nobody here had
+# touched, and it would have failed the same way on any branch.
+# **/Cargo.lock
 *.pdb
 
 # Claude Code agent worktrees (session infrastructure, not source)

@@ -389,6 +389,20 @@ describe('handle-email-status per-recipient send anchor', () => {
     expect(committedRecord('open').timeToOpen).toBe(59400);
   });
 
+  test('labels the record as recipient-anchored so aggregation can trust it', async () => {
+    await sendOpen({ date: RECIPIENT_SENT_AT });
+
+    // The redirect click pipeline writes into the same click# space and can
+    // only ever be publish-anchored, so the stored number alone is ambiguous.
+    expect(committedRecord('open').timingAnchor).toBe('recipient');
+  });
+
+  test('labels a header-less record as publish-anchored, not recipient', async () => {
+    await sendOpen(undefined);
+
+    expect(committedRecord('open').timingAnchor).toBe('publish');
+  });
+
   test('times a click from this recipient\'s own send too', async () => {
     await handler({
       detail: {

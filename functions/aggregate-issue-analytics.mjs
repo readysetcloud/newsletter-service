@@ -81,7 +81,7 @@ export const handler = async (event) => {
       openDecay: calculateOpenDecay(events.opens, publishedAt),
       geoDistribution: calculateGeoDistribution(events.clicks, events.opens),
       deviceBreakdown: calculateDeviceBreakdown(events.opens),
-      timingMetrics: calculateTimingMetrics(events.opens, events.clicks),
+      timingMetrics: calculateTimingMetrics(events.opens, events.clicks, publishedAt),
       engagementType: await calculateEngagementType(events.clicks, ddb, tenantId),
       trafficSource: calculateTrafficSource(events.clicks),
       // Reported alongside the raw counters, never subtracted from them. The
@@ -261,7 +261,7 @@ export async function queryEventsByType(ddb, tenantId, issueNumber, eventType) {
     const result = await ddb.send(new QueryCommand({
       TableName: process.env.TABLE_NAME,
       KeyConditionExpression: 'pk = :pk AND begins_with(sk, :eventType)',
-      ProjectionExpression: 'sk, eventType, #ts, subscriberEmailHash, linkUrl, linkPosition, trafficSource, device, country, timeToClick, timeToOpen, bounceType, bounceReason, complaintType',
+      ProjectionExpression: 'sk, eventType, #ts, subscriberEmailHash, linkUrl, linkPosition, trafficSource, device, country, timeToClick, timeToOpen, timingAnchor, bounceType, bounceReason, complaintType',
       ExpressionAttributeNames: {
         '#ts': 'timestamp'
       },
@@ -370,37 +370,45 @@ const isSendInFlight = async (pk) => {
 };
 
 /**
- * How many whole hours after ITS OWN send a recorded event happened.
+ * Seconds between a recorded event and the send of the copy it belongs to.
  *
- * `timeToOpen` / `timeToClick` are stamped per recipient at write time against
- * the send instant of that recipient's copy. A local-send issue spreads those
- * instants across most of a day, so bucketing on `timestamp - publishedAt`
- * flattens one decay curve into a smear and reads a prompt Sydney open as a
- * sixteen-hour-late one.
+ * Two pipelines write `open#` / `click#` records and they anchor differently.
+ * The SES event handler has the message's own Date header, which is
+ * per-recipient, and labels what it stored with `timingAnchor`. The redirect
+ * click handler only knows the issue and a subscriber hash, so it can only
+ * measure from the issue-wide publish instant and says so.
  *
- * The stored value wins. `publishedAt` stays as the fallback for records
- * written before the per-recipient anchor landed - their stored value is
- * either absent or measured from the issue-wide instant regardless, so the
- * two paths agree for them.
+ * Only a value labelled `recipient` is trusted as-is. Everything else -
+ * publish-labelled, and every record written before the label existed - is
+ * re-derived from the publish instant, which is what those values already
+ * mean. Reading an unlabelled value as recipient-relative is what would bucket
+ * a prompt click from a late timezone group many hours late.
  *
- * @param {{timestamp: string}} event - The recorded open or click
+ * @param {{timestamp: string, timingAnchor?: string}} event - The recorded open or click
  * @param {number|string|null|undefined} storedSeconds - timeToOpen / timeToClick
  * @param {number} publishTime - Issue publish instant, epoch ms
- * @returns {number} Whole hours since that recipient's send
+ * @returns {number} Seconds since that recipient's send
  */
-function hoursSinceSend(event, storedSeconds, publishTime) {
-  // `null` has to be rejected before the numeric coercion, not after it.
-  // The event builders persist an explicit null when neither the send header
-  // nor the issue record yielded an anchor, DynamoDB round-trips that back as
-  // null, and `Number(null)` is 0 - which is finite, and would file every
-  // unanchored event under hour zero instead of taking the fallback below.
-  if (storedSeconds !== null && storedSeconds !== undefined && storedSeconds !== '') {
+function secondsSinceSend(event, storedSeconds, publishTime) {
+  if (event?.timingAnchor === 'recipient'
+    // `null` has to be rejected before the numeric coercion, not after it. The
+    // builders persist an explicit null when no anchor was available at all,
+    // DynamoDB round-trips it back as null, and `Number(null)` is 0 - finite,
+    // and would file the event at the instant of its own send.
+    && storedSeconds !== null && storedSeconds !== undefined && storedSeconds !== '') {
     const seconds = Number(storedSeconds);
     if (Number.isFinite(seconds)) {
-      return Math.floor(seconds / 3600);
+      return seconds;
     }
   }
-  return Math.floor((new Date(event.timestamp).getTime() - publishTime) / (1000 * 60 * 60));
+  return Math.floor((new Date(event.timestamp).getTime() - publishTime) / 1000);
+}
+
+/**
+ * The same measurement in whole hours, for the decay buckets.
+ */
+function hoursSinceSend(event, storedSeconds, publishTime) {
+  return Math.floor(secondsSinceSend(event, storedSeconds, publishTime) / 3600);
 }
 
 export function calculateClickDecay(clicks, publishedAt) {
@@ -519,9 +527,18 @@ export function calculateDeviceBreakdown(opens) {
   return breakdown;
 }
 
-export function calculateTimingMetrics(opens, clicks) {
-  const openTimes = opens.map(o => o.timeToOpen).filter(t => t != null).sort((a, b) => a - b);
-  const clickTimes = clicks.map(c => c.timeToClick).filter(t => t != null).sort((a, b) => a - b);
+export function calculateTimingMetrics(opens, clicks, publishedAt) {
+  // Normalised the same way the decay curves are: a median that mixes
+  // recipient-relative and publish-relative values is not a median of anything.
+  // Without a publish instant there is nothing to re-derive against, so the
+  // stored values are used as they are.
+  const publishTime = new Date(publishedAt).getTime();
+  const normalize = (event, stored) => (Number.isFinite(publishTime)
+    ? secondsSinceSend(event, stored, publishTime)
+    : stored);
+
+  const openTimes = opens.map(o => normalize(o, o.timeToOpen)).filter(t => t != null).sort((a, b) => a - b);
+  const clickTimes = clicks.map(c => normalize(c, c.timeToClick)).filter(t => t != null).sort((a, b) => a - b);
 
   return {
     medianTimeToOpen: calculateMedian(openTimes),

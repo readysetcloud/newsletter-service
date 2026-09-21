@@ -244,6 +244,13 @@ const captureClickEvent = async (msg, eventTimestamp, statsCache) => {
     device,
     country,
     timeToClick,
+    // The redirect only knows the issue and a subscriber hash - there is no
+    // per-recipient send instant to anchor to here, the way the SES event
+    // pipeline has the message's own Date header. Labelling it says so
+    // explicitly, so aggregation re-derives this one from the issue's publish
+    // instant instead of reading it as recipient-relative and bucketing a
+    // prompt click from a late timezone group hours late.
+    timingAnchor: 'publish',
     ttl: Math.floor(Date.now() / 1000) + (90 * 24 * 60 * 60)
   };
 

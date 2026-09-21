@@ -1296,7 +1296,8 @@ describe('aggregate-issue-analytics', () => {
       // to their own delivery they are what they actually were - prompt.
       const opens = [{
         timestamp: '2026-09-22T10:30:00.000Z',
-        timeToOpen: 1800
+        timeToOpen: 1800,
+        timingAnchor: 'recipient'
       }];
 
       const decay = calculateOpenDecay(opens, publishedAt);
@@ -1308,7 +1309,8 @@ describe('aggregate-issue-analytics', () => {
     test('buckets a click by its own send too', () => {
       const clicks = [{
         timestamp: '2026-09-22T11:00:00.000Z',
-        timeToClick: 3600
+        timeToClick: 3600,
+        timingAnchor: 'recipient'
       }];
 
       const decay = calculateClickDecay(clicks, publishedAt);
@@ -1331,7 +1333,7 @@ describe('aggregate-issue-analytics', () => {
       // record yielded an anchor, and DynamoDB round-trips it back as null.
       // `Number(null)` is 0 and finite, so coercing before the null check
       // filed every unanchored event under hour zero.
-      const opens = [{ timestamp: '2026-09-21T17:00:00.000Z', timeToOpen: null }];
+      const opens = [{ timestamp: '2026-09-21T17:00:00.000Z', timeToOpen: null, timingAnchor: 'recipient' }];
 
       const decay = calculateOpenDecay(opens, publishedAt);
 
@@ -1339,7 +1341,7 @@ describe('aggregate-issue-analytics', () => {
     });
 
     test('treats a stored null click timing as missing too', () => {
-      const clicks = [{ timestamp: '2026-09-21T18:00:00.000Z', timeToClick: null }];
+      const clicks = [{ timestamp: '2026-09-21T18:00:00.000Z', timeToClick: null, timingAnchor: 'recipient' }];
 
       const decay = calculateClickDecay(clicks, publishedAt);
 
@@ -1349,11 +1351,56 @@ describe('aggregate-issue-analytics', () => {
     test('keeps a zero stored timing distinct from a missing one', () => {
       // 0 is a real value - opened inside the first hour - and must not be
       // treated as absent and re-derived from the publish instant.
-      const opens = [{ timestamp: '2026-09-22T10:00:00.000Z', timeToOpen: 0 }];
+      const opens = [{ timestamp: '2026-09-22T10:00:00.000Z', timeToOpen: 0, timingAnchor: 'recipient' }];
 
       const decay = calculateOpenDecay(opens, publishedAt);
 
       expect(decay).toEqual([{ hour: 0, opens: 1, cumulativeOpens: 1 }]);
+    });
+
+    test('re-derives a redirect click, which can only be publish-anchored', () => {
+      // process-link-click only knows the issue and a subscriber hash, so it
+      // labels what it stores `publish`. Trusting 3600 here as
+      // recipient-relative would put a click that actually happened 20 hours
+      // after publish into hour one.
+      const clicks = [{
+        timestamp: '2026-09-22T10:00:00.000Z',
+        timeToClick: 3600,
+        timingAnchor: 'publish'
+      }];
+
+      const decay = calculateClickDecay(clicks, publishedAt);
+
+      expect(decay[decay.length - 1]).toEqual({ hour: 20, clicks: 1, cumulativeClicks: 1 });
+    });
+
+    test('re-derives an unlabelled record rather than assuming it is recipient-relative', () => {
+      // Everything written before the label existed was publish-anchored, so
+      // absent must not be read as `recipient`.
+      const opens = [{ timestamp: '2026-09-22T10:00:00.000Z', timeToOpen: 3600 }];
+
+      const decay = calculateOpenDecay(opens, publishedAt);
+
+      expect(decay[decay.length - 1]).toEqual({ hour: 20, opens: 1, cumulativeOpens: 1 });
+    });
+  });
+
+  describe('timing metrics across both writers', () => {
+    const publishedAt = '2026-09-21T14:00:00.000Z';
+
+    test('normalises mixed anchors before taking a median', () => {
+      // One SES click from a late timezone group (prompt: 1800s after its own
+      // send) and one redirect click on the same issue stored publish-relative
+      // (72000s). Taken raw the median mixes two different measurements.
+      const clicks = [
+        { timestamp: '2026-09-22T06:30:00.000Z', timeToClick: 1800, timingAnchor: 'recipient' },
+        { timestamp: '2026-09-22T10:00:00.000Z', timeToClick: 72000, timingAnchor: 'publish' }
+      ];
+
+      const metrics = calculateTimingMetrics([], clicks, publishedAt);
+
+      // 1800 (trusted) and 72000 (re-derived from the timestamp, same value).
+      expect(metrics.medianTimeToClick).toBe((1800 + 72000) / 2);
     });
   });
 });

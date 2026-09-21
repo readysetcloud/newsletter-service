@@ -1229,7 +1229,7 @@ describe('aggregate-issue-analytics', () => {
       publishedAt: '2026-09-21T14:00:00.000Z'
     };
 
-    test('defers without claiming when groups are still going out', async () => {
+    test('fails the invocation rather than consuming it when groups are still going out', async () => {
       // A sendProgress record with no completedAt: the fan-out is mid-flight.
       // Aggregating here would count subscribers who have not been sent to yet
       // as deliveries that failed to open.
@@ -1237,12 +1237,14 @@ describe('aggregate-issue-analytics', () => {
         Item: marshall({ pk: 'tenant123#42', sk: 'sendProgress' })
       });
 
-      const result = await handler(event);
+      // Returning cleanly would consume the scheduled run, leaving the fan-out
+      // and completion announcements as the only things that could book
+      // another - and both swallow PutEvents failures by design. Throwing lets
+      // the schedule's own retry policy keep trying.
+      await expect(handler(event)).rejects.toThrow('aggregation deferred');
 
-      expect(result.success).toBe(false);
-      expect(result.message).toContain('deferred');
-      // Critically, the claim never happened - statsPhase is untouched, so the
-      // run that send completion schedules can still claim it.
+      // The claim never happened either, so statsPhase is untouched and a retry
+      // (or the run an announcement books) can still claim it.
       expect(mockSend).toHaveBeenCalledTimes(1);
     });
 

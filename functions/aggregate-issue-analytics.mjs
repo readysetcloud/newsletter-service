@@ -18,28 +18,38 @@ export const handler = async (event) => {
     };
   }
 
-  try {
-    const pk = `${tenantId}#${issueNumber}`;
-    const sk = 'stats';
+  // A local-send issue is still delivering long after it is handed off: the
+  // groups fan out across the better part of a day and the catch-all sweeps 30
+  // minutes behind the last of them. Aggregating before that finishes counts
+  // not-yet-sent subscribers in `deliveries` with no chance to have opened,
+  // which deflates open rate - and the harder the issue was personalised, the
+  // worse it reads.
+  //
+  // This sits outside the try below, and throws rather than returning, both
+  // deliberately.
+  //
+  // Returning would consume the invocation successfully, and the only things
+  // that would book another run are the fan-out and completion announcements -
+  // both of which go through `publishEvent` and swallow PutEvents failures by
+  // design. Lose both and the issue would never be aggregated at all, with
+  // nothing anywhere recording that it had been skipped. The outer catch would
+  // do the same thing by a different route: it turns a throw into a
+  // `{statusCode: 500}` return value, which to an asynchronous invoker is a
+  // success.
+  //
+  // Throwing past it fails the invocation, so the schedule's own retry policy
+  // (set in schedule-aggregation, with an event age long enough to outlast a
+  // fan-out) keeps trying on its own. The announcements become the fast path
+  // rather than the only path.
+  const pk = `${tenantId}#${issueNumber}`;
 
-    // A local-send issue is still delivering long after it is handed off: the
-    // groups fan out across the better part of a day and the catch-all sweeps
-    // 30 minutes behind the last of them. Aggregating before that finishes
-    // counts not-yet-sent subscribers in `deliveries` with no chance to have
-    // opened, which deflates open rate - and the harder the issue was
-    // personalised, the worse it reads.
-    //
-    // Bailing is not a dropped aggregation. Send completion re-schedules this
-    // run (schedule-aggregation handles `Issue Send Completed`), so this defers
-    // to the run that will see the whole picture.
-    if (await isSendInFlight(pk)) {
-      console.log(`Send still in flight for ${pk} - deferring aggregation to send completion`);
-      return {
-        success: false,
-        message: 'Send still in flight - aggregation deferred to send completion',
-        issueNumber
-      };
-    }
+  if (await isSendInFlight(pk)) {
+    console.log(`Send still in flight for ${pk} - deferring aggregation, will retry`);
+    throw new Error(`Send still in flight for ${pk} - aggregation deferred`);
+  }
+
+  try {
+    const sk = 'stats';
 
     // ALL_NEW so the realtime counters come back on the claim itself — the
     // anomaly check below reads them and would otherwise need its own GetItem.
@@ -128,7 +138,6 @@ export const handler = async (event) => {
     console.error('Aggregation error:', err);
 
     try {
-      const pk = `${tenantId}#${issueNumber}`;
       const sk = 'stats';
       await ddb.send(new UpdateItemCommand({
         TableName: process.env.TABLE_NAME,

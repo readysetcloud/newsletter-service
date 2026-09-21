@@ -1,6 +1,6 @@
 import { jest } from '@jest/globals';
 
-const { SchedulerClient, CreateScheduleCommand } = await import('@aws-sdk/client-scheduler');
+const { SchedulerClient, CreateScheduleCommand, UpdateScheduleCommand } = await import('@aws-sdk/client-scheduler');
 const { handler, calculateScheduleTime, ensureFutureScheduleTime } = await import('../schedule-aggregation.mjs');
 
 describe('schedule-aggregation', () => {
@@ -181,6 +181,83 @@ describe('schedule-aggregation', () => {
       const resultTime = new Date(`${result}Z`).getTime();
       const minTime = Date.now() + 60 * 1000;
       expect(resultTime).toBeGreaterThanOrEqual(minTime - 1000);
+    });
+  });
+  describe('Issue Send Completed', () => {
+    const completedEvent = (detail) => ({
+      'detail-type': 'Issue Send Completed',
+      detail: {
+        tenantId: 'tenant-123',
+        issueNumber: 42,
+        recipients: 1450,
+        baseAt: '2026-09-21T14:00:00.000Z',
+        ...detail
+      }
+    });
+
+    test('moves the window to 24 hours after delivery finished, not after hand-off', async () => {
+      mockSend.mockResolvedValue({});
+
+      const result = await handler(completedEvent());
+
+      expect(result.success).toBe(true);
+      expect(mockSend).toHaveBeenCalledTimes(1);
+
+      const command = mockSend.mock.calls[0][0];
+      expect(command).toBeInstanceOf(UpdateScheduleCommand);
+      // Same name the hand-off booked, so this replaces that window rather
+      // than racing a second aggregation against it.
+      expect(command.input.Name).toBe('aggregate-tenant-123-42-24h');
+
+      // Measured from now (completion), not from the issue's base instant -
+      // that is the entire point of handling this event.
+      const scheduledFor = new Date(`${command.input.ScheduleExpression.slice(3, -1)}Z`).getTime();
+      const expected = Date.now() + 24 * 60 * 60 * 1000;
+      expect(Math.abs(scheduledFor - expected)).toBeLessThan(60 * 1000);
+    });
+
+    test('passes baseAt to the aggregator as its publishedAt input', async () => {
+      mockSend.mockResolvedValue({});
+
+      await handler(completedEvent());
+
+      const input = JSON.parse(mockSend.mock.calls[0][0].input.Target.Input);
+      expect(input).toEqual({
+        tenantId: 'tenant-123',
+        issueNumber: 42,
+        publishedAt: '2026-09-21T14:00:00.000Z'
+      });
+    });
+
+    test('creates the schedule when the hand-off never booked one', async () => {
+      const notFound = new Error('No schedule');
+      notFound.name = 'ResourceNotFoundException';
+      mockSend
+        .mockRejectedValueOnce(notFound)
+        .mockResolvedValueOnce({});
+
+      const result = await handler(completedEvent());
+
+      expect(result.success).toBe(true);
+      expect(mockSend).toHaveBeenCalledTimes(2);
+      expect(mockSend.mock.calls[0][0]).toBeInstanceOf(UpdateScheduleCommand);
+      expect(mockSend.mock.calls[1][0]).toBeInstanceOf(CreateScheduleCommand);
+    });
+
+    test('surfaces a non-missing scheduler failure instead of silently creating', async () => {
+      mockSend.mockRejectedValue(new Error('AccessDenied'));
+
+      const result = await handler(completedEvent());
+
+      expect(result.statusCode).toBe(500);
+      expect(mockSend).toHaveBeenCalledTimes(1);
+    });
+
+    test('returns 400 without baseAt, leaving the hand-off window in place', async () => {
+      const result = await handler(completedEvent({ baseAt: undefined }));
+
+      expect(result.statusCode).toBe(400);
+      expect(mockSend).not.toHaveBeenCalled();
     });
   });
 });

@@ -379,7 +379,11 @@ const announceSendCompleted = async (tenantId, issueNumber, progress) => {
     await publishEvent('newsletter-service', 'Issue Send Completed', {
       tenantId,
       issueNumber,
-      recipients: countRecipients(progress)
+      recipients: countRecipients(progress),
+      // Carried for schedule-aggregation, which re-books the issue's analytics
+      // window for 24 hours after delivery actually finished and needs an
+      // instant to hand the aggregator.
+      baseAt: progress?.baseAt ?? null
     });
   } catch (error) {
     console.error('[PROGRESS] Could not announce completed send', {

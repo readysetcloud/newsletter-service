@@ -5125,7 +5125,12 @@ Resources:
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
-              Action: scheduler:CreateSchedule
+              Action:
+                - scheduler:CreateSchedule
+                # A completed local send moves its aggregation window out to 24
+                # hours after the last email actually left, which updates the
+                # schedule the hand-off already booked under the same name.
+                - scheduler:UpdateSchedule
               Resource: !Sub "arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/newsletter/*"
             - Effect: Allow
               Action:
@@ -5159,6 +5164,10 @@ Resources:
                 # for a while.
                 - Issue Handed Off
                 - ISSUE_PUBLISHED
+                # A local-send issue keeps delivering for hours after hand-off,
+                # so the window booked above closes mid-send. This one re-books
+                # it for 24 hours after delivery genuinely finished.
+                - Issue Send Completed
 
   DeleteExpiredDraftFunction:
     Type: AWS::Serverless::Function

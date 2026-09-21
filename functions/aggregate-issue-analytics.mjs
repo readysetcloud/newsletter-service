@@ -22,6 +22,25 @@ export const handler = async (event) => {
     const pk = `${tenantId}#${issueNumber}`;
     const sk = 'stats';
 
+    // A local-send issue is still delivering long after it is handed off: the
+    // groups fan out across the better part of a day and the catch-all sweeps
+    // 30 minutes behind the last of them. Aggregating before that finishes
+    // counts not-yet-sent subscribers in `deliveries` with no chance to have
+    // opened, which deflates open rate - and the harder the issue was
+    // personalised, the worse it reads.
+    //
+    // Bailing is not a dropped aggregation. Send completion re-schedules this
+    // run (schedule-aggregation handles `Issue Send Completed`), so this defers
+    // to the run that will see the whole picture.
+    if (await isSendInFlight(pk)) {
+      console.log(`Send still in flight for ${pk} - deferring aggregation to send completion`);
+      return {
+        success: false,
+        message: 'Send still in flight - aggregation deferred to send completion',
+        issueNumber
+      };
+    }
+
     // ALL_NEW so the realtime counters come back on the claim itself — the
     // anomaly check below reads them and would otherwise need its own GetItem.
     let counters = {};
@@ -82,7 +101,12 @@ export const handler = async (event) => {
         ':analytics': analytics,
         ':phase': 'consolidated',
         ':now': new Date().toISOString(),
-        ':version': '1.0'
+        // 1.1: open/click timing is anchored to each recipient's own send
+        // instant rather than the issue-wide publish, and aggregation waits for
+        // a local send to finish fanning out. Records below this version can
+        // hold a deflated open rate for any locally-sent issue, so anything
+        // comparing issues across the boundary has to account for it.
+        ':version': '1.1'
       })
     }));
 
@@ -321,16 +345,66 @@ export function calculateLinkPerformance(clicks) {
   return links;
 }
 
+/**
+ * Whether the issue's local-send fan-out is still running.
+ *
+ * Only local-send issues have a `sendProgress` record, so its absence means
+ * there is nothing to wait for. A read failure is never allowed to block
+ * aggregation: a missing aggregation is worse than an early one.
+ *
+ * @param {string} pk - `<tenantId>#<issueNumber>`
+ * @returns {Promise<boolean>}
+ */
+const isSendInFlight = async (pk) => {
+  try {
+    const result = await ddb.send(new GetItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({ pk, sk: 'sendProgress' }),
+      ProjectionExpression: 'completedAt'
+    }));
+    return Boolean(result.Item) && !unmarshall(result.Item).completedAt;
+  } catch (err) {
+    console.error('Failed to read send progress - aggregating anyway', { pk, error: err.message });
+    return false;
+  }
+};
+
+/**
+ * How many whole hours after ITS OWN send a recorded event happened.
+ *
+ * `timeToOpen` / `timeToClick` are stamped per recipient at write time against
+ * the send instant of that recipient's copy. A local-send issue spreads those
+ * instants across most of a day, so bucketing on `timestamp - publishedAt`
+ * flattens one decay curve into a smear and reads a prompt Sydney open as a
+ * sixteen-hour-late one.
+ *
+ * The stored value wins. `publishedAt` stays as the fallback for records
+ * written before the per-recipient anchor landed - their stored value is
+ * either absent or measured from the issue-wide instant regardless, so the
+ * two paths agree for them.
+ *
+ * @param {{timestamp: string}} event - The recorded open or click
+ * @param {number|string|null|undefined} storedSeconds - timeToOpen / timeToClick
+ * @param {number} publishTime - Issue publish instant, epoch ms
+ * @returns {number} Whole hours since that recipient's send
+ */
+function hoursSinceSend(event, storedSeconds, publishTime) {
+  const seconds = Number(storedSeconds);
+  if (Number.isFinite(seconds)) {
+    return Math.floor(seconds / 3600);
+  }
+  return Math.floor((new Date(event.timestamp).getTime() - publishTime) / (1000 * 60 * 60));
+}
+
 export function calculateClickDecay(clicks, publishedAt) {
   const publishTime = new Date(publishedAt).getTime();
   const hourlyClicks = new Map();
 
   for (const click of clicks) {
-    const clickTime = new Date(click.timestamp).getTime();
-    const hoursSincePublish = Math.floor((clickTime - publishTime) / (1000 * 60 * 60));
+    const hoursSinceSent = hoursSinceSend(click, click.timeToClick, publishTime);
 
-    if (hoursSincePublish >= 0 && hoursSincePublish < 168) {
-      hourlyClicks.set(hoursSincePublish, (hourlyClicks.get(hoursSincePublish) || 0) + 1);
+    if (hoursSinceSent >= 0 && hoursSinceSent < 168) {
+      hourlyClicks.set(hoursSinceSent, (hourlyClicks.get(hoursSinceSent) || 0) + 1);
     }
   }
 
@@ -353,11 +427,10 @@ export function calculateOpenDecay(opens, publishedAt) {
   const hourlyOpens = new Map();
 
   for (const open of opens) {
-    const openTime = new Date(open.timestamp).getTime();
-    const hoursSincePublish = Math.floor((openTime - publishTime) / (1000 * 60 * 60));
+    const hoursSinceSent = hoursSinceSend(open, open.timeToOpen, publishTime);
 
-    if (hoursSincePublish >= 0 && hoursSincePublish < 168) {
-      hourlyOpens.set(hoursSincePublish, (hourlyOpens.get(hoursSincePublish) || 0) + 1);
+    if (hoursSinceSent >= 0 && hoursSinceSent < 168) {
+      hourlyOpens.set(hoursSinceSent, (hourlyOpens.get(hoursSinceSent) || 0) + 1);
     }
   }
 

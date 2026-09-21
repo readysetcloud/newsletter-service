@@ -256,11 +256,13 @@ describe('handle-email-status', () => {
   });
 
   describe('Open event capture (analytics)', () => {
-    it('should capture open event with timeToOpen from publishedAt', async () => {
-      // GetItem returns publishedAt
-      ddbSend.mockResolvedValueOnce({
-        Item: { publishedAt: { S: '2025-01-21T10:00:00.000Z' } }
-      });
+    // The send header is per-recipient and the issue's publishedAt is not, which
+    // is the whole difference for a local send: its timezone groups go out hours
+    // apart, so anchoring every open to the issue-wide instant reads a prompt
+    // reader in a late group as a many-hour-late one. The header is preferred
+    // for every issue rather than behind a mode check - one path, and no read of
+    // the issue record at all in the common case.
+    it('should capture open event with timeToOpen from the per-recipient send header', async () => {
       ddbSend.mockResolvedValueOnce({}); // PutItem (capture open)
       ddbSend.mockResolvedValueOnce({}); // PutItem (track unique)
       ddbSend.mockResolvedValueOnce({}); // UpdateItem (stats)
@@ -288,11 +290,13 @@ describe('handle-email-status', () => {
       const result = await handler(event);
 
       expect(result).toBe(true);
-      expect(ddbSend).toHaveBeenCalledTimes(3);
 
-      // First call is GetItemCommand for publishedAt
-      const getCall = ddbSend.mock.calls[0][0];
-      expect(getCall.__type).toBe('GetItem');
+      // The issue's stats record is never read: the header already carries the
+      // anchor, so the only reason this open had to touch it is gone.
+      const statsReads = ddbSend.mock.calls
+        .map(([command]) => command)
+        .filter((command) => command.__type === 'GetItem' && command.Key?.sk?.S === 'stats');
+      expect(statsReads).toHaveLength(0);
 
       const captureCall = eventRecordPut();
       expect(captureCall.Item.pk.S).toBe('tenant123#issue-456');
@@ -509,8 +513,10 @@ describe('handle-email-status', () => {
       expect(captureCall.Item.sk.S).toContain('01HQZX3Y4K5M6N7P8Q9R0S1T2U');
     });
 
-    it('should still compute timeToOpen when GetItem fails', async () => {
-      // GetItem fails, but commonHeaders.date is available as fallback
+    it('should record the open without a timing when the header is absent and the fallback read fails', async () => {
+      // No header to anchor to, and the issue record cannot be read either.
+      // The open itself still has to be recorded - losing the event to save a
+      // derived metric is the worse trade.
       ddbSend.mockRejectedValueOnce(new Error('DynamoDB error'));
       ddbSend.mockResolvedValueOnce({}); // PutItem (capture open)
       ddbSend.mockResolvedValueOnce({}); // PutItem (track unique)
@@ -523,10 +529,7 @@ describe('handle-email-status', () => {
             tags: {
               referenceNumber: ['tenant123_issue-456']
             },
-            destination: ['subscriber@example.com'],
-            commonHeaders: {
-              date: '2025-01-21T10:00:00.000Z'
-            }
+            destination: ['subscriber@example.com']
           },
           open: {
             timestamp: '2025-01-21T10:30:00.000Z',
@@ -540,7 +543,7 @@ describe('handle-email-status', () => {
 
       expect(result).toBe(true);
       const captureCall = eventRecordPut();
-      expect(captureCall.Item.timeToOpen.N).toBe('1800');
+      expect(captureCall.Item.timeToOpen).toBeUndefined();
     });
   });
 

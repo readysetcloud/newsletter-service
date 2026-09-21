@@ -96,6 +96,12 @@ const eventBridgeCalls = () => eventBridgeInstance.send.mock.calls.map(([cmd]) =
 const parseScheduleDetail = (cmd) => JSON.parse(JSON.parse(cmd.Target.Input).Entries[0].Detail);
 const parseEventDetail = (cmd) => JSON.parse(cmd.Entries[0].Detail);
 
+// The fan-out also announces `Issue Fanout Planned` so analytics can book its
+// aggregation window against the catch-all instead of the hand-off time. That
+// is a second PutEvents on the same client, and every assertion below is about
+// the group sends, so they filter to those rather than counting every event.
+const isSendEvent = (cmd) => cmd.__type === 'PutEvents' && cmd.Entries[0].DetailType === 'Send Email v2';
+
 /** DynamoDB writes against the issue's progress item, with their call order. */
 const progressWrites = () =>
   ddbInstance.send.mock.calls
@@ -191,7 +197,7 @@ describe('send-email-v2 local send', () => {
       // The New York group (== default zone) is due now → immediate emit.
       expect(result).toMatchObject({ localSend: true, groups: 1, immediate: 1, scheduled: 0 });
 
-      const events = eventBridgeCalls().filter((cmd) => cmd.__type === 'PutEvents');
+      const events = eventBridgeCalls().filter(isSendEvent);
       expect(events).toHaveLength(1);
       expect(parseEventDetail(events[0]).localSendGroup.timeZone).toBe('America/New_York');
 
@@ -265,7 +271,7 @@ describe('send-email-v2 local send', () => {
 
         // Nothing fired at fan-out time: every group has a future target.
         expect(result).toMatchObject({ groups: 3, immediate: 0, scheduled: 3 });
-        expect(eventBridgeCalls().filter((cmd) => cmd.__type === 'PutEvents')).toHaveLength(0);
+        expect(eventBridgeCalls().filter(isSendEvent)).toHaveLength(0);
 
         const byZone = new Map(
           schedulerCalls().map((cmd) => [parseScheduleDetail(cmd).localSendGroup.timeZone, cmd])
@@ -297,7 +303,7 @@ describe('send-email-v2 local send', () => {
         expect(result).toMatchObject({ groups: 3, immediate: 3, scheduled: 0 });
 
         const emitted = eventBridgeCalls()
-          .filter((cmd) => cmd.__type === 'PutEvents')
+          .filter(isSendEvent)
           .map((cmd) => parseEventDetail(cmd).localSendGroup.timeZone);
         expect(new Set(emitted)).toEqual(
           new Set(['America/New_York', 'Europe/London', 'Asia/Tokyo'])
@@ -381,7 +387,7 @@ describe('send-email-v2 local send', () => {
       const localSchedules = schedulerCalls().filter((cmd) => cmd.Name?.startsWith('local-'));
       expect(localSchedules).toHaveLength(0);
       const localEvents = eventBridgeCalls()
-        .filter((cmd) => cmd.__type === 'PutEvents')
+        .filter(isSendEvent)
         .filter((cmd) => parseEventDetail(cmd).localSendGroup);
       expect(localEvents).toHaveLength(0);
     });
@@ -560,7 +566,7 @@ describe('send-email-v2 local send', () => {
       // base = now → the default group is due immediately.
       expect(result).toMatchObject({ localSend: true, mode: 'peak-hour', groups: 1, immediate: 1, scheduled: 0 });
 
-      const events = eventBridgeCalls().filter((cmd) => cmd.__type === 'PutEvents');
+      const events = eventBridgeCalls().filter(isSendEvent);
       expect(events).toHaveLength(1);
       expect(parseEventDetail(events[0]).localSendGroup).toEqual({ peakHour: null });
 
@@ -689,7 +695,7 @@ describe('send-email-v2 local send', () => {
 
       const plannedLabels = Object.keys(planWrite().cmd.ExpressionAttributeValues.marshalled[':groups']);
       const groupPayloads = [
-        ...eventBridgeCalls().filter((cmd) => cmd.__type === 'PutEvents').map(parseEventDetail),
+        ...eventBridgeCalls().filter(isSendEvent).map(parseEventDetail),
         ...schedulerCalls().map(parseScheduleDetail)
       ];
       expect(groupPayloads.length).toBe(plannedLabels.length);
@@ -760,4 +766,53 @@ describe('send-email-v2 local send', () => {
       expect(groups).toContain('__catch_all__');
     });
   });
+
+  describe('announcing the plan to analytics', () => {
+    test('publishes catchAllAt so the aggregation window can clear the whole send', async () => {
+      mockVerifiedSender();
+      listSubscribers.mockResolvedValue({
+        subscribers: [
+          { email: 'ny@example.com', timeZone: 'America/New_York' },
+          { email: 'la@example.com', timeZone: 'America/Los_Angeles' }
+        ],
+        lastEvaluatedKey: undefined
+      });
+
+      await handler(baseEvent());
+
+      const announcement = eventBridgeCalls()
+        .filter((cmd) => cmd.__type === 'PutEvents')
+        .find((cmd) => cmd.Entries[0].DetailType === 'Issue Fanout Planned');
+
+      expect(announcement).toBeDefined();
+
+      const detail = parseEventDetail(announcement);
+      expect(detail.tenantId).toBe('tenant-123');
+      // catchAllAt is the first instant every group is guaranteed delivered.
+      // Without it, analytics can only book off the hand-off time, which for a
+      // local send closes while later timezones are still being sent to.
+      expect(new Date(detail.catchAllAt).getTime())
+        .toBeGreaterThan(new Date(detail.baseAt).getTime());
+    });
+
+    test('does not fail the send when the announcement cannot be published', async () => {
+      // Delivery is already planned and scheduled by the time this runs. A
+      // missed analytics window must never take a send down with it.
+      mockVerifiedSender();
+      listSubscribers.mockResolvedValue({
+        subscribers: [{ email: 'ny@example.com', timeZone: 'America/New_York' }],
+        lastEvaluatedKey: undefined
+      });
+
+      eventBridgeInstance.send.mockImplementation((cmd) => {
+        if (cmd.__type === 'PutEvents' && cmd.Entries[0].DetailType === 'Issue Fanout Planned') {
+          return Promise.reject(new Error('EventBridge unavailable'));
+        }
+        return Promise.resolve({ FailedEntryCount: 0, Entries: [{ EventId: 'ok' }] });
+      });
+
+      await expect(handler(baseEvent())).resolves.toMatchObject({ localSend: true });
+    });
+  });
+
 });

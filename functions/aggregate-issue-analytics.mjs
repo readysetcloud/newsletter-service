@@ -389,9 +389,16 @@ const isSendInFlight = async (pk) => {
  * @returns {number} Whole hours since that recipient's send
  */
 function hoursSinceSend(event, storedSeconds, publishTime) {
-  const seconds = Number(storedSeconds);
-  if (Number.isFinite(seconds)) {
-    return Math.floor(seconds / 3600);
+  // `null` has to be rejected before the numeric coercion, not after it.
+  // The event builders persist an explicit null when neither the send header
+  // nor the issue record yielded an anchor, DynamoDB round-trips that back as
+  // null, and `Number(null)` is 0 - which is finite, and would file every
+  // unanchored event under hour zero instead of taking the fallback below.
+  if (storedSeconds !== null && storedSeconds !== undefined && storedSeconds !== '') {
+    const seconds = Number(storedSeconds);
+    if (Number.isFinite(seconds)) {
+      return Math.floor(seconds / 3600);
+    }
   }
   return Math.floor((new Date(event.timestamp).getTime() - publishTime) / (1000 * 60 * 60));
 }

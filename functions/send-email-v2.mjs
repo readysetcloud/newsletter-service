@@ -1,6 +1,7 @@
 import { SESv2Client, SendEmailCommand } from "@aws-sdk/client-sesv2";
 import { SchedulerClient, CreateScheduleCommand } from "@aws-sdk/client-scheduler";
 import { recordIssueEvent, ISSUE_EVENTS, issueNumberFromReference } from './utils/issue-timeline.mjs';
+import { publishEvent } from './utils/event-publisher.mjs';
 import { EventBridgeClient, PutEventsCommand } from "@aws-sdk/client-eventbridge";
 import { DynamoDBClient, QueryCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
@@ -519,6 +520,34 @@ const fanOutLocalSendGroups = async ({ data, localSend }) => {
       catchAllAt: catchAllAt.toISOString()
     }
   });
+
+  // Analytics needs to know when this issue will actually be finished, and it
+  // needs to know now rather than at completion. The 24-hour aggregation window
+  // is booked off the hand-off event, which for a local send can close while
+  // later timezone groups are still going out - counting subscribers who have
+  // not been sent to yet as deliveries that failed to open.
+  //
+  // `catchAllAt` is the first instant the whole issue is guaranteed to be
+  // delivered, and it is known here, at plan time. Announcing it lets the
+  // window be moved immediately instead of depending on the completion
+  // notification, which is deliberately best-effort and can be lost.
+  //
+  // Best-effort itself, and last: delivery is already planned and scheduled by
+  // this point, and a missed analytics window must never fail a send that is
+  // going out regardless.
+  try {
+    await publishEvent('newsletter-service', 'Issue Fanout Planned', {
+      tenantId: data.tenantId,
+      issueNumber: issueNumberFromReference(data.referenceNumber),
+      baseAt: base.toISOString(),
+      catchAllAt: catchAllAt.toISOString()
+    });
+  } catch (error) {
+    console.error('[LOCAL SEND] Could not announce the fan-out plan', {
+      referenceNumber: data.referenceNumber,
+      error: error.message
+    });
+  }
 
   return {
     sent: false,

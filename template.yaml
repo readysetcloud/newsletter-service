@@ -2331,6 +2331,13 @@ Resources:
 
   SendEmailV2Function:
     Type: AWS::Serverless::Function
+    # Updated after the aggregation rule, for the same reason
+    # PublishIssueFunction is: this function emits `Issue Fanout Planned` and
+    # `Issue Send Completed`, and both are new to that rule. Without the
+    # ordering the two resources update independently, and a local send
+    # completing in the window where the publisher has landed but the rule has
+    # not would never get its aggregation window moved off the hand-off time.
+    DependsOn: ScheduleAggregationFunctionIssuePublishedEvent
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
@@ -5165,8 +5172,11 @@ Resources:
                 - Issue Handed Off
                 - ISSUE_PUBLISHED
                 # A local-send issue keeps delivering for hours after hand-off,
-                # so the window booked above closes mid-send. This one re-books
-                # it for 24 hours after delivery genuinely finished.
+                # so the window booked above closes mid-send. These two re-book
+                # it: the first for 24 hours after the catch-all sweep (known at
+                # plan time, so the window is right even if the second is lost),
+                # the second for 24 hours after delivery genuinely finished.
+                - Issue Fanout Planned
                 - Issue Send Completed
 
   DeleteExpiredDraftFunction:

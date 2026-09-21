@@ -1326,6 +1326,26 @@ describe('aggregate-issue-analytics', () => {
       expect(decay[decay.length - 1]).toEqual({ hour: 2, opens: 1, cumulativeOpens: 1 });
     });
 
+    test('treats an explicitly stored null as missing, not as hour zero', () => {
+      // The builders persist null when neither the send header nor the issue
+      // record yielded an anchor, and DynamoDB round-trips it back as null.
+      // `Number(null)` is 0 and finite, so coercing before the null check
+      // filed every unanchored event under hour zero.
+      const opens = [{ timestamp: '2026-09-21T17:00:00.000Z', timeToOpen: null }];
+
+      const decay = calculateOpenDecay(opens, publishedAt);
+
+      expect(decay[decay.length - 1]).toEqual({ hour: 3, opens: 1, cumulativeOpens: 1 });
+    });
+
+    test('treats a stored null click timing as missing too', () => {
+      const clicks = [{ timestamp: '2026-09-21T18:00:00.000Z', timeToClick: null }];
+
+      const decay = calculateClickDecay(clicks, publishedAt);
+
+      expect(decay[decay.length - 1]).toEqual({ hour: 4, clicks: 1, cumulativeClicks: 1 });
+    });
+
     test('keeps a zero stored timing distinct from a missing one', () => {
       // 0 is a real value - opened inside the first hour - and must not be
       // treated as absent and re-derived from the publish instant.

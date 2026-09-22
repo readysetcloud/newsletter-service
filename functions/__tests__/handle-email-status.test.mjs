@@ -300,3 +300,125 @@ describe('handle-email-status interest scoring on email click', () => {
     expect(scoringUpdate.input.ExpressionAttributeNames['#topic']).toBe('ai');
   });
 });
+
+// A local-send issue delivers its timezone groups hours apart, so the issue-wide
+// publishedAt is the wrong zero for everyone outside the first group: a reader in
+// a late group who opens immediately was being recorded as a many-hour-late open,
+// which flattened the decay curve into a smear.
+describe('handle-email-status per-recipient send anchor', () => {
+  let mockSend;
+  let originalEnv;
+
+  const PUBLISHED_AT = '2026-09-21T14:00:00.000Z';
+  // This recipient's copy went out 16 hours after the issue was handed off.
+  const RECIPIENT_SENT_AT = '2026-09-22T06:00:00.000Z';
+
+  beforeEach(() => {
+    originalEnv = process.env.TABLE_NAME;
+    process.env.TABLE_NAME = 'test-table';
+    mockSend = jest.fn();
+    DynamoDBClient.prototype.send = mockSend;
+    jest.clearAllMocks();
+
+    mockSend.mockImplementation((command) => {
+      if (command instanceof GetItemCommand) {
+        const key = unmarshall(command.input.Key);
+        if (key.sk === 'stats') {
+          return Promise.resolve({
+            Item: {
+              pk: { S: 'tenant123#42' },
+              sk: { S: 'stats' },
+              publishedAt: { S: PUBLISHED_AT }
+            }
+          });
+        }
+      }
+      return Promise.resolve({});
+    });
+  });
+
+  afterEach(() => {
+    process.env.TABLE_NAME = originalEnv;
+  });
+
+  const committedRecord = (eventType) => {
+    const commit = mockSend.mock.calls
+      .map(([command]) => command)
+      .find((command) => command instanceof TransactWriteItemsCommand);
+    expect(commit).toBeDefined();
+
+    const put = commit.input.TransactItems
+      .map((item) => item.Put)
+      .filter(Boolean)
+      .map((item) => unmarshall(item.Item))
+      .find((item) => item.eventType === eventType);
+
+    expect(put).toBeDefined();
+    return put;
+  };
+
+  const sendOpen = (commonHeaders) => handler({
+    detail: {
+      eventType: 'Open',
+      open: { timestamp: '2026-09-22T06:30:00.000Z' },
+      mail: {
+        destination: ['reader@example.com'],
+        tags: { referenceNumber: ['tenant123_42'] },
+        ...commonHeaders && { commonHeaders }
+      }
+    }
+  });
+
+  test('times an open from this recipient\'s own send, not the issue publish', async () => {
+    await sendOpen({ date: RECIPIENT_SENT_AT });
+
+    // 30 minutes after their copy went out - a prompt reader. Anchored to
+    // publishedAt this same open reads as 16.5 hours late.
+    expect(committedRecord('open').timeToOpen).toBe(1800);
+  });
+
+  test('falls back to the issue publish when the header is absent', async () => {
+    await sendOpen(undefined);
+
+    expect(committedRecord('open').timeToOpen).toBe(59400);
+  });
+
+  test('ignores an unparseable header date rather than recording NaN', async () => {
+    await sendOpen({ date: 'not a date' });
+
+    expect(committedRecord('open').timeToOpen).toBe(59400);
+  });
+
+  test('labels the record as recipient-anchored so aggregation can trust it', async () => {
+    await sendOpen({ date: RECIPIENT_SENT_AT });
+
+    // The redirect click pipeline writes into the same click# space and can
+    // only ever be publish-anchored, so the stored number alone is ambiguous.
+    expect(committedRecord('open').timingAnchor).toBe('recipient');
+  });
+
+  test('labels a header-less record as publish-anchored, not recipient', async () => {
+    await sendOpen(undefined);
+
+    expect(committedRecord('open').timingAnchor).toBe('publish');
+  });
+
+  test('times a click from this recipient\'s own send too', async () => {
+    await handler({
+      detail: {
+        eventType: 'Click',
+        click: {
+          link: 'https://example.com/article',
+          timestamp: '2026-09-22T07:00:00.000Z'
+        },
+        mail: {
+          destination: ['reader@example.com'],
+          tags: { referenceNumber: ['tenant123_42'] },
+          commonHeaders: { date: RECIPIENT_SENT_AT }
+        }
+      }
+    });
+
+    expect(committedRecord('click').timeToClick).toBe(3600);
+  });
+});

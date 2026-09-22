@@ -11,6 +11,7 @@ const {
   queryAllEventsParallel,
   calculateLinkPerformance,
   calculateClickDecay,
+  calculateOpenDecay,
   calculateGeoDistribution,
   calculateDeviceBreakdown,
   calculateTimingMetrics,
@@ -45,7 +46,12 @@ describe('aggregate-issue-analytics', () => {
         publishedAt: '2025-01-29T10:00:00.000Z'
       };
 
+      // The handler now reads the issue's sendProgress record before claiming
+      // the aggregation, so a local send that is still fanning out defers
+      // instead of publishing a half-sent number. An empty response means "not
+      // a local send", which is the case every test below is exercising.
       mockSend
+        .mockResolvedValueOnce({}) // sendProgress read: no record, not a local send
         .mockResolvedValueOnce({})
         .mockResolvedValueOnce({ Items: [] })
         .mockResolvedValueOnce({ Items: [] })
@@ -58,17 +64,20 @@ describe('aggregate-issue-analytics', () => {
 
       expect(result.success).toBe(true);
       expect(result.issueNumber).toBe('42');
-      expect(mockSend).toHaveBeenCalledTimes(7);
+      expect(mockSend).toHaveBeenCalledTimes(8);
 
-      const firstCall = mockSend.mock.calls[0][0];
-      expect(firstCall).toBeInstanceOf(UpdateItemCommand);
-      expect(firstCall.input.ConditionExpression).toContain('statsPhase');
+      const progressRead = mockSend.mock.calls[0][0];
+      expect(progressRead).toBeInstanceOf(GetItemCommand);
 
-      const lastCall = mockSend.mock.calls[6][0];
+      const claimCall = mockSend.mock.calls[1][0];
+      expect(claimCall).toBeInstanceOf(UpdateItemCommand);
+      expect(claimCall.input.ConditionExpression).toContain('statsPhase');
+
+      const lastCall = mockSend.mock.calls[7][0];
       expect(lastCall).toBeInstanceOf(UpdateItemCommand);
       const updateValues = unmarshall(lastCall.input.ExpressionAttributeValues);
       expect(updateValues[':phase']).toBe('consolidated');
-      expect(updateValues[':version']).toBe('1.0');
+      expect(updateValues[':version']).toBe('1.1');
       expect(updateValues[':analytics']).toBeDefined();
     });
 
@@ -81,13 +90,15 @@ describe('aggregate-issue-analytics', () => {
 
       const conditionalError = new Error('ConditionalCheckFailedException');
       conditionalError.name = 'ConditionalCheckFailedException';
-      mockSend.mockRejectedValueOnce(conditionalError);
+      mockSend
+        .mockResolvedValueOnce({}) // sendProgress read: not a local send
+        .mockRejectedValueOnce(conditionalError);
 
       const result = await handler(event);
 
       expect(result.success).toBe(false);
       expect(result.message).toContain('already in progress or completed');
-      expect(mockSend).toHaveBeenCalledTimes(1);
+      expect(mockSend).toHaveBeenCalledTimes(2);
     });
 
     test('should reset statsPhase on aggregation error', async () => {
@@ -98,6 +109,7 @@ describe('aggregate-issue-analytics', () => {
       };
 
       mockSend
+        .mockResolvedValueOnce({}) // sendProgress read: not a local send
         .mockResolvedValueOnce({})
         .mockRejectedValueOnce(new Error('DynamoDB query failed'))
         .mockResolvedValueOnce({});
@@ -170,6 +182,7 @@ describe('aggregate-issue-analytics', () => {
       ];
 
       mockSend
+        .mockResolvedValueOnce({}) // sendProgress read: not a local send
         .mockResolvedValueOnce({})
         .mockResolvedValueOnce({ Items: sampleClicks })
         .mockResolvedValueOnce({ Items: sampleOpens })
@@ -182,7 +195,7 @@ describe('aggregate-issue-analytics', () => {
 
       expect(result.success).toBe(true);
 
-      const finalUpdateCall = mockSend.mock.calls[6][0];
+      const finalUpdateCall = mockSend.mock.calls[7][0];
       const updateValues = unmarshall(finalUpdateCall.input.ExpressionAttributeValues);
       const analytics = updateValues[':analytics'];
 
@@ -1207,6 +1220,288 @@ describe('aggregate-issue-analytics', () => {
       expect(b.openRate).toBeCloseTo(40, 5);
       expect(b.clickRate).toBeCloseTo(4, 5);
       expect(b.subject).toBe('Challenger');
+    });
+  });
+  describe('deferring aggregation while a local send is in flight', () => {
+    const event = {
+      tenantId: 'tenant123',
+      issueNumber: '42',
+      publishedAt: '2026-09-21T14:00:00.000Z'
+    };
+
+    // A deferral re-books itself by announcing the plan's catchAllAt, so this
+    // group needs the event client mocked as well as DynamoDB.
+    let eventBridgeSend;
+
+    beforeEach(() => {
+      eventBridgeSend = jest.fn().mockResolvedValue({});
+      EventBridgeClient.prototype.send = eventBridgeSend;
+    });
+
+    // Relative to now, not a fixed date: whether a send counts as in flight or
+    // stalled is decided against the clock, so a hard-coded catchAllAt would
+    // silently flip these tests to the overdue path once that date passed.
+    const CATCH_ALL_AHEAD = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+    // Past the aggregation deadline (catchAllAt + 24h), which is the point at
+    // which a still-incomplete send is stalled rather than merely slow.
+    const CATCH_ALL_LONG_PAST = new Date(Date.now() - 30 * 60 * 60 * 1000).toISOString();
+    // After the sweep but before the deadline: early, not late.
+    const CATCH_ALL_RECENTLY_PAST = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+
+    const inFlightProgress = (catchAllAt = CATCH_ALL_AHEAD) => ({
+      Item: marshall({
+        pk: 'tenant123#42',
+        sk: 'sendProgress',
+        baseAt: '2026-09-21T14:00:00.000Z',
+        ...catchAllAt && { catchAllAt }
+      })
+    });
+
+    const aggregationMocks = () => {
+      mockSend
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({ Items: [] })
+        .mockResolvedValueOnce({ Items: [] })
+        .mockResolvedValueOnce({ Items: [] })
+        .mockResolvedValueOnce({ Items: [] })
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({});
+    };
+
+    test('re-books itself for after the catch-all when groups are still going out', async () => {
+      // A sendProgress record with no completedAt: the fan-out is mid-flight.
+      // Aggregating here would count subscribers who have not been sent to yet
+      // as deliveries that failed to open.
+      mockSend.mockResolvedValueOnce(inFlightProgress());
+
+      const result = await handler(event);
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('re-booked');
+
+      // The run has to book its own replacement. Scheduler's RetryPolicy only
+      // covers delivery to the target, and an async Lambda invoke is delivered
+      // the moment Lambda accepts it - so a throw here would get Lambda's two
+      // async retries a minute apart and then be gone, long before a fan-out
+      // that runs for hours has finished.
+      const announced = eventBridgeSend.mock.calls.map(([cmd]) => cmd.input.Entries[0]);
+      expect(announced).toHaveLength(1);
+      expect(announced[0].DetailType).toBe('Issue Fanout Planned');
+      expect(JSON.parse(announced[0].Detail)).toMatchObject({
+        tenantId: 'tenant123',
+        issueNumber: '42',
+        catchAllAt: CATCH_ALL_AHEAD
+      });
+
+      // The claim never happened, so statsPhase is untouched and the re-booked
+      // run can still take it.
+      expect(mockSend).toHaveBeenCalledTimes(1);
+    });
+
+    test('throws when it cannot re-book, rather than dropping the issue silently', async () => {
+      mockSend.mockResolvedValueOnce(inFlightProgress());
+      eventBridgeSend.mockRejectedValueOnce(new Error('Bus unavailable'));
+
+      await expect(handler(event)).rejects.toThrow('Bus unavailable');
+    });
+
+    test('aggregates a send that is long past its catch-all instead of deferring again', async () => {
+      // Re-booking here would ask for `catchAllAt + 24h`, already in the past,
+      // which ensureFutureScheduleTime floors at a minute from now - so the run
+      // would come straight back and spin every minute for as long as the
+      // record stayed incomplete. A stalled send gets aggregated instead.
+      mockSend.mockResolvedValueOnce(inFlightProgress(CATCH_ALL_LONG_PAST));
+      aggregationMocks();
+
+      const result = await handler(event);
+
+      expect(result.success).toBe(true);
+      expect(eventBridgeSend).not.toHaveBeenCalled();
+    });
+
+    test('aggregates rather than looping when the record has no catch-all at all', async () => {
+      // Nothing to wait for and nothing to re-book against.
+      mockSend.mockResolvedValueOnce(inFlightProgress(null));
+      aggregationMocks();
+
+      const result = await handler(event);
+
+      expect(result.success).toBe(true);
+      expect(eventBridgeSend).not.toHaveBeenCalled();
+    });
+
+    test('proceeds once the send has completed', async () => {
+      mockSend
+        .mockResolvedValueOnce({
+          Item: marshall({
+            pk: 'tenant123#42',
+            sk: 'sendProgress',
+            completedAt: '2026-09-22T06:30:00.000Z'
+          })
+        })
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({ Items: [] })
+        .mockResolvedValueOnce({ Items: [] })
+        .mockResolvedValueOnce({ Items: [] })
+        .mockResolvedValueOnce({ Items: [] })
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({});
+
+      const result = await handler(event);
+
+      expect(result.success).toBe(true);
+    });
+
+    test('refuses to consolidate when delivery state cannot be read', async () => {
+      // Treating a read failure as "not a local send" would let this run
+      // consolidate a fan-out that is still going. Consolidation is terminal -
+      // the claim refuses to recompute a consolidated record - so the correctly
+      // scheduled run arriving later could not repair it, and the undercount
+      // would be permanent. A failed invocation costs a retry instead.
+      mockSend.mockRejectedValueOnce(new Error('AccessDenied'));
+
+      await expect(handler(event)).rejects.toThrow('AccessDenied');
+    });
+
+    test('defers a send past its sweep but still inside the aggregation window', async () => {
+      // catchAllAt was 6 hours ago, so the deadline is still 18 hours out.
+      // Consolidating now would give the last groups only 6 hours to respond.
+      mockSend.mockResolvedValueOnce(inFlightProgress(CATCH_ALL_RECENTLY_PAST));
+
+      const result = await handler(event);
+
+      expect(result.success).toBe(false);
+      expect(eventBridgeSend).toHaveBeenCalledTimes(1);
+    });
+
+    test('throws when EventBridge rejects the re-book entry', async () => {
+      // PutEvents resolves even when it refuses the entry, so the per-entry
+      // result is the only thing that says the re-book was accepted.
+      mockSend.mockResolvedValueOnce(inFlightProgress());
+      eventBridgeSend.mockResolvedValueOnce({
+        FailedEntryCount: 1,
+        Entries: [{ ErrorCode: 'InternalException', ErrorMessage: 'try again' }]
+      });
+
+      await expect(handler(event)).rejects.toThrow('InternalException');
+    });
+  });
+
+  describe('decay curves anchored per recipient', () => {
+    const publishedAt = '2026-09-21T14:00:00.000Z';
+
+    test('buckets an open by its own send, not by the issue publish', () => {
+      // A late-timezone subscriber on a local send: their copy went out 20
+      // hours after the issue was handed off, and they opened it half an hour
+      // later. Anchored to publish they look like a 20-hour-late open; anchored
+      // to their own delivery they are what they actually were - prompt.
+      const opens = [{
+        timestamp: '2026-09-22T10:30:00.000Z',
+        timeToOpen: 1800,
+        timingAnchor: 'recipient'
+      }];
+
+      const decay = calculateOpenDecay(opens, publishedAt);
+
+      expect(decay[0]).toEqual({ hour: 0, opens: 1, cumulativeOpens: 1 });
+      expect(decay).toHaveLength(1);
+    });
+
+    test('buckets a click by its own send too', () => {
+      const clicks = [{
+        timestamp: '2026-09-22T11:00:00.000Z',
+        timeToClick: 3600,
+        timingAnchor: 'recipient'
+      }];
+
+      const decay = calculateClickDecay(clicks, publishedAt);
+
+      expect(decay[decay.length - 1]).toEqual({ hour: 1, clicks: 1, cumulativeClicks: 1 });
+    });
+
+    test('falls back to the publish instant for records with no stored timing', () => {
+      // Written before the per-recipient anchor existed. Their stored value is
+      // absent, and publish-relative is the best available reading.
+      const opens = [{ timestamp: '2026-09-21T16:00:00.000Z' }];
+
+      const decay = calculateOpenDecay(opens, publishedAt);
+
+      expect(decay[decay.length - 1]).toEqual({ hour: 2, opens: 1, cumulativeOpens: 1 });
+    });
+
+    test('treats an explicitly stored null as missing, not as hour zero', () => {
+      // The builders persist null when neither the send header nor the issue
+      // record yielded an anchor, and DynamoDB round-trips it back as null.
+      // `Number(null)` is 0 and finite, so coercing before the null check
+      // filed every unanchored event under hour zero.
+      const opens = [{ timestamp: '2026-09-21T17:00:00.000Z', timeToOpen: null, timingAnchor: 'recipient' }];
+
+      const decay = calculateOpenDecay(opens, publishedAt);
+
+      expect(decay[decay.length - 1]).toEqual({ hour: 3, opens: 1, cumulativeOpens: 1 });
+    });
+
+    test('treats a stored null click timing as missing too', () => {
+      const clicks = [{ timestamp: '2026-09-21T18:00:00.000Z', timeToClick: null, timingAnchor: 'recipient' }];
+
+      const decay = calculateClickDecay(clicks, publishedAt);
+
+      expect(decay[decay.length - 1]).toEqual({ hour: 4, clicks: 1, cumulativeClicks: 1 });
+    });
+
+    test('keeps a zero stored timing distinct from a missing one', () => {
+      // 0 is a real value - opened inside the first hour - and must not be
+      // treated as absent and re-derived from the publish instant.
+      const opens = [{ timestamp: '2026-09-22T10:00:00.000Z', timeToOpen: 0, timingAnchor: 'recipient' }];
+
+      const decay = calculateOpenDecay(opens, publishedAt);
+
+      expect(decay).toEqual([{ hour: 0, opens: 1, cumulativeOpens: 1 }]);
+    });
+
+    test('re-derives a redirect click, which can only be publish-anchored', () => {
+      // process-link-click only knows the issue and a subscriber hash, so it
+      // labels what it stores `publish`. Trusting 3600 here as
+      // recipient-relative would put a click that actually happened 20 hours
+      // after publish into hour one.
+      const clicks = [{
+        timestamp: '2026-09-22T10:00:00.000Z',
+        timeToClick: 3600,
+        timingAnchor: 'publish'
+      }];
+
+      const decay = calculateClickDecay(clicks, publishedAt);
+
+      expect(decay[decay.length - 1]).toEqual({ hour: 20, clicks: 1, cumulativeClicks: 1 });
+    });
+
+    test('re-derives an unlabelled record rather than assuming it is recipient-relative', () => {
+      // Everything written before the label existed was publish-anchored, so
+      // absent must not be read as `recipient`.
+      const opens = [{ timestamp: '2026-09-22T10:00:00.000Z', timeToOpen: 3600 }];
+
+      const decay = calculateOpenDecay(opens, publishedAt);
+
+      expect(decay[decay.length - 1]).toEqual({ hour: 20, opens: 1, cumulativeOpens: 1 });
+    });
+  });
+
+  describe('timing metrics across both writers', () => {
+    const publishedAt = '2026-09-21T14:00:00.000Z';
+
+    test('normalises mixed anchors before taking a median', () => {
+      // One SES click from a late timezone group (prompt: 1800s after its own
+      // send) and one redirect click on the same issue stored publish-relative
+      // (72000s). Taken raw the median mixes two different measurements.
+      const clicks = [
+        { timestamp: '2026-09-22T06:30:00.000Z', timeToClick: 1800, timingAnchor: 'recipient' },
+        { timestamp: '2026-09-22T10:00:00.000Z', timeToClick: 72000, timingAnchor: 'publish' }
+      ];
+
+      const metrics = calculateTimingMetrics([], clicks, publishedAt);
+
+      // 1800 (trusted) and 72000 (re-derived from the timestamp, same value).
+      expect(metrics.medianTimeToClick).toBe((1800 + 72000) / 2);
     });
   });
 });

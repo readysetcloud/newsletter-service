@@ -551,6 +551,14 @@ export const IssueDetailPage: React.FC = () => {
 
   const isDraft = useMemo(() => issue?.status === 'draft', [issue?.status]);
   const isPublished = useMemo(() => issue?.status === 'published', [issue?.status]);
+  // Only true while groups are genuinely still going out. The progress record
+  // outlives the send itself - it stays on the issue through the 24 hours
+  // between the last group landing and the analytics snapshot - so its mere
+  // presence cannot stand in for "still delivering".
+  const isLocalSendDelivering = useMemo(
+    () => Boolean(issue?.sendProgress) && issue?.sendProgress?.state !== 'complete',
+    [issue?.sendProgress]
+  );
   /**
    * Whether the issue has reached the point where things actually happen —
    * mail goes out, an A/B sample is measured. A draft or a scheduled issue
@@ -1172,19 +1180,65 @@ export const IssueDetailPage: React.FC = () => {
           </div>
         )}
 
-        {/* Analytics Pending Banner */}
+        {/* A local-send issue is only "waiting on delivery" while it is actually
+            still delivering. Between the last group landing and the analytics
+            snapshot 24 hours later the progress record is still present but
+            complete, and telling someone results open once every group has
+            delivered - when every group already has - reads as a stuck page. */}
+        {/* Analytics Pending Banner.
+
+            A local send is measured on a different clock and the generic copy
+            below is wrong for it in both directions: results are not minutes
+            away, and they are not late. Aggregation deliberately waits for the
+            last timezone group to deliver - running at the usual 24 hours after
+            hand-off would count subscribers who had not been sent to yet as
+            deliveries that failed to open, and report a personalised issue as a
+            worse one. */}
         {isPublished && issue.stats && !issue.stats.analytics && (
           <Card className="shadow-sm mb-4 sm:mb-6 border-l-4 border-l-amber-500">
             <CardHeader className="bg-muted/30 p-3 sm:p-6">
-              <CardTitle className="text-base sm:text-xl">Analytics Processing</CardTitle>
+              <CardTitle className="text-base sm:text-xl">
+                {isLocalSendDelivering ? 'Analytics Waiting On Delivery' : 'Analytics Processing'}
+              </CardTitle>
               <p className="text-xs sm:text-sm text-muted-foreground mt-1">
-                Analytics can take a few minutes to appear after publish.
+                {isLocalSendDelivering
+                  ? "This issue sends in each subscriber's local time, and is still going out."
+                  : issue.sendProgress
+                    ? 'Every group has delivered. Results are taken 24 hours after the last one went out.'
+                    : 'Analytics can take a few minutes to appear after publish.'}
               </p>
             </CardHeader>
             <CardContent className="pt-4 sm:pt-6 p-3 sm:p-6">
               <div className="text-sm text-muted-foreground">
-                Refresh this page in a few minutes to see the latest analytics.
+                {issue.sendProgress
+                  ? 'Open and click rates are taken 24 hours after the last group goes out, so no one is counted before they have had a chance to read it. Reporting earlier would undercount the later timezones.'
+                  : 'Refresh this page in a few minutes to see the latest analytics.'}
               </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* How a local send's numbers were measured.
+
+            Sits with the results rather than the delivery card: by the time
+            these exist the send is long finished, and the question this answers
+            is "can I compare this to my other issues?", not "has it gone out?".
+            Timings are per-recipient - each open is counted against the send
+            instant of that subscriber's own copy, not the issue's publish
+            time - which is what makes the comparison legitimate at all. */}
+        {isPublished && analytics && issue.sendProgress && (
+          <Card className="shadow-sm mb-4 sm:mb-6 border-l-4 border-l-blue-500">
+            <CardContent className="p-3 sm:p-6">
+              <p className="text-sm text-muted-foreground">
+                <span className="font-medium text-foreground">Measured on local-send timing.</span>{' '}
+                This issue went out across{' '}
+                {issue.sendProgress.groupsTotal}{' '}
+                {issue.sendProgress.mode === 'peak-hour' ? 'peak-hour' : 'timezone'} groups. Opens and
+                clicks are timed from each subscriber&apos;s own delivery rather than from publish.
+                Results are taken 24 hours after the last group, so earlier groups had longer to
+                respond than the final one &mdash; expect these rates to read a little high against
+                an issue sent all at once.
+              </p>
             </CardContent>
           </Card>
         )}

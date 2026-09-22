@@ -1,6 +1,6 @@
 import { jest } from '@jest/globals';
 
-const { SchedulerClient, CreateScheduleCommand } = await import('@aws-sdk/client-scheduler');
+const { SchedulerClient, CreateScheduleCommand, UpdateScheduleCommand } = await import('@aws-sdk/client-scheduler');
 const { handler, calculateScheduleTime, ensureFutureScheduleTime } = await import('../schedule-aggregation.mjs');
 
 describe('schedule-aggregation', () => {
@@ -181,6 +181,138 @@ describe('schedule-aggregation', () => {
       const resultTime = new Date(`${result}Z`).getTime();
       const minTime = Date.now() + 60 * 1000;
       expect(resultTime).toBeGreaterThanOrEqual(minTime - 1000);
+    });
+  });
+  describe('Issue Send Completed', () => {
+    const completedEvent = (detail) => ({
+      'detail-type': 'Issue Send Completed',
+      detail: {
+        tenantId: 'tenant-123',
+        issueNumber: 42,
+        recipients: 1450,
+        baseAt: '2026-09-21T14:00:00.000Z',
+        ...detail
+      }
+    });
+
+    test('moves the window to 24 hours after delivery finished, not after hand-off', async () => {
+      mockSend.mockResolvedValue({});
+
+      const result = await handler(completedEvent());
+
+      expect(result.success).toBe(true);
+      expect(mockSend).toHaveBeenCalledTimes(1);
+
+      const command = mockSend.mock.calls[0][0];
+      expect(command).toBeInstanceOf(UpdateScheduleCommand);
+      // Same name the hand-off booked, so this replaces that window rather
+      // than racing a second aggregation against it.
+      expect(command.input.Name).toBe('aggregate-tenant-123-42-24h');
+
+      // Measured from now (completion), not from the issue's base instant -
+      // that is the entire point of handling this event.
+      const scheduledFor = new Date(`${command.input.ScheduleExpression.slice(3, -1)}Z`).getTime();
+      const expected = Date.now() + 24 * 60 * 60 * 1000;
+      expect(Math.abs(scheduledFor - expected)).toBeLessThan(60 * 1000);
+    });
+
+    test('passes baseAt to the aggregator as its publishedAt input', async () => {
+      mockSend.mockResolvedValue({});
+
+      await handler(completedEvent());
+
+      const input = JSON.parse(mockSend.mock.calls[0][0].input.Target.Input);
+      expect(input).toEqual({
+        tenantId: 'tenant-123',
+        issueNumber: 42,
+        publishedAt: '2026-09-21T14:00:00.000Z'
+      });
+    });
+
+    test('creates the schedule when the hand-off never booked one', async () => {
+      const notFound = new Error('No schedule');
+      notFound.name = 'ResourceNotFoundException';
+      mockSend
+        .mockRejectedValueOnce(notFound)
+        .mockResolvedValueOnce({});
+
+      const result = await handler(completedEvent());
+
+      expect(result.success).toBe(true);
+      expect(mockSend).toHaveBeenCalledTimes(2);
+      expect(mockSend.mock.calls[0][0]).toBeInstanceOf(UpdateScheduleCommand);
+      expect(mockSend.mock.calls[1][0]).toBeInstanceOf(CreateScheduleCommand);
+    });
+
+    test('lets a non-missing scheduler failure escape the invocation', async () => {
+      mockSend.mockRejectedValue(new Error('AccessDenied'));
+
+      // Returning a 500 *object* here would be a successful invocation as far
+      // as EventBridge is concerned, so the reschedule would never be retried
+      // and the issue would be left on the hand-off window - the one that can
+      // fire mid-send. The throw is what reaches the async retry policy.
+      await expect(handler(completedEvent())).rejects.toThrow('AccessDenied');
+      expect(mockSend).toHaveBeenCalledTimes(1);
+    });
+
+    test('returns 400 without baseAt, leaving the hand-off window in place', async () => {
+      const result = await handler(completedEvent({ baseAt: undefined }));
+
+      expect(result.statusCode).toBe(400);
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+  });
+  describe('Issue Fanout Planned', () => {
+    const plannedEvent = (detail) => ({
+      'detail-type': 'Issue Fanout Planned',
+      detail: {
+        tenantId: 'tenant-123',
+        issueNumber: 42,
+        baseAt: '2026-09-21T14:00:00.000Z',
+        catchAllAt: '2026-09-22T06:30:00.000Z',
+        ...detail
+      }
+    });
+
+    test('books the window 24 hours after the catch-all sweep', async () => {
+      mockSend.mockResolvedValue({});
+
+      const result = await handler(plannedEvent());
+
+      expect(result.success).toBe(true);
+      const command = mockSend.mock.calls[0][0];
+      expect(command).toBeInstanceOf(UpdateScheduleCommand);
+      expect(command.input.Name).toBe('aggregate-tenant-123-42-24h');
+      // catchAllAt + 24h, not publish + 24h: the first window guaranteed to be
+      // past the whole send.
+      expect(command.input.ScheduleExpression).toBe('at(2026-09-23T06:30:00)');
+    });
+
+    test('is enough on its own when the completion announcement is lost', async () => {
+      // The completion event is best-effort and swallows publish failures, so
+      // this booking has to stand by itself. It already sits past the catch-all,
+      // which is the point at which every group has gone out.
+      mockSend.mockResolvedValue({});
+
+      await handler(plannedEvent());
+
+      const scheduledFor = new Date(
+        `${mockSend.mock.calls[0][0].input.ScheduleExpression.slice(3, -1)}Z`
+      ).getTime();
+      expect(scheduledFor).toBeGreaterThan(new Date('2026-09-22T06:30:00.000Z').getTime());
+    });
+
+    test('lets a scheduler failure escape so the invocation is retried', async () => {
+      mockSend.mockRejectedValue(new Error('Throttled'));
+
+      await expect(handler(plannedEvent())).rejects.toThrow('Throttled');
+    });
+
+    test('returns 400 without catchAllAt rather than booking a wrong window', async () => {
+      const result = await handler(plannedEvent({ catchAllAt: undefined }));
+
+      expect(result.statusCode).toBe(400);
+      expect(mockSend).not.toHaveBeenCalled();
     });
   });
 });

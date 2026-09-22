@@ -3,6 +3,7 @@ import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge
 import { unmarshall, marshall } from '@aws-sdk/util-dynamodb';
 import { decrypt, getTenant } from './utils/helpers.mjs';
 import { classifyScannerClicks } from './utils/scanner-clicks.mjs';
+import { assertEventsPublished } from './utils/eventbridge.mjs';
 
 const ddb = new DynamoDBClient();
 const eventBridge = new EventBridgeClient();
@@ -18,8 +19,57 @@ export const handler = async (event) => {
     };
   }
 
+  // A local-send issue is still delivering long after it is handed off: the
+  // groups fan out across the better part of a day and the catch-all sweeps 30
+  // minutes behind the last of them. Aggregating before that finishes counts
+  // not-yet-sent subscribers in `deliveries` with no chance to have opened,
+  // which deflates open rate - and the harder the issue was personalised, the
+  // worse it reads.
+  //
+  // Deferring has to re-book the run itself, not rely on being retried.
+  //
+  // Scheduler's RetryPolicy governs *delivery* to the target, and an async
+  // Lambda invoke is delivered the moment Lambda accepts it - a later
+  // exception is Lambda's async retry (two attempts, about a minute apart),
+  // which a fan-out lasting hours outlives easily. Simply returning is no
+  // better: it consumes the run, leaving the fan-out and completion
+  // announcements as the only things that could book another, and both swallow
+  // PutEvents failures by design.
+  //
+  // So this re-announces the plan's own `catchAllAt`, which
+  // schedule-aggregation already knows how to turn into a window. It is the
+  // same event the fan-out sends and the handling is idempotent, so a
+  // redelivery costs one schedule update. Sits outside the try below because
+  // that catch turns a throw into a `{statusCode: 500}` return value, which to
+  // an asynchronous invoker is a success.
+  const pk = `${tenantId}#${issueNumber}`;
+  const progress = await readSendProgress(pk);
+
+  if (progress && !progress.completedAt && !isSendOverdue(progress)) {
+    await rebookForInFlightSend(pk, tenantId, issueNumber, progress);
+    return {
+      success: false,
+      message: 'Send still in flight - aggregation re-booked for after the catch-all',
+      issueNumber
+    };
+  }
+
+  if (progress && !progress.completedAt) {
+    // Past its own catch-all and still not complete: this send is not going to
+    // finish. Deferring again would re-book for `catchAllAt + 24h`, which is
+    // now in the past, and `ensureFutureScheduleTime` floors a past time at a
+    // minute from now - so the run would come straight back, defer again, and
+    // spin every minute for as long as the record stayed incomplete.
+    //
+    // Aggregating what did send is the better failure: the numbers undercount
+    // a delivery that genuinely did not happen, which is true, and the issue
+    // gets analytics instead of an endless loop and none.
+    console.error(`Send for ${pk} is past its catch-all and still incomplete - aggregating what delivered`, {
+      catchAllAt: progress.catchAllAt
+    });
+  }
+
   try {
-    const pk = `${tenantId}#${issueNumber}`;
     const sk = 'stats';
 
     // ALL_NEW so the realtime counters come back on the claim itself — the
@@ -62,7 +112,7 @@ export const handler = async (event) => {
       openDecay: calculateOpenDecay(events.opens, publishedAt),
       geoDistribution: calculateGeoDistribution(events.clicks, events.opens),
       deviceBreakdown: calculateDeviceBreakdown(events.opens),
-      timingMetrics: calculateTimingMetrics(events.opens, events.clicks),
+      timingMetrics: calculateTimingMetrics(events.opens, events.clicks, publishedAt),
       engagementType: await calculateEngagementType(events.clicks, ddb, tenantId),
       trafficSource: calculateTrafficSource(events.clicks),
       // Reported alongside the raw counters, never subtracted from them. The
@@ -82,7 +132,12 @@ export const handler = async (event) => {
         ':analytics': analytics,
         ':phase': 'consolidated',
         ':now': new Date().toISOString(),
-        ':version': '1.0'
+        // 1.1: open/click timing is anchored to each recipient's own send
+        // instant rather than the issue-wide publish, and aggregation waits for
+        // a local send to finish fanning out. Records below this version can
+        // hold a deflated open rate for any locally-sent issue, so anything
+        // comparing issues across the boundary has to account for it.
+        ':version': '1.1'
       })
     }));
 
@@ -104,7 +159,6 @@ export const handler = async (event) => {
     console.error('Aggregation error:', err);
 
     try {
-      const pk = `${tenantId}#${issueNumber}`;
       const sk = 'stats';
       await ddb.send(new UpdateItemCommand({
         TableName: process.env.TABLE_NAME,
@@ -237,7 +291,7 @@ export async function queryEventsByType(ddb, tenantId, issueNumber, eventType) {
     const result = await ddb.send(new QueryCommand({
       TableName: process.env.TABLE_NAME,
       KeyConditionExpression: 'pk = :pk AND begins_with(sk, :eventType)',
-      ProjectionExpression: 'sk, eventType, #ts, subscriberEmailHash, linkUrl, linkPosition, trafficSource, device, country, timeToClick, timeToOpen, bounceType, bounceReason, complaintType',
+      ProjectionExpression: 'sk, eventType, #ts, subscriberEmailHash, linkUrl, linkPosition, trafficSource, device, country, timeToClick, timeToOpen, timingAnchor, bounceType, bounceReason, complaintType',
       ExpressionAttributeNames: {
         '#ts': 'timestamp'
       },
@@ -321,16 +375,165 @@ export function calculateLinkPerformance(clicks) {
   return links;
 }
 
+/**
+ * How long after the catch-all sweep an issue's results are taken.
+ *
+ * Mirrors the window schedule-aggregation books for `Issue Fanout Planned`
+ * (`catchAllAt + 24h`). The two have to agree: this module decides when to stop
+ * waiting, and that module decides when the waiting ends.
+ */
+const AGGREGATION_DELAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Whether there is no longer any point deferring this send.
+ *
+ * The cutoff is the issue's actual aggregation deadline, not the sweep itself.
+ * A run that fires between `catchAllAt` and the deadline - a stale hand-off
+ * window, say - is early, not late: consolidating it would hand the final
+ * timezone groups only the hours that had elapsed so far and reintroduce
+ * exactly the skew this is meant to remove. Only once the deadline has passed
+ * is a still-incomplete send stalled rather than slow.
+ *
+ * This is also what terminates the re-booking cycle. A deferral books
+ * `catchAllAt + 24h`; past that point this returns true, so the next run
+ * aggregates instead of asking for a time in the past and being floored to a
+ * minute from now, over and over.
+ *
+ * A record with no `catchAllAt` counts as overdue: there is nothing to wait
+ * for, and nothing to re-book against either.
+ *
+ * @param {{catchAllAt?: string}} progress
+ * @returns {boolean}
+ */
+const isSendOverdue = (progress) => {
+  const catchAllAt = new Date(progress?.catchAllAt).getTime();
+  if (!Number.isFinite(catchAllAt)) {
+    return true;
+  }
+  return Date.now() > catchAllAt + AGGREGATION_DELAY_MS;
+};
+
+/**
+ * The issue's local-send progress record, or null when there is none.
+ *
+ * Only local-send issues have one, so a genuine absence means there is nothing
+ * to wait for.
+ *
+ * A read *failure* is not an absence and must not be reported as one. Treating
+ * it as "not a local send" lets a stale `publishedAt + 24h` window consolidate
+ * a fan-out that is still running, and consolidation is terminal: the claim
+ * refuses to recompute a record already marked `consolidated`, so the correctly
+ * scheduled run that arrives later can do nothing about it. The undercount
+ * would be locked in permanently. Failing the invocation costs a retry; the
+ * alternative costs the issue's numbers for good.
+ *
+ * @param {string} pk - `<tenantId>#<issueNumber>`
+ * @returns {Promise<Object|null>}
+ * @throws when delivery state cannot be read
+ */
+const readSendProgress = async (pk) => {
+  try {
+    const result = await ddb.send(new GetItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({ pk, sk: 'sendProgress' }),
+      ProjectionExpression: 'completedAt, catchAllAt, baseAt'
+    }));
+    return result.Item ? unmarshall(result.Item) : null;
+  } catch (err) {
+    console.error('Could not read send progress - refusing to consolidate blind', { pk, error: err.message });
+    throw err;
+  }
+};
+
+/**
+ * Re-book this issue's aggregation for after its catch-all sweep.
+ *
+ * Emits the same event the fan-out emits, because schedule-aggregation already
+ * turns it into a window at `catchAllAt + 24h` and the handling is idempotent.
+ *
+ * Throws when it cannot be sent. There is nothing else left at that point, and
+ * a failed invocation at least gets Lambda's async retries and lands in the
+ * failure destination rather than disappearing silently.
+ *
+ * @param {string} pk - `<tenantId>#<issueNumber>`
+ * @param {string} tenantId
+ * @param {string|number} issueNumber
+ * @param {{catchAllAt?: string, baseAt?: string}} progress
+ */
+const rebookForInFlightSend = async (pk, tenantId, issueNumber, progress) => {
+  const { catchAllAt, baseAt } = progress;
+
+  if (!catchAllAt || !baseAt) {
+    // Nothing to re-book against. Fail loudly rather than return a success
+    // that quietly drops the issue's analytics.
+    throw new Error(`Send in flight for ${pk} but its progress record has no catchAllAt/baseAt to re-book against`);
+  }
+
+  console.log(`Send still in flight for ${pk} - re-booking aggregation for after ${catchAllAt}`);
+
+  // PutEvents resolves at the call level even when it rejects the entry, so
+  // the per-entry result is the only thing that says the re-book was accepted.
+  const result = await eventBridge.send(new PutEventsCommand({
+    Entries: [{
+      Source: 'newsletter-service',
+      DetailType: 'Issue Fanout Planned',
+      Detail: JSON.stringify({ tenantId, issueNumber, baseAt, catchAllAt })
+    }]
+  }));
+  assertEventsPublished(result, 'Aggregation re-book event');
+};
+
+/**
+ * Seconds between a recorded event and the send of the copy it belongs to.
+ *
+ * Two pipelines write `open#` / `click#` records and they anchor differently.
+ * The SES event handler has the message's own Date header, which is
+ * per-recipient, and labels what it stored with `timingAnchor`. The redirect
+ * click handler only knows the issue and a subscriber hash, so it can only
+ * measure from the issue-wide publish instant and says so.
+ *
+ * Only a value labelled `recipient` is trusted as-is. Everything else -
+ * publish-labelled, and every record written before the label existed - is
+ * re-derived from the publish instant, which is what those values already
+ * mean. Reading an unlabelled value as recipient-relative is what would bucket
+ * a prompt click from a late timezone group many hours late.
+ *
+ * @param {{timestamp: string, timingAnchor?: string}} event - The recorded open or click
+ * @param {number|string|null|undefined} storedSeconds - timeToOpen / timeToClick
+ * @param {number} publishTime - Issue publish instant, epoch ms
+ * @returns {number} Seconds since that recipient's send
+ */
+function secondsSinceSend(event, storedSeconds, publishTime) {
+  if (event?.timingAnchor === 'recipient'
+    // `null` has to be rejected before the numeric coercion, not after it. The
+    // builders persist an explicit null when no anchor was available at all,
+    // DynamoDB round-trips it back as null, and `Number(null)` is 0 - finite,
+    // and would file the event at the instant of its own send.
+    && storedSeconds !== null && storedSeconds !== undefined && storedSeconds !== '') {
+    const seconds = Number(storedSeconds);
+    if (Number.isFinite(seconds)) {
+      return seconds;
+    }
+  }
+  return Math.floor((new Date(event.timestamp).getTime() - publishTime) / 1000);
+}
+
+/**
+ * The same measurement in whole hours, for the decay buckets.
+ */
+function hoursSinceSend(event, storedSeconds, publishTime) {
+  return Math.floor(secondsSinceSend(event, storedSeconds, publishTime) / 3600);
+}
+
 export function calculateClickDecay(clicks, publishedAt) {
   const publishTime = new Date(publishedAt).getTime();
   const hourlyClicks = new Map();
 
   for (const click of clicks) {
-    const clickTime = new Date(click.timestamp).getTime();
-    const hoursSincePublish = Math.floor((clickTime - publishTime) / (1000 * 60 * 60));
+    const hoursSinceSent = hoursSinceSend(click, click.timeToClick, publishTime);
 
-    if (hoursSincePublish >= 0 && hoursSincePublish < 168) {
-      hourlyClicks.set(hoursSincePublish, (hourlyClicks.get(hoursSincePublish) || 0) + 1);
+    if (hoursSinceSent >= 0 && hoursSinceSent < 168) {
+      hourlyClicks.set(hoursSinceSent, (hourlyClicks.get(hoursSinceSent) || 0) + 1);
     }
   }
 
@@ -353,11 +556,10 @@ export function calculateOpenDecay(opens, publishedAt) {
   const hourlyOpens = new Map();
 
   for (const open of opens) {
-    const openTime = new Date(open.timestamp).getTime();
-    const hoursSincePublish = Math.floor((openTime - publishTime) / (1000 * 60 * 60));
+    const hoursSinceSent = hoursSinceSend(open, open.timeToOpen, publishTime);
 
-    if (hoursSincePublish >= 0 && hoursSincePublish < 168) {
-      hourlyOpens.set(hoursSincePublish, (hourlyOpens.get(hoursSincePublish) || 0) + 1);
+    if (hoursSinceSent >= 0 && hoursSinceSent < 168) {
+      hourlyOpens.set(hoursSinceSent, (hourlyOpens.get(hoursSinceSent) || 0) + 1);
     }
   }
 
@@ -439,9 +641,18 @@ export function calculateDeviceBreakdown(opens) {
   return breakdown;
 }
 
-export function calculateTimingMetrics(opens, clicks) {
-  const openTimes = opens.map(o => o.timeToOpen).filter(t => t != null).sort((a, b) => a - b);
-  const clickTimes = clicks.map(c => c.timeToClick).filter(t => t != null).sort((a, b) => a - b);
+export function calculateTimingMetrics(opens, clicks, publishedAt) {
+  // Normalised the same way the decay curves are: a median that mixes
+  // recipient-relative and publish-relative values is not a median of anything.
+  // Without a publish instant there is nothing to re-derive against, so the
+  // stored values are used as they are.
+  const publishTime = new Date(publishedAt).getTime();
+  const normalize = (event, stored) => (Number.isFinite(publishTime)
+    ? secondsSinceSend(event, stored, publishTime)
+    : stored);
+
+  const openTimes = opens.map(o => normalize(o, o.timeToOpen)).filter(t => t != null).sort((a, b) => a - b);
+  const clickTimes = clicks.map(c => normalize(c, c.timeToClick)).filter(t => t != null).sort((a, b) => a - b);
 
   return {
     medianTimeToOpen: calculateMedian(openTimes),

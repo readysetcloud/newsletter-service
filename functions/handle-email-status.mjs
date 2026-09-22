@@ -325,7 +325,7 @@ export const handler = async (event) => {
         break;
       }
       case 'click':
-        eventRecord = await buildClickEventRecord(issueId, recipient, detail.click, recordId);
+        eventRecord = await buildClickEventRecord(issueId, recipient, detail.click, detail.mail.commonHeaders, recordId);
         stat = 'clicks';
         break;
       default:
@@ -487,6 +487,60 @@ const runEnrichment = async (detail, { issueId, tenantId, issueNumber, recipient
   await recordClickActivity(tenantId, recipient, issueNumeric, detail.click);
 };
 
+/**
+ * When this recipient's copy of the issue was actually sent.
+ *
+ * SES reports the message's own `Date` header, which is per-recipient: a
+ * local-send issue fans out into timezone groups that go out hours apart, so
+ * the issue-wide `publishedAt` is the wrong zero for everyone outside the
+ * first group and makes a prompt reader look like a slow one.
+ *
+ * The header is the truer anchor for every issue, not just local-send ones, so
+ * it is preferred unconditionally rather than behind a mode check - one code
+ * path, correct for both, and no read at all in the common case.
+ *
+ * `publishedAt` remains the fallback for events that arrive without the header.
+ *
+ * @param {string} issueId - `<tenantId>#<issueNumber>`
+ * @param {{date?: string}|undefined} commonHeaders - SES mail commonHeaders
+ * Returns which source won alongside the instant. Aggregation cannot tell a
+ * recipient-relative timing from a publish-relative one by looking at the
+ * number, and it has to: the redirect click pipeline writes into the same
+ * `click#` space and can only ever anchor to the issue-wide instant. An
+ * unlabelled value would be read as recipient-relative and bucket a prompt
+ * click from a late timezone group many hours late.
+ *
+ * @param {string} metric - Names the metric in the log line when the fallback read fails
+ * @returns {Promise<{sentAt: Date|null, anchor: 'recipient'|'publish'|null}>}
+ */
+const resolveRecipientSentAt = async (issueId, commonHeaders, metric) => {
+  const headerDate = commonHeaders?.date ? new Date(commonHeaders.date) : null;
+  if (headerDate && !Number.isNaN(headerDate.getTime())) {
+    return { sentAt: headerDate, anchor: 'recipient' };
+  }
+
+  try {
+    const statsResult = await ddb.send(new GetItemCommand({
+      TableName: process.env.TABLE_NAME,
+      Key: marshall({ pk: issueId, sk: 'stats' }),
+      ProjectionExpression: 'publishedAt'
+    }));
+    if (statsResult.Item) {
+      const { publishedAt } = unmarshall(statsResult.Item);
+      if (publishedAt) {
+        const parsed = new Date(publishedAt);
+        return Number.isNaN(parsed.getTime())
+          ? { sentAt: null, anchor: null }
+          : { sentAt: parsed, anchor: 'publish' };
+      }
+    }
+  } catch (err) {
+    console.error(`Failed to fetch publishedAt for ${metric}`, { issueId, error: err.message });
+  }
+
+  return { sentAt: null, anchor: null };
+};
+
 const buildOpenEventRecord = async (issueId, subscriberEmail, openEvent, commonHeaders, recordId) => {
   const openedAt = openEvent?.timestamp ? new Date(openEvent.timestamp) : new Date();
   const timestamp = openedAt.toISOString();
@@ -501,25 +555,8 @@ const buildOpenEventRecord = async (issueId, subscriberEmail, openEvent, commonH
   const countryData = ipAddress ? await lookupCountry(ipAddress) : null;
   const country = countryData?.countryCode || 'unknown';
 
-  let publishedAt = null;
-  try {
-    const statsResult = await ddb.send(new GetItemCommand({
-      TableName: process.env.TABLE_NAME,
-      Key: marshall({ pk: issueId, sk: 'stats' }),
-      ProjectionExpression: 'publishedAt'
-    }));
-    if (statsResult.Item) {
-      const stats = unmarshall(statsResult.Item);
-      publishedAt = stats.publishedAt || null;
-    }
-  } catch (err) {
-    console.error('Failed to fetch publishedAt for timeToOpen', { issueId, error: err.message });
-  }
-
-  const sentAt = publishedAt || commonHeaders?.date || null;
-  const timeToOpen = sentAt
-    ? Math.floor((openedAt - new Date(sentAt)) / 1000)
-    : null;
+  const { sentAt, anchor } = await resolveRecipientSentAt(issueId, commonHeaders, 'timeToOpen');
+  const timeToOpen = sentAt ? Math.floor((openedAt - sentAt) / 1000) : null;
 
   const openEventRecord = {
     pk: issueId,
@@ -530,6 +567,9 @@ const buildOpenEventRecord = async (issueId, subscriberEmail, openEvent, commonH
     device,
     country,
     timeToOpen,
+    // Which instant timeToOpen is measured from. Absent on records written
+    // before this existed, which aggregation reads as 'publish'.
+    ...anchor && { timingAnchor: anchor },
     ttl: Math.floor(Date.now() / 1000) + (90 * 24 * 60 * 60)
   };
 
@@ -748,7 +788,7 @@ const getStoredLinkPosition = async (issueId, link) => {
   }
 };
 
-const buildClickEventRecord = async (issueId, subscriberEmail, clickEvent, recordId) => {
+const buildClickEventRecord = async (issueId, subscriberEmail, clickEvent, commonHeaders, recordId) => {
   const clickedAt = clickEvent?.timestamp ? new Date(clickEvent.timestamp) : new Date();
   const timestamp = clickedAt.toISOString();
 
@@ -764,24 +804,8 @@ const buildClickEventRecord = async (issueId, subscriberEmail, clickEvent, recor
   const device = detectDevice(userAgent);
   const trafficSource = 'email';
 
-  let publishedAt = null;
-  try {
-    const statsResult = await ddb.send(new GetItemCommand({
-      TableName: process.env.TABLE_NAME,
-      Key: marshall({ pk: issueId, sk: 'stats' }),
-      ProjectionExpression: 'publishedAt'
-    }));
-    if (statsResult.Item) {
-      const stats = unmarshall(statsResult.Item);
-      publishedAt = stats.publishedAt || null;
-    }
-  } catch (err) {
-    console.error('Failed to fetch publishedAt for timeToClick', { issueId, error: err.message });
-  }
-
-  const timeToClick = publishedAt
-    ? Math.floor((clickedAt - new Date(publishedAt)) / 1000)
-    : null;
+  const { sentAt, anchor } = await resolveRecipientSentAt(issueId, commonHeaders, 'timeToClick');
+  const timeToClick = sentAt ? Math.floor((clickedAt - sentAt) / 1000) : null;
 
   const linkPosition = await getStoredLinkPosition(issueId, linkUrl);
 
@@ -797,6 +821,9 @@ const buildClickEventRecord = async (issueId, subscriberEmail, clickEvent, recor
     device,
     country,
     timeToClick,
+    // See the note on the open record: distinguishes this from the redirect
+    // pipeline's publish-relative timings.
+    ...anchor && { timingAnchor: anchor },
     ttl: Math.floor(Date.now() / 1000) + (90 * 24 * 60 * 60)
   };
 

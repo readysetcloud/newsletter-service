@@ -44,13 +44,28 @@ export const handler = async (event) => {
   const pk = `${tenantId}#${issueNumber}`;
   const progress = await readSendProgress(pk);
 
-  if (progress && !progress.completedAt) {
+  if (progress && !progress.completedAt && !isSendOverdue(progress)) {
     await rebookForInFlightSend(pk, tenantId, issueNumber, progress);
     return {
       success: false,
       message: 'Send still in flight - aggregation re-booked for after the catch-all',
       issueNumber
     };
+  }
+
+  if (progress && !progress.completedAt) {
+    // Past its own catch-all and still not complete: this send is not going to
+    // finish. Deferring again would re-book for `catchAllAt + 24h`, which is
+    // now in the past, and `ensureFutureScheduleTime` floors a past time at a
+    // minute from now - so the run would come straight back, defer again, and
+    // spin every minute for as long as the record stayed incomplete.
+    //
+    // Aggregating what did send is the better failure: the numbers undercount
+    // a delivery that genuinely did not happen, which is true, and the issue
+    // gets analytics instead of an endless loop and none.
+    console.error(`Send for ${pk} is past its catch-all and still incomplete - aggregating what delivered`, {
+      catchAllAt: progress.catchAllAt
+    });
   }
 
   try {
@@ -358,6 +373,29 @@ export function calculateLinkPerformance(clicks) {
 
   return links;
 }
+
+/**
+ * Whether a send has missed its own backstop.
+ *
+ * The catch-all sweep is the last thing a fan-out does, so an issue that is
+ * still incomplete well past `catchAllAt` is stalled rather than slow. The
+ * grace period covers the sweep's own run time and clock skew.
+ *
+ * A record with no `catchAllAt` counts as overdue: there is nothing to wait
+ * for, and nothing to re-book against either.
+ *
+ * @param {{catchAllAt?: string}} progress
+ * @returns {boolean}
+ */
+const SEND_OVERDUE_GRACE_MS = 60 * 60 * 1000;
+
+const isSendOverdue = (progress) => {
+  const catchAllAt = new Date(progress?.catchAllAt).getTime();
+  if (!Number.isFinite(catchAllAt)) {
+    return true;
+  }
+  return Date.now() > catchAllAt + SEND_OVERDUE_GRACE_MS;
+};
 
 /**
  * The issue's local-send progress record, or null when there is none.

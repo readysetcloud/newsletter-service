@@ -1238,14 +1238,31 @@ describe('aggregate-issue-analytics', () => {
       EventBridgeClient.prototype.send = eventBridgeSend;
     });
 
-    const inFlightProgress = () => ({
+    // Relative to now, not a fixed date: whether a send counts as in flight or
+    // stalled is decided against the clock, so a hard-coded catchAllAt would
+    // silently flip these tests to the overdue path once that date passed.
+    const CATCH_ALL_AHEAD = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+    const CATCH_ALL_LONG_PAST = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+
+    const inFlightProgress = (catchAllAt = CATCH_ALL_AHEAD) => ({
       Item: marshall({
         pk: 'tenant123#42',
         sk: 'sendProgress',
         baseAt: '2026-09-21T14:00:00.000Z',
-        catchAllAt: '2026-09-22T06:30:00.000Z'
+        ...catchAllAt && { catchAllAt }
       })
     });
+
+    const aggregationMocks = () => {
+      mockSend
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({ Items: [] })
+        .mockResolvedValueOnce({ Items: [] })
+        .mockResolvedValueOnce({ Items: [] })
+        .mockResolvedValueOnce({ Items: [] })
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({});
+    };
 
     test('re-books itself for after the catch-all when groups are still going out', async () => {
       // A sendProgress record with no completedAt: the fan-out is mid-flight.
@@ -1269,7 +1286,7 @@ describe('aggregate-issue-analytics', () => {
       expect(JSON.parse(announced[0].Detail)).toMatchObject({
         tenantId: 'tenant123',
         issueNumber: '42',
-        catchAllAt: '2026-09-22T06:30:00.000Z'
+        catchAllAt: CATCH_ALL_AHEAD
       });
 
       // The claim never happened, so statsPhase is untouched and the re-booked
@@ -1284,12 +1301,29 @@ describe('aggregate-issue-analytics', () => {
       await expect(handler(event)).rejects.toThrow('Bus unavailable');
     });
 
-    test('throws when the progress record has nothing to re-book against', async () => {
-      mockSend.mockResolvedValueOnce({
-        Item: marshall({ pk: 'tenant123#42', sk: 'sendProgress' })
-      });
+    test('aggregates a send that is long past its catch-all instead of deferring again', async () => {
+      // Re-booking here would ask for `catchAllAt + 24h`, already in the past,
+      // which ensureFutureScheduleTime floors at a minute from now - so the run
+      // would come straight back and spin every minute for as long as the
+      // record stayed incomplete. A stalled send gets aggregated instead.
+      mockSend.mockResolvedValueOnce(inFlightProgress(CATCH_ALL_LONG_PAST));
+      aggregationMocks();
 
-      await expect(handler(event)).rejects.toThrow('no catchAllAt/baseAt');
+      const result = await handler(event);
+
+      expect(result.success).toBe(true);
+      expect(eventBridgeSend).not.toHaveBeenCalled();
+    });
+
+    test('aggregates rather than looping when the record has no catch-all at all', async () => {
+      // Nothing to wait for and nothing to re-book against.
+      mockSend.mockResolvedValueOnce(inFlightProgress(null));
+      aggregationMocks();
+
+      const result = await handler(event);
+
+      expect(result.success).toBe(true);
+      expect(eventBridgeSend).not.toHaveBeenCalled();
     });
 
     test('proceeds once the send has completed', async () => {

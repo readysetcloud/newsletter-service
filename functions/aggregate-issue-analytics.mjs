@@ -3,6 +3,7 @@ import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge
 import { unmarshall, marshall } from '@aws-sdk/util-dynamodb';
 import { decrypt, getTenant } from './utils/helpers.mjs';
 import { classifyScannerClicks } from './utils/scanner-clicks.mjs';
+import { assertEventsPublished } from './utils/eventbridge.mjs';
 
 const ddb = new DynamoDBClient();
 const eventBridge = new EventBridgeClient();
@@ -375,11 +376,28 @@ export function calculateLinkPerformance(clicks) {
 }
 
 /**
- * Whether a send has missed its own backstop.
+ * How long after the catch-all sweep an issue's results are taken.
  *
- * The catch-all sweep is the last thing a fan-out does, so an issue that is
- * still incomplete well past `catchAllAt` is stalled rather than slow. The
- * grace period covers the sweep's own run time and clock skew.
+ * Mirrors the window schedule-aggregation books for `Issue Fanout Planned`
+ * (`catchAllAt + 24h`). The two have to agree: this module decides when to stop
+ * waiting, and that module decides when the waiting ends.
+ */
+const AGGREGATION_DELAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Whether there is no longer any point deferring this send.
+ *
+ * The cutoff is the issue's actual aggregation deadline, not the sweep itself.
+ * A run that fires between `catchAllAt` and the deadline - a stale hand-off
+ * window, say - is early, not late: consolidating it would hand the final
+ * timezone groups only the hours that had elapsed so far and reintroduce
+ * exactly the skew this is meant to remove. Only once the deadline has passed
+ * is a still-incomplete send stalled rather than slow.
+ *
+ * This is also what terminates the re-booking cycle. A deferral books
+ * `catchAllAt + 24h`; past that point this returns true, so the next run
+ * aggregates instead of asking for a time in the past and being floored to a
+ * minute from now, over and over.
  *
  * A record with no `catchAllAt` counts as overdue: there is nothing to wait
  * for, and nothing to re-book against either.
@@ -387,25 +405,31 @@ export function calculateLinkPerformance(clicks) {
  * @param {{catchAllAt?: string}} progress
  * @returns {boolean}
  */
-const SEND_OVERDUE_GRACE_MS = 60 * 60 * 1000;
-
 const isSendOverdue = (progress) => {
   const catchAllAt = new Date(progress?.catchAllAt).getTime();
   if (!Number.isFinite(catchAllAt)) {
     return true;
   }
-  return Date.now() > catchAllAt + SEND_OVERDUE_GRACE_MS;
+  return Date.now() > catchAllAt + AGGREGATION_DELAY_MS;
 };
 
 /**
  * The issue's local-send progress record, or null when there is none.
  *
- * Only local-send issues have one, so its absence means there is nothing to
- * wait for. A read failure reads as absent: a missing aggregation is worse
- * than an early one, so bookkeeping is never allowed to block analytics.
+ * Only local-send issues have one, so a genuine absence means there is nothing
+ * to wait for.
+ *
+ * A read *failure* is not an absence and must not be reported as one. Treating
+ * it as "not a local send" lets a stale `publishedAt + 24h` window consolidate
+ * a fan-out that is still running, and consolidation is terminal: the claim
+ * refuses to recompute a record already marked `consolidated`, so the correctly
+ * scheduled run that arrives later can do nothing about it. The undercount
+ * would be locked in permanently. Failing the invocation costs a retry; the
+ * alternative costs the issue's numbers for good.
  *
  * @param {string} pk - `<tenantId>#<issueNumber>`
  * @returns {Promise<Object|null>}
+ * @throws when delivery state cannot be read
  */
 const readSendProgress = async (pk) => {
   try {
@@ -416,8 +440,8 @@ const readSendProgress = async (pk) => {
     }));
     return result.Item ? unmarshall(result.Item) : null;
   } catch (err) {
-    console.error('Failed to read send progress - aggregating anyway', { pk, error: err.message });
-    return null;
+    console.error('Could not read send progress - refusing to consolidate blind', { pk, error: err.message });
+    throw err;
   }
 };
 
@@ -447,13 +471,16 @@ const rebookForInFlightSend = async (pk, tenantId, issueNumber, progress) => {
 
   console.log(`Send still in flight for ${pk} - re-booking aggregation for after ${catchAllAt}`);
 
-  await eventBridge.send(new PutEventsCommand({
+  // PutEvents resolves at the call level even when it rejects the entry, so
+  // the per-entry result is the only thing that says the re-book was accepted.
+  const result = await eventBridge.send(new PutEventsCommand({
     Entries: [{
       Source: 'newsletter-service',
       DetailType: 'Issue Fanout Planned',
       Detail: JSON.stringify({ tenantId, issueNumber, baseAt, catchAllAt })
     }]
   }));
+  assertEventsPublished(result, 'Aggregation re-book event');
 };
 
 /**

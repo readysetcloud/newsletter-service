@@ -1242,7 +1242,11 @@ describe('aggregate-issue-analytics', () => {
     // stalled is decided against the clock, so a hard-coded catchAllAt would
     // silently flip these tests to the overdue path once that date passed.
     const CATCH_ALL_AHEAD = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
-    const CATCH_ALL_LONG_PAST = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+    // Past the aggregation deadline (catchAllAt + 24h), which is the point at
+    // which a still-incomplete send is stalled rather than merely slow.
+    const CATCH_ALL_LONG_PAST = new Date(Date.now() - 30 * 60 * 60 * 1000).toISOString();
+    // After the sweep but before the deadline: early, not late.
+    const CATCH_ALL_RECENTLY_PAST = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
 
     const inFlightProgress = (catchAllAt = CATCH_ALL_AHEAD) => ({
       Item: marshall({
@@ -1348,21 +1352,38 @@ describe('aggregate-issue-analytics', () => {
       expect(result.success).toBe(true);
     });
 
-    test('aggregates anyway when the progress read fails', async () => {
-      // Bookkeeping must never be able to block analytics outright.
-      mockSend
-        .mockRejectedValueOnce(new Error('AccessDenied'))
-        .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({ Items: [] })
-        .mockResolvedValueOnce({ Items: [] })
-        .mockResolvedValueOnce({ Items: [] })
-        .mockResolvedValueOnce({ Items: [] })
-        .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({});
+    test('refuses to consolidate when delivery state cannot be read', async () => {
+      // Treating a read failure as "not a local send" would let this run
+      // consolidate a fan-out that is still going. Consolidation is terminal -
+      // the claim refuses to recompute a consolidated record - so the correctly
+      // scheduled run arriving later could not repair it, and the undercount
+      // would be permanent. A failed invocation costs a retry instead.
+      mockSend.mockRejectedValueOnce(new Error('AccessDenied'));
+
+      await expect(handler(event)).rejects.toThrow('AccessDenied');
+    });
+
+    test('defers a send past its sweep but still inside the aggregation window', async () => {
+      // catchAllAt was 6 hours ago, so the deadline is still 18 hours out.
+      // Consolidating now would give the last groups only 6 hours to respond.
+      mockSend.mockResolvedValueOnce(inFlightProgress(CATCH_ALL_RECENTLY_PAST));
 
       const result = await handler(event);
 
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
+      expect(eventBridgeSend).toHaveBeenCalledTimes(1);
+    });
+
+    test('throws when EventBridge rejects the re-book entry', async () => {
+      // PutEvents resolves even when it refuses the entry, so the per-entry
+      // result is the only thing that says the re-book was accepted.
+      mockSend.mockResolvedValueOnce(inFlightProgress());
+      eventBridgeSend.mockResolvedValueOnce({
+        FailedEntryCount: 1,
+        Entries: [{ ErrorCode: 'InternalException', ErrorMessage: 'try again' }]
+      });
+
+      await expect(handler(event)).rejects.toThrow('InternalException');
     });
   });
 

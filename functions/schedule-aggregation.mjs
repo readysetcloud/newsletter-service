@@ -208,17 +208,7 @@ const buildScheduleInput = ({ scheduleName, scheduleTime, tenantId, issueNumber,
   Target: {
     Arn: process.env.AGGREGATION_FUNCTION_ARN,
     RoleArn: process.env.SCHEDULER_ROLE_ARN,
-    Input: JSON.stringify({ tenantId, issueNumber, publishedAt }),
-    // The aggregator throws rather than returning when it finds a send still
-    // in flight, so that a window which fired mid-send is retried instead of
-    // being silently consumed. That only works if the retries outlast the
-    // fan-out, and the spread between a local send's first and last timezone
-    // group can be most of a day - so this is the maximum Scheduler allows
-    // rather than a default measured in minutes.
-    RetryPolicy: {
-      MaximumEventAgeInSeconds: 86400,
-      MaximumRetryAttempts: 185
-    }
+    Input: JSON.stringify({ tenantId, issueNumber, publishedAt })
   },
   FlexibleTimeWindow: {
     Mode: 'OFF'

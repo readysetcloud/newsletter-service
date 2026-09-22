@@ -1229,23 +1229,67 @@ describe('aggregate-issue-analytics', () => {
       publishedAt: '2026-09-21T14:00:00.000Z'
     };
 
-    test('fails the invocation rather than consuming it when groups are still going out', async () => {
+    // A deferral re-books itself by announcing the plan's catchAllAt, so this
+    // group needs the event client mocked as well as DynamoDB.
+    let eventBridgeSend;
+
+    beforeEach(() => {
+      eventBridgeSend = jest.fn().mockResolvedValue({});
+      EventBridgeClient.prototype.send = eventBridgeSend;
+    });
+
+    const inFlightProgress = () => ({
+      Item: marshall({
+        pk: 'tenant123#42',
+        sk: 'sendProgress',
+        baseAt: '2026-09-21T14:00:00.000Z',
+        catchAllAt: '2026-09-22T06:30:00.000Z'
+      })
+    });
+
+    test('re-books itself for after the catch-all when groups are still going out', async () => {
       // A sendProgress record with no completedAt: the fan-out is mid-flight.
       // Aggregating here would count subscribers who have not been sent to yet
       // as deliveries that failed to open.
+      mockSend.mockResolvedValueOnce(inFlightProgress());
+
+      const result = await handler(event);
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('re-booked');
+
+      // The run has to book its own replacement. Scheduler's RetryPolicy only
+      // covers delivery to the target, and an async Lambda invoke is delivered
+      // the moment Lambda accepts it - so a throw here would get Lambda's two
+      // async retries a minute apart and then be gone, long before a fan-out
+      // that runs for hours has finished.
+      const announced = eventBridgeSend.mock.calls.map(([cmd]) => cmd.input.Entries[0]);
+      expect(announced).toHaveLength(1);
+      expect(announced[0].DetailType).toBe('Issue Fanout Planned');
+      expect(JSON.parse(announced[0].Detail)).toMatchObject({
+        tenantId: 'tenant123',
+        issueNumber: '42',
+        catchAllAt: '2026-09-22T06:30:00.000Z'
+      });
+
+      // The claim never happened, so statsPhase is untouched and the re-booked
+      // run can still take it.
+      expect(mockSend).toHaveBeenCalledTimes(1);
+    });
+
+    test('throws when it cannot re-book, rather than dropping the issue silently', async () => {
+      mockSend.mockResolvedValueOnce(inFlightProgress());
+      eventBridgeSend.mockRejectedValueOnce(new Error('Bus unavailable'));
+
+      await expect(handler(event)).rejects.toThrow('Bus unavailable');
+    });
+
+    test('throws when the progress record has nothing to re-book against', async () => {
       mockSend.mockResolvedValueOnce({
         Item: marshall({ pk: 'tenant123#42', sk: 'sendProgress' })
       });
 
-      // Returning cleanly would consume the scheduled run, leaving the fan-out
-      // and completion announcements as the only things that could book
-      // another - and both swallow PutEvents failures by design. Throwing lets
-      // the schedule's own retry policy keep trying.
-      await expect(handler(event)).rejects.toThrow('aggregation deferred');
-
-      // The claim never happened either, so statsPhase is untouched and a retry
-      // (or the run an announcement books) can still claim it.
-      expect(mockSend).toHaveBeenCalledTimes(1);
+      await expect(handler(event)).rejects.toThrow('no catchAllAt/baseAt');
     });
 
     test('proceeds once the send has completed', async () => {

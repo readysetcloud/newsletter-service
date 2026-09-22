@@ -25,27 +25,32 @@ export const handler = async (event) => {
   // which deflates open rate - and the harder the issue was personalised, the
   // worse it reads.
   //
-  // This sits outside the try below, and throws rather than returning, both
-  // deliberately.
+  // Deferring has to re-book the run itself, not rely on being retried.
   //
-  // Returning would consume the invocation successfully, and the only things
-  // that would book another run are the fan-out and completion announcements -
-  // both of which go through `publishEvent` and swallow PutEvents failures by
-  // design. Lose both and the issue would never be aggregated at all, with
-  // nothing anywhere recording that it had been skipped. The outer catch would
-  // do the same thing by a different route: it turns a throw into a
-  // `{statusCode: 500}` return value, which to an asynchronous invoker is a
-  // success.
+  // Scheduler's RetryPolicy governs *delivery* to the target, and an async
+  // Lambda invoke is delivered the moment Lambda accepts it - a later
+  // exception is Lambda's async retry (two attempts, about a minute apart),
+  // which a fan-out lasting hours outlives easily. Simply returning is no
+  // better: it consumes the run, leaving the fan-out and completion
+  // announcements as the only things that could book another, and both swallow
+  // PutEvents failures by design.
   //
-  // Throwing past it fails the invocation, so the schedule's own retry policy
-  // (set in schedule-aggregation, with an event age long enough to outlast a
-  // fan-out) keeps trying on its own. The announcements become the fast path
-  // rather than the only path.
+  // So this re-announces the plan's own `catchAllAt`, which
+  // schedule-aggregation already knows how to turn into a window. It is the
+  // same event the fan-out sends and the handling is idempotent, so a
+  // redelivery costs one schedule update. Sits outside the try below because
+  // that catch turns a throw into a `{statusCode: 500}` return value, which to
+  // an asynchronous invoker is a success.
   const pk = `${tenantId}#${issueNumber}`;
+  const progress = await readSendProgress(pk);
 
-  if (await isSendInFlight(pk)) {
-    console.log(`Send still in flight for ${pk} - deferring aggregation, will retry`);
-    throw new Error(`Send still in flight for ${pk} - aggregation deferred`);
+  if (progress && !progress.completedAt) {
+    await rebookForInFlightSend(pk, tenantId, issueNumber, progress);
+    return {
+      success: false,
+      message: 'Send still in flight - aggregation re-booked for after the catch-all',
+      issueNumber
+    };
   }
 
   try {
@@ -355,27 +360,62 @@ export function calculateLinkPerformance(clicks) {
 }
 
 /**
- * Whether the issue's local-send fan-out is still running.
+ * The issue's local-send progress record, or null when there is none.
  *
- * Only local-send issues have a `sendProgress` record, so its absence means
- * there is nothing to wait for. A read failure is never allowed to block
- * aggregation: a missing aggregation is worse than an early one.
+ * Only local-send issues have one, so its absence means there is nothing to
+ * wait for. A read failure reads as absent: a missing aggregation is worse
+ * than an early one, so bookkeeping is never allowed to block analytics.
  *
  * @param {string} pk - `<tenantId>#<issueNumber>`
- * @returns {Promise<boolean>}
+ * @returns {Promise<Object|null>}
  */
-const isSendInFlight = async (pk) => {
+const readSendProgress = async (pk) => {
   try {
     const result = await ddb.send(new GetItemCommand({
       TableName: process.env.TABLE_NAME,
       Key: marshall({ pk, sk: 'sendProgress' }),
-      ProjectionExpression: 'completedAt'
+      ProjectionExpression: 'completedAt, catchAllAt, baseAt'
     }));
-    return Boolean(result.Item) && !unmarshall(result.Item).completedAt;
+    return result.Item ? unmarshall(result.Item) : null;
   } catch (err) {
     console.error('Failed to read send progress - aggregating anyway', { pk, error: err.message });
-    return false;
+    return null;
   }
+};
+
+/**
+ * Re-book this issue's aggregation for after its catch-all sweep.
+ *
+ * Emits the same event the fan-out emits, because schedule-aggregation already
+ * turns it into a window at `catchAllAt + 24h` and the handling is idempotent.
+ *
+ * Throws when it cannot be sent. There is nothing else left at that point, and
+ * a failed invocation at least gets Lambda's async retries and lands in the
+ * failure destination rather than disappearing silently.
+ *
+ * @param {string} pk - `<tenantId>#<issueNumber>`
+ * @param {string} tenantId
+ * @param {string|number} issueNumber
+ * @param {{catchAllAt?: string, baseAt?: string}} progress
+ */
+const rebookForInFlightSend = async (pk, tenantId, issueNumber, progress) => {
+  const { catchAllAt, baseAt } = progress;
+
+  if (!catchAllAt || !baseAt) {
+    // Nothing to re-book against. Fail loudly rather than return a success
+    // that quietly drops the issue's analytics.
+    throw new Error(`Send in flight for ${pk} but its progress record has no catchAllAt/baseAt to re-book against`);
+  }
+
+  console.log(`Send still in flight for ${pk} - re-booking aggregation for after ${catchAllAt}`);
+
+  await eventBridge.send(new PutEventsCommand({
+    Entries: [{
+      Source: 'newsletter-service',
+      DetailType: 'Issue Fanout Planned',
+      Detail: JSON.stringify({ tenantId, issueNumber, baseAt, catchAllAt })
+    }]
+  }));
 };
 
 /**

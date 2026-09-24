@@ -190,7 +190,7 @@ describe('schedule-aggregation', () => {
         tenantId: 'tenant-123',
         issueNumber: 42,
         recipients: 1450,
-        baseAt: '2099-01-01T14:00:00.000Z',
+        baseAt: '2026-09-21T14:00:00.000Z',
         ...detail
       }
     });
@@ -225,7 +225,7 @@ describe('schedule-aggregation', () => {
       expect(input).toEqual({
         tenantId: 'tenant-123',
         issueNumber: 42,
-        publishedAt: '2099-01-01T14:00:00.000Z'
+        publishedAt: '2026-09-21T14:00:00.000Z'
       });
     });
 

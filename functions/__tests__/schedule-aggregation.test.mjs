@@ -190,7 +190,7 @@ describe('schedule-aggregation', () => {
         tenantId: 'tenant-123',
         issueNumber: 42,
         recipients: 1450,
-        baseAt: '2026-09-21T14:00:00.000Z',
+        baseAt: '2099-01-01T14:00:00.000Z',
         ...detail
       }
     });
@@ -225,7 +225,7 @@ describe('schedule-aggregation', () => {
       expect(input).toEqual({
         tenantId: 'tenant-123',
         issueNumber: 42,
-        publishedAt: '2026-09-21T14:00:00.000Z'
+        publishedAt: '2099-01-01T14:00:00.000Z'
       });
     });
 
@@ -268,8 +268,8 @@ describe('schedule-aggregation', () => {
       detail: {
         tenantId: 'tenant-123',
         issueNumber: 42,
-        baseAt: '2026-09-21T14:00:00.000Z',
-        catchAllAt: '2026-09-22T06:30:00.000Z',
+        baseAt: '2099-01-01T14:00:00.000Z',
+        catchAllAt: '2099-01-02T06:30:00.000Z',
         ...detail
       }
     });
@@ -285,7 +285,7 @@ describe('schedule-aggregation', () => {
       expect(command.input.Name).toBe('aggregate-tenant-123-42-24h');
       // catchAllAt + 24h, not publish + 24h: the first window guaranteed to be
       // past the whole send.
-      expect(command.input.ScheduleExpression).toBe('at(2026-09-23T06:30:00)');
+      expect(command.input.ScheduleExpression).toBe('at(2099-01-03T06:30:00)');
     });
 
     test('is enough on its own when the completion announcement is lost', async () => {
@@ -299,7 +299,7 @@ describe('schedule-aggregation', () => {
       const scheduledFor = new Date(
         `${mockSend.mock.calls[0][0].input.ScheduleExpression.slice(3, -1)}Z`
       ).getTime();
-      expect(scheduledFor).toBeGreaterThan(new Date('2026-09-22T06:30:00.000Z').getTime());
+      expect(scheduledFor).toBeGreaterThan(new Date('2099-01-02T06:30:00.000Z').getTime());
     });
 
     test('lets a scheduler failure escape so the invocation is retried', async () => {

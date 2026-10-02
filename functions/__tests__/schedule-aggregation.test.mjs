@@ -263,21 +263,26 @@ describe('schedule-aggregation', () => {
     });
   });
   describe('Issue Fanout Planned', () => {
-    const plannedEvent = (detail) => ({
-      'detail-type': 'Issue Fanout Planned',
-      detail: {
-        tenantId: 'tenant-123',
-        issueNumber: 42,
-        baseAt: '2026-09-21T14:00:00.000Z',
-        catchAllAt: '2026-09-22T06:30:00.000Z',
-        ...detail
-      }
-    });
+    const plannedEvent = (detail) => {
+      const baseAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      const catchAllAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+      return {
+        'detail-type': 'Issue Fanout Planned',
+        detail: {
+          tenantId: 'tenant-123',
+          issueNumber: 42,
+          baseAt,
+          catchAllAt,
+          ...detail
+        }
+      };
+    };
 
     test('books the window 24 hours after the catch-all sweep', async () => {
       mockSend.mockResolvedValue({});
+      const event = plannedEvent();
 
-      const result = await handler(plannedEvent());
+      const result = await handler(event);
 
       expect(result.success).toBe(true);
       const command = mockSend.mock.calls[0][0];
@@ -285,7 +290,9 @@ describe('schedule-aggregation', () => {
       expect(command.input.Name).toBe('aggregate-tenant-123-42-24h');
       // catchAllAt + 24h, not publish + 24h: the first window guaranteed to be
       // past the whole send.
-      expect(command.input.ScheduleExpression).toBe('at(2026-09-23T06:30:00)');
+      expect(command.input.ScheduleExpression).toBe(
+        `at(${calculateScheduleTime(event.detail.catchAllAt, '24h')})`
+      );
     });
 
     test('is enough on its own when the completion announcement is lost', async () => {
@@ -293,13 +300,14 @@ describe('schedule-aggregation', () => {
       // this booking has to stand by itself. It already sits past the catch-all,
       // which is the point at which every group has gone out.
       mockSend.mockResolvedValue({});
+      const event = plannedEvent();
 
-      await handler(plannedEvent());
+      await handler(event);
 
       const scheduledFor = new Date(
         `${mockSend.mock.calls[0][0].input.ScheduleExpression.slice(3, -1)}Z`
       ).getTime();
-      expect(scheduledFor).toBeGreaterThan(new Date('2026-09-22T06:30:00.000Z').getTime());
+      expect(scheduledFor).toBeGreaterThan(new Date(event.detail.catchAllAt).getTime());
     });
 
     test('lets a scheduler failure escape so the invocation is retried', async () => {

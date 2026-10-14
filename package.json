@@ -32,7 +32,7 @@
     "stripe": "^23.0.0",
     "ulid": "^3.0.2",
     "zlib": "^1.0.5",
-    "zod": "^4.6.5"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1149.0",

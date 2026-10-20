@@ -10,6 +10,7 @@ import { assertEventsPublished } from './utils/eventbridge.mjs';
 import { mintSubscriberToken } from './utils/subscriber-token.mjs';
 import { listSuppressedEmails, getSuppression } from './utils/suppression.mjs';
 import { listSubscribers, getSubscriberByEmail, updateSubscriberSendMetadata } from './utils/subscriber.mjs';
+import { canReceiveMarketing } from './utils/subscriber-screening.mjs';
 import { splitRecipients, selectHoldoutSample } from './utils/ab-variants.mjs';
 import {
   isValidTimeZone,
@@ -700,6 +701,7 @@ const isMarketingSend = (data) =>
  * outcome worth failing a send over.
  */
 const filterSuppressedPhase = async (tenantId, subscribers) => {
+  subscribers = subscribers.filter(canReceiveMarketing);
   // A single-recipient send (welcome mail, a test) asks about one address
   // rather than pulling the tenant's whole suppression partition to check it.
   if (subscribers.length === 1) {
@@ -887,6 +889,9 @@ const sendEmailsPhase = async (emailAddresses, emailConfig, senderEmail) => {
     }, `Send email to ${email}`);
 
     try {
+      // A bounce or complaint can arrive after the audience snapshot was
+      // loaded. Recheck at dispatch so a long-running blast honors it too.
+      if (emailConfig.marketing && await getSuppression(emailConfig.tenantId, email)) continue;
       await sendOne();
     } catch (sendError) {
       // A controlled failure does not have to behave like a hard crash. The

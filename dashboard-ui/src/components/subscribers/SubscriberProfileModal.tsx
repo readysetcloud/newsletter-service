@@ -123,6 +123,7 @@ export const SubscriberProfileModal: React.FC<SubscriberProfileModalProps> = ({
   const profile = getSortedInterestProfile(subscriber.interestScores);
   const autoSegmentTopics = profile.filter((entry) => entry.score >= AUTO_SEGMENT_THRESHOLD);
   const recentActivity = detail?.recentActivity ?? [];
+  const watchStatus = detail?.watchStatus ?? subscriber.watchStatus;
   const botReasons = describeBotFlags(subscriber.botFlags);
   const strongBotSignal = hasStrongBotSignal(subscriber.botFlags);
 
@@ -135,6 +136,14 @@ export const SubscriberProfileModal: React.FC<SubscriberProfileModalProps> = ({
         <ModalDescription>{subscriber.email}</ModalDescription>
       </ModalHeader>
       <ModalContent className="space-y-6">
+        {watchStatus?.status === 'watch' && (
+          <section className="rounded-lg border border-amber-500/30 p-3" aria-label="Watch status">
+            <h3 className="font-medium text-amber-600">Watch</h3>
+            <p className="text-sm">{watchStatus.reason}</p>
+            <p className="text-sm text-muted-foreground">Monitoring only. Still eligible for newsletter mail.</p>
+            <p className="text-xs text-muted-foreground">Marked {new Date(watchStatus.markedAt).toLocaleDateString()}</p>
+          </section>
+        )}
         {/* Why this subscriber is flagged — only present when something fired.
             This is what the "Suspected" chip on the list opens to. */}
         {botReasons.length > 0 && (

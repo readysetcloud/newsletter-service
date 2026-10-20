@@ -939,6 +939,10 @@ Resources:
         ReputationMetricsEnabled: true
       SendingOptions:
         SendingEnabled: true
+      SuppressionOptions:
+        SuppressedReasons:
+          - BOUNCE
+          - COMPLAINT
 
   ConfigurationSetDestination:
     Type: AWS::SES::ConfigurationSetEventDestination
@@ -1168,6 +1172,8 @@ Resources:
       Handler: subscribers/send-welcome-email.handler
       Policies:
         - AWSLambdaBasicExecutionRole
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt EmailPipelineDLQ.QueueName
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
@@ -1194,14 +1200,75 @@ Resources:
             - !Sub https://api.newsletter.${DomainName}
             - !Sub "https://${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com/public"
       Events:
-        SubscriberAddedEvent:
-          Type: EventBridgeRule
+        ScreenedSubscriberStream:
+          Type: DynamoDB
           Properties:
-            Pattern:
-              source:
-                - newsletter-service
-              detail-type:
-                - Subscriber Added
+            Stream: !GetAtt SubscribersTable.StreamArn
+            StartingPosition: LATEST
+            BatchSize: 1
+            MaximumRetryAttempts: 10
+            DestinationConfig:
+              OnFailure:
+                Type: SQS
+                Destination: !GetAtt EmailPipelineDLQ.Arn
+            FilterCriteria:
+              Filters:
+                - Pattern: '{"eventName":["MODIFY"],"dynamodb":{"OldImage":{"screening":{"M":{"action":{"S":["pending"]}}}},"NewImage":{"screening":{"M":{"action":{"S":["allow","watch"]}}}}}}'
+
+  ScreenSubscriberFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - subscribers/screen-subscriber.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: subscribers/screen-subscriber.handler
+      Timeout: 60
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt EmailPipelineDLQ.QueueName
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt SubscribersTable.Arn
+            - Effect: Allow
+              Action: ses:GetSuppressedDestination
+              Resource: '*'
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/amazon.nova-micro-v1:0
+                - !Sub arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/us.amazon.nova-micro-v1:0
+      Environment:
+        Variables:
+          SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
+          SCREENING_MODEL_ID: us.amazon.nova-micro-v1:0
+      Events:
+        NewSubscriberStream:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt SubscribersTable.StreamArn
+            StartingPosition: LATEST
+            BatchSize: 1
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+            BisectBatchOnFunctionError: true
+            MaximumRetryAttempts: 10
+            DestinationConfig:
+              OnFailure:
+                Type: SQS
+                Destination: !GetAtt EmailPipelineDLQ.Arn
+            FilterCriteria:
+              Filters:
+                - Pattern: '{"eventName":["INSERT"],"dynamodb":{"NewImage":{"screening":{"M":{"action":{"S":["pending"]}}}}}}'
 
   # Turns the things that happen in the background into something a person can
   # see when they next open the dashboard. One consumer for every source, so
@@ -1850,6 +1917,53 @@ Resources:
             DeadLetterConfig:
               Arn: !GetAtt EmailPipelineDLQ.Arn
 
+  HandleDeliveryHealthFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        <<: *esbuild-properties
+        EntryPoints:
+          - subscribers/handle-delivery-health.mjs
+    Properties:
+      Runtime: nodejs24.x
+      CodeUri: functions
+      Handler: subscribers/handle-delivery-health.handler
+      Timeout: 60
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt EmailPipelineDLQ.QueueName
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt NewsletterTable.Arn
+            - Effect: Allow
+              Action: dynamodb:DeleteItem
+              Resource: !GetAtt SubscribersTable.Arn
+      EventInvokeConfig:
+        MaximumRetryAttempts: 2
+        DestinationConfig:
+          OnFailure:
+            Type: SQS
+            Destination: !GetAtt EmailPipelineDLQ.Arn
+      Events:
+        DeliveryHealthEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - aws.ses
+              detail-type:
+                - Email Bounced
+                - Email Delivered
+            DeadLetterConfig:
+              Arn: !GetAtt EmailPipelineDLQ.Arn
+
   CleanBouncedSubscribersFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -1862,11 +1976,16 @@ Resources:
       Runtime: nodejs24.x
       CodeUri: functions
       Handler: subscribers/clean-bounced-subscribers.handler
-      Timeout: 60
+      Timeout: 300
       Policies:
         - AWSLambdaBasicExecutionRole
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt EmailPipelineDLQ.QueueName
         - Version: 2012-10-17
           Statement:
+            - Effect: Allow
+              Action: ses:ListSuppressedDestinations
+              Resource: '*'
             - Effect: Allow
               Action:
                 - dynamodb:GetItem
@@ -1891,6 +2010,12 @@ Resources:
                 # a signup or unsubscribe landing mid-count is never erased.
                 - dynamodb:Query
               Resource: !GetAtt SubscribersTable.Arn
+      EventInvokeConfig:
+        MaximumRetryAttempts: 2
+        DestinationConfig:
+          OnFailure:
+            Type: SQS
+            Destination: !GetAtt EmailPipelineDLQ.Arn
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
@@ -1904,6 +2029,8 @@ Resources:
                 - newsletter-service
               detail-type:
                 - Clean Bounced Subscribers
+            DeadLetterConfig:
+              Arn: !GetAtt EmailPipelineDLQ.Arn
 
   UnsubscribeFunction:
     Type: AWS::Serverless::Function
@@ -4285,6 +4412,60 @@ Resources:
       OKActions:
         - !Ref EventBridgeCriticalAlertsTopic
       TreatMissingData: notBreaching
+
+  SesBounceReputationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "SES account bounce rate at least 2 percent; investigate acquisition sources and suppressions before the next issue"
+      Namespace: AWS/SES
+      MetricName: Reputation.BounceRate
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0.02
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: ignore
+      AlarmActions:
+        - !Ref EventBridgeCriticalAlertsTopic
+      OKActions:
+        - !Ref EventBridgeCriticalAlertsTopic
+
+  SesComplaintReputationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "SES account complaint rate at least 0.1 percent; investigate consent and list acquisition"
+      Namespace: AWS/SES
+      MetricName: Reputation.ComplaintRate
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0.001
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: ignore
+      AlarmActions:
+        - !Ref EventBridgeCriticalAlertsTopic
+      OKActions:
+        - !Ref EventBridgeCriticalAlertsTopic
+
+  DeliveryHealthErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "SES delivery-health suppression failed; retries and email pipeline DLQ require attention"
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref HandleDeliveryHealthFunction
+      AlarmActions:
+        - !Ref EventBridgeCriticalAlertsTopic
+      OKActions:
+        - !Ref EventBridgeCriticalAlertsTopic
 
   HandleEmailStatusErrorsAlarm:
     Type: AWS::CloudWatch::Alarm

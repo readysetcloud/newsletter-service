@@ -106,6 +106,22 @@ describe('SubscribersPage', () => {
     });
   });
 
+  it('shows Watch for a monitored subscriber without requiring a bot flag', async () => {
+    vi.mocked(subscriberService.getCount).mockResolvedValue({ success: true, data: { totalSubscribers: 1 } });
+    vi.mocked(subscriberService.getTrends).mockResolvedValue({ success: true, data: mockTrendsData });
+    vi.mocked(segmentService.listSegments).mockResolvedValue({ success: true, data: { segments: [] } });
+    vi.mocked(subscriberService.getList).mockResolvedValue({ success: true, data: { total: 2, subscribers: [{
+      email: 'watched@example.com', addedAt: null, lastEngagedIssue: null,
+      watchStatus: { status: 'watch', reason: 'Model-suggested review candidate', source: 'model-audit', markedAt: '2026-10-20T12:00:00Z' },
+    }, { email: 'regular@example.com', addedAt: null, lastEngagedIssue: null }] } });
+    renderPage();
+    expect((await screen.findAllByText('Watch')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Suspected')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Watch (1)' }));
+    expect(screen.queryByText('regular@example.com')).not.toBeInTheDocument();
+    expect(screen.getAllByText('watched@example.com').length).toBeGreaterThan(0);
+  });
+
   // --- Loading state ---
   it('displays skeleton placeholders while data is loading', () => {
     vi.mocked(subscriberService.getCount).mockReturnValue(new Promise(() => {}));

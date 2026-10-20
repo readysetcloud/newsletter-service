@@ -71,6 +71,7 @@ export const listSubscribers = async (tenantId, options = {}) => {
         // Open-hour histogram (activity-timeline.mjs) — drives peak-hour local sends.
         openHours: subscriber.openHours ?? null,
         openHourTotal: subscriber.openHourTotal ?? null,
+        ...(subscriber.screening && { screening: subscriber.screening }),
         // Interest data used by the send path for interest-aware issue
         // assembly (contentAssembly). Omitted when absent so consumers can
         // cheaply distinguish "no data" subscribers.
@@ -126,7 +127,7 @@ export const removeSubscriberAndDecrement = async (tenantId, email) => {
             UpdateExpression: 'SET subscribers = if_not_exists(subscribers, :zero) - :dec',
             ExpressionAttributeValues: marshall({ ':dec': 1, ':zero': 0 }),
             // Keep the count off negative numbers.
-            ConditionExpression: 'if_not_exists(subscribers, :zero) >= :dec'
+            ConditionExpression: 'attribute_exists(subscribers) AND subscribers >= :dec'
           }
         }
       ]

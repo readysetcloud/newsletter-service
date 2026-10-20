@@ -18,6 +18,15 @@ const template = Handlebars.compile(welcomeTemplate);
 
 
 export const handler = async (event) => {
+  if (event.Records) {
+    for (const record of event.Records) {
+      const before = unmarshall(record.dynamodb.OldImage || {});
+      const after = unmarshall(record.dynamodb.NewImage || {});
+      if (before.screening?.action !== 'pending' || !['allow', 'watch'].includes(after.screening?.action)) continue;
+      await handler({ detail: { tenantId: after.tenantId, data: after } });
+    }
+    return;
+  }
   try {
     if (!event?.detail) {
       console.error('Missing event detail');

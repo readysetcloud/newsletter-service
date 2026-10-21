@@ -247,16 +247,19 @@ export const SubscribersPage: React.FC = () => {
     return { flagged, of: recent.length, percent: Math.round((flagged / recent.length) * 100) };
   }, [subscriberList]);
 
+  const [watchOnly, setWatchOnly] = useState(false);
+  const watchCount = subscriberList.filter(sub => sub.watchStatus?.status === 'watch').length;
+
   const sortedSubscribers = useMemo(() => {
-    const visible = suspectedOnly
-      ? subscriberList.filter((sub) => sub.suspectedBot)
-      : subscriberList;
+    const visible = subscriberList.filter((sub) =>
+      (!suspectedOnly || sub.suspectedBot) && (!watchOnly || sub.watchStatus?.status === 'watch')
+    );
     return [...visible].sort((a, b) => {
       const aTime = a.addedAt ? new Date(a.addedAt).getTime() : 0;
       const bTime = b.addedAt ? new Date(b.addedAt).getTime() : 0;
       return sortDirection === 'asc' ? aTime - bTime : bTime - aTime;
     });
-  }, [subscriberList, sortDirection, suspectedOnly]);
+  }, [subscriberList, sortDirection, suspectedOnly, watchOnly]);
 
   const toggleSortDirection = useCallback(() => {
     setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
@@ -341,6 +344,7 @@ export const SubscribersPage: React.FC = () => {
               <div className="flex min-w-0 items-center gap-2">
                 <span className="truncate text-foreground">{sub.email}</span>
                 {renderBotBadge(sub)}
+                {sub.watchStatus?.status === 'watch' && <span className="text-amber-600" title={sub.watchStatus.reason}>Watch</span>}
               </div>
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <span
@@ -400,7 +404,12 @@ export const SubscribersPage: React.FC = () => {
       {
         key: 'bot',
         header: 'Bot',
-        render: (sub) => renderBotBadge(sub),
+        render: (sub) => (
+          <div className="flex gap-2">
+            {renderBotBadge(sub)}
+            {sub.watchStatus?.status === 'watch' && <span className="text-amber-600" title={sub.watchStatus.reason}>Watch</span>}
+          </div>
+        ),
       },
       {
         key: 'name',
@@ -671,6 +680,12 @@ export const SubscribersPage: React.FC = () => {
         <Card padding="md">
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
             <h3 className="text-lg font-semibold text-foreground">Subscribers</h3>
+            {watchCount > 0 && (
+              <button type="button" aria-pressed={watchOnly} onClick={() => setWatchOnly(value => !value)}
+                className="rounded-full border border-amber-500/40 px-2.5 py-1 text-xs font-medium text-amber-600">
+                Watch ({watchCount.toLocaleString()})
+              </button>
+            )}
             {suspectedCount > 0 && (
               <div className="flex flex-wrap items-center gap-3">
                 {/* The lifetime count answers "how much junk is on the list";

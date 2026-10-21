@@ -137,6 +137,8 @@ struct SubscriberListResponse {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SubscriberListItem {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    watch_status: Option<SubscriberWatchStatus>,
     email: String,
     added_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -198,6 +200,8 @@ struct ActivityEntry {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SubscriberDetailResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    watch_status: Option<SubscriberWatchStatus>,
     email: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     first_name: Option<String>,
@@ -876,6 +880,31 @@ fn parse_recent_activity(item: &HashMap<String, AttributeValue>) -> Vec<Activity
     result
 }
 
+/// Informational monitoring marker, independent of sending eligibility.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SubscriberWatchStatus {
+    status: String,
+    reason: String,
+    marked_at: String,
+    source: String,
+}
+
+fn parse_watch_status(item: &HashMap<String, AttributeValue>) -> Option<SubscriberWatchStatus> {
+    let marker = item.get("watchStatus")?.as_m().ok()?;
+    let field = |key: &str| marker.get(key)?.as_s().ok().cloned();
+    let status = field("status")?;
+    if status != "watch" {
+        return None;
+    }
+    Some(SubscriberWatchStatus {
+        status,
+        reason: field("reason")?,
+        marked_at: field("markedAt")?,
+        source: field("source")?,
+    })
+}
+
 /// Build the full subscriber detail response from a subscriber record.
 fn parse_subscriber_detail(item: &HashMap<String, AttributeValue>) -> SubscriberDetailResponse {
     let email = item
@@ -925,6 +954,7 @@ fn parse_subscriber_detail(item: &HashMap<String, AttributeValue>) -> Subscriber
         .unwrap_or(0);
 
     SubscriberDetailResponse {
+        watch_status: parse_watch_status(item),
         email,
         first_name,
         last_name,
@@ -1133,6 +1163,7 @@ async fn query_all_subscribers(
             };
 
             subscribers.push(SubscriberListItem {
+                watch_status: parse_watch_status(item),
                 email,
                 added_at,
                 first_name,
@@ -1498,6 +1529,40 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::collections::HashMap;
+
+    #[test]
+    fn test_watch_status_serialized_in_detail() {
+        let mut item = HashMap::new();
+        item.insert(
+            "email".into(),
+            AttributeValue::S("reader@example.com".into()),
+        );
+        item.insert(
+            "watchStatus".into(),
+            AttributeValue::M(HashMap::from([
+                ("status".into(), AttributeValue::S("watch".into())),
+                (
+                    "reason".into(),
+                    AttributeValue::S("Model-suggested review candidate".into()),
+                ),
+                (
+                    "markedAt".into(),
+                    AttributeValue::S("2026-10-20T12:00:00Z".into()),
+                ),
+                ("source".into(), AttributeValue::S("model-audit".into())),
+            ])),
+        );
+        let value = serde_json::to_value(parse_subscriber_detail(&item)).unwrap();
+        assert_eq!(value["watchStatus"]["status"], "watch");
+        assert_eq!(value["watchStatus"]["source"], "model-audit");
+        item.remove("watchStatus");
+        assert!(serde_json::to_value(parse_subscriber_detail(&item))
+            .unwrap()
+            .get("watchStatus")
+            .is_none());
+        item.insert("watchStatus".into(), AttributeValue::S("malformed".into()));
+        assert!(parse_watch_status(&item).is_none());
+    }
 
     fn make_subscriber_item(
         email: &str,

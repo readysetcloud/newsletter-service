@@ -1,3 +1,10 @@
+export interface SubscriberWatchStatus {
+  status: "watch";
+  reason: string;
+  markedAt: string;
+  source: string;
+}
+
 export interface SubscriberCountResponse {
   totalSubscribers: number;
 }
@@ -35,6 +42,7 @@ export interface InterestScoreEntry {
 }
 
 export interface SubscriberListItem {
+  watchStatus?: SubscriberWatchStatus;
   email: string;
   addedAt: string | null;
   firstName?: string;
@@ -84,6 +92,7 @@ export interface ActivityEntry {
  * fields with the rolling activity timeline and the open-hour histogram total.
  */
 export interface SubscriberDetail {
+  watchStatus?: SubscriberWatchStatus;
   email: string;
   firstName?: string;
   lastName?: string;

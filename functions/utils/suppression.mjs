@@ -30,8 +30,12 @@ const ddb = new DynamoDBClient();
  *    owner sent it; treating it as fresh consent would have let anyone erase
  *    someone else's opt-out. Reactivation is therefore blocked pending a
  *    confirmed opt-in flow (see `clearSuppression`).
- *  - Operator actions (dashboard delete, bounce cleanup) do NOT suppress:
- *    neither is a consent revocation, and the operator may re-add on purpose.
+ *  - Delivery-health events and scheduled SES reconciliation also suppress
+ *    confirmed hard bounces and persistent temporary failures. Their methods
+ *    distinguish delivery exclusions from consent revocations; they do not
+ *    assert verified ownership or clear an existing opt-out.
+ *  - A dashboard deletion alone is not a consent revocation and does not
+ *    suppress; the operator may re-add that address on purpose.
  */
 
 const suppressionSk = (email) => `suppression#${email.toLowerCase()}`;
@@ -207,7 +211,7 @@ export const recordSuppression = async (tenantId, emailAddress, method, metadata
 };
 
 /**
- * The outstanding consent revocation for an address, or null if there is none.
+ * The consent or delivery suppression for an address, or null if there is none.
  *
  * Throws when the store cannot be read. "We checked and there is no
  * suppression" and "we could not check" are different facts, and collapsing

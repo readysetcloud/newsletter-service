@@ -333,6 +333,18 @@ describe('send-email-v2', () => {
       expect(sesInstance.send).not.toHaveBeenCalled();
     });
 
+    test('honors a bounce suppression arriving after the audience snapshot', async () => {
+      const { getSuppression } = await import('../functions/utils/suppression.mjs');
+      getSuppression.mockImplementation(async (_tenant, email) => email === 'bounced@example.com' ? { method: 'hard-bounce' } : null);
+      listSubscribers.mockResolvedValue({ subscribers: [
+        { email: 'fine@example.com' }, { email: 'bounced@example.com' }
+      ] });
+      senderLookup();
+      const result = await handler(issueSend());
+      expect(result.recipients).toBe(1);
+      expect(sesInstance.send.mock.calls.map(([command]) => command.Destination.ToAddresses[0])).toEqual(['fine@example.com']);
+    });
+
     // An unreadable consent store is not evidence that nobody opted out.
     test('fails the send rather than mailing when suppression cannot be read', async () => {
       const { listSuppressedEmails } = await import('../functions/utils/suppression.mjs');
@@ -1074,6 +1086,18 @@ describe('send-email-v2', () => {
 import * as fc from 'fast-check';
 
 describe('send-email-v2 property-based tests', () => {
+  test.each(['pending', 'reject', 'hold'])('withholds %s recipients in single-recipient marketing sends', async action => {
+    ddbInstance.send.mockResolvedValue({ Items: [{ email: 'sender@example.com', senderId: 'sender', verificationStatus: 'verified' }] });
+    getSubscriberByEmail.mockResolvedValue({ email: 'reader@example.com', screening: { action } });
+    await handler({ detail: { tenantId: 'tenant', from: 'sender@example.com', subject: 'Welcome', html: '<p>Welcome</p>', to: { email: 'reader@example.com' }, listUnsubscribe: true } });
+    expect(sesInstance.send).not.toHaveBeenCalled();
+  });
+  test('withholds pending and rejected recipients in newsletter lists', async () => {
+    ddbInstance.send.mockResolvedValue({ Items: [{ email: 'sender@example.com', senderId: 'sender', verificationStatus: 'verified' }] });
+    listSubscribers.mockResolvedValue({ subscribers: ['pending', 'reject', 'hold'].map(action => ({ email: `${action}@example.com`, screening: { action } })) });
+    await handler({ detail: { tenantId: 'tenant', from: 'sender@example.com', subject: 'Issue', html: '<p>Issue</p>', to: { list: 'list' }, referenceNumber: 'tenant_238' } });
+    expect(sesInstance.send).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     jest.clearAllMocks();
     process.env.TABLE_NAME = 'test-table';

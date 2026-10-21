@@ -18,6 +18,15 @@ const template = Handlebars.compile(welcomeTemplate);
 
 
 export const handler = async (event) => {
+  if (event.Records) {
+    for (const record of event.Records) {
+      const before = unmarshall(record.dynamodb.OldImage || {});
+      const after = unmarshall(record.dynamodb.NewImage || {});
+      if (before.screening?.action !== 'pending' || !['allow', 'watch'].includes(after.screening?.action)) continue;
+      await handler({ detail: { tenantId: after.tenantId, data: after } });
+    }
+    return;
+  }
   try {
     if (!event?.detail) {
       console.error('Missing event detail');
@@ -108,11 +117,6 @@ export const handler = async (event) => {
     // failure would leave a subscriber who was added with no welcome email and
     // nothing to try again. Throwing is what reaches the retry and the DLQ.
     //
-    // The earlier hop is not covered by this: `publishSubscriberEvent` in
-    // add-subscriber still swallows its own EventBridge failures, so a signup
-    // can lose the `Subscriber Added` event before this function is ever
-    // invoked. Closing that needs a durable outbox and is deliberately not in
-    // this change — this handler is retryable, the handoff into it is not yet.
     console.error('Send welcome email error:', {
       error: error.message,
       stack: error.stack

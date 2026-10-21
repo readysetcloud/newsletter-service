@@ -51,6 +51,11 @@ jest.unstable_mockModule(welcomeTemplatePath, () => ({
 const { handler } = await import('../functions/subscribers/send-welcome-email.mjs');
 
 describe('send-welcome-email handler', () => {
+  test('stream transitions to reject do not send welcome mail', async () => {
+    mockEventBridgeSend.mockClear();
+    await handler({ Records: [{ dynamodb: { OldImage: { screening: { action: 'pending' } }, NewImage: { screening: { action: 'reject' } } } }] });
+    expect(mockEventBridgeSend).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     jest.clearAllMocks();
     process.env.TABLE_NAME = 'test-table';

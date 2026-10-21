@@ -335,6 +335,7 @@ const addSubscriber = async (tenantId, contact, normalizedEmail, detectionData, 
     tenantId,
     email: normalizedEmail,
     addedAt,
+    screening: { action: 'pending', version: 1 },
     ...(contact.firstName && { firstName: contact.firstName }),
     ...(contact.lastName && { lastName: contact.lastName }),
     // Absent rather than null when unresolved: `groupSubscribersByTimeZone`

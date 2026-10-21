@@ -1,4 +1,5 @@
 export default {
+  modulePathIgnorePatterns: ['<rootDir>/.local/', '<rootDir>/.claude/'],
   // Runs before the module registry is built for each test file, so any AWS
   // client a test constructs is already pointed away from real AWS. See the
   // file for why this exists.

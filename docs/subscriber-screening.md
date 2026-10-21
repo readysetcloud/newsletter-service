@@ -1,8 +1,8 @@
 # Subscriber screening
 
 Public signup still returns 201 after committing a subscriber. The new row has
-`screening.action = pending`. A DynamoDB INSERT stream invokes the screening
-worker, which checks SES account suppression, DNS mail routing, existing bot
+`screening.action = pending`. One shared DynamoDB lifecycle stream consumer routes INSERT events to screening,
+then routes pending-to-allow/watch MODIFY events to welcome delivery. Screening checks SES account suppression, DNS mail routing, existing bot
 flags, and Amazon Nova Micro on Bedrock on demand for records not already rejected
 by suppression or email/domain checks.
 The result is persisted with an incarnation/pending condition so retries cannot
@@ -14,7 +14,10 @@ recreate a deleted subscriber or overwrite a later assessment.
 - `reject`: retained for review, excluded from marketing.
 - `pending`: excluded until screening completes.
 
-Welcome mail now follows the durable pending-to-allow/watch stream transition.
+Welcome mail follows the durable pending-to-allow/watch stream transition.
+The shared consumer starts at TRIM_HORIZON to cover rollout events and leaves
+only two Subscribers stream readers, including segment-membership cleanup.
+Per-record failures retry from the earliest failed sequence number.
 Existing subscribers without an assessment remain eligible. Imports retain their
 existing behavior; audit imported subscribers before sending. Rejected rows are
 retained and included in the existing subscriber count; this is not a count of

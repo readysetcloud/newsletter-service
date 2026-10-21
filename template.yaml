@@ -1165,11 +1165,12 @@ Resources:
       BuildProperties:
         <<: *esbuild-properties
         EntryPoints:
-          - subscribers/send-welcome-email.mjs
+          - subscribers/subscriber-stream.mjs
     Properties:
       Runtime: nodejs24.x
       CodeUri: functions
-      Handler: subscribers/send-welcome-email.handler
+      Handler: subscribers/subscriber-stream.handler
+      Timeout: 60
       Policies:
         - AWSLambdaBasicExecutionRole
         - SQSSendMessagePolicy:
@@ -1186,54 +1187,6 @@ Resources:
             - Effect: Allow
               Action: events:PutEvents
               Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
-      Environment:
-        Variables:
-          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
-          # Must be EMAIL_ENCRYPTION_KEY — helpers.mjs getKey() reads that name.
-          # This was ENCRYPTION_KEY, so encrypt() threw on an undefined key and
-          # the handler's catch swallowed it: no welcome email ever sent.
-          EMAIL_ENCRYPTION_KEY: !Ref EncryptionKey
-          # Where the unsubscribe endpoint actually lives. The link used to be
-          # built from ORIGIN (the marketing site), which has no such route.
-          API_BASE_URL: !If
-            - DeployNewsletterApiCustomDomain
-            - !Sub https://api.newsletter.${DomainName}
-            - !Sub "https://${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com/public"
-      Events:
-        ScreenedSubscriberStream:
-          Type: DynamoDB
-          Properties:
-            Stream: !GetAtt SubscribersTable.StreamArn
-            StartingPosition: LATEST
-            BatchSize: 1
-            MaximumRetryAttempts: 10
-            DestinationConfig:
-              OnFailure:
-                Type: SQS
-                Destination: !GetAtt EmailPipelineDLQ.Arn
-            FilterCriteria:
-              Filters:
-                - Pattern: '{"eventName":["MODIFY"],"dynamodb":{"OldImage":{"screening":{"M":{"action":{"S":["pending"]}}}},"NewImage":{"screening":{"M":{"action":{"S":["allow","watch"]}}}}}}'
-
-  ScreenSubscriberFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        <<: *esbuild-properties
-        EntryPoints:
-          - subscribers/screen-subscriber.mjs
-    Properties:
-      Runtime: nodejs24.x
-      CodeUri: functions
-      Handler: subscribers/screen-subscriber.handler
-      Timeout: 60
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - SQSSendMessagePolicy:
-            QueueName: !GetAtt EmailPipelineDLQ.QueueName
-        - Version: 2012-10-17
-          Statement:
             - Effect: Allow
               Action:
                 - dynamodb:GetItem
@@ -1251,12 +1204,23 @@ Resources:
         Variables:
           SUBSCRIBERS_TABLE_NAME: !Ref SubscribersTable
           SCREENING_MODEL_ID: us.amazon.nova-micro-v1:0
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+          # Must be EMAIL_ENCRYPTION_KEY — helpers.mjs getKey() reads that name.
+          # This was ENCRYPTION_KEY, so encrypt() threw on an undefined key and
+          # the handler's catch swallowed it: no welcome email ever sent.
+          EMAIL_ENCRYPTION_KEY: !Ref EncryptionKey
+          # Where the unsubscribe endpoint actually lives. The link used to be
+          # built from ORIGIN (the marketing site), which has no such route.
+          API_BASE_URL: !If
+            - DeployNewsletterApiCustomDomain
+            - !Sub https://api.newsletter.${DomainName}
+            - !Sub "https://${NewsletterApi}.execute-api.${AWS::Region}.amazonaws.com/public"
       Events:
-        NewSubscriberStream:
+        SubscriberLifecycleStream:
           Type: DynamoDB
           Properties:
             Stream: !GetAtt SubscribersTable.StreamArn
-            StartingPosition: LATEST
+            StartingPosition: TRIM_HORIZON
             BatchSize: 1
             FunctionResponseTypes:
               - ReportBatchItemFailures
@@ -1269,6 +1233,8 @@ Resources:
             FilterCriteria:
               Filters:
                 - Pattern: '{"eventName":["INSERT"],"dynamodb":{"NewImage":{"screening":{"M":{"action":{"S":["pending"]}}}}}}'
+                - Pattern: '{"eventName":["MODIFY"],"dynamodb":{"OldImage":{"screening":{"M":{"action":{"S":["pending"]}}}},"NewImage":{"screening":{"M":{"action":{"S":["allow","watch"]}}}}}}'
+
 
   # Turns the things that happen in the background into something a person can
   # see when they next open the dashboard. One consumer for every source, so

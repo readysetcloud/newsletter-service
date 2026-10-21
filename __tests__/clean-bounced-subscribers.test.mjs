@@ -43,7 +43,7 @@ test('reconciles confirmed SES suppressions and leaves temporary failures alone'
     ['tenant', 'hard@example.com', 'ses-bounce'], ['tenant', 'complaint@example.com', 'ses-complaint']
   ]);
   expect(remove.mock.calls.map(call => call[1])).toEqual(['hard@example.com', 'complaint@example.com']);
-  expect(increment).toHaveBeenCalledTimes(2);
+  expect(increment).not.toHaveBeenCalled();
   expect(eventSend).toHaveBeenCalledTimes(1);
 });
 test('durably suppresses before deleting', async () => {

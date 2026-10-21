@@ -73,3 +73,7 @@ Sources:
 - [SES bounce notification types](https://docs.aws.amazon.com/ses/latest/dg/notification-contents.html)
 - [SES reputation alarms](https://docs.aws.amazon.com/ses/latest/dg/reputationdashboard-cloudwatch-alarm.html)
 - [Configuration-set suppression options](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-properties-ses-configurationset-suppressionoptions.html)
+
+Historical SES suppression reconciliation does not increment any issue's cleaned
+counter: the account list does not identify an originating issue. Only the live
+delivery path attributes removals using the message's issuePk.

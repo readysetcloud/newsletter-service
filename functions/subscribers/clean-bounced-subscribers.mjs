@@ -6,7 +6,6 @@ import { getTenant, sendWithRetry, throttle } from '../utils/helpers.mjs';
 import { removeSubscriberAndDecrement } from '../utils/subscriber.mjs';
 import { recordSuppression } from '../utils/suppression.mjs';
 import { isSubscriberRecord } from '../utils/subscriber-record.mjs';
-import { getMostRecentPublishedIssue, incrementIssueCounter } from '../utils/issue-attribution.mjs';
 import { countSubscriberRows, reconcileSubscriberCount } from '../utils/subscriber-count.mjs';
 import { assertEventsPublished } from '../utils/eventbridge.mjs';
 
@@ -31,9 +30,6 @@ export const handler = async (event) => {
   } while (token);
   let key;
   let removed = 0;
-  let issue = null;
-  try { issue = await getMostRecentPublishedIssue(tenantId); }
-  catch (error) { console.warn('Cleanup attribution lookup failed', { error: error.name }); }
   do {
     const response = await ddb.send(new QueryCommand({
       TableName: process.env.SUBSCRIBERS_TABLE_NAME,
@@ -48,13 +44,9 @@ export const handler = async (event) => {
         // silently restore a known bad address after its subscriber row is gone.
         await recordSuppression(tenantId, email, `ses-${suppressed.get(email).toLowerCase()}`);
         const didRemove = await sendWithRetry(() => removeSubscriberAndDecrement(tenantId, email));
-        if (didRemove) {
-          removed++;
-          if (issue) {
-            try { await incrementIssueCounter(issue.pk, 'cleaned'); }
-            catch (error) { console.warn('Cleanup attribution failed', { error: error.name }); }
-          }
-        }
+        // The account suppression list has no originating issue. Only the live
+        // delivery handler can attribute a removal using its message's issuePk.
+        if (didRemove) removed++;
       });
     await throttle(tasks, 5);
     key = response.LastEvaluatedKey;

@@ -1158,7 +1158,9 @@ Resources:
             Auth:
               Authorizer: NONE
 
-  SendWelcomeEmailFunction:
+  # A distinct function identity lets CloudFormation create the combined stream
+  # mapping before deleting the legacy welcome mapping without a duplicate pair.
+  SubscriberLifecycleFunction:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: esbuild

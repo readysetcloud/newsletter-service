@@ -58,8 +58,9 @@ test('a welcome failure retries that transition without repeating an earlier scr
 
 test('IaC keeps two Subscribers shard readers and replays lifecycle events from the trim horizon', () => {
   const template = readFileSync(new URL('../../template.yaml', import.meta.url), 'utf8');
+  expect(template).not.toContain('  SendWelcomeEmailFunction:');
   expect(template.match(/Stream: !GetAtt SubscribersTable.StreamArn/g)).toHaveLength(2);
-  const resource = template.split('  SendWelcomeEmailFunction:')[1].split(/\n  [A-Za-z][A-Za-z0-9]*:/)[0];
+  const resource = template.split('  SubscriberLifecycleFunction:')[1].split(/\n  [A-Za-z][A-Za-z0-9]*:/)[0];
   expect(resource).toContain('Handler: subscribers/subscriber-stream.handler');
   expect(resource).toContain('StartingPosition: TRIM_HORIZON');
   expect(resource).toContain('ReportBatchItemFailures');

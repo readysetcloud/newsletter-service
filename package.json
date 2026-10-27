@@ -51,7 +51,7 @@
     "@aws-sdk/client-ssm": "^3.1156.0",
     "@aws-sdk/s3-request-presigner": "^3.1156.0",
     "@aws-sdk/util-dynamodb": "^3.996.9",
-    "@babel/core": "^8.0.7",
+    "@babel/core": "^8.0.9",
     "@babel/preset-env": "^8.0.7",
     "@babel/preset-react": "^8.0.1",
     "@babel/preset-typescript": "^8.0.7",

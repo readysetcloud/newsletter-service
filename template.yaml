@@ -4415,40 +4415,6 @@ Resources:
       OKActions:
         - !Ref EventBridgeCriticalAlertsTopic
 
-  # The leading indicator the reputation alarms above cannot be. Those two are
-  # the only thing that has ever noticed bad acquisition, and they notice it
-  # weeks late: the Sept 2026 complaint climb from 0.38% to 0.53% took five
-  # weeks to show, by which time the addresses causing it were already on the
-  # list and already mailed. Signup rate moves first.
-  #
-  # Threshold from the list's own history rather than a guess. Across every
-  # subscriber this tenant has, the busiest hour of organic signup is 12, and
-  # over the last 30 days it is 8 — so 15 inside a 15-minute window is a rate
-  # (60/hour) five times anything the endpoint has served. The February 2026
-  # bulk import put 1,710 rows in one hour and is not a counterexample: imports
-  # run through import-subscriber-list, which does not emit this metric.
-  #
-  # Watches the undimensioned series, since an alarm must name every dimension
-  # value it watches and this template cannot know a tenant id. The per-tenant
-  # series emitted alongside it answers which list is affected.
-  SignupVelocityAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmDescription: "Public signups above 15 in 15 minutes; check for bot signups before the next issue is sent"
-      Namespace: Newsletter/Signups
-      MetricName: SignupsAccepted
-      Statistic: Sum
-      Period: 900
-      EvaluationPeriods: 1
-      Threshold: 15
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      # No signups in a quarter hour is the ordinary case, not a problem.
-      TreatMissingData: notBreaching
-      AlarmActions:
-        - !Ref EventBridgeCriticalAlertsTopic
-      OKActions:
-        - !Ref EventBridgeCriticalAlertsTopic
-
   DeliveryHealthErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:

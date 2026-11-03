@@ -7,6 +7,14 @@
  * held the addresses that caused it. Signup rate is the leading indicator —
  * whatever a flood is made of, there is a lot of it and it arrives quickly.
  *
+ * Nothing watches these automatically, by choice. A threshold alarm here would
+ * have been one more notification nobody acts on, standing in for a control it
+ * is not. What this buys is the record: the counts are already in CloudWatch
+ * when someone asks how many real signups a month held, instead of being
+ * reconstructed from a table scan — which is how the question was answered
+ * last time, wrongly on the first attempt, because subscriber rows and segment
+ * membership rows both carry an addedAt.
+ *
  * Why EMF rather than cloudwatch-metrics.mjs, which the rest of the service
  * uses: the signup endpoint is public, unauthenticated and precisely what a
  * bot flood points at. A PutMetricData call per request would add an AWS round
@@ -29,9 +37,9 @@ export const SIGNUPS_BLOCKED = 'SignupsBlocked';
  * Record one signup outcome.
  *
  * Two dimension sets are emitted: by tenant, and aggregate. The aggregate one
- * is what an alarm watches — a CloudWatch alarm has to name every dimension
- * value it watches, and the template cannot know a tenant's id — while the
- * per-tenant series is what answers "which list is this happening to".
+ * is the series to graph when the question is "how many signups, and when",
+ * since it needs no tenant id to query; the per-tenant series is what answers
+ * "which list is this happening to".
  *
  * Never throws. A metric that cannot be written must not fail a signup.
  *

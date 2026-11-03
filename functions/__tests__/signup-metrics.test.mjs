@@ -17,8 +17,8 @@ describe('signup metrics', () => {
     expect(typeof doc._aws.Timestamp).toBe('number');
   });
 
-  // The empty dimension set is what SignupVelocityAlarm watches: an alarm has
-  // to name every dimension value, and the template has no tenant id to name.
+  // The empty dimension set is the one that can be queried without knowing a
+  // tenant id, which is what a "how many signups, and when" question needs.
   test('emits both a per-tenant and an aggregate series', () => {
     jest.spyOn(console, 'log').mockImplementation(() => {});
     emitSignupMetric(SIGNUPS_BLOCKED, 'readysetcloud');

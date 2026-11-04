@@ -7,7 +7,7 @@
  * distinct shapes — but the structure never does, which no population of
  * human names reproduces. None predates 24 Jun 2026, against 422 named
  * signups before it; the volume is 462 in September, 974 in October. They
- * engage at 14.8% where ordinary names engage at 47.7%, and their domains are
+ * engage at 22.7% where ordinary names engage at 55.0%, and their domains are
  * German freemail and Yahoo/Hotmail/AOL, with gmail at 4.6% against 46% for
  * everyone else. It is one source.
  *
@@ -22,15 +22,22 @@
  *   - Scored against real-world names, a combination of low vowel ratio,
  *     consonant runs and case switches flags 23% of them. Polish, Dutch,
  *     Scandinavian, Irish and Scottish orthography is not high-entropy noise.
- *   - 445 subscribers on this very list have names that are single random
- *     tokens of 16-24 characters, from February to July, when that source
- *     stopped. They engage at 46.5% — indistinguishable from ordinary names.
- *     They are real readers, and an entropy rule blocks them.
+ *   - 416 subscribers on this very list have names of two random tokens of
+ *     16-24 characters, from February to July, when that source stopped.
+ *     They engage at 57.7%, above the 55.0% of ordinary names. They are
+ *     real readers, and an entropy rule blocks every one of them. Note
+ *     what keeps them out of this detector: not a structure that differs
+ *     in kind, since they are a pair of opaque tokens too, but the two
+ *     specifics below -- no digit, and not ten characters.
  *
  * So this matches a signature, not a quality. It is deliberately narrow and
  * it is brittle by construction: the operator changes one constant and it
  * stops working, with no error to say so. It buys time for a control that
  * does not depend on what the client chooses to send.
+ *
+ * Rates above are engagementCount > 0 over the same snapshot, which also
+ * puts the 1,736 subscribers with no name at all at 77.8%, the highest on
+ * the list. Absence of a name is not a signal; this shape is.
  *
  * Tuning, on the same data: 1,451 of 1,475 caught (98.4%), 0 of the other
  * 1,030 named subscribers, 0 of a hand-built control that includes the names
@@ -67,9 +74,11 @@ const tokensOf = (...parts) => parts
  *
  * Length-independent, so it still holds if the generator changes its token
  * size, and it is the clause doing most of the work: 1,426 of the 1,475.
- * The length floor is what keeps a human out of it — someone signing as
+ * Two guards keep a human out of it. The length floor: someone signing as
  * `Allen Helton 2` has a one-character digit token, not an eight-character
- * mixed one.
+ * mixed one. And the two-token requirement in the caller, without which this
+ * clause alone would convict a reader who types a handle where the form asks
+ * for a name.
  */
 const mixesLettersAndDigits = (token) =>
   token.length >= MIXED_TOKEN_LENGTH && /[A-Za-z]/.test(token) && /\d/.test(token);
@@ -79,16 +88,26 @@ const caseSwitches = (token) => (token.match(/[a-z][A-Z]/g) || []).length;
 /**
  * Whether a submitted name looks machine-generated.
  *
- * Takes the name parts as stored. Absent or non-string parts are ignored
- * rather than treated as evidence: a signup with no name at all is ordinary,
- * and 1,736 subscribers on this list have none.
+ * Takes the name parts as stored. Only a two-token name can match. Absent or
+ * non-string parts are ignored rather than treated as evidence: a signup with
+ * no name at all is ordinary, and 1,736 subscribers on this list have none.
  *
  * @param {...*} parts - Name fields, normally firstName and lastName
  * @returns {boolean} true when the name matches the generator's signature
  */
 export function isGeneratedName(...parts) {
   const tokens = tokensOf(...parts);
-  if (!tokens.length) return false;
+
+  // Two tokens, which is the only shape this generator has ever produced:
+  // 1,475 rows, 2,852 tokens, not one of any other count or length. The
+  // requirement is free -- the same 1,451 are still caught -- and it closes
+  // the one path where this could have blocked a reader, which is a
+  // handle-shaped value in a single name field (`allenh1985`: letters,
+  // digits, over the length floor). No subscriber on the list has that
+  // shape, so the clause that would have blocked it had never once been
+  // exercised, and it would have failed the way everything here fails,
+  // as a silent 201.
+  if (tokens.length !== 2) return false;
 
   if (tokens.some(mixesLettersAndDigits)) return true;
 

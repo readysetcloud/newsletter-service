@@ -27,8 +27,9 @@ describe('isGeneratedName', () => {
       expect(isGeneratedName('a1B2c3D4e5F6g7', 'H8i9J0k1L2m3n4')).toBe(true);
     });
 
-    test('a single mixed token is enough, wherever it sits', () => {
+    test('one of the two tokens carrying digits is enough, either side', () => {
       expect(isGeneratedName('Michael', 'x7Kq2Lp9Rt')).toBe(true);
+      expect(isGeneratedName('x7Kq2Lp9Rt', 'Michael')).toBe(true);
     });
   });
 
@@ -67,9 +68,9 @@ describe('isGeneratedName', () => {
       expect(isGeneratedName(first, last)).toBe(false);
     });
 
-    // The 445 subscribers whose names are single long random tokens engage at
-    // 46.5%, the same as ordinary names. An entropy rule blocks them; this
-    // must not.
+    // The 416 subscribers whose names are two long random tokens engage at
+    // 57.7%, above ordinary names. An entropy rule blocks them; this must
+    // not.
     test('a long opaque token is not evidence by itself', () => {
       expect(isGeneratedName('AaaAaaAAaaaaaAAaAAaA', 'AaaaAAaaaaaaaaaaAaa')).toBe(false);
     });
@@ -80,6 +81,25 @@ describe('isGeneratedName', () => {
 
     test('a short handle with digits', () => {
       expect(isGeneratedName('R2D2', 'Unit')).toBe(false);
+    });
+
+    // A handle is what a reader types when the form asks for a name and they
+    // would rather not give one. Mixed letters and digits, over the length
+    // floor, and not this bot: the generator has never emitted one token, and
+    // no subscriber on the list carries a single mixed one.
+    test.each([
+      'allenh1985',
+      'sarah2024dev',
+      'mcdonald99',
+      'xXgamer2026Xx'
+    ])('a lone handle-shaped value is allowed: %s', (handle) => {
+      expect(isGeneratedName(handle, undefined)).toBe(false);
+      expect(isGeneratedName(handle, '')).toBe(false);
+    });
+
+    test('a mixed token among three is not the generator either', () => {
+      expect(isGeneratedName('Allen', 'J Helton1985')).toBe(false);
+      expect(isGeneratedName('x7Kq2Lp9Rt', 'l2uZduTOGW qVoCx3mTzb')).toBe(false);
     });
   });
 
@@ -97,9 +117,10 @@ describe('isGeneratedName', () => {
 
     // 1,736 subscribers have no name at all, and they engage at the highest
     // rate on the list. Absence must never be read as evidence.
-    test('a first name alone is judged on its own merits', () => {
+    test('a one-token name is never a match', () => {
       expect(isGeneratedName('Allen', undefined)).toBe(false);
-      expect(isGeneratedName('x7Kq2Lp9Rt', undefined)).toBe(true);
+      expect(isGeneratedName('x7Kq2Lp9Rt', undefined)).toBe(false);
+      expect(isGeneratedName(undefined, 'x7Kq2Lp9Rt')).toBe(false);
     });
   });
 });

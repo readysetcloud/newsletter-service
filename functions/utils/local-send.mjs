@@ -35,6 +35,32 @@ export function isValidTimeZone(timeZone) {
 }
 
 /**
+ * POSIX-style zone names that mean exactly a region zone, mapped explicitly
+ * because `Intl` cannot be relied on to collapse them.
+ *
+ * It used to. Node 24.11 (ICU 77) resolves `EST5EDT` to `America/New_York`;
+ * Node 24.22 returns `EST5EDT` unchanged, following the CLDR change that made
+ * these primary identifiers in their own right. The Lambda runtime is
+ * `nodejs24.x` and tracks the newer one, so without this map a reader whose
+ * browser reports `EST5EDT` is stored under a different key from one reporting
+ * `America/New_York` and `groupSubscribersByTimeZone` fires two sends for one
+ * timezone — the precise failure this function exists to prevent, reintroduced
+ * by a dependency moving underneath it.
+ *
+ * Only these four. Each is a DST-observing zone identical to the region name
+ * it maps to, so collapsing them loses nothing. The bare `EST`, `MST` and
+ * `HST` are deliberately absent: those are fixed-offset zones with no DST, so
+ * `EST` is not `America/New_York`, and whatever the runtime resolves them to
+ * is already correct.
+ */
+const POSIX_ZONE_ALIASES = new Map([
+  ['EST5EDT', 'America/New_York'],
+  ['CST6CDT', 'America/Chicago'],
+  ['MST7MDT', 'America/Denver'],
+  ['PST8PDT', 'America/Los_Angeles']
+]);
+
+/**
  * The canonical IANA name for a timezone, or null when it is not one.
  *
  * `isValidTimeZone` answers whether a runtime accepts a string; it is not
@@ -44,10 +70,11 @@ export function isValidTimeZone(timeZone) {
  * `groupSubscribersByTimeZone` keys on the string, so storing them as sent
  * splits one timezone into several send groups that each fire separately.
  *
- * Resolving through `Intl` collapses them to the one name the grouping
- * expects, and rejects everything else. Callers taking a timezone from
- * outside the system should use this rather than validating and storing the
- * raw value.
+ * Resolving through `Intl` collapses most of them to the one name the grouping
+ * expects, and rejects everything else; `POSIX_ZONE_ALIASES` finishes the job
+ * for the names whose resolution depends on the runtime's ICU build. Callers
+ * taking a timezone from outside the system should use this rather than
+ * validating and storing the raw value.
  *
  * @param {unknown} timeZone - Candidate timezone, from any source
  * @returns {string|null} The canonical IANA name, or null when unusable
@@ -56,7 +83,11 @@ export function normalizeTimeZone(timeZone) {
   if (!isValidTimeZone(timeZone)) {
     return null;
   }
-  return new Intl.DateTimeFormat('en-US', { timeZone }).resolvedOptions().timeZone;
+  const resolved = new Intl.DateTimeFormat('en-US', { timeZone }).resolvedOptions().timeZone;
+  // Keyed on the resolved name, not the input: an ICU build that still
+  // collapses these never reaches the map, and one that does not gets the same
+  // answer out of it.
+  return POSIX_ZONE_ALIASES.get(resolved.toUpperCase()) ?? resolved;
 }
 
 /**

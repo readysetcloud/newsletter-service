@@ -467,27 +467,24 @@ describe('Property 9: Policy evaluation blocks iff triggered flag has action "bl
     disposableDomain: fc.boolean(),
     suspiciousUserAgent: fc.boolean(),
     unknownIp: fc.boolean(),
-    fastSubmission: fc.boolean(),
-    generatedName: fc.boolean()
+    fastSubmission: fc.boolean()
   });
 
   const arbPolicy = fc.record({
     honeypotAction: fc.constantFrom('block', 'flag'),
     disposableDomainAction: fc.constantFrom('block', 'flag'),
-    generatedNameAction: fc.constantFrom('block', 'flag'),
     rateLimitThreshold: fc.integer({ min: 1, max: 1000 }),
     rateLimitWindowSeconds: fc.integer({ min: 60, max: 86400 })
   });
 
-  test('blocked is true iff honeypot, disposable or generated name has action block', () => {
+  test('blocked is true iff honeypot+block or disposable+block', () => {
     fc.assert(
       fc.property(arbFlags, arbPolicy, (flags, policy) => {
         const result = evaluatePolicy(flags, policy);
 
         const shouldBlockHoneypot = flags.honeypotTriggered && policy.honeypotAction === 'block';
         const shouldBlockDisposable = flags.disposableDomain && policy.disposableDomainAction === 'block';
-        const shouldBlockGenerated = flags.generatedName && policy.generatedNameAction === 'block';
-        const expectedBlocked = shouldBlockHoneypot || shouldBlockDisposable || shouldBlockGenerated;
+        const expectedBlocked = shouldBlockHoneypot || shouldBlockDisposable;
 
         expect(result.blocked).toBe(expectedBlocked);
       }),
@@ -495,22 +492,19 @@ describe('Property 9: Policy evaluation blocks iff triggered flag has action "bl
     );
   });
 
-  test('rejectionReason is first match: honeypot, then disposable domain, then generated name', () => {
+  test('rejectionReason is first match: honeypot before disposable domain', () => {
     fc.assert(
       fc.property(arbFlags, arbPolicy, (flags, policy) => {
         const result = evaluatePolicy(flags, policy);
 
         const shouldBlockHoneypot = flags.honeypotTriggered && policy.honeypotAction === 'block';
         const shouldBlockDisposable = flags.disposableDomain && policy.disposableDomainAction === 'block';
-        const shouldBlockGenerated = flags.generatedName && policy.generatedNameAction === 'block';
 
         if (shouldBlockHoneypot) {
           // Honeypot takes priority
           expect(result.rejectionReason).toBe('honeypot');
         } else if (shouldBlockDisposable) {
           expect(result.rejectionReason).toBe('disposable_domain');
-        } else if (shouldBlockGenerated) {
-          expect(result.rejectionReason).toBe('generated_name');
         } else {
           expect(result.rejectionReason).toBeNull();
         }
@@ -519,12 +513,11 @@ describe('Property 9: Policy evaluation blocks iff triggered flag has action "bl
     );
   });
 
-  test('the advisory flags never influence blocking on their own', () => {
-    // Fix every blocking flag to false, vary the ones that only get recorded.
+  test('only honeypotTriggered and disposableDomain influence blocking', () => {
+    // Fix honeypot and disposable to false, vary all other flags
     const arbNonBlockingFlags = fc.record({
       honeypotTriggered: fc.constant(false),
       disposableDomain: fc.constant(false),
-      generatedName: fc.constant(false),
       suspiciousUserAgent: fc.boolean(),
       unknownIp: fc.boolean(),
       fastSubmission: fc.boolean()

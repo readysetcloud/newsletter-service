@@ -78,25 +78,6 @@ does not have: confirmed opt-in, or bounce outcomes labeled per signup.
 Deterministic front-door controls — confirmed opt-in, signup velocity limits —
 are what reduce bot signups; a better classifier behind the door is not.
 
-## The generated-name block
-
-One such control now exists, in `functions/utils/generated-name.mjs`. It is
-not a screening rule and the model has no part in it: it matches one signup
-source's name generator, which emits two tokens of exactly ten random
-characters. 1,475 subscribers carry that shape, none before 24 Jun 2026, and
-they engage at 14.8% where ordinary names engage at 47.7%. Every existing
-deterministic flag missed all of them.
-
-It blocks at the door — `generatedNameAction`, defaulting to `block`, with the
-same silent 201 and no record that the honeypot gets.
-
-Two things to know before relying on it. It matches a signature, not a
-quality, so it stops working the day the operator changes a constant, and
-nothing will report that it has. And entropy is not a substitute: scored
-against real names it flags 23% of them, and 445 subscribers on this list have
-single random tokens of 16-24 characters while engaging at 46.5% — the same
-rate as everyone else. They are real readers that an entropy rule blocks.
-
 Model rejection candidates can be reviewed and held through the flow in
 [existing-list cleanup](existing-list-cleanup.md). A hold is reversible and
 changes only `screening`. On 2026-11-02, 52 candidates that carried a

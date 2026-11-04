@@ -1143,7 +1143,6 @@ Resources:
           TABLE_NAME: !Ref NewsletterTable
           HONEYPOT_ACTION: block
           DISPOSABLE_DOMAIN_ACTION: flag
-          GENERATED_NAME_ACTION: block
           RATE_LIMIT_THRESHOLD: "10"
           RATE_LIMIT_WINDOW_SECONDS: "3600"
           UNKNOWN_IP_RATE_LIMIT_THRESHOLD: "5"

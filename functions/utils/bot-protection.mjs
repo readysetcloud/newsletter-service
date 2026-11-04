@@ -158,18 +158,16 @@ export function isSuspiciousEmailPattern(normalizedEmail) {
  * @param {boolean} unknownIp
  * @param {boolean} fastSubmission
  * @param {boolean} [suspiciousEmailPattern=false]
- * @param {boolean} [generatedName=false]
  * @returns {object}
  */
-export function buildDetectionFlags(honeypot, disposable, suspiciousUa, unknownIp, fastSubmission, suspiciousEmailPattern = false, generatedName = false) {
+export function buildDetectionFlags(honeypot, disposable, suspiciousUa, unknownIp, fastSubmission, suspiciousEmailPattern = false) {
   return {
     honeypotTriggered: honeypot,
     disposableDomain: disposable,
     suspiciousUserAgent: suspiciousUa,
     unknownIp,
     fastSubmission,
-    suspiciousEmailPattern,
-    generatedName
+    suspiciousEmailPattern
   };
 }
 
@@ -180,7 +178,7 @@ export function buildDetectionFlags(honeypot, disposable, suspiciousUa, unknownI
  * @param {object} tenant - Tenant DynamoDB record
  * @param {object} globalDefaults - Environment-variable-based defaults
  * @param {Function} logInvalidOverride - Callback to log invalid overrides: (fieldName, invalidValue) => void
- * @returns {{ honeypotAction: string, disposableDomainAction: string, generatedNameAction: string, rateLimitThreshold: number, rateLimitWindowSeconds: number }}
+ * @returns {{ honeypotAction: string, disposableDomainAction: string, rateLimitThreshold: number, rateLimitWindowSeconds: number }}
  */
 export function resolvePolicy(tenant, globalDefaults, logInvalidOverride) {
   const validActions = ['block', 'flag'];
@@ -200,15 +198,6 @@ export function resolvePolicy(tenant, globalDefaults, logInvalidOverride) {
       disposableDomainAction = tenant.disposableDomainAction;
     } else {
       logInvalidOverride('disposableDomainAction', tenant.disposableDomainAction);
-    }
-  }
-
-  let generatedNameAction = globalDefaults.generatedNameAction;
-  if (tenant.generatedNameAction !== undefined && tenant.generatedNameAction !== null) {
-    if (validActions.includes(tenant.generatedNameAction)) {
-      generatedNameAction = tenant.generatedNameAction;
-    } else {
-      logInvalidOverride('generatedNameAction', tenant.generatedNameAction);
     }
   }
 
@@ -232,19 +221,14 @@ export function resolvePolicy(tenant, globalDefaults, logInvalidOverride) {
     }
   }
 
-  return { honeypotAction, disposableDomainAction, generatedNameAction, rateLimitThreshold, rateLimitWindowSeconds };
+  return { honeypotAction, disposableDomainAction, rateLimitThreshold, rateLimitWindowSeconds };
 }
 
 /**
  * Given detection flags and resolved policy, decide the action.
- * Only honeypotTriggered, disposableDomain and generatedName influence
- * blocking. The rest are recorded for review and gate nothing, which is
- * deliberate: fastSubmission and suspiciousEmailPattern have fired 867 times
- * between them across this table's history without once landing on a known
- * bot, and fastSubmission is inverted -- real signups have a p10 of 1422ms,
- * under its 1500ms line, while the generator's fastest was 2070ms.
- * Rejection reason order: honeypot, disposable domain, generated name.
- * @param {object} flags - { honeypotTriggered, disposableDomain, suspiciousUserAgent, unknownIp, fastSubmission, generatedName }
+ * Only honeypotTriggered and disposableDomain influence blocking.
+ * Rejection reason order: honeypot before disposable domain.
+ * @param {object} flags - { honeypotTriggered, disposableDomain, suspiciousUserAgent, unknownIp, fastSubmission }
  * @param {object} policy - Resolved policy from resolvePolicy()
  * @returns {{ blocked: boolean, rejectionReason: string|null }}
  */
@@ -254,9 +238,6 @@ export function evaluatePolicy(flags, policy) {
   }
   if (flags.disposableDomain && policy.disposableDomainAction === 'block') {
     return { blocked: true, rejectionReason: 'disposable_domain' };
-  }
-  if (flags.generatedName && policy.generatedNameAction === 'block') {
-    return { blocked: true, rejectionReason: 'generated_name' };
   }
   return { blocked: false, rejectionReason: null };
 }

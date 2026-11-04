@@ -290,49 +290,6 @@ describe('add-subscriber handler — bot protection integration', () => {
     expect(mockPublishSubscriberEvent).not.toHaveBeenCalled();
   });
 
-  // 4b. The generated-name flag, which is computed in the handler rather than
-  // in the mocked bot-protection module, so these exercise the real detector.
-  test('passes the generated-name verdict into the detection flags', async () => {
-    mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
-
-    await handler(makeEvent({ email: 'a@example.com', firstName: 'c5QdWQH7gz', lastName: 'l2uZduTOGW' }));
-
-    // Seventh positional argument, after suspiciousEmailPattern.
-    expect(mockBuildDetectionFlags).toHaveBeenCalledWith(
-      expect.anything(), expect.anything(), expect.anything(),
-      expect.anything(), expect.anything(), expect.anything(), true
-    );
-  });
-
-  test('leaves the generated-name verdict false for an ordinary name', async () => {
-    mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
-
-    await handler(makeEvent({ email: 'a@example.com', firstName: 'Allen', lastName: 'Helton' }));
-
-    expect(mockBuildDetectionFlags).toHaveBeenCalledWith(
-      expect.anything(), expect.anything(), expect.anything(),
-      expect.anything(), expect.anything(), expect.anything(), false
-    );
-  });
-
-  test('returns HTTP 201 silent block for a generated name', async () => {
-    mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });
-    mockBuildDetectionFlags.mockReturnValue({ ...DEFAULT_FLAGS, generatedName: true });
-    mockResolvePolicy.mockReturnValue({ ...DEFAULT_POLICY, generatedNameAction: 'block' });
-    mockEvaluatePolicy.mockReturnValue({ blocked: true, rejectionReason: 'generated_name' });
-
-    const res = await handler(makeEvent({ email: 'a@example.com', firstName: 'c5QdWQH7gz', lastName: 'l2uZduTOGW' }));
-
-    expect(res.statusCode).toBe(201);
-    expect(ddbInstance.send).not.toHaveBeenCalled();
-    expect(mockEmitBotProtectionLog).toHaveBeenCalledWith(
-      mockLogger,
-      'signup.blocked',
-      expect.objectContaining({ rejectionReason: 'generated_name' })
-    );
-    expect(mockPublishSubscriberEvent).not.toHaveBeenCalled();
-  });
-
   // 5. HTTP 201 flagged signup for disposable domain with action=flag (Signup_Record created with flag)
   test('returns HTTP 201 flagged signup for disposable domain with action=flag', async () => {
     mockGetTenant.mockResolvedValue({ id: 't1', subscribers: 5 });

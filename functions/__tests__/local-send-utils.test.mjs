@@ -31,6 +31,47 @@ describe('normalizeTimeZone', () => {
     expect(normalizeTimeZone('GMT')).toBe('UTC');
   });
 
+  // Node 24.11 (ICU 77) collapsed these through Intl and Node 24.22 does not,
+  // so they are mapped explicitly. Without that, one timezone becomes two send
+  // groups depending on which runtime the Lambda happens to be on.
+  it.each([
+    ['EST5EDT', 'America/New_York'],
+    ['CST6CDT', 'America/Chicago'],
+    ['MST7MDT', 'America/Denver'],
+    ['PST8PDT', 'America/Los_Angeles']
+  ])('collapses the POSIX name %s onto %s on any ICU build', (posix, canonical) => {
+    expect(normalizeTimeZone(posix)).toBe(canonical);
+  });
+
+  // The test above passes on an ICU build that still collapses these, which
+  // proves nothing about the one that does not. This stubs resolvedOptions to
+  // hand the zone back unchanged — what Node 24.22 does — so the map itself is
+  // under test rather than the runtime underneath it.
+  it('maps the POSIX names on a runtime that resolves them to themselves', () => {
+    const real = Intl.DateTimeFormat;
+    Intl.DateTimeFormat = function (locale, options = {}) {
+      new real(locale, options); // keep the real validation, including throwing
+      return { resolvedOptions: () => ({ timeZone: options.timeZone }) };
+    };
+    try {
+      expect(normalizeTimeZone('EST5EDT')).toBe('America/New_York');
+      expect(normalizeTimeZone('CST6CDT')).toBe('America/Chicago');
+      expect(normalizeTimeZone('MST7MDT')).toBe('America/Denver');
+      expect(normalizeTimeZone('PST8PDT')).toBe('America/Los_Angeles');
+      expect(normalizeTimeZone('Not/AZone')).toBeNull();
+    } finally {
+      Intl.DateTimeFormat = real;
+    }
+  });
+
+  // The bare fixed-offset names are left alone on purpose: EST has no DST, so
+  // it is not America/New_York and must not be folded into it. Asserting what
+  // it does resolve to would just re-encode an ICU build.
+  it('does not fold fixed-offset names into a DST zone', () => {
+    expect(normalizeTimeZone('EST')).not.toBeNull();
+    expect(normalizeTimeZone('EST')).not.toBe('America/New_York');
+  });
+
   it('agrees with groupSubscribersByTimeZone on what one group is', () => {
     const zones = ['America/Chicago', 'america/chicago', 'US/Central'].map(normalizeTimeZone);
     const groups = groupSubscribersByTimeZone(

@@ -25,6 +25,7 @@ import { getMostRecentPublishedIssue, incrementIssueCounter } from '../utils/iss
 import { getSuppression, suppressionConditionCheck } from '../utils/suppression.mjs';
 import { normalizeTimeZone } from '../utils/local-send.mjs';
 import { lookupGeo } from '../utils/geolocation.mjs';
+import { emitSignupMetric, SIGNUPS_ACCEPTED, SIGNUPS_BLOCKED } from '../utils/signup-metrics.mjs';
 
 const ddb = new DynamoDBClient();
 
@@ -101,6 +102,8 @@ export const handler = async (event) => {
         requestCountInWindow: rateLimitResult.count
       });
 
+      emitSignupMetric(SIGNUPS_BLOCKED, tenantId);
+
       return {
         statusCode: 429,
         body: JSON.stringify({ message: 'Too many requests' }),
@@ -142,6 +145,8 @@ export const handler = async (event) => {
         requestCountInWindow: rateLimitResult.count,
         elapsedMs: sanitizedElapsedMs
       });
+
+      emitSignupMetric(SIGNUPS_BLOCKED, tenantId);
 
       // Optional EventBridge publish for blocked signups
       if (process.env.PUBLISH_BLOCKED_EVENTS === 'true') {
@@ -222,6 +227,11 @@ export const handler = async (event) => {
     }, { addedAt, timestamp, timeZone });
 
     if (isNew) {
+      // Counted here rather than on entry to the handler: this is the point a
+      // subscriber actually exists, so the count cannot be inflated by
+      // duplicates, blocked bots or suppressed addresses.
+      emitSignupMetric(SIGNUPS_ACCEPTED, tenantId);
+
       // Emit signup.flagged log if any detection flag is true
       const anyFlagSet = Object.values(detectionFlags).some(v => v === true);
       if (anyFlagSet) {

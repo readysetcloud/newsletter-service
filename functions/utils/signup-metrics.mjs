@@ -49,10 +49,7 @@ export const SIGNUPS_BLOCKED = 'SignupsBlocked';
  */
 export function emitSignupMetric(metricName, tenantId, value = 1) {
   try {
-    // A bare console.log on purpose. EMF requires the metric document at the
-    // root of the log line, and structured-logger.mjs nests whatever it is
-    // given inside its own envelope, where CloudWatch would never find it.
-    console.log(JSON.stringify({
+    const document = {
       _aws: {
         Timestamp: Date.now(),
         CloudWatchMetrics: [{
@@ -63,7 +60,18 @@ export function emitSignupMetric(metricName, tenantId, value = 1) {
       },
       TenantId: tenantId || 'unknown',
       [metricName]: value
-    }));
+    };
+
+    // Written straight to the file descriptor rather than through console.log
+    // or structured-logger.mjs. Both wrap what they are given: the logger in
+    // its own envelope, and console.log in Lambda's, once a function's log
+    // format is set to JSON -- which puts the line under a `message` string
+    // where the `_aws` block is no longer at the root and the extractor stops
+    // seeing it. Nothing in this stack sets LoggingConfig today, so console
+    // would work right now and silently stop working the day one does. This
+    // is also what aws-embedded-metrics does for the same reason.
+    process.stdout.write(`${JSON.stringify(document)}
+`);
   } catch (err) {
     console.warn('Failed to emit signup metric', { metricName, error: err.message });
   }

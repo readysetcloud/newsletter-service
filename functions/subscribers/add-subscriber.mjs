@@ -228,8 +228,8 @@ export const handler = async (event) => {
 
     if (isNew) {
       // Counted here rather than on entry to the handler: this is the point a
-      // subscriber actually exists, so the metric an alarm watches cannot be
-      // inflated by duplicates, blocked bots or suppressed addresses.
+      // subscriber actually exists, so the count cannot be inflated by
+      // duplicates, blocked bots or suppressed addresses.
       emitSignupMetric(SIGNUPS_ACCEPTED, tenantId);
 
       // Emit signup.flagged log if any detection flag is true

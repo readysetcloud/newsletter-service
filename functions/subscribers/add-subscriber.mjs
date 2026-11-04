@@ -19,6 +19,7 @@ import {
   disposableDomainSet
 } from '../utils/bot-protection.mjs';
 import { sanitizeName } from '../utils/subscriber-name.mjs';
+import { isGeneratedName } from '../utils/generated-name.mjs';
 import { checkRateLimit } from '../utils/rate-limiter.mjs';
 import { createLogger } from '../utils/structured-logger.mjs';
 import { getMostRecentPublishedIssue, incrementIssueCounter } from '../utils/issue-attribution.mjs';
@@ -71,6 +72,7 @@ export const handler = async (event) => {
     const envDefaults = {
       honeypotAction: process.env.HONEYPOT_ACTION || 'block',
       disposableDomainAction: process.env.DISPOSABLE_DOMAIN_ACTION || 'flag',
+      generatedNameAction: process.env.GENERATED_NAME_ACTION || 'block',
       rateLimitThreshold: parseInt(process.env.RATE_LIMIT_THRESHOLD || '10', 10),
       rateLimitWindowSeconds: parseInt(process.env.RATE_LIMIT_WINDOW_SECONDS || '3600', 10)
     };
@@ -123,9 +125,12 @@ export const handler = async (event) => {
     const suspiciousEmail = isSuspiciousEmailPattern(normalizedEmail);
     const sanitizedElapsedMs = sanitizeElapsedMs(contact.elapsedMs);
     const fastSubmission = isFastSubmission(sanitizedElapsedMs);
+    // Reads the sanitized names set above, so it judges what would be stored
+    // rather than the raw body.
+    const generatedName = isGeneratedName(contact.firstName, contact.lastName);
 
     // Step 7: Build detection flags
-    const detectionFlags = buildDetectionFlags(honeypotTriggered, disposableDomain, suspiciousUa, unknownIp, fastSubmission, suspiciousEmail);
+    const detectionFlags = buildDetectionFlags(honeypotTriggered, disposableDomain, suspiciousUa, unknownIp, fastSubmission, suspiciousEmail, generatedName);
 
     // Step 8: Evaluate policy
     const policyResult = evaluatePolicy(detectionFlags, policy);

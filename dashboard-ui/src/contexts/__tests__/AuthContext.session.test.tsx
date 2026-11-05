@@ -99,8 +99,13 @@ describe('AuthProvider session restore', () => {
 
     renderAuth();
 
-    await waitFor(() => expect(screen.getByTestId('authenticated')).toHaveTextContent('false'));
-    expect(screen.getByTestId('loading')).toHaveTextContent('false');
+    // Wait on `loading`, not on `authenticated`. Revalidation starts with
+    // `authenticated` already false, so waiting for it to be false is a
+    // condition the first render satisfies -- the wait returns before the
+    // refresh has resolved and the assertions below race it. `loading` is the
+    // only flag here that has to change for the session to have settled.
+    await waitFor(() => expect(screen.getByTestId('loading')).toHaveTextContent('false'));
+    expect(screen.getByTestId('authenticated')).toHaveTextContent('false');
     // ...and the login page gets something to say about it.
     expect(screen.getByTestId('expired')).toHaveTextContent('true');
   });

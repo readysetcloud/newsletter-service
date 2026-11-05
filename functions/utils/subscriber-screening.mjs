@@ -57,10 +57,36 @@ export async function screenSubscriber(subscriber, { suppressionReason, domainSt
       if (!['allow', 'watch', 'reject'].includes(decision?.action) || !Number.isFinite(decision.confidence) || decision.confidence < 0 || decision.confidence > 1) throw new Error('Invalid decision');
       // Model confidence is not calibrated evidence of mailbox validity.
       // Only multiple independent bot signals may support a model rejection.
+      //
+      // This looks over-cautious — it rejects very few signups, because of the
+      // six flags only fastSubmission and the Gmail dot trick have ever fired
+      // in production, so "two independent flags" is effectively one specific
+      // pair. Loosening it was tried and measured against the live list on
+      // 2026-11-02, and the looser rules are worse:
+      //
+      //   rule                                    rejects   engaged readers
+      //   two flags (this one)                          5                 0
+      //   one flag, or a model-cited address pattern  153          69 (45%)
+      //   one flag, dot trick needing a partner        35          17 (49%)
+      //
+      // Half of everything the looser rules reject has opened or clicked,
+      // some of them twenty times over. The available signals cannot separate
+      // a bot from a reader: the dot trick is something real people type, a
+      // sub-1500ms submission is a password manager, and the model's own
+      // account of its evidence does not survive checking — of 1859 rows
+      // where it claimed behavioral evidence, 438 (24%) had any such flag on
+      // the record. So its unverifiable claims, address patterns included,
+      // cannot carry a rejection either.
+      //
+      // Raising precision needs evidence this pipeline does not have yet:
+      // confirmed opt-in, or bounce outcomes labeled per signup. Until then
+      // the model's rejections are recorded on watch for review and the list
+      // keeps its readers. See docs/subscriber-screening.md.
       const botSignals = reasons.filter(reason => flags.includes(reason)).length;
       const action = decision.confidence < 0.9 || (decision.action === 'reject' && botSignals < 2)
         ? 'watch' : decision.action;
       return result(action, { source: 'model', modelAction: decision.action, confidence: decision.confidence,
+        ...(decision.signals?.length && { signals: decision.signals }),
         ...(typeof decision.explanation === 'string' && { explanation: decision.explanation.slice(0, 400) }),
         ...(decision.model && { model: decision.model }) });
     } catch {

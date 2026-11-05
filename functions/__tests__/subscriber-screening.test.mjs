@@ -45,6 +45,25 @@ describe('subscriber screening', () => {
       domainStatus: 'valid', decide: async () => ({ action: 'reject', confidence: 0.95 })
     })).toMatchObject({ action: 'reject', source: 'model' });
   });
+  // One flag is deliberately not enough. Measured against the live list, the
+  // looser rule rejected 153 addresses of which 69 had opened or clicked; the
+  // dominant flag behind it is the Gmail dot trick, which real readers type.
+  test('a single bot signal is not enough for a confident rejection', async () => {
+    expect(await screenSubscriber({ ...subscriber, fastSubmission: true }, {
+      domainStatus: 'valid', decide: async () => ({ action: 'reject', confidence: 0.95 })
+    })).toMatchObject({ action: 'watch', modelAction: 'reject' });
+  });
+  test('cited signals are recorded for review but never gate a decision', async () => {
+    expect(await screenSubscriber({ email: 'kqj8s7dfh2@gmail.com' }, {
+      domainStatus: 'valid',
+      decide: async () => ({ action: 'reject', confidence: 0.99, signals: ['address_pattern', 'name_pattern'] })
+    })).toMatchObject({ action: 'watch', modelAction: 'reject', signals: ['address_pattern', 'name_pattern'] });
+  });
+  test('an unconfident rejection stays on watch however many flags agree', async () => {
+    expect(await screenSubscriber({ ...subscriber, fastSubmission: true, suspiciousUserAgent: true }, {
+      domainStatus: 'valid', decide: async () => ({ action: 'reject', confidence: 0.6 })
+    })).toMatchObject({ action: 'watch', modelAction: 'reject' });
+  });
   test('decision outages fall back to watch', async () => {
     expect(await screenSubscriber(subscriber, { decide: async () => { throw new Error('outage'); } }))
       .toMatchObject({ action: 'watch', reasons: ['dns_uncertain', 'decision_unavailable'] });

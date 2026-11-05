@@ -33,14 +33,56 @@ other evidence; unfamiliar names or a name/email mismatch alone cannot justify
 rejection. Records without existing bot flags are also reviewed when the model
 is enabled so random names are not missed by the rules-only shortcut.
 `screening-decider.mjs` uses Strands structured
-output to return a validated action and confidence, and records the model ID.
+output to return a validated action, confidence and `signals`, and records the
+model ID.
 `SCREENING_MODEL_ID` defaults to `us.amazon.nova-micro-v1:0`; changing the model
 also requires updating the worker's IAM permissions. Calls are pay per use and
 made for records that pass the deterministic rejection checks. Model confidence is not a calibrated probability
 that an email will bounce.
 Confirmed SES suppression or invalid domain routing overrides model decisions.
-Missing DNS, past failures, low engagement or an unusual address alone never
-justify model rejection. DNS routing does not verify that a mailbox exists.
+DNS routing does not verify that a mailbox exists.
+
+## What makes a model rejection hold
+
+A model rejection takes effect only at confidence 0.9 or above *and* with two
+independent deterministic bot flags on the record. Anything short of that is
+recorded as `watch` — eligible for mail — keeping `modelAction`, `confidence`
+and `signals` for review. Missing DNS, past failures, low engagement, an
+unusual name or an unfamiliar domain never justify a model rejection.
+
+`signals` is the model's own account of the evidence it used:
+`address_pattern`, `name_pattern`, `behavioral`, `delivery_history`, `domain`.
+It is recorded and never acted on.
+
+This rule rejects very few signups, and that is the measured outcome rather
+than an oversight. Of the six flags only `fastSubmission` and the Gmail dot
+trick have ever fired in production, so "two independent flags" is effectively
+one specific pair. Loosening it was tried and measured against the live list
+on 2026-11-02, re-screening all 4,241 subscribers:
+
+| rule | rejects | of which had opened or clicked |
+| --- | --- | --- |
+| two flags (current) | 5 | 0 |
+| one flag, or a model-cited `address_pattern` | 153 | 69 (45%) |
+| one flag, dot trick needing a partner | 35 | 17 (49%) |
+
+Roughly half of what the looser rules reject is an engaged reader, several with
+more than twenty recorded opens. The signals available at signup do not
+separate a bot from a reader: the Gmail dot trick is something real people
+type, a sub-1500ms submission is a password manager, and the model's `signals`
+do not survive checking — `behavioral` is the one category that maps onto data
+we hold, and only 438 of the 1859 rows claiming it (24%) had any such flag.
+
+So the model stays advisory. Raising precision needs evidence this pipeline
+does not have: confirmed opt-in, or bounce outcomes labeled per signup.
+Deterministic front-door controls — confirmed opt-in, signup velocity limits —
+are what reduce bot signups; a better classifier behind the door is not.
+
+Model rejection candidates can be reviewed and held through the flow in
+[existing-list cleanup](existing-list-cleanup.md). A hold is reversible and
+changes only `screening`. On 2026-11-02, 52 candidates that carried a
+deterministic flag *and* had never engaged were held that way; rows with any
+recorded engagement were deliberately excluded.
 
 ## The generated-name block
 

@@ -84,6 +84,31 @@ changes only `screening`. On 2026-11-02, 52 candidates that carried a
 deterministic flag *and* had never engaged were held that way; rows with any
 recorded engagement were deliberately excluded.
 
+## The generated-name block
+
+A deterministic front-door control, in `functions/utils/generated-name.mjs`.
+It is not a screening rule and the model has no part in it: it matches one
+signup source's name generator, which emits two tokens of exactly ten random
+characters. 1,475 subscribers carry that shape, none before 24 Jun 2026, and
+they engage at 22.7% where ordinary names engage at 55.0%. Every existing
+deterministic flag missed all of them. Rates are `engagementCount` > 0 over
+the 2026-11-02 rescreen.
+
+Both tokens are required. A single handle-shaped value such as `allenh1985` is
+allowed even though it mixes letters and digits over the length floor: the
+generator has never emitted one token, no subscriber on the list carries one,
+and a reader who would rather not give a name is not a bot.
+
+It blocks at the door — `generatedNameAction`, defaulting to `block`, with the
+same silent 201 and no record that the honeypot gets.
+
+Two things to know before relying on it. It matches a signature, not a
+quality, so it stops working the day the operator changes a constant, and
+nothing will report that it has. And entropy is not a substitute: scored
+against real names it flags 23% of them, and 416 subscribers on this list have
+names of two random tokens of 16-24 characters while engaging at 57.7%, above
+ordinary names. They are real readers that an entropy rule blocks.
+
 ## Existing-list audit
 
 ```powershell

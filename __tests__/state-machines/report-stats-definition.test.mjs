@@ -99,4 +99,29 @@ describe('report-stats definition', () => {
 
     expect(problems).toEqual([]);
   });
+
+  describe('which issue the report is about', () => {
+    it('does not look the issue up by recency', () => {
+      // The old "Get Last Issue" state returned the newest newsletter row,
+      // which is not necessarily the issue the execution was started for (a
+      // draft of the next issue sorts after it). The report then mixed one
+      // issue's stats with another's key, subject and open records.
+      expect(states['Get Last Issue']).toBeUndefined();
+      expect(definition.StartAt).toBe('Parallel');
+      expect(JSON.stringify(states)).not.toContain('$.Items[0]');
+    });
+
+    it('builds the issue key from the execution input', () => {
+      const payload = states['Build Report Data'].Parameters.Payload;
+      expect(payload['issue.$']).toBe(
+        "States.Format('{}#{}', $$.Execution.Input.tenant.id, $$.Execution.Input.issueId)"
+      );
+    });
+
+    it('takes subject and sent date from the issue stats row', () => {
+      const payload = states['Build Report Data'].Parameters.Payload;
+      expect(payload['subjectLine.$']).toBe('$.data[0].stats.Item.subject.S');
+      expect(payload['sentDate.$']).toBe('$.data[0].stats.Item.publishedAt.S');
+    });
+  });
 });

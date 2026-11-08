@@ -50,7 +50,7 @@
               {{#each insightsV2}}
               <div style="border:1px solid #e9ecef;border-left:5px solid {{#if (eq this.severity "action")}}#dc3545{{else if (eq this.severity "watch")}}#f0ad4e{{else}}#28a745{{/if}};padding:12px;margin-bottom:10px;border-radius:6px;">
                 <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.6px;color:#666;margin-bottom:6px;">
-                  {{this.type}} â€¢ {{this.severity}} â€¢ {{this.confidence}} confidence
+                  {{this.type}} • {{this.severity}} • {{this.confidence}} confidence
                 </div>
                 <div style="font-size:14px;color:#222;font-weight:bold;margin-bottom:4px;">{{this.summary}}</div>
                 <div style="font-size:13px;color:#444;">{{this.recommendation}}</div>

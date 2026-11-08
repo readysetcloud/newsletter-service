@@ -288,59 +288,46 @@ const updateStatsWithConsolidatedData = async (issueId, consolidatedData) => {
   }));
 };
 
-const queryPreviousIssueAnalytics = async (currentIssueId, currentSentDate) => {
-  const tenantId = currentIssueId.split('#')[0];
+const padIssueNumber = (issueNumber) => String(issueNumber).padStart(5, '0');
+
+/**
+ * Issues before this one that already have consolidated analytics, newest
+ * first. Stats rows are indexed under `<tenantId>#issue` and sorted by the
+ * zero-padded issue number; the older `#analytics` partition is no longer
+ * written, so reading it returned months-old issues.
+ */
+const queryPriorIssues = async (currentIssueId, limit) => {
+  const [tenantId, issueNumber] = currentIssueId.split('#');
 
   try {
     const response = await ddb.send(new QueryCommand({
       TableName: process.env.TABLE_NAME,
       IndexName: 'GSI1',
-      KeyConditionExpression: 'GSI1PK = :gsi1pk AND GSI1SK < :currentDate',
+      KeyConditionExpression: 'GSI1PK = :gsi1pk AND GSI1SK < :current',
       ExpressionAttributeValues: marshall({
-        ':gsi1pk': `${tenantId}#analytics`,
-        ':currentDate': currentSentDate
+        ':gsi1pk': `${tenantId}#issue`,
+        ':current': padIssueNumber(issueNumber)
       }),
       ScanIndexForward: false,
-      Limit: 1
+      Limit: 20
     }));
 
-    if (response.Items && response.Items.length > 0) {
-      return unmarshall(response.Items[0]);
-    }
-
-    return null;
+    return (response.Items || [])
+      .map(item => unmarshall(item))
+      .filter(item => metricsFromRecord(item))
+      .slice(0, limit);
   } catch (error) {
-    console.error('Error querying previous issue analytics:', error);
-    return null;
-  }
-};
-
-const queryHistoricalAnalytics = async (currentIssueId, currentSentDate) => {
-  const tenantId = currentIssueId.split('#')[0];
-
-  try {
-    const response = await ddb.send(new QueryCommand({
-      TableName: process.env.TABLE_NAME,
-      IndexName: 'GSI1',
-      KeyConditionExpression: 'GSI1PK = :gsi1pk AND GSI1SK < :currentDate',
-      ExpressionAttributeValues: marshall({
-        ':gsi1pk': `${tenantId}#analytics`,
-        ':currentDate': currentSentDate
-      }),
-      ScanIndexForward: false,
-      Limit: 4
-    }));
-
-    if (response.Items && response.Items.length > 0) {
-      return response.Items.map(item => unmarshall(item));
-    }
-
-    return [];
-  } catch (error) {
-    console.error('Error querying historical analytics:', error);
+    console.error('Error querying prior issue analytics:', error);
     return [];
   }
 };
+
+const queryPreviousIssueAnalytics = async (currentIssueId) => {
+  const [previous] = await queryPriorIssues(currentIssueId, 1);
+  return previous ?? null;
+};
+
+const queryHistoricalAnalytics = (currentIssueId) => queryPriorIssues(currentIssueId, 4);
 
 const avg = (values) => {
   if (!values || values.length === 0) return 0;
@@ -361,19 +348,19 @@ const calculateBenchmarks = (historicalIssues) => {
   }
 
   const openRates = historicalIssues
-    .map(issue => issue.data?.currentMetrics?.openRate)
+    .map(issue => metricsFromRecord(issue)?.openRate)
     .filter(val => val !== null && val !== undefined);
 
   const ctrs = historicalIssues
-    .map(issue => issue.data?.currentMetrics?.clickThroughRate)
+    .map(issue => metricsFromRecord(issue)?.clickThroughRate)
     .filter(val => val !== null && val !== undefined);
 
   const bounceRates = historicalIssues
-    .map(issue => issue.data?.currentMetrics?.bounceRate)
+    .map(issue => metricsFromRecord(issue)?.bounceRate)
     .filter(val => val !== null && val !== undefined);
 
   const growthRates = historicalIssues
-    .map(issue => issue.data?.currentMetrics?.growthRate)
+    .map(issue => metricsFromRecord(issue)?.growthRate)
     .filter(val => val !== null && val !== undefined);
 
   return {
@@ -533,15 +520,25 @@ const generateHealthBullets = (metrics, benchmarksSafe) => {
   return bullets.slice(0, 3);
 };
 
+// Issue keys are `<tenantId>#<issueNumber>`.
+const issueNumberFromKey = (pk) => pk?.split('#')[1] || 'Unknown';
+
+// Consolidated analytics live on the stats row's `analytics` attribute; rows
+// written by older versions kept them under `data`.
+const metricsFromRecord = (record) =>
+  record?.analytics?.currentMetrics ?? record?.data?.currentMetrics ?? null;
+
 const extractHistoricalMetrics = (historicalIssues) => {
   if (!historicalIssues || historicalIssues.length === 0) {
     return [];
   }
 
   return historicalIssues.map(issue => {
-    const metrics = issue.data?.currentMetrics || {};
-    const issueName = issue.pk ? issue.pk.split('#')[1]?.split('_')[1]?.split('.')[0]?.replace('-', ' ') : 'Unknown';
-    const issueDate = issue.GSI1SK ? new Date(issue.GSI1SK).toISOString().split('T')[0] : 'Unknown';
+    const metrics = metricsFromRecord(issue) || {};
+    const issueName = issueNumberFromKey(issue.pk);
+    const issueDate = (issue.publishedAt && isValidTimestamp(issue.publishedAt))
+      ? new Date(issue.publishedAt).toISOString().split('T')[0]
+      : 'Unknown';
 
     return {
       issueName: issueName || 'Unknown',
@@ -1277,8 +1274,8 @@ export const handler = async (state) => {
       console.error('Could not cache consolidated stats; the report still uses them:', persistError);
     }
 
-    previousIssueAnalytics = await queryPreviousIssueAnalytics(state.issue, normalizedSentDate);
-    historicalIssues = await queryHistoricalAnalytics(state.issue, normalizedSentDate);
+    previousIssueAnalytics = await queryPreviousIssueAnalytics(state.issue);
+    historicalIssues = await queryHistoricalAnalytics(state.issue);
     benchmarks = calculateBenchmarks(historicalIssues);
 
     const benchmarksSafe = benchmarks ?? {
@@ -1290,7 +1287,9 @@ export const handler = async (state) => {
       steadyStateGrowth: 0
     };
 
-    const uniqueOpens = consolidatedData.uniqueOpens;
+    // Per-open records expire after a week, so an issue reported late can have
+    // none left while the counter on the stats row still knows the answer.
+    const uniqueOpens = consolidatedData.uniqueOpens > 0 ? consolidatedData.uniqueOpens : totalOpens;
 
     const links = Array.isArray(state.links) ? state.links : [];
     const totalClicks = links.reduce((sum, l) => sum + n(l.count), 0);
@@ -1313,10 +1312,10 @@ export const handler = async (state) => {
     };
 
     const wowDeltas = previousIssueAnalytics ? {
-      openRateWoW: calculateDelta(openRate, previousIssueAnalytics.data?.currentMetrics?.openRate || 0),
-      ctrWoW: calculateDelta(clickThroughRate, previousIssueAnalytics.data?.currentMetrics?.clickThroughRate || 0),
-      subscribersWoW: calculateDelta(subscribers, previousIssueAnalytics.data?.currentMetrics?.subscribers || 0),
-      clicksWoW: calculateDelta(totalClicks, previousIssueAnalytics.data?.currentMetrics?.clicks || 0)
+      openRateWoW: calculateDelta(openRate, metricsFromRecord(previousIssueAnalytics)?.openRate || 0),
+      ctrWoW: calculateDelta(clickThroughRate, metricsFromRecord(previousIssueAnalytics)?.clickThroughRate || 0),
+      subscribersWoW: calculateDelta(subscribers, metricsFromRecord(previousIssueAnalytics)?.subscribers || 0),
+      clicksWoW: calculateDelta(totalClicks, metricsFromRecord(previousIssueAnalytics)?.clicks || 0)
     } : {
       openRateWoW: null,
       ctrWoW: null,
@@ -1364,10 +1363,10 @@ export const handler = async (state) => {
         sends
       },
       previousMetrics: previousIssueAnalytics ? {
-        openRate: previousIssueAnalytics.data?.currentMetrics?.openRate || 0,
-        clickThroughRate: previousIssueAnalytics.data?.currentMetrics?.clickThroughRate || 0,
-        subscribers: previousIssueAnalytics.data?.currentMetrics?.subscribers || 0,
-        clicks: previousIssueAnalytics.data?.currentMetrics?.clicks || 0
+        openRate: metricsFromRecord(previousIssueAnalytics)?.openRate || 0,
+        clickThroughRate: metricsFromRecord(previousIssueAnalytics)?.clickThroughRate || 0,
+        subscribers: metricsFromRecord(previousIssueAnalytics)?.subscribers || 0,
+        clicks: metricsFromRecord(previousIssueAnalytics)?.clicks || 0
       } : null,
       wowDeltas,
       benchmarks: benchmarksSafe,
@@ -1427,9 +1426,7 @@ export const handler = async (state) => {
       })
     }));
 
-    const name = state.issue
-      ? (state.issue.split('_')[1]?.split('.')[0]?.replace('-', ' ') || 'Unknown')
-      : 'Unknown';
+    const name = issueNumberFromKey(state.issue);
 
     return {
       subject: `📊 Newsletter Issue ${name} Performance Report`,

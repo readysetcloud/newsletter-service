@@ -59,6 +59,43 @@ describe('build-report-data', () => {
     await loadIsolated();
   });
 
+  describe('Issue identity and history', () => {
+    const baseState = (overrides = {}) => ({
+      issue: 'tenant123#240',
+      subscribers: 1000,
+      priorSubscribers: 975,
+      sentDate: '2025-01-21T10:00:00.000Z',
+      subjectLine: 'Test Newsletter',
+      links: [],
+      stats: { deliveries: { N: '500' }, opens: { N: '150' }, reopens: { N: '0' }, bounces: { N: '0' }, unsubscribes: { N: '0' }, sends: { N: '500' }, cleaned: { N: '0' } },
+      ...overrides
+    });
+
+    it('names the issue by its number in the subject', async () => {
+      ddbSend.mockResolvedValue({ Items: [] });
+      const result = await handler(baseState());
+      expect(result.subject).toBe('📊 Newsletter Issue 240 Performance Report');
+    });
+
+    it('falls back to the stats counter when no open records remain', async () => {
+      ddbSend.mockResolvedValue({ Items: [] });
+      const result = await handler(baseState());
+      expect(result.insightData.currentMetrics.uniqueOpens).toBe(150);
+      expect(result.insightData.currentMetrics.openRate).toBe(30);
+    });
+
+    it('reads prior issues from the issue index, not the retired analytics partition', async () => {
+      ddbSend.mockResolvedValue({ Items: [] });
+      await handler(baseState());
+      const queries = ddbSend.mock.calls.map(c => c[0]).filter(c => c.IndexName === 'GSI1');
+      expect(queries.length).toBeGreaterThan(0);
+      for (const q of queries) {
+        expect(q.ExpressionAttributeValues[':gsi1pk'].S).toBe('tenant123#issue');
+        expect(q.ExpressionAttributeValues[':current'].S).toBe('00240');
+      }
+    });
+  });
+
   describe('Analytics consolidation', () => {
     it('should update stats record with analytics data', async () => {
       ddbSend.mockResolvedValueOnce({ Items: [] });

@@ -1,27 +1,7 @@
 {
   "Comment": "Send an email report of how the latest issue performed",
-  "StartAt": "Get Last Issue",
+  "StartAt": "Parallel",
   "States": {
-    "Get Last Issue": {
-      "Type": "Task",
-      "Parameters": {
-        "TableName": "${TableName}",
-        "IndexName": "GSI1",
-        "KeyConditionExpression": "#GSI1PK = :GSI1PK",
-        "ExpressionAttributeNames": {
-          "#GSI1PK": "GSI1PK"
-        },
-        "ExpressionAttributeValues": {
-          ":GSI1PK": {
-            "S.$": "States.Format('{}#newsletter', $$.Execution.Input.tenant.id)"
-          }
-        },
-        "ScanIndexForward": false,
-        "Limit": 1
-      },
-      "Resource": "${DynamodbQuery}",
-      "Next": "Parallel"
-    },
     "Parallel": {
       "Type": "Parallel",
       "Branches": [
@@ -158,12 +138,12 @@
         "FunctionName": "${BuildReportData}",
         "Payload": {
           "stats.$": "$.data[0].stats.Item",
-          "issue.$": "$.Items[0].pk.S",
+          "issue.$": "States.Format('{}#{}', $$.Execution.Input.tenant.id, $$.Execution.Input.issueId)",
           "subscribers.$": "$.data[2].Item.subscribers.N",
           "priorSubscribers.$": "$.data[3].Items[0].count.S",
           "links.$": "$.data[1].links",
-          "sentDate.$": "$.Items[0].GSI1SK.S",
-          "subjectLine.$": "$.Items[0].subject.S"
+          "sentDate.$": "$.data[0].stats.Item.publishedAt.S",
+          "subjectLine.$": "$.data[0].stats.Item.subject.S"
         }
       },
       "Retry": [
@@ -191,7 +171,7 @@
           "issueId.$": "States.Format('{}', $$.Execution.Input.issueId)",
           "tenantId.$": "$$.Execution.Input.tenant.id",
           "insightData.$": "$.reportData.Payload.insightData",
-          "subjectLine.$": "$.Items[0].subject.S"
+          "subjectLine.$": "$.data[0].stats.Item.subject.S"
         }
       },
       "Retry": [

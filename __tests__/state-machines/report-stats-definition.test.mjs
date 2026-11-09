@@ -118,10 +118,21 @@ describe('report-stats definition', () => {
       );
     });
 
-    it('takes subject and sent date from the issue stats row', () => {
+    it('does not require seeded subject/publishedAt on the stats row', () => {
+      // Stats rows are seeded best-effort. A required JSONPath to an absent
+      // attribute is a States.Runtime error before the Lambda runs, so those
+      // fields are resolved inside the handler with the newsletter row as
+      // the fallback.
       const payload = states['Build Report Data'].Parameters.Payload;
-      expect(payload['subjectLine.$']).toBe('$.data[0].stats.Item.subject.S');
-      expect(payload['sentDate.$']).toBe('$.data[0].stats.Item.publishedAt.S');
+      expect(JSON.stringify(payload)).not.toMatch(/publishedAt|\.subject/);
+      expect(payload['newsletter.$']).toBe('$.data[4].Item');
+      const branch = states.Parallel.Branches[4].States['Get Newsletter Row'];
+      expect(branch.Parameters.Key.sk.S).toBe('newsletter');
+    });
+
+    it('feeds Generate Insights the subject the report resolved', () => {
+      const payload = states['Generate Insights'].Parameters.Payload;
+      expect(payload['subjectLine.$']).toBe('$.reportData.Payload.subjectLine');
     });
   });
 });

@@ -84,6 +84,51 @@ describe('build-report-data', () => {
       expect(result.insightData.currentMetrics.openRate).toBe(30);
     });
 
+    it('uses the durable counter even when only some open records survive', async () => {
+      const pk = 'tenant123#240';
+      ddbSend.mockImplementation(async (cmd) => {
+        if (cmd.__type === 'Query' && cmd.KeyConditionExpression?.includes('begins_with') && cmd.ExpressionAttributeValues?.[':sk']?.S === 'opens#') {
+          return { Items: [{ createdAt: { S: '2025-01-21T10:30:00.000Z' } }] };
+        }
+        return { Items: [] };
+      });
+      const result = await handler(baseState());
+      expect(result.insightData.currentMetrics.uniqueOpens).toBe(150);
+
+      const persisted = ddbSend.mock.calls.map(c => c[0])
+        .find(c => c.__type === 'UpdateItem' && c.UpdateExpression.includes('uniqueOpens'));
+      expect(persisted.ExpressionAttributeValues[':uniqueOpens'].N).toBe('150');
+      expect(pk).toBeDefined();
+    });
+
+    it('falls back to the newsletter row for subject and sent date', async () => {
+      ddbSend.mockResolvedValue({ Items: [] });
+      const result = await handler(baseState({
+        sentDate: undefined,
+        subjectLine: undefined,
+        newsletter: { subject: { S: 'From newsletter row' }, publishedAt: { S: '2025-01-20T09:00:00.000Z' } }
+      }));
+      expect(result.subjectLine).toBe('From newsletter row');
+      expect(result.insightData.content.subjectLine).toBe('From newsletter row');
+    });
+
+    it('derives history from raw counters and keeps paging past unreported rows', async () => {
+      ddbSend.mockImplementation(async (cmd) => {
+        if (cmd.IndexName === 'GSI1') {
+          if (!cmd.ExclusiveStartKey) {
+            return { Items: [{ pk: { S: 'tenant123#239' } }], LastEvaluatedKey: { pk: { S: 'x' } } };
+          }
+          {
+            return { Items: [{ pk: { S: 'tenant123#238' }, deliveries: { N: '400' }, opens: { N: '200' }, clicks: { N: '40' }, bounces: { N: '4' }, sends: { N: '400' }, subscribers: { N: '900' } }] };
+          }
+        }
+        return { Items: [] };
+      });
+      const result = await handler(baseState());
+      expect(result.insightData.trends.lastIssues).toHaveLength(1);
+      expect(result.insightData.trends.lastIssues[0]).toMatchObject({ issueName: '238', openRate: 50, ctr: 10 });
+    });
+
     it('reads prior issues from the issue index, not the retired analytics partition', async () => {
       ddbSend.mockResolvedValue({ Items: [] });
       await handler(baseState());

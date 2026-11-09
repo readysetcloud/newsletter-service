@@ -296,30 +296,43 @@ const padIssueNumber = (issueNumber) => String(issueNumber).padStart(5, '0');
  * zero-padded issue number; the older `#analytics` partition is no longer
  * written, so reading it returned months-old issues.
  */
+const MAX_HISTORY_PAGES = 10;
+
 const queryPriorIssues = async (currentIssueId, limit) => {
   const [tenantId, issueNumber] = currentIssueId.split('#');
+  const found = [];
+  let lastEvaluatedKey;
+  let pages = 0;
 
   try {
-    const response = await ddb.send(new QueryCommand({
-      TableName: process.env.TABLE_NAME,
-      IndexName: 'GSI1',
-      KeyConditionExpression: 'GSI1PK = :gsi1pk AND GSI1SK < :current',
-      ExpressionAttributeValues: marshall({
-        ':gsi1pk': `${tenantId}#issue`,
-        ':current': padIssueNumber(issueNumber)
-      }),
-      ScanIndexForward: false,
-      Limit: 20
-    }));
+    do {
+      const response = await ddb.send(new QueryCommand({
+        TableName: process.env.TABLE_NAME,
+        IndexName: 'GSI1',
+        KeyConditionExpression: 'GSI1PK = :gsi1pk AND GSI1SK < :current',
+        ExpressionAttributeValues: marshall({
+          ':gsi1pk': `${tenantId}#issue`,
+          ':current': padIssueNumber(issueNumber)
+        }),
+        ScanIndexForward: false,
+        Limit: 20,
+        ...(lastEvaluatedKey && { ExclusiveStartKey: lastEvaluatedKey })
+      }));
 
-    return (response.Items || [])
-      .map(item => unmarshall(item))
-      .filter(item => metricsFromRecord(item))
-      .slice(0, limit);
+      for (const item of response.Items || []) {
+        const record = unmarshall(item);
+        if (metricsFromRecord(record)) found.push(record);
+        if (found.length >= limit) return found;
+      }
+
+      lastEvaluatedKey = response.LastEvaluatedKey;
+      pages++;
+    } while (lastEvaluatedKey && pages < MAX_HISTORY_PAGES);
   } catch (error) {
     console.error('Error querying prior issue analytics:', error);
-    return [];
   }
+
+  return found;
 };
 
 const queryPreviousIssueAnalytics = async (currentIssueId) => {
@@ -525,8 +538,25 @@ const issueNumberFromKey = (pk) => pk?.split('#')[1] || 'Unknown';
 
 // Consolidated analytics live on the stats row's `analytics` attribute; rows
 // written by older versions kept them under `data`.
-const metricsFromRecord = (record) =>
-  record?.analytics?.currentMetrics ?? record?.data?.currentMetrics ?? null;
+//
+// An issue that was never reported (the weekly report was failing for months)
+// has only the raw counters, so headline metrics are derived from those. Growth
+// rate cannot be derived from a single issue's counters and is left out, which
+// benchmark averaging skips.
+const metricsFromRecord = (record) => {
+  const consolidated = record?.analytics?.currentMetrics ?? record?.data?.currentMetrics;
+  if (consolidated) return consolidated;
+
+  if (!record || n(record.deliveries) <= 0) return null;
+  return {
+    openRate: pct(record.opens, record.deliveries),
+    clickThroughRate: pct(record.clicks, record.deliveries),
+    clickToOpenRate: pct(record.clicks, record.opens),
+    bounceRate: pct(record.bounces, record.sends),
+    clicks: n(record.clicks),
+    subscribers: n(record.subscribers)
+  };
+};
 
 const extractHistoricalMetrics = (historicalIssues) => {
   if (!historicalIssues || historicalIssues.length === 0) {
@@ -1207,7 +1237,14 @@ export const handler = async (state) => {
       throw new Error('Missing required state data');
     }
 
-    const normalizedSentDate = normalizeISOTimestamp(state.sentDate);
+    // Stats rows are seeded best-effort and can lack `subject` / `publishedAt`;
+    // the issue's newsletter row is the fallback.
+    const newsletter = state.newsletter ? unmarshall(state.newsletter) : {};
+    const seeded = state.stats ? unmarshall(state.stats) : {};
+    const subjectLine = state.subjectLine ?? seeded.subject ?? newsletter.subject ?? null;
+    const normalizedSentDate = normalizeISOTimestamp(
+      state.sentDate ?? seeded.publishedAt ?? newsletter.publishedAt ?? newsletter.GSI1SK ?? newsletter.createdAt
+    );
 
     const subscribers = n(state.subscribers);
     const priorSubscribers = n(state.priorSubscribers);
@@ -1268,6 +1305,9 @@ export const handler = async (state) => {
     // expression then meant every report for months reported no opens, no
     // engagement velocity and no devices, while the only symptom was one
     // swallowed log line.
+    const durableUniqueOpens = stats.opens != null ? totalOpens : consolidatedData.uniqueOpens;
+    consolidatedData.uniqueOpens = durableUniqueOpens;
+
     try {
       await updateStatsWithConsolidatedData(state.issue, consolidatedData);
     } catch (persistError) {
@@ -1287,9 +1327,10 @@ export const handler = async (state) => {
       steadyStateGrowth: 0
     };
 
-    // Per-open records expire after a week, so an issue reported late can have
-    // none left while the counter on the stats row still knows the answer.
-    const uniqueOpens = consolidatedData.uniqueOpens > 0 ? consolidatedData.uniqueOpens : totalOpens;
+    // Per-open records expire after a week, so a late report can find none or
+    // only some of them. The `opens` counter on the stats row counts first
+    // opens durably, so it owns the headline number.
+    const uniqueOpens = durableUniqueOpens;
 
     const links = Array.isArray(state.links) ? state.links : [];
     const totalClicks = links.reduce((sum, l) => sum + n(l.count), 0);
@@ -1384,7 +1425,7 @@ export const handler = async (state) => {
       engagementQuality,
       trends,
       content: {
-        subjectLine: state.subjectLine || 'N/A',
+        subjectLine: subjectLine || 'N/A',
         linkCount: links.length,
         topPerformingLink,
         links
@@ -1430,6 +1471,7 @@ export const handler = async (state) => {
 
     return {
       subject: `📊 Newsletter Issue ${name} Performance Report`,
+      subjectLine,
       insightData
     };
   } catch (error) {

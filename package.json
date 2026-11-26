@@ -18,8 +18,8 @@
     "fmt:rust:fix": "cargo fmt --all"
   },
   "dependencies": {
-    "@aws-lambda-powertools/logger": "^2.36.0",
-    "@aws-lambda-powertools/parameters": "^2.36.0",
+    "@aws-lambda-powertools/logger": "^2.37.0",
+    "@aws-lambda-powertools/parameters": "^2.37.0",
     "@aws-sdk/client-sesv2": "^3.1175.0",
     "@aws-sdk/signature-v4a": "^3.1138.0",
     "@github-docs/frontmatter": "^1.3.1",
